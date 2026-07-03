@@ -200,6 +200,7 @@ export default function NewVendorIssuePage() {
   const [issueType, setIssueType] = useState<string>("");
   const [priority, setPriority] = useState<string>("MEDIUM");
   const [description, setDescription] = useState("");
+  const [ticketNo, setTicketNo] = useState("");
   const [billId, setBillId] = useState("");
   const [suggestedResolution, setSuggestedResolution] = useState("");
   const [docLink, setDocLink] = useState("");
@@ -354,6 +355,7 @@ export default function NewVendorIssuePage() {
           clientPhone: issueSource === "CLIENT" ? (clientPhone.trim() || undefined) : undefined,
           issueType,
           description: description.trim(),
+          ticketNo: ticketNo.trim() || undefined,
           priority,
           billId: billId || undefined,
           photoUrls: photoUrls.length > 0 ? photoUrls : undefined,
@@ -565,6 +567,22 @@ export default function NewVendorIssuePage() {
             rows={4}
             className="flex w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
           />
+        </div>
+
+        {/* Ticket Number */}
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            Ticket Number (optional)
+          </label>
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="Brand's ticket / reference no. (e.g. eMotorad)"
+            value={ticketNo}
+            onChange={(e) => setTicketNo(e.target.value)}
+            className="flex w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
+          />
+          <p className="mt-1 text-xs text-slate-400">Shown in the WhatsApp message so the brand can match it to their ticket.</p>
         </div>
 
         {/* Photos / Videos */}

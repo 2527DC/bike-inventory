@@ -16,6 +16,7 @@ import { DesktopTable } from "@/components/desktop-table";
 interface IssueItem {
   id: string;
   issueNo: string;
+  ticketNo: string | null;
   issueSource: string;
   issueType: string;
   description: string;
@@ -200,6 +201,7 @@ export default function VendorIssuesPage() {
         const days = overdueDays(issue.createdAt);
         const overduePrefix = days > 0 ? `⏰ ${days}d overdue • ` : "";
         lines.push(`${i + 1}. *[${issue.issueNo}]* ${issue.issueType.replace(/_/g, " ")}`);
+        if (issue.ticketNo) lines.push(`   🎫 Ticket: ${issue.ticketNo}`);
         if (!perBrand) lines.push(`   Brand: ${issue.vendor?.name || "Unknown"}`);
         lines.push(`   ${issue.description.slice(0, 140)}${issue.description.length > 140 ? "..." : ""}`);
         lines.push(`   ${overduePrefix}Status: ${issue.status.replace(/_/g, " ")}`);
@@ -214,6 +216,7 @@ export default function VendorIssuesPage() {
         const days = overdueDays(issue.createdAt);
         const overduePrefix = days > 0 ? `⏰ ${days}d overdue • ` : "";
         lines.push(`${i + 1}. *[${issue.issueNo}]* ${issue.issueType.replace(/_/g, " ")}`);
+        if (issue.ticketNo) lines.push(`   🎫 Ticket: ${issue.ticketNo}`);
         lines.push(`   Client: ${issue.clientName || "Unknown"}`);
         lines.push(`   ${issue.description.slice(0, 140)}${issue.description.length > 140 ? "..." : ""}`);
         lines.push(`   ${overduePrefix}Status: ${issue.status.replace(/_/g, " ")}`);

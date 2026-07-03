@@ -18,6 +18,7 @@ interface IssueNote {
 interface IssueDetail {
   id: string;
   issueNo: string;
+  ticketNo?: string | null;
   issueSource: string;
   issueType: string;
   description: string;
@@ -225,6 +226,7 @@ export default function VendorIssueDetailPage({
     const greetName = issue.issueSource !== "CLIENT" ? issue.vendor?.contacts?.[0]?.name : undefined;
     let text = greetName ? `Hi ${greetName},\n\n` : "";
     text += `*Ops Issue ${issue.issueNo}*\n`;
+    if (issue.ticketNo) text += `🎫 Ticket: ${issue.ticketNo}\n`;
     text += `Source: ${source}\n`;
     text += `Type: ${issue.issueType.replace(/_/g, " ")}\n`;
     text += `Priority: ${issue.priority}\n`;
@@ -385,6 +387,12 @@ export default function VendorIssueDetailPage({
               </div>
             )}
           </div>
+          {issue.ticketNo && (
+            <div>
+              <span className="text-xs text-slate-500">Ticket:</span>
+              <p className="text-sm font-medium text-slate-900">🎫 {issue.ticketNo}</p>
+            </div>
+          )}
           {issue.bill && (
             <div>
               <span className="text-xs text-slate-500">Bill:</span>

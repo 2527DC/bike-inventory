@@ -54,6 +54,7 @@ export async function GET(req: NextRequest) {
           select: {
             id: true,
             issueNo: true,
+            ticketNo: true,
             issueSource: true,
             issueType: true,
             description: true,
@@ -135,6 +136,7 @@ export async function POST(req: NextRequest) {
         clientName: isClient ? data.clientName : null,
         clientPhone: isClient ? (data.clientPhone || null) : null,
         issueNo,
+        ticketNo: data.ticketNo?.trim() || null,
         issueType: data.issueType,
         description: data.description,
         priority: data.priority || "MEDIUM",

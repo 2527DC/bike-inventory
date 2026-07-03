@@ -271,6 +271,7 @@ export const vendorIssueSchema = z.object({
   clientPhone: z.string().optional(),
   issueType: z.enum(["QUALITY", "SHORTAGE", "DAMAGE", "WRONG_ITEM", "BILLING_ERROR", "DELIVERY_DELAY", "OTHER"]),
   description: z.string().min(1, "Description is required"),
+  ticketNo: z.string().optional(),
   priority: z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
   billId: z.string().optional(),
   photoUrls: z.array(z.string()).optional(),
@@ -283,6 +284,7 @@ export const vendorIssueUpdateSchema = z.object({
   priority: z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
   resolution: z.string().optional(),
   docLink: z.string().optional(),
+  ticketNo: z.string().optional(),
   vendorId: z.string().optional(), // admin-only: reassign an issue to the correct brand
 });
 

@@ -91,6 +91,7 @@ export async function PUT(
         ...(data.priority && { priority: data.priority }),
         ...(data.resolution !== undefined && { resolution: data.resolution }),
         ...(data.docLink !== undefined && { docLink: data.docLink || null }),
+        ...(data.ticketNo !== undefined && { ticketNo: data.ticketNo.trim() || null }),
         ...(data.vendorId !== undefined && { vendorId: data.vendorId }),
         ...(resolvedAt !== undefined && { resolvedAt }),
       },
