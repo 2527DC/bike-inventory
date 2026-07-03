@@ -61,6 +61,8 @@ export async function GET(req: NextRequest) {
             priority: true,
             createdAt: true,
             clientName: true,
+            photoUrls: true,
+            docLink: true,
             vendor: { select: { id: true, name: true, waGroupName: true, waGroupCode: true } },
           },
           orderBy: { createdAt: "desc" },

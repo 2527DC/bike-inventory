@@ -24,6 +24,8 @@ interface IssueItem {
   createdAt: string;
   vendor: { id: string; name: string; waGroupName: string | null; waGroupCode: string | null } | null;
   clientName: string | null;
+  photoUrls: string[];
+  docLink: string | null;
   openCount: number;
   inProgressCount: number;
   resolvedCount: number;
@@ -156,16 +158,18 @@ export default function VendorIssuesPage() {
     if (!toShare.length) return null;
 
     const today = new Date();
+    const perBrand = shareBrand && brandFilter !== "ALL"; // single brand → its own WhatsApp group
     const lines: string[] = [];
-    const heading = brandFilter !== "ALL"
-      ? `⚠️ *${brandFilter} — Open Issues*`
+
+    const heading = perBrand
+      ? "⚠️ *Open Issues*"
       : shareBrand && shareClient ? "⚠️ *Ops Issues Summary*"
       : shareBrand ? "⚠️ *Brand Issues Summary*"
       : "⚠️ *Client Issues Summary*";
 
     // Per-brand share → prepend the mapped WhatsApp group as a routing label (the human taps that group).
     let target: string | null = null;
-    if (shareBrand && brandFilter !== "ALL") {
+    if (perBrand) {
       const meta = brandMeta[brandFilter];
       const code = fmtGroupCode(meta?.waGroupCode);
       if (meta && (meta.waGroupName || code)) {
@@ -182,15 +186,24 @@ export default function VendorIssuesPage() {
     const brandItems = toShare.filter(i => i.issueSource === "VENDOR");
     const clientItems = toShare.filter(i => i.issueSource === "CLIENT");
 
+    // Clickable links to any uploaded photos / supporting document on an issue.
+    const pushLinks = (issue: IssueItem) => {
+      (issue.photoUrls || []).forEach((u, pi) => {
+        if (u) lines.push(`   📷 ${(issue.photoUrls || []).length > 1 ? `Photo ${pi + 1}: ` : "Photo: "}${u}`);
+      });
+      if (issue.docLink) lines.push(`   📎 Document: ${issue.docLink}`);
+    };
+
     if (brandItems.length > 0) {
-      lines.push(`🏭 *Brand Issues (${brandItems.length})*`);
+      if (!perBrand) lines.push(`🏭 *Brand Issues (${brandItems.length})*`);
       brandItems.forEach((issue, i) => {
         const days = overdueDays(issue.createdAt);
-        const overdueStr = days > 0 ? ` ⏰ ${days}d overdue` : "";
+        const overduePrefix = days > 0 ? `⏰ ${days}d overdue • ` : "";
         lines.push(`${i + 1}. *[${issue.issueNo}]* ${issue.issueType.replace(/_/g, " ")}`);
-        lines.push(`   Brand: ${issue.vendor?.name || "Unknown"}${overdueStr}`);
-        lines.push(`   ${issue.description.slice(0, 80)}${issue.description.length > 80 ? "..." : ""}`);
-        lines.push(`   Status: ${issue.status.replace(/_/g, " ")} | Priority: ${issue.priority}`);
+        if (!perBrand) lines.push(`   Brand: ${issue.vendor?.name || "Unknown"}`);
+        lines.push(`   ${issue.description.slice(0, 140)}${issue.description.length > 140 ? "..." : ""}`);
+        lines.push(`   ${overduePrefix}Status: ${issue.status.replace(/_/g, " ")}`);
+        pushLinks(issue);
         lines.push("");
       });
     }
@@ -199,17 +212,21 @@ export default function VendorIssuesPage() {
       lines.push(`👤 *Client Issues (${clientItems.length})*`);
       clientItems.forEach((issue, i) => {
         const days = overdueDays(issue.createdAt);
-        const overdueStr = days > 0 ? ` ⏰ ${days}d overdue` : "";
+        const overduePrefix = days > 0 ? `⏰ ${days}d overdue • ` : "";
         lines.push(`${i + 1}. *[${issue.issueNo}]* ${issue.issueType.replace(/_/g, " ")}`);
-        lines.push(`   Client: ${issue.clientName || "Unknown"}${overdueStr}`);
-        lines.push(`   ${issue.description.slice(0, 80)}${issue.description.length > 80 ? "..." : ""}`);
-        lines.push(`   Status: ${issue.status.replace(/_/g, " ")} | Priority: ${issue.priority}`);
+        lines.push(`   Client: ${issue.clientName || "Unknown"}`);
+        lines.push(`   ${issue.description.slice(0, 140)}${issue.description.length > 140 ? "..." : ""}`);
+        lines.push(`   ${overduePrefix}Status: ${issue.status.replace(/_/g, " ")}`);
+        pushLinks(issue);
         lines.push("");
       });
     }
 
     lines.push(`📊 *Total: ${toShare.length} open issues*`);
-    lines.push("\n_Sent from BCH OPS App_");
+    if (perBrand) {
+      lines.push("");
+      lines.push("🙏 *Please share an update on the above.*");
+    }
     return { text: lines.join("\n"), target };
   };
 
