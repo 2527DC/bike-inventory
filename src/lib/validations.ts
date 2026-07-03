@@ -283,6 +283,7 @@ export const vendorIssueUpdateSchema = z.object({
   priority: z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
   resolution: z.string().optional(),
   docLink: z.string().optional(),
+  vendorId: z.string().optional(), // admin-only: reassign an issue to the correct brand
 });
 
 export const vendorIssueNoteSchema = z.object({

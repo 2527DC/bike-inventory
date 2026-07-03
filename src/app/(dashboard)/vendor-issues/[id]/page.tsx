@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, use } from "react";
+import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { ArrowLeft, Share2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -77,6 +78,9 @@ export default function VendorIssueDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
+  const { data: session } = useSession();
+  const role = (session?.user as { role?: string })?.role || "";
+  const isAdmin = role === "ADMIN" || role === "CEO";
   const [issue, setIssue] = useState<IssueDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
@@ -84,6 +88,62 @@ export default function VendorIssueDetailPage({
   const [resolutionText, setResolutionText] = useState("");
   const [noteText, setNoteText] = useState("");
   const [addingNote, setAddingNote] = useState(false);
+  // Admin-only brand (vendor) reassignment
+  const [brandEditing, setBrandEditing] = useState(false);
+  const [vendorOptions, setVendorOptions] = useState<{ id: string; name: string; code: string }[]>([]);
+  const [selectedVendorId, setSelectedVendorId] = useState("");
+  const [savingBrand, setSavingBrand] = useState(false);
+  const [brandError, setBrandError] = useState<string | null>(null);
+
+  async function openBrandEdit() {
+    setBrandError(null);
+    setSelectedVendorId(issue?.vendor?.id || "");
+    setBrandEditing(true);
+    if (vendorOptions.length === 0) {
+      try {
+        const res = await fetch("/api/vendors?limit=500");
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
+          setVendorOptions(json.data.map((v: { id: string; name: string; code: string }) => ({ id: v.id, name: v.name, code: v.code })));
+        }
+      } catch { /* ignore */ }
+    }
+  }
+
+  async function saveBrand() {
+    if (!selectedVendorId || selectedVendorId === issue?.vendor?.id) { setBrandEditing(false); return; }
+    setSavingBrand(true);
+    setBrandError(null);
+    try {
+      const res = await fetch(`/api/vendor-issues/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vendorId: selectedVendorId }),
+      });
+      const json = await res.json();
+      if (json.success) { setIssue(json.data); setBrandEditing(false); }
+      else setBrandError(json.error || "Failed to change brand");
+    } catch (e) {
+      setBrandError(e instanceof Error ? e.message : "Failed to change brand");
+    }
+    setSavingBrand(false);
+  }
+
+  // On sharing an issue with the vendor, auto-move it from OPEN to IN PROGRESS.
+  async function markIssueShared() {
+    if (!issue || issue.status !== "OPEN") return;
+    try {
+      const res = await fetch("/api/vendor-issues/mark-shared", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [issue.id] }),
+      });
+      const json = await res.json();
+      if (json.success && (json.data?.updatedIds || []).length) {
+        setIssue((prev) => (prev ? { ...prev, status: "IN_PROGRESS" } : prev));
+      }
+    } catch { /* ignore — the share itself still worked */ }
+  }
 
   async function addNote() {
     if (!issue || !noteText.trim()) return;
@@ -157,6 +217,7 @@ export default function VendorIssueDetailPage({
 
   async function handleWhatsAppShare() {
     if (!issue) return;
+    void markIssueShared();
     const source = issue.issueSource === "CLIENT"
       ? `Client: ${issue.clientName || "Unknown"}${issue.clientPhone ? ` (${issue.clientPhone})` : ""}`
       : `Brand: ${issue.vendor?.name || "Unknown"} (${issue.vendor?.code || ""})`;
@@ -284,7 +345,44 @@ export default function VendorIssueDetailPage({
                 {issue.clientPhone && <p className="text-xs text-slate-500">{issue.clientPhone}</p>}
               </div>
             ) : (
-              <p className="text-sm text-slate-900">{issue.vendor?.name} ({issue.vendor?.code})</p>
+              <div>
+                <p className="text-sm text-slate-900">{issue.vendor?.name} ({issue.vendor?.code})</p>
+                {isAdmin && !brandEditing && (
+                  <button onClick={openBrandEdit} className="mt-1 text-xs font-medium text-blue-600 hover:underline">
+                    Change brand
+                  </button>
+                )}
+                {isAdmin && brandEditing && (
+                  <div className="mt-2 space-y-2">
+                    <select
+                      value={selectedVendorId}
+                      onChange={(e) => setSelectedVendorId(e.target.value)}
+                      className="w-full h-9 px-2 rounded-lg border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+                    >
+                      <option value="">Select correct brand…</option>
+                      {vendorOptions.map((v) => (
+                        <option key={v.id} value={v.id}>{v.name} ({v.code})</option>
+                      ))}
+                    </select>
+                    {brandError && <p className="text-xs text-red-600">{brandError}</p>}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={saveBrand}
+                        disabled={savingBrand || !selectedVendorId}
+                        className="flex-1 h-9 rounded-lg bg-blue-600 text-white text-sm font-medium disabled:opacity-50"
+                      >
+                        {savingBrand ? "Saving…" : "Save brand"}
+                      </button>
+                      <button
+                        onClick={() => setBrandEditing(false)}
+                        className="flex-1 h-9 rounded-lg border border-slate-200 text-sm font-medium text-slate-600"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </div>
           {issue.bill && (

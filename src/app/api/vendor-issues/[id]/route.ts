@@ -67,6 +67,15 @@ export async function PUT(
 
     if (!current) return errorResponse("Issue not found", 404);
 
+    // Reassigning an issue to a different brand is ADMIN/CEO only, and the brand must exist.
+    if (data.vendorId !== undefined) {
+      if (user.role !== "ADMIN" && user.role !== "CEO") {
+        return errorResponse("Only admins can change the brand", 403);
+      }
+      const v = await prisma.vendor.findUnique({ where: { id: data.vendorId }, select: { id: true } });
+      if (!v) return errorResponse("Selected brand not found", 400);
+    }
+
     // Handle resolvedAt auto-set/clear on status transitions
     let resolvedAt: Date | null | undefined = undefined;
     if (data.status === "RESOLVED" && current.status !== "RESOLVED") {
@@ -82,6 +91,7 @@ export async function PUT(
         ...(data.priority && { priority: data.priority }),
         ...(data.resolution !== undefined && { resolution: data.resolution }),
         ...(data.docLink !== undefined && { docLink: data.docLink || null }),
+        ...(data.vendorId !== undefined && { vendorId: data.vendorId }),
         ...(resolvedAt !== undefined && { resolvedAt }),
       },
       include: {

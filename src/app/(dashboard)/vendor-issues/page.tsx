@@ -230,11 +230,31 @@ export default function VendorIssuesPage() {
     return { text: lines.join("\n"), target };
   };
 
+  // When a specific brand's issues are shared with the vendor, auto-move OPEN → IN PROGRESS.
+  const markSharedInProgress = async (shareBrand: boolean) => {
+    if (!shareBrand || brandFilter === "ALL") return; // only per-brand shares count as "sent to the vendor"
+    const ids = filteredBrandIssues.filter(i => i.status === "OPEN").map(i => i.id);
+    if (!ids.length) return;
+    try {
+      const res = await fetch("/api/vendor-issues/mark-shared", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const json = await res.json();
+      const flipped = new Set<string>(json?.data?.updatedIds || []);
+      if (flipped.size) {
+        setIssues(prev => prev.map(it => flipped.has(it.id) ? { ...it, status: "IN_PROGRESS" } : it));
+      }
+    } catch { /* ignore — the share itself still worked */ }
+  };
+
   // Open WhatsApp's chat picker with the message pre-filled (user picks the chat/group).
   const shareIssuesWhatsApp = (shareBrand: boolean = true, shareClient: boolean = true) => {
     const msg = buildShareMessage(shareBrand, shareClient);
     if (!msg) return;
     window.open(`https://wa.me/?text=${encodeURIComponent(msg.text)}`, "_blank");
+    void markSharedInProgress(shareBrand);
   };
 
   // Copy the message so it can be pasted straight into the correct group (reliable — no wrong-chat risk).
@@ -256,6 +276,7 @@ export default function VendorIssuesPage() {
     setCopyToast(ok
       ? (msg.target ? `Copied ✓ — open “${msg.target}” in WhatsApp & paste` : "Copied ✓ — open the group in WhatsApp & paste")
       : "Couldn't copy — long-press the text to select");
+    if (ok) void markSharedInProgress(shareBrand);
     window.setTimeout(() => setCopyToast(null), 4500);
   };
 
