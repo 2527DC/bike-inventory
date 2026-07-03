@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { Search, AlertCircle, Plus, Trash2, Share2, Building2, Users, CalendarCheck, MessagesSquare, X, Loader2 } from "lucide-react";
+import { Search, AlertCircle, Plus, Trash2, Share2, Building2, Users, CalendarCheck, MessagesSquare, X, Loader2, Copy } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -92,6 +92,7 @@ export default function VendorIssuesPage() {
   const [groupsOpen, setGroupsOpen] = useState(false);
   const [groupDraft, setGroupDraft] = useState<Record<string, { name: string; code: string }>>({});
   const [savingGroups, setSavingGroups] = useState(false);
+  const [copyToast, setCopyToast] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -146,11 +147,13 @@ export default function VendorIssuesPage() {
   const resolvedCount = issues[0]?.resolvedCount ?? 0;
 
   // WhatsApp share with overdue days
-  const shareIssuesWhatsApp = (shareBrand: boolean = true, shareClient: boolean = true) => {
+  // Build the formatted WhatsApp message for the current selection.
+  // Returns the text + the target group label (when a single mapped brand is selected).
+  const buildShareMessage = (shareBrand: boolean, shareClient: boolean): { text: string; target: string | null } | null => {
     const toShare: IssueItem[] = [];
     if (shareBrand) toShare.push(...filteredBrandIssues.filter(i => i.status !== "CLOSED"));
     if (shareClient) toShare.push(...clientIssues.filter(i => i.status !== "CLOSED"));
-    if (!toShare.length) return;
+    if (!toShare.length) return null;
 
     const today = new Date();
     const lines: string[] = [];
@@ -161,12 +164,14 @@ export default function VendorIssuesPage() {
       : "⚠️ *Client Issues Summary*";
 
     // Per-brand share → prepend the mapped WhatsApp group as a routing label (the human taps that group).
+    let target: string | null = null;
     if (shareBrand && brandFilter !== "ALL") {
       const meta = brandMeta[brandFilter];
       const code = fmtGroupCode(meta?.waGroupCode);
       if (meta && (meta.waGroupName || code)) {
         lines.push(`📍 *${meta.waGroupName || brandFilter}*${code ? `  ${code}` : ""}`);
         lines.push("");
+        target = `${meta.waGroupName || brandFilter}${code ? ` ${code}` : ""}`;
       }
     }
     lines.push(heading);
@@ -205,7 +210,36 @@ export default function VendorIssuesPage() {
 
     lines.push(`📊 *Total: ${toShare.length} open issues*`);
     lines.push("\n_Sent from BCH OPS App_");
-    window.open(`https://wa.me/?text=${encodeURIComponent(lines.join("\n"))}`, "_blank");
+    return { text: lines.join("\n"), target };
+  };
+
+  // Open WhatsApp's chat picker with the message pre-filled (user picks the chat/group).
+  const shareIssuesWhatsApp = (shareBrand: boolean = true, shareClient: boolean = true) => {
+    const msg = buildShareMessage(shareBrand, shareClient);
+    if (!msg) return;
+    window.open(`https://wa.me/?text=${encodeURIComponent(msg.text)}`, "_blank");
+  };
+
+  // Copy the message so it can be pasted straight into the correct group (reliable — no wrong-chat risk).
+  const copyIssues = async (shareBrand: boolean = true, shareClient: boolean = true) => {
+    const msg = buildShareMessage(shareBrand, shareClient);
+    if (!msg) { setCopyToast("Nothing to copy"); window.setTimeout(() => setCopyToast(null), 2500); return; }
+    let ok = true;
+    try {
+      await navigator.clipboard.writeText(msg.text);
+    } catch {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = msg.text; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      } catch { ok = false; }
+    }
+    setCopyToast(ok
+      ? (msg.target ? `Copied ✓ — open “${msg.target}” in WhatsApp & paste` : "Copied ✓ — open the group in WhatsApp & paste")
+      : "Couldn't copy — long-press the text to select");
+    window.setTimeout(() => setCopyToast(null), 4500);
   };
 
   // Open the brand → WhatsApp group editor, seeded from current mappings.
@@ -432,11 +466,18 @@ export default function VendorIssuesPage() {
             <MessagesSquare className="w-4 h-4" /> Groups
           </button>
           <button
-            onClick={() => shareIssuesWhatsApp(sourceTab !== "CLIENT", sourceTab !== "VENDOR")}
-            className="w-9 h-9 rounded-full bg-green-500 flex items-center justify-center active:scale-95 transition-transform shadow"
-            title="Share issues on WhatsApp"
+            onClick={() => copyIssues(sourceTab !== "CLIENT", sourceTab !== "VENDOR")}
+            className="flex items-center gap-1.5 h-9 px-3 rounded-full bg-green-600 text-white text-xs font-semibold active:scale-95 transition-transform shadow"
+            title="Copy the message to paste into the WhatsApp group"
           >
-            <Share2 className="w-4 h-4 text-white" />
+            <Copy className="w-4 h-4" /> Copy
+          </button>
+          <button
+            onClick={() => shareIssuesWhatsApp(sourceTab !== "CLIENT", sourceTab !== "VENDOR")}
+            className="w-9 h-9 rounded-full bg-white border border-slate-200 flex items-center justify-center active:scale-95 transition-transform shadow-sm"
+            title="Open WhatsApp share (you pick the chat)"
+          >
+            <Share2 className="w-4 h-4 text-green-600" />
           </button>
         </div>
       </div>
@@ -555,9 +596,16 @@ export default function VendorIssuesPage() {
                     <Building2 className="w-4 h-4 text-orange-600" />
                     <p className="text-xs font-bold text-orange-700 uppercase tracking-wider">Brand Issues ({filteredBrandIssues.length})</p>
                     <button
+                      onClick={() => copyIssues(true, false)}
+                      className="ml-auto p-1 rounded-full hover:bg-green-50 text-green-600"
+                      title="Copy brand issues"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                    <button
                       onClick={() => shareIssuesWhatsApp(true, false)}
-                      className="ml-auto p-1 rounded-full hover:bg-green-50 text-green-500"
-                      title="Share brand issues"
+                      className="p-1 rounded-full hover:bg-green-50 text-green-500"
+                      title="Share brand issues (pick chat)"
                     >
                       <Share2 className="w-3.5 h-3.5" />
                     </button>
@@ -573,9 +621,16 @@ export default function VendorIssuesPage() {
                     <Users className="w-4 h-4 text-teal-600" />
                     <p className="text-xs font-bold text-teal-700 uppercase tracking-wider">Client Issues ({clientIssues.length})</p>
                     <button
+                      onClick={() => copyIssues(false, true)}
+                      className="ml-auto p-1 rounded-full hover:bg-green-50 text-green-600"
+                      title="Copy client issues"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                    <button
                       onClick={() => shareIssuesWhatsApp(false, true)}
-                      className="ml-auto p-1 rounded-full hover:bg-green-50 text-green-500"
-                      title="Share client issues"
+                      className="p-1 rounded-full hover:bg-green-50 text-green-500"
+                      title="Share client issues (pick chat)"
                     >
                       <Share2 className="w-3.5 h-3.5" />
                     </button>
@@ -626,6 +681,15 @@ export default function VendorIssuesPage() {
       >
         <Plus className="h-5 w-5" />
       </Link>
+
+      {/* Copy confirmation toast */}
+      {copyToast && (
+        <div className="fixed inset-x-0 bottom-24 z-[70] flex justify-center px-4 pointer-events-none">
+          <div className="pointer-events-auto max-w-sm text-center bg-slate-900 text-white text-xs font-medium px-4 py-2.5 rounded-full shadow-lg">
+            {copyToast}
+          </div>
+        </div>
+      )}
 
       {/* Brand → WhatsApp group editor */}
       {groupsOpen && (
