@@ -865,6 +865,7 @@ model VendorIssue {
   clientPhone   String?
   issueNo       String         @unique // ISS-YYYYMM-NNNN
   ticketNo      String?        // Brand's own ticket/reference number (e.g. eMotorad) — shown in the WhatsApp message
+  serviceLocation String?      // IN_STORE (cycle at store) | CUSTOMER (cycle with customer) — shown in the WhatsApp message
   issueType     IssueType
   description   String
   status        IssueStatus    @default(OPEN)

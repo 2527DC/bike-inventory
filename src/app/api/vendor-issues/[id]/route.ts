@@ -92,6 +92,7 @@ export async function PUT(
         ...(data.resolution !== undefined && { resolution: data.resolution }),
         ...(data.docLink !== undefined && { docLink: data.docLink || null }),
         ...(data.ticketNo !== undefined && { ticketNo: data.ticketNo.trim() || null }),
+        ...(data.serviceLocation !== undefined && { serviceLocation: data.serviceLocation }),
         ...(data.vendorId !== undefined && { vendorId: data.vendorId }),
         ...(resolvedAt !== undefined && { resolvedAt }),
       },

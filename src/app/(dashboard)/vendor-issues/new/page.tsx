@@ -201,6 +201,7 @@ export default function NewVendorIssuePage() {
   const [priority, setPriority] = useState<string>("MEDIUM");
   const [description, setDescription] = useState("");
   const [ticketNo, setTicketNo] = useState("");
+  const [serviceLocation, setServiceLocation] = useState("");
   const [billId, setBillId] = useState("");
   const [suggestedResolution, setSuggestedResolution] = useState("");
   const [docLink, setDocLink] = useState("");
@@ -356,6 +357,7 @@ export default function NewVendorIssuePage() {
           issueType,
           description: description.trim(),
           ticketNo: ticketNo.trim() || undefined,
+          serviceLocation: serviceLocation || undefined,
           priority,
           billId: billId || undefined,
           photoUrls: photoUrls.length > 0 ? photoUrls : undefined,
@@ -583,6 +585,33 @@ export default function NewVendorIssuePage() {
             className="flex w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
           />
           <p className="mt-1 text-xs text-slate-400">Shown in the WhatsApp message so the brand can match it to their ticket.</p>
+        </div>
+
+        {/* Service Location */}
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            Service Location (optional)
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { key: "IN_STORE", label: "In-Store Service" },
+              { key: "CUSTOMER", label: "Customer Service" },
+            ].map((opt) => (
+              <button
+                key={opt.key}
+                type="button"
+                onClick={() => setServiceLocation((prev) => (prev === opt.key ? "" : opt.key))}
+                className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                  serviceLocation === opt.key
+                    ? "bg-slate-900 text-white border-slate-900"
+                    : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-slate-400">In-Store = cycle is at the store · Customer = cycle is with the customer.</p>
         </div>
 
         {/* Photos / Videos */}

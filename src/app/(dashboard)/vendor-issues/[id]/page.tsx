@@ -19,6 +19,7 @@ interface IssueDetail {
   id: string;
   issueNo: string;
   ticketNo?: string | null;
+  serviceLocation?: string | null;
   issueSource: string;
   issueType: string;
   description: string;
@@ -67,6 +68,11 @@ const STATUS_VARIANT: Record<string, "default" | "info" | "warning" | "success">
   IN_PROGRESS: "info",
   RESOLVED: "success",
   CLOSED: "default",
+};
+
+const SERVICE_LOCATION_LABEL: Record<string, string> = {
+  IN_STORE: "In-Store Service",
+  CUSTOMER: "Customer Service",
 };
 
 function isVideoUrl(url: string): boolean {
@@ -227,6 +233,7 @@ export default function VendorIssueDetailPage({
     let text = greetName ? `Hi ${greetName},\n\n` : "";
     text += `*Ops Issue ${issue.issueNo}*\n`;
     if (issue.ticketNo) text += `🎫 Ticket: ${issue.ticketNo}\n`;
+    if (issue.serviceLocation && SERVICE_LOCATION_LABEL[issue.serviceLocation]) text += `🔧 ${SERVICE_LOCATION_LABEL[issue.serviceLocation]}\n`;
     text += `Source: ${source}\n`;
     text += `Type: ${issue.issueType.replace(/_/g, " ")}\n`;
     text += `Priority: ${issue.priority}\n`;
@@ -391,6 +398,12 @@ export default function VendorIssueDetailPage({
             <div>
               <span className="text-xs text-slate-500">Ticket:</span>
               <p className="text-sm font-medium text-slate-900">🎫 {issue.ticketNo}</p>
+            </div>
+          )}
+          {issue.serviceLocation && SERVICE_LOCATION_LABEL[issue.serviceLocation] && (
+            <div>
+              <span className="text-xs text-slate-500">Service Location:</span>
+              <p className="text-sm font-medium text-slate-900">🔧 {SERVICE_LOCATION_LABEL[issue.serviceLocation]}</p>
             </div>
           )}
           {issue.bill && (

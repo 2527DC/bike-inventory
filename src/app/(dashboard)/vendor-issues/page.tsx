@@ -17,6 +17,7 @@ interface IssueItem {
   id: string;
   issueNo: string;
   ticketNo: string | null;
+  serviceLocation: string | null;
   issueSource: string;
   issueType: string;
   description: string;
@@ -31,6 +32,11 @@ interface IssueItem {
   inProgressCount: number;
   resolvedCount: number;
 }
+
+const SERVICE_LOCATION_LABEL: Record<string, string> = {
+  IN_STORE: "In-Store Service",
+  CUSTOMER: "Customer Service",
+};
 
 const STATUS_FILTERS = ["ALL", "OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"];
 const PRIORITY_FILTERS = ["ALL", "LOW", "MEDIUM", "HIGH", "URGENT"];
@@ -202,6 +208,7 @@ export default function VendorIssuesPage() {
         const overduePrefix = days > 0 ? `⏰ ${days}d overdue • ` : "";
         lines.push(`${i + 1}. *[${issue.issueNo}]* ${issue.issueType.replace(/_/g, " ")}`);
         if (issue.ticketNo) lines.push(`   🎫 Ticket: ${issue.ticketNo}`);
+        if (issue.serviceLocation && SERVICE_LOCATION_LABEL[issue.serviceLocation]) lines.push(`   🔧 ${SERVICE_LOCATION_LABEL[issue.serviceLocation]}`);
         if (!perBrand) lines.push(`   Brand: ${issue.vendor?.name || "Unknown"}`);
         lines.push(`   ${issue.description.slice(0, 140)}${issue.description.length > 140 ? "..." : ""}`);
         lines.push(`   ${overduePrefix}Status: ${issue.status.replace(/_/g, " ")}`);
@@ -217,6 +224,7 @@ export default function VendorIssuesPage() {
         const overduePrefix = days > 0 ? `⏰ ${days}d overdue • ` : "";
         lines.push(`${i + 1}. *[${issue.issueNo}]* ${issue.issueType.replace(/_/g, " ")}`);
         if (issue.ticketNo) lines.push(`   🎫 Ticket: ${issue.ticketNo}`);
+        if (issue.serviceLocation && SERVICE_LOCATION_LABEL[issue.serviceLocation]) lines.push(`   🔧 ${SERVICE_LOCATION_LABEL[issue.serviceLocation]}`);
         lines.push(`   Client: ${issue.clientName || "Unknown"}`);
         lines.push(`   ${issue.description.slice(0, 140)}${issue.description.length > 140 ? "..." : ""}`);
         lines.push(`   ${overduePrefix}Status: ${issue.status.replace(/_/g, " ")}`);
