@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, use } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Share2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -84,6 +85,15 @@ export default function VendorIssueDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
+  const router = useRouter();
+  // Go back exactly one step (preserving the previous list's filters/scroll); fall back to the list.
+  const goBack = () => {
+    if (typeof window !== "undefined" && window.history.length > 1) router.back();
+    else router.push("/vendor-issues");
+  };
+  // Post-action confirmation ("Completed") with a quick way back.
+  const [toast, setToast] = useState<string | null>(null);
+  const showToast = (msg: string) => { setToast(msg); window.setTimeout(() => setToast(null), 5000); };
   const [issue, setIssue] = useState<IssueDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
@@ -124,6 +134,7 @@ export default function VendorIssueDetailPage({
       if (json.success) {
         setIssue(json.data);
         setRefEditing(false);
+        showToast("✓ Completed");
       } else setRefError(json.error || "Failed to save");
     } catch (e) {
       setRefError(e instanceof Error ? e.message : "Failed to save");
@@ -157,7 +168,7 @@ export default function VendorIssueDetailPage({
         body: JSON.stringify({ vendorId: selectedVendorId }),
       });
       const json = await res.json();
-      if (json.success) { setIssue(json.data); setBrandEditing(false); }
+      if (json.success) { setIssue(json.data); setBrandEditing(false); showToast("✓ Completed"); }
       else setBrandError(json.error || "Failed to change brand");
     } catch (e) {
       setBrandError(e instanceof Error ? e.message : "Failed to change brand");
@@ -230,6 +241,7 @@ export default function VendorIssueDetailPage({
         setIssue(data.data);
         setShowResolution(false);
         setResolutionText("");
+        showToast("✓ Completed");
       }
     } catch {
       // silent
@@ -344,9 +356,9 @@ export default function VendorIssueDetailPage({
     <div>
       {/* Header */}
       <div className="flex items-center gap-3 mb-4">
-        <Link href="/vendor-issues" className="p-1">
+        <button onClick={goBack} className="p-1" aria-label="Back">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
-        </Link>
+        </button>
         <div className="flex-1">
           <h1 className="text-lg font-bold text-slate-900">{issue.issueNo}</h1>
           <p className="text-xs text-slate-500">
@@ -750,6 +762,16 @@ export default function VendorIssueDetailPage({
           <Link href={`/vendors/${issue.vendor?.id}`} className="underline">brand page</Link>
           {" "}to message them directly.
         </p>
+      )}
+
+      {/* Completion confirmation with a quick way back */}
+      {toast && (
+        <div className="fixed inset-x-0 bottom-24 z-[70] flex justify-center px-4">
+          <div className="bg-slate-900 text-white text-xs font-medium px-4 py-2.5 rounded-full shadow-lg flex items-center gap-3">
+            <span>{toast}</span>
+            <button onClick={goBack} className="underline font-semibold whitespace-nowrap">Back to list</button>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -453,6 +453,16 @@ export default function VendorIssuesPage() {
                   {issue.issueType.replace(/_/g, " ")}
                 </span>
               </div>
+              {(issue.ticketNo || (issue.serviceLocation && SERVICE_LOCATION_SHORT[issue.serviceLocation])) && (
+                <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                  {issue.ticketNo && (
+                    <span className="inline-flex items-center rounded-full bg-slate-100 text-slate-600 px-2 py-0.5 text-[10px] font-medium">🎫 {issue.ticketNo}</span>
+                  )}
+                  {issue.serviceLocation && SERVICE_LOCATION_SHORT[issue.serviceLocation] && (
+                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${SERVICE_LOCATION_BADGE[issue.serviceLocation]}`}>{SERVICE_LOCATION_SHORT[issue.serviceLocation]}</span>
+                  )}
+                </div>
+              )}
               <p className="text-xs text-slate-500 mb-1">
                 {issue.issueSource === "CLIENT" ? (
                   <><span className="text-teal-600 font-medium">Client:</span> {issue.clientName || "Unknown"}</>
@@ -461,14 +471,6 @@ export default function VendorIssuesPage() {
                 )}
               </p>
               <p className="text-xs text-slate-600 line-clamp-2">{issue.description}</p>
-              {(issue.ticketNo || (issue.serviceLocation && SERVICE_LOCATION_SHORT[issue.serviceLocation])) && (
-                <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                  {issue.ticketNo && <span className="text-[10px] text-slate-500">🎫 {issue.ticketNo}</span>}
-                  {issue.serviceLocation && SERVICE_LOCATION_SHORT[issue.serviceLocation] && (
-                    <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-medium ${SERVICE_LOCATION_BADGE[issue.serviceLocation]}`}>{SERVICE_LOCATION_SHORT[issue.serviceLocation]}</span>
-                  )}
-                </div>
-              )}
             </div>
             <div className="text-right shrink-0 space-y-1">
               <Badge variant={PRIORITY_VARIANT[issue.priority] || "default"} className="text-[10px]">{issue.priority}</Badge>
