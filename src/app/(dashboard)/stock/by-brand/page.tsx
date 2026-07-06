@@ -42,8 +42,17 @@ interface BrandStock {
   lowStockCount: number;
   outOfStockCount: number;
   totalValue: number;
+  byLocation?: Record<string, number>;
   products?: BrandProduct[];
 }
+
+// Short labels for the per-location breakdown chips.
+const LOC_SHORT: { key: string; label: string }[] = [
+  { key: "BCH_WAREHOUSE", label: "BCH Whse" },
+  { key: "BCH_STORE", label: "BCH Store" },
+  { key: "BCC_WAREHOUSE", label: "BCC Whse" },
+  { key: "BCC_STORE", label: "BCC Store" },
+];
 
 type SortKey = "name" | "value" | "count" | "stock";
 
@@ -245,6 +254,19 @@ export default function BrandStockPage() {
                         <p className="text-xs text-slate-500 mt-0.5">
                           {brand.productCount} products | {brand.totalStock.toLocaleString("en-IN")} units
                         </p>
+                        {brand.byLocation && Object.values(brand.byLocation).some((v) => v > 0) && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {LOC_SHORT.map((l) => {
+                              const q = brand.byLocation?.[l.key] || 0;
+                              if (q <= 0) return null;
+                              return (
+                                <span key={l.key} className="inline-flex items-center rounded-full bg-slate-100 text-slate-600 px-2 py-0.5 text-[10px] font-medium">
+                                  {l.label} {q.toLocaleString("en-IN")}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                       {isAdmin && (
                         <div className="text-right shrink-0">

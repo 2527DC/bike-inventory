@@ -83,7 +83,8 @@ export default function StockByLocationPage() {
               </p>
               <div className="grid gap-3 sm:grid-cols-2">
                 {group.locs.map((loc) => (
-                  <Card key={loc.key}>
+                  <Link key={loc.key} href={`/stock/by-location/${loc.key}`} className="block">
+                    <Card className="hover:border-slate-300 transition-colors">
                     <CardContent className="p-4">
                       <div className="flex items-center gap-3 mb-3">
                         <div className={`h-10 w-10 rounded-xl flex items-center justify-center ${loc.kind === "Warehouse" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}`}>
@@ -115,8 +116,10 @@ export default function StockByLocationPage() {
                           )}
                         </div>
                       )}
+                      <p className="text-[11px] font-medium text-blue-600 mt-2">View stock by brand →</p>
                     </CardContent>
-                  </Card>
+                    </Card>
+                  </Link>
                 ))}
               </div>
             </div>

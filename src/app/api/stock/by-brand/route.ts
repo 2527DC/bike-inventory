@@ -9,7 +9,7 @@ export async function GET() {
     await requireAuth();
 
     // Fetch brand summaries using groupBy — no need to load all 2765 products
-    const [brands, brandStats] = await Promise.all([
+    const [brands, brandStats, locStats] = await Promise.all([
       prisma.brand.findMany({
         orderBy: { name: "asc" },
         select: {
@@ -38,9 +38,23 @@ export async function GET() {
         WHERE status = 'ACTIVE' AND "brandId" IS NOT NULL
         GROUP BY "brandId"
       `,
+      // Per-brand × per-location unit totals (the "where does this brand's stock sit" breakdown)
+      prisma.$queryRaw<Array<{ brandId: string; location: string; qty: number }>>`
+        SELECT p."brandId", sl.location::text as location, COALESCE(SUM(sl.quantity), 0)::int as qty
+        FROM "StockLevel" sl
+        JOIN "Product" p ON p.id = sl."productId"
+        WHERE p.status = 'ACTIVE' AND p."brandId" IS NOT NULL
+        GROUP BY p."brandId", sl.location
+      `,
     ]);
 
     const statsMap = new Map(brandStats.map((s) => [s.brandId, s]));
+    const locMap = new Map<string, Record<string, number>>();
+    for (const r of locStats) {
+      const cur = locMap.get(r.brandId) || {};
+      cur[r.location] = r.qty;
+      locMap.set(r.brandId, cur);
+    }
 
     const data = brands
       .filter((b) => b._count.products > 0)
@@ -56,6 +70,7 @@ export async function GET() {
           lowStockCount: stats?.low_stock || 0,
           outOfStockCount: stats?.out_of_stock || 0,
           totalValue: stats?.total_value || 0,
+          byLocation: locMap.get(b.id) || {},
         };
       });
 
