@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, use } from "react";
-import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { ArrowLeft, Share2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -85,9 +84,6 @@ export default function VendorIssueDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
-  const isAdmin = role === "ADMIN" || role === "CEO";
   const [issue, setIssue] = useState<IssueDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
@@ -126,7 +122,7 @@ export default function VendorIssueDetailPage({
       });
       const json = await res.json();
       if (json.success) {
-        setIssue((prev) => (prev ? { ...prev, ticketNo: json.data.ticketNo, serviceLocation: json.data.serviceLocation } : prev));
+        setIssue(json.data);
         setRefEditing(false);
       } else setRefError(json.error || "Failed to save");
     } catch (e) {
@@ -155,8 +151,8 @@ export default function VendorIssueDetailPage({
     setSavingBrand(true);
     setBrandError(null);
     try {
-      const res = await fetch(`/api/vendor-issues/${id}`, {
-        method: "PUT",
+      const res = await fetch(`/api/vendor-issues/${id}/reference`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ vendorId: selectedVendorId }),
       });
@@ -180,7 +176,11 @@ export default function VendorIssueDetailPage({
       });
       const json = await res.json();
       if (json.success && (json.data?.updatedIds || []).length) {
-        setIssue((prev) => (prev ? { ...prev, status: "IN_PROGRESS" } : prev));
+        // Refetch so the status AND the auto-logged action note show in the activity log.
+        const r2 = await fetch(`/api/vendor-issues/${id}`);
+        const j2 = await r2.json();
+        if (j2.success) setIssue(j2.data);
+        else setIssue((prev) => (prev ? { ...prev, status: "IN_PROGRESS" } : prev));
       }
     } catch { /* ignore — the share itself still worked */ }
   }
@@ -389,12 +389,12 @@ export default function VendorIssueDetailPage({
             ) : (
               <div>
                 <p className="text-sm text-slate-900">{issue.vendor?.name} ({issue.vendor?.code})</p>
-                {isAdmin && !brandEditing && (
+                {!brandEditing && (
                   <button onClick={openBrandEdit} className="mt-1 text-xs font-medium text-blue-600 hover:underline">
                     Change brand
                   </button>
                 )}
-                {isAdmin && brandEditing && (
+                {brandEditing && (
                   <div className="mt-2 space-y-2">
                     <select
                       value={selectedVendorId}
@@ -691,10 +691,11 @@ export default function VendorIssueDetailPage({
           )}
         </div>
       )}
-      {/* Follow-up notes timeline */}
+      {/* Activity log — actions taken on this ticket + follow-up notes */}
       <Card className="mb-4">
         <CardContent className="p-3">
-          <p className="text-xs font-semibold text-slate-700 mb-2">Follow-up Notes</p>
+          <p className="text-xs font-semibold text-slate-700">Activity Log</p>
+          <p className="text-[11px] text-slate-400 mb-2">Every action on this ticket — status changes, shares, brand/ticket edits — plus your notes.</p>
           <textarea
             value={noteText}
             onChange={(e) => setNoteText(e.target.value)}
@@ -728,7 +729,7 @@ export default function VendorIssueDetailPage({
               ))}
             </div>
           ) : (
-            <p className="text-xs text-slate-400">No notes yet. Add the first follow-up note above.</p>
+            <p className="text-xs text-slate-400">No activity yet. Actions and notes will appear here.</p>
           )}
         </CardContent>
       </Card>
