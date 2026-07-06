@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { Search, AlertCircle, Plus, Trash2, Share2, Building2, Users, CalendarCheck, MessagesSquare, X, Loader2, Copy } from "lucide-react";
+import { Search, AlertCircle, Plus, Trash2, Share2, Building2, Users, CalendarCheck, MessagesSquare, X, Loader2, Copy, ChevronDown } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -37,6 +37,28 @@ const SERVICE_LOCATION_LABEL: Record<string, string> = {
   IN_STORE: "In-Store Service",
   CUSTOMER: "Customer Service",
 };
+const SERVICE_LOCATION_SHORT: Record<string, string> = { IN_STORE: "In-Store", CUSTOMER: "Customer" };
+const SERVICE_LOCATION_BADGE: Record<string, string> = {
+  IN_STORE: "bg-indigo-100 text-indigo-700",
+  CUSTOMER: "bg-amber-100 text-amber-700",
+};
+
+const PRIORITY_ORDER: Record<string, number> = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+const STATUS_ORDER: Record<string, number> = { OPEN: 0, IN_PROGRESS: 1, RESOLVED: 2, CLOSED: 3 };
+const SORT_OPTIONS: { key: string; label: string }[] = [
+  { key: "DEFAULT", label: "Latest" },
+  { key: "AGE", label: "Age (oldest)" },
+  { key: "PRIORITY", label: "Priority" },
+  { key: "STATUS", label: "Status" },
+];
+
+function sortIssues(list: IssueItem[], sortBy: string): IssueItem[] {
+  const arr = [...list];
+  if (sortBy === "AGE") arr.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  else if (sortBy === "PRIORITY") arr.sort((a, b) => (PRIORITY_ORDER[a.priority] ?? 9) - (PRIORITY_ORDER[b.priority] ?? 9));
+  else if (sortBy === "STATUS") arr.sort((a, b) => (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9));
+  return arr;
+}
 
 const STATUS_FILTERS = ["ALL", "OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"];
 const PRIORITY_FILTERS = ["ALL", "LOW", "MEDIUM", "HIGH", "URGENT"];
@@ -89,6 +111,8 @@ export default function VendorIssuesPage() {
   const [sourceTab, setSourceTab] = useState<"ALL" | "VENDOR" | "CLIENT">("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [priorityFilter, setPriorityFilter] = useState("ALL");
+  const [serviceFilter, setServiceFilter] = useState("ALL");
+  const [sortBy, setSortBy] = useState("DEFAULT");
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search);
   const [dateFilter, setDateFilter] = useState<DateRangeKey>("all");
@@ -146,10 +170,17 @@ export default function VendorIssuesPage() {
     }
   }
 
-  // Apply brand filter
-  const filteredBrandIssues = brandFilter === "ALL"
-    ? brandIssues
-    : brandIssues.filter(i => i.vendor?.name === brandFilter);
+  // Service-location filter + chosen sort, applied to any source list.
+  const viewList = (list: IssueItem[]) => {
+    const filtered = serviceFilter === "ALL" ? list : list.filter(i => i.serviceLocation === serviceFilter);
+    return sortIssues(filtered, sortBy);
+  };
+
+  // Apply brand filter, then the shared service filter + sort.
+  const filteredBrandIssues = viewList(
+    brandFilter === "ALL" ? brandIssues : brandIssues.filter(i => i.vendor?.name === brandFilter)
+  );
+  const visibleClientIssues = viewList(clientIssues);
 
   const openCount = issues[0]?.openCount ?? 0;
   const inProgressCount = issues[0]?.inProgressCount ?? 0;
@@ -430,6 +461,14 @@ export default function VendorIssuesPage() {
                 )}
               </p>
               <p className="text-xs text-slate-600 line-clamp-2">{issue.description}</p>
+              {(issue.ticketNo || (issue.serviceLocation && SERVICE_LOCATION_SHORT[issue.serviceLocation])) && (
+                <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                  {issue.ticketNo && <span className="text-[10px] text-slate-500">🎫 {issue.ticketNo}</span>}
+                  {issue.serviceLocation && SERVICE_LOCATION_SHORT[issue.serviceLocation] && (
+                    <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-medium ${SERVICE_LOCATION_BADGE[issue.serviceLocation]}`}>{SERVICE_LOCATION_SHORT[issue.serviceLocation]}</span>
+                  )}
+                </div>
+              )}
             </div>
             <div className="text-right shrink-0 space-y-1">
               <Badge variant={PRIORITY_VARIANT[issue.priority] || "default"} className="text-[10px]">{issue.priority}</Badge>
@@ -470,9 +509,12 @@ export default function VendorIssuesPage() {
         emptyText="No issues found"
         columns={[
           { header: "Issue", cell: (i) => (
-            <div className="flex items-center gap-2">
-              <span className="font-semibold text-slate-900">{i.issueNo}</span>
-              <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${ISSUE_TYPE_COLORS[i.issueType] || ISSUE_TYPE_COLORS.OTHER}`}>{i.issueType.replace(/_/g, " ")}</span>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-slate-900">{i.issueNo}</span>
+                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${ISSUE_TYPE_COLORS[i.issueType] || ISSUE_TYPE_COLORS.OTHER}`}>{i.issueType.replace(/_/g, " ")}</span>
+              </div>
+              {i.ticketNo && <span className="text-[11px] text-slate-400">🎫 {i.ticketNo}</span>}
             </div>
           ) },
           { header: "Brand / Client", cell: (i) => i.issueSource === "CLIENT"
@@ -481,6 +523,9 @@ export default function VendorIssuesPage() {
           { header: "Description", cell: (i) => <span className="text-slate-600 line-clamp-1 max-w-[24rem] inline-block align-middle">{i.description}</span> },
           { header: "Priority", cell: (i) => <Badge variant={PRIORITY_VARIANT[i.priority] || "default"} className="text-[10px]">{i.priority}</Badge> },
           { header: "Status", cell: (i) => <Badge variant={STATUS_VARIANT[i.status] || "default"} className="text-[10px]">{i.status.replace(/_/g, " ")}</Badge> },
+          { header: "Service", cell: (i) => i.serviceLocation && SERVICE_LOCATION_SHORT[i.serviceLocation]
+            ? <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium whitespace-nowrap ${SERVICE_LOCATION_BADGE[i.serviceLocation]}`}>{SERVICE_LOCATION_SHORT[i.serviceLocation]}</span>
+            : <span className="text-slate-300">—</span> },
           { header: "Age", className: "whitespace-nowrap", cell: (i) => {
             const days = (i.status !== "CLOSED" && i.status !== "RESOLVED") ? overdueDays(i.createdAt) : 0;
             return <span className="text-slate-500">{new Date(i.createdAt).toLocaleDateString("en-IN")}{days > 0 && <span className="text-red-500 font-medium ml-1">({days}d)</span>}</span>;
@@ -579,9 +624,10 @@ export default function VendorIssuesPage() {
         <Input placeholder="Search issue no, vendor, or client..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
       </div>
 
-      {/* Filters */}
+      {/* Filters + Sort */}
+      <div className="flex items-center gap-2 mb-3">
       <FilterSheet
-        className="mb-3"
+        className="flex-1 min-w-0"
         dateValue={dateFilter}
         onDateChange={(key, from, to) => { setDateFilter(key); setDateFrom(from); setDateTo(to); }}
         groups={[
@@ -599,6 +645,17 @@ export default function VendorIssuesPage() {
             options: PRIORITY_FILTERS.map((p) => ({ key: p, label: p === "ALL" ? "All" : p })),
             onChange: (key) => setPriorityFilter(key),
           },
+          {
+            label: "Service",
+            value: serviceFilter,
+            defaultValue: "ALL",
+            options: [
+              { key: "ALL", label: "All" },
+              { key: "IN_STORE", label: "In-Store" },
+              { key: "CUSTOMER", label: "Customer" },
+            ],
+            onChange: (key) => setServiceFilter(key),
+          },
           ...(brandNames.length > 0 && (sourceTab === "ALL" || sourceTab === "VENDOR")
             ? [{
                 label: "Brand",
@@ -610,6 +667,20 @@ export default function VendorIssuesPage() {
             : []),
         ]}
       />
+        <div className="shrink-0 relative">
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="appearance-none h-10 pl-3 pr-8 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 hover:border-slate-400 cursor-pointer focus:outline-none"
+            aria-label="Sort issues"
+          >
+            {SORT_OPTIONS.map((o) => (
+              <option key={o.key} value={o.key}>Sort: {o.label}</option>
+            ))}
+          </select>
+          <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+        </div>
+      </div>
 
       {/* Nudge: a brand is selected but has no WhatsApp group mapped yet */}
       {brandFilter !== "ALL" && brandMeta[brandFilter] && !(brandMeta[brandFilter].waGroupName || brandMeta[brandFilter].waGroupCode) && (
@@ -664,11 +735,11 @@ export default function VendorIssuesPage() {
               )}
 
               {/* Client Issues Section */}
-              {clientIssues.length > 0 && (
+              {visibleClientIssues.length > 0 && (
                 <div>
                   <div className="flex items-center gap-2 mb-2">
                     <Users className="w-4 h-4 text-teal-600" />
-                    <p className="text-xs font-bold text-teal-700 uppercase tracking-wider">Client Issues ({clientIssues.length})</p>
+                    <p className="text-xs font-bold text-teal-700 uppercase tracking-wider">Client Issues ({visibleClientIssues.length})</p>
                     <button
                       onClick={() => copyIssues(false, true)}
                       className="ml-auto p-1 rounded-full hover:bg-green-50 text-green-600"
@@ -684,11 +755,11 @@ export default function VendorIssuesPage() {
                       <Share2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                  {renderIssueList(clientIssues)}
+                  {renderIssueList(visibleClientIssues)}
                 </div>
               )}
 
-              {filteredBrandIssues.length === 0 && clientIssues.length === 0 && (
+              {filteredBrandIssues.length === 0 && visibleClientIssues.length === 0 && (
                 <div className="text-center py-12">
                   <AlertCircle className="h-8 w-8 text-slate-300 mx-auto mb-2" />
                   <p className="text-sm text-slate-400">No issues found</p>
@@ -712,7 +783,7 @@ export default function VendorIssuesPage() {
           {/* CLIENT tab: only client issues */}
           {sourceTab === "CLIENT" && (
             <div className="space-y-0">
-              {clientIssues.length > 0 ? renderIssueList(clientIssues) : (
+              {visibleClientIssues.length > 0 ? renderIssueList(visibleClientIssues) : (
                 <div className="text-center py-12">
                   <Users className="h-8 w-8 text-slate-300 mx-auto mb-2" />
                   <p className="text-sm text-slate-400">No client issues found</p>
