@@ -778,7 +778,7 @@ export default function BrandCountPage() {
               {countedCount} items counted for {selectedBrand?.name}{BIN_TRACKING_ENABLED && selectedBin ? ` in ${selectedBin.name}` : selectedLocation ? ` at ${stockLocationLabel(selectedLocation)}` : ""}
             </p>
             <p className="text-xs text-slate-500 mt-2">
-              Waiting for approval. Once approved, these become the actual stock levels.
+              This is a verification count — it records the numbers and any variance, but does not change stock. Stock is added through Inwards.
             </p>
           </div>
           <div className="flex gap-2 justify-center mt-4">

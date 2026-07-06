@@ -107,6 +107,14 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       }
     }
 
+    // Stock Count is VERIFY-ONLY by default: approving records the count + variance but does
+    // not change inventory (Inwards is the way stock is added). Only an ADMIN/CEO who explicitly
+    // sends applyToStock=true may push the counted quantities onto stock as a correction.
+    const applyToStock =
+      data.status === "APPROVED" &&
+      data.applyToStock === true &&
+      (user.role === "ADMIN" || user.role === "CEO");
+
     const result = await prisma.$transaction(async (tx) => {
       if (data.items && data.items.length > 0) {
         for (const item of data.items) {
@@ -164,8 +172,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         updateData.rejectionReason = data.rejectionReason || null;
       }
 
-      // When APPROVED: apply counted quantities to product stock + brands
-      if (data.status === "APPROVED") {
+      // Apply counted quantities to stock ONLY on an explicit admin correction (applyToStock).
+      // A plain approval is verify-only and leaves inventory untouched.
+      if (applyToStock) {
         const BASELINE_END = new Date("2026-07-31T23:59:59+05:30");
         const isBaselinePeriod = new Date() <= BASELINE_END;
         // Location mode: the count was scoped to one of the 4 locations, so apply the

@@ -226,7 +226,7 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
         <div className="flex gap-2 mb-3">
           <button onClick={handleApprove} disabled={actionLoading}
             className="flex-1 flex items-center justify-center gap-2 bg-green-600 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50">
-            <ShieldCheck className="h-4 w-4" /> {actionLoading ? "..." : "Approve & Apply Stock"}
+            <ShieldCheck className="h-4 w-4" /> {actionLoading ? "..." : "Approve (verify only)"}
           </button>
           <button onClick={() => setShowRejectModal(true)} disabled={actionLoading}
             className="flex-1 flex items-center justify-center gap-2 bg-red-600 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50">

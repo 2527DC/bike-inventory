@@ -260,7 +260,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
     finally { setSaving(false); }
   };
 
-  const handleStatusChange = async (newStatus: string, extras?: Record<string, string>) => {
+  const handleStatusChange = async (newStatus: string, extras?: Record<string, unknown>) => {
     setActionLoading(true);
     try {
       const res = await fetch(`/api/stock-counts/${id}`, {
@@ -493,15 +493,27 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
       )}
 
       {summary.status === "COMPLETED" && canApprove && (
-        <div className="flex gap-2 mb-3">
-          <button onClick={() => handleStatusChange("APPROVED")} disabled={actionLoading}
-            className="flex-1 flex items-center justify-center gap-2 bg-green-600 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50">
-            <ShieldCheck className="h-4 w-4" /> {actionLoading ? "..." : "Approve & Apply Stock"}
-          </button>
-          <button onClick={() => setShowRejectModal(true)}
-            className="flex-1 flex items-center justify-center gap-2 bg-red-600 text-white py-2.5 rounded-lg text-sm font-medium">
-            <XCircle className="h-4 w-4" /> Reject
-          </button>
+        <div className="mb-3 space-y-2">
+          <div className="flex gap-2">
+            <button onClick={() => handleStatusChange("APPROVED")} disabled={actionLoading}
+              className="flex-1 flex items-center justify-center gap-2 bg-green-600 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50">
+              <ShieldCheck className="h-4 w-4" /> {actionLoading ? "..." : "Approve (verify only)"}
+            </button>
+            <button onClick={() => setShowRejectModal(true)}
+              className="flex-1 flex items-center justify-center gap-2 bg-red-600 text-white py-2.5 rounded-lg text-sm font-medium">
+              <XCircle className="h-4 w-4" /> Reject
+            </button>
+          </div>
+          {isAdmin && (
+            <button onClick={() => handleStatusChange("APPROVED", { applyToStock: true })} disabled={actionLoading}
+              className="w-full flex items-center justify-center gap-2 border border-amber-300 bg-amber-50 text-amber-800 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50">
+              <ShieldCheck className="h-4 w-4" /> Approve &amp; correct stock levels
+            </button>
+          )}
+          <p className="text-[11px] text-slate-400">
+            <span className="font-medium">Verify only</span> records the count without changing stock (Inwards adds stock).
+            {isAdmin ? " Correct stock levels overwrites each item's stock at this location with the counted quantity — admin only." : ""}
+          </p>
         </div>
       )}
 

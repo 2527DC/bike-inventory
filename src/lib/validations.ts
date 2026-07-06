@@ -95,6 +95,9 @@ export const stockCountUpdateSchema = z.object({
   status: z.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "APPROVED", "REJECTED"]).optional(),
   notes: z.string().optional(),
   rejectionReason: z.string().optional(),
+  // Admin-only: when approving, also overwrite stock with the counted quantities.
+  // Default (absent/false) = verify-only — records the count/variance without changing stock.
+  applyToStock: z.boolean().optional(),
   items: z
     .array(
       z.object({
