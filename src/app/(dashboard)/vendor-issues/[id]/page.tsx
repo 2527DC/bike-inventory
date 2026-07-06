@@ -101,6 +101,39 @@ export default function VendorIssueDetailPage({
   const [selectedVendorId, setSelectedVendorId] = useState("");
   const [savingBrand, setSavingBrand] = useState(false);
   const [brandError, setBrandError] = useState<string | null>(null);
+  // Add/edit ticket number + service location on an already-logged issue
+  const [refEditing, setRefEditing] = useState(false);
+  const [ticketDraft, setTicketDraft] = useState("");
+  const [serviceDraft, setServiceDraft] = useState("");
+  const [savingRef, setSavingRef] = useState(false);
+  const [refError, setRefError] = useState<string | null>(null);
+
+  function openRefEdit() {
+    setTicketDraft(issue?.ticketNo || "");
+    setServiceDraft(issue?.serviceLocation || "");
+    setRefError(null);
+    setRefEditing(true);
+  }
+
+  async function saveRef() {
+    setSavingRef(true);
+    setRefError(null);
+    try {
+      const res = await fetch(`/api/vendor-issues/${id}/reference`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticketNo: ticketDraft.trim(), serviceLocation: serviceDraft || "" }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setIssue((prev) => (prev ? { ...prev, ticketNo: json.data.ticketNo, serviceLocation: json.data.serviceLocation } : prev));
+        setRefEditing(false);
+      } else setRefError(json.error || "Failed to save");
+    } catch (e) {
+      setRefError(e instanceof Error ? e.message : "Failed to save");
+    }
+    setSavingRef(false);
+  }
 
   async function openBrandEdit() {
     setBrandError(null);
@@ -394,18 +427,64 @@ export default function VendorIssueDetailPage({
               </div>
             )}
           </div>
-          {issue.ticketNo && (
-            <div>
-              <span className="text-xs text-slate-500">Ticket:</span>
-              <p className="text-sm font-medium text-slate-900">🎫 {issue.ticketNo}</p>
+          {/* Ticket number + Service location — addable/editable after the issue is logged */}
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500">Ticket &amp; Service:</span>
+              {!refEditing && (
+                <button onClick={openRefEdit} className="text-xs font-medium text-blue-600 hover:underline">
+                  {issue.ticketNo || issue.serviceLocation ? "Edit" : "Add"}
+                </button>
+              )}
             </div>
-          )}
-          {issue.serviceLocation && SERVICE_LOCATION_LABEL[issue.serviceLocation] && (
-            <div>
-              <span className="text-xs text-slate-500">Service Location:</span>
-              <p className="text-sm font-medium text-slate-900">🔧 {SERVICE_LOCATION_LABEL[issue.serviceLocation]}</p>
-            </div>
-          )}
+            {!refEditing ? (
+              <div className="mt-0.5">
+                <p className="text-sm text-slate-900">🎫 Ticket: {issue.ticketNo || <span className="text-slate-400">—</span>}</p>
+                <p className="text-sm text-slate-900">
+                  🔧 {issue.serviceLocation && SERVICE_LOCATION_LABEL[issue.serviceLocation]
+                    ? SERVICE_LOCATION_LABEL[issue.serviceLocation]
+                    : <span className="text-slate-400">No service location</span>}
+                </p>
+              </div>
+            ) : (
+              <div className="mt-2 space-y-2">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={ticketDraft}
+                  onChange={(e) => setTicketDraft(e.target.value)}
+                  placeholder="Ticket / reference no. (e.g. eMotorad)"
+                  className="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
+                />
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { key: "IN_STORE", label: "In-Store Service" },
+                    { key: "CUSTOMER", label: "Customer Service" },
+                  ].map((opt) => (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => setServiceDraft((prev) => (prev === opt.key ? "" : opt.key))}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                        serviceDraft === opt.key ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                {refError && <p className="text-xs text-red-600">{refError}</p>}
+                <div className="flex gap-2">
+                  <button onClick={saveRef} disabled={savingRef} className="flex-1 h-9 rounded-lg bg-blue-600 text-white text-sm font-medium disabled:opacity-50">
+                    {savingRef ? "Saving…" : "Save"}
+                  </button>
+                  <button onClick={() => setRefEditing(false)} className="flex-1 h-9 rounded-lg border border-slate-200 text-sm font-medium text-slate-600">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
           {issue.bill && (
             <div>
               <span className="text-xs text-slate-500">Bill:</span>
