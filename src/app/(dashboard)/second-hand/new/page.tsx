@@ -8,7 +8,8 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
-import { uploadImage } from "@/lib/supabase";
+import { uploadImage } from "@/lib/media-upload";
+import { compressImageFull } from "@/lib/media-compress";
 
 type Condition = "EXCELLENT" | "GOOD" | "FAIR" | "SCRAP";
 
@@ -20,42 +21,6 @@ const CONDITIONS: { value: Condition; label: string; color: string }[] = [
   { value: "FAIR", label: "Fair", color: "bg-amber-100 border-amber-400 text-amber-700" },
   { value: "SCRAP", label: "Scrap", color: "bg-red-100 border-red-400 text-red-700" },
 ];
-
-/** Compress an image file to a blob (800px max, JPEG 0.7 quality) */
-function compressImage(file: File): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = reject;
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error("Failed to load image"));
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        const maxSize = 800;
-        let w = img.width;
-        let h = img.height;
-        if (w > maxSize || h > maxSize) {
-          if (w > h) { h = (h / w) * maxSize; w = maxSize; }
-          else { w = (w / h) * maxSize; h = maxSize; }
-        }
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d")!;
-        ctx.drawImage(img, 0, 0, w, h);
-        canvas.toBlob(
-          (blob) => {
-            if (blob) resolve(blob);
-            else reject(new Error("Compression failed"));
-          },
-          "image/jpeg",
-          0.7
-        );
-      };
-      img.src = reader.result as string;
-    };
-    reader.readAsDataURL(file);
-  });
-}
 
 export default function NewSecondHandPage() {
   const router = useRouter();
@@ -155,9 +120,9 @@ export default function NewSecondHandPage() {
       // Compress and upload all photos to Supabase
       const uploadedUrls: string[] = [];
       for (let i = 0; i < photos.length; i++) {
-        const compressed = await compressImage(photos[i]);
-        const file = new File([compressed], `${i}.jpg`, { type: "image/jpeg" });
-        const path = `second-hand/${tempPrefix}/${i}.jpg`;
+        const { blob, ext, contentType } = await compressImageFull(photos[i], { maxEdge: 800, skipBelow: 0 });
+        const file = new File([blob], `${i}.${ext}`, { type: contentType });
+        const path = `second-hand/${tempPrefix}/${i}.${ext}`;
         const url = await uploadImage(file, path);
         uploadedUrls.push(url);
       }

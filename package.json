@@ -26,6 +26,7 @@
     "@hookform/resolvers": "^5.2.2",
     "@prisma/client": "^6.19.3",
     "@supabase/supabase-js": "^2.104.0",
+    "aws4fetch": "^1.0.20",
     "bcryptjs": "^3.0.3",
     "bwip-js": "^4.9.0",
     "class-variance-authority": "^0.7.1",

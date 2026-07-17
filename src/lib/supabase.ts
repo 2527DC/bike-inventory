@@ -16,7 +16,7 @@ export async function uploadImage(file: File, path: string): Promise<string> {
   const supabase = getSupabase();
   const { data, error } = await supabase.storage
     .from('product images')
-    .upload(path, file, { cacheControl: '3600' });
+    .upload(path, file, { cacheControl: '31536000' }); // paths are unique+immutable — cache for a year to cut storage egress
   if (error) throw new Error(`Upload failed: ${error.message}`);
   const { data: urlData } = supabase.storage
     .from('product images')
@@ -30,7 +30,7 @@ export async function uploadMedia(file: Blob, path: string, contentType?: string
   const supabase = getSupabase();
   const { data, error } = await supabase.storage
     .from('product images')
-    .upload(path, file, { cacheControl: '3600', contentType: contentType || (file as File).type || undefined });
+    .upload(path, file, { cacheControl: '31536000', contentType: contentType || (file as File).type || undefined });
   if (error) throw new Error(`Upload failed: ${error.message}`);
   const { data: urlData } = supabase.storage
     .from('product images')
