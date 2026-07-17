@@ -3,8 +3,9 @@
 import { useState, useEffect, use } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { Loader2, Phone } from "lucide-react";
+import { Phone } from "lucide-react";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { DeliveryData } from "./_components/types";
 import { DetailHeader } from "./_components/detail-header";
 import { CustomerInfoCard } from "./_components/customer-info-card";
@@ -156,8 +157,8 @@ export default function DeliveryDetailPage({ params }: { params: Promise<{ id: s
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
+      <div className="py-2">
+        <SkeletonList count={5} type="card" />
       </div>
     );
   }
@@ -211,7 +212,7 @@ export default function DeliveryDetailPage({ params }: { params: Promise<{ id: s
             <div className="flex gap-2 mb-3">
               <a
                 href={`tel:${data.customerPhone}`}
-                className="flex-1 flex items-center justify-center gap-2 bg-slate-100 text-slate-700 py-2.5 rounded-lg text-sm font-medium"
+                className="flex-1 flex items-center justify-center gap-2 bg-slate-100 text-slate-700 py-2.5 min-h-[48px] rounded-lg text-sm font-medium tabular-nums focus-ring"
               >
                 <Phone className="h-4 w-4" /> {data.customerPhone}
               </a>

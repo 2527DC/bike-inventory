@@ -210,7 +210,7 @@ export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCance
                 maxLength={6}
               />
               {editPincode && !/^\d{6}$/.test(editPincode) && (
-                <p className="text-[10px] text-red-500 mt-0.5">Must be 6 digits</p>
+                <p className="text-[11px] text-red-500 mt-0.5">Must be 6 digits</p>
               )}
             </div>
             <div>

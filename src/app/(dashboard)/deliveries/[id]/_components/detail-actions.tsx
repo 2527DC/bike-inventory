@@ -146,7 +146,7 @@ export function DetailActions({
             <div className="flex gap-2">
               <button
                 onClick={() => setShowSchedule(true)}
-                className="flex-1 bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium"
+                className="flex-1 bg-blue-600 text-white py-2.5 min-h-[48px] rounded-lg text-sm font-medium"
               >
                 Schedule Delivery
               </button>
@@ -155,7 +155,7 @@ export function DetailActions({
                   if (!contactSaved && data.customerPhone) return;
                   setShowHandover("WALK_OUT");
                 }}
-                className="flex-1 bg-green-600 text-white py-2.5 rounded-lg text-sm font-medium flex items-center justify-center gap-1.5"
+                className="flex-1 bg-green-600 text-white py-2.5 min-h-[48px] rounded-lg text-sm font-medium flex items-center justify-center gap-1.5"
               >
                 <CheckCircle2 className="h-4 w-4" /> Walk-out
               </button>
@@ -169,7 +169,7 @@ export function DetailActions({
         <button
           onClick={() => setShowHandover("DELIVERED")}
           disabled={actionLoading}
-          className="w-full flex items-center justify-center gap-2 bg-green-600 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50"
+          className="w-full flex items-center justify-center gap-2 bg-green-600 text-white py-2.5 min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50"
         >
           <CheckCircle2 className="h-4 w-4" /> Mark Delivered
         </button>
@@ -180,7 +180,7 @@ export function DetailActions({
         <button
           onClick={() => setShowDispatch(true)}
           disabled={actionLoading}
-          className="w-full flex items-center justify-center gap-2 bg-orange-600 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50"
+          className="w-full flex items-center justify-center gap-2 bg-orange-600 text-white py-2.5 min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50"
         >
           <Truck className="h-4 w-4" /> Dispatch
         </button>
@@ -191,7 +191,7 @@ export function DetailActions({
         <button
           onClick={() => handleStatusUpdate("PACKED")}
           disabled={actionLoading}
-          className="w-full flex items-center justify-center gap-2 bg-amber-600 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50"
+          className="w-full flex items-center justify-center gap-2 bg-amber-600 text-white py-2.5 min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50"
         >
           <Package className="h-4 w-4" /> Mark Packed
         </button>
@@ -211,7 +211,7 @@ export function DetailActions({
               }
             }}
             disabled={actionLoading}
-            className="w-full flex items-center justify-center gap-2 bg-amber-600 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-2 bg-amber-600 text-white py-2.5 min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50"
           >
             <Truck className="h-4 w-4" /> Mark Shipped
           </button>
@@ -230,7 +230,7 @@ export function DetailActions({
         <button
           onClick={() => handleStatusUpdate("IN_TRANSIT")}
           disabled={actionLoading}
-          className="w-full flex items-center justify-center gap-2 bg-amber-600 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50"
+          className="w-full flex items-center justify-center gap-2 bg-amber-600 text-white py-2.5 min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50"
         >
           <Truck className="h-4 w-4" /> Mark In Transit
         </button>
@@ -241,7 +241,7 @@ export function DetailActions({
         <button
           onClick={() => setShowHandover("DELIVERED")}
           disabled={actionLoading}
-          className="w-full flex items-center justify-center gap-2 bg-green-600 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50"
+          className="w-full flex items-center justify-center gap-2 bg-green-600 text-white py-2.5 min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50"
         >
           <CheckCircle2 className="h-4 w-4" /> Mark Delivered
         </button>
@@ -252,7 +252,7 @@ export function DetailActions({
         <button
           onClick={() => setShowHandover("DELIVERED")}
           disabled={actionLoading}
-          className="w-full flex items-center justify-center gap-2 bg-green-600 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50"
+          className="w-full flex items-center justify-center gap-2 bg-green-600 text-white py-2.5 min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50"
         >
           <CheckCircle2 className="h-4 w-4" /> Mark Delivered
         </button>
@@ -270,7 +270,7 @@ export function DetailActions({
         <button
           onClick={() => handleStatusUpdate("PENDING")}
           disabled={actionLoading}
-          className="w-full bg-slate-900 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50"
+          className="w-full bg-slate-900 text-white py-2.5 min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50"
         >
           Resolve Flag
         </button>
@@ -281,7 +281,7 @@ export function DetailActions({
         <button
           onClick={() => handleStatusUpdate("VERIFIED")}
           disabled={actionLoading}
-          className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50"
+          className="w-full bg-blue-600 text-white py-2.5 min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50"
         >
           Mark Ready (Cycle Available)
         </button>

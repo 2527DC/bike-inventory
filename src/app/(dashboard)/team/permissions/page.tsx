@@ -2,9 +2,10 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowLeft, Loader2, Save, Eye, Plus, Pencil, Trash2, ShieldCheck, RotateCcw, CloudDownload } from "lucide-react";
+import { ArrowLeft, Save, Eye, Plus, Pencil, Trash2, ShieldCheck, RotateCcw, CloudDownload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface Feature {
   key: string;
@@ -125,8 +126,9 @@ export default function PermissionsPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
+      <div className="pb-8">
+        <div className="h-6 w-40 bg-slate-200 rounded animate-pulse mb-4" />
+        <SkeletonList count={6} type="card" />
       </div>
     );
   }
@@ -134,15 +136,17 @@ export default function PermissionsPage() {
   return (
     <div className="pb-8">
       <div className="flex items-center gap-3 mb-4">
-        <Link href="/team" className="p-1">
+        <Link href="/team" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
         <div className="flex-1">
           <h1 className="text-lg font-bold text-slate-900">Roles & Permissions</h1>
           <p className="text-xs text-slate-500">Manage what each role can view, add, edit, delete, approve, and fetch</p>
         </div>
-        <button onClick={handleReset} className="p-2 text-slate-400 hover:text-slate-600">
+        <button onClick={handleReset} aria-label="Reset to defaults"
+          className="flex items-center gap-1 min-h-[44px] px-2.5 rounded-lg text-red-600 hover:bg-red-50 focus-ring">
           <RotateCcw className="h-4 w-4" />
+          <span className="text-xs font-medium">Reset</span>
         </button>
       </div>
 
@@ -181,24 +185,29 @@ export default function PermissionsPage() {
         ))}
       </div>
 
+      {/* Section header */}
+      <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2 px-1">
+        Permissions — {ROLE_LABELS[selectedRole]}
+      </p>
+
       {/* Permission legend */}
       <div className="flex items-center gap-3 mb-3 px-1 overflow-x-auto scrollbar-hide">
-        <div className="flex items-center gap-1 text-[10px] text-slate-500 shrink-0">
+        <div className="flex items-center gap-1 text-[11px] text-slate-500 shrink-0">
           <Eye className="h-3 w-3" /> View
         </div>
-        <div className="flex items-center gap-1 text-[10px] text-slate-500 shrink-0">
+        <div className="flex items-center gap-1 text-[11px] text-slate-500 shrink-0">
           <Plus className="h-3 w-3" /> Add New
         </div>
-        <div className="flex items-center gap-1 text-[10px] text-slate-500 shrink-0">
+        <div className="flex items-center gap-1 text-[11px] text-slate-500 shrink-0">
           <Pencil className="h-3 w-3" /> Edit
         </div>
-        <div className="flex items-center gap-1 text-[10px] text-slate-500 shrink-0">
+        <div className="flex items-center gap-1 text-[11px] text-slate-500 shrink-0">
           <Trash2 className="h-3 w-3" /> Delete
         </div>
-        <div className="flex items-center gap-1 text-[10px] text-slate-500 shrink-0">
+        <div className="flex items-center gap-1 text-[11px] text-slate-500 shrink-0">
           <ShieldCheck className="h-3 w-3" /> Approve
         </div>
-        <div className="flex items-center gap-1 text-[10px] text-slate-500 shrink-0">
+        <div className="flex items-center gap-1 text-[11px] text-slate-500 shrink-0">
           <CloudDownload className="h-3 w-3" /> Fetch
         </div>
       </div>
@@ -208,9 +217,9 @@ export default function PermissionsPage() {
         {features.map((feature) => {
           const perm = getPerm(selectedRole, feature.key);
           return (
-            <Card key={feature.key} className="border-slate-100">
+            <Card key={feature.key}>
               <CardContent className="p-2.5">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between min-h-[44px]">
                   <p className="text-xs font-medium text-slate-800 flex-1 min-w-0 mr-2">
                     {feature.label}
                   </p>
@@ -297,7 +306,7 @@ export default function PermissionsPage() {
 
       {/* Save button */}
       <div className="mt-4">
-        <Button onClick={handleSave} size="lg" disabled={saving} className="w-full bg-indigo-600 hover:bg-indigo-700">
+        <Button onClick={handleSave} size="lg" disabled={saving} className="w-full min-h-[48px] bg-emerald-600 hover:bg-emerald-700 focus-ring">
           <Save className="h-4 w-4 mr-2" />
           {saving ? "Saving..." : "Save Permissions"}
         </Button>

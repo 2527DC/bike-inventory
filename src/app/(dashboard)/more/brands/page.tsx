@@ -7,6 +7,7 @@ import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface BrandItem {
   id: string;
@@ -73,22 +74,36 @@ export default function BrandsPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+      <div>
+        <div className="flex items-center gap-2 mb-4">
+          <Link
+            href="/more"
+            aria-label="Back"
+            className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"
+          >
+            <ArrowLeft className="h-5 w-5 text-slate-600" />
+          </Link>
+          <h1 className="text-lg font-bold text-slate-900 flex-1">Brand Management</h1>
+        </div>
+        <SkeletonList count={6} type="card" />
       </div>
     );
   }
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/more" className="p-1">
+      <div className="flex items-center gap-2 mb-4">
+        <Link
+          href="/more"
+          aria-label="Back"
+          className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"
+        >
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
         <h1 className="text-lg font-bold text-slate-900 flex-1">
           Brand Management
         </h1>
-        <Badge variant="info">{brands.length} brands</Badge>
+        <Badge variant="info" className="tabular-nums">{brands.length} brands</Badge>
       </div>
 
       {error && (
@@ -117,7 +132,7 @@ export default function BrandsPage() {
                     <p className="text-sm font-medium text-slate-900 truncate">
                       {brand.name}
                     </p>
-                    <p className="text-xs text-slate-500">
+                    <p className="text-xs text-slate-500 tabular-nums">
                       {brand._count.products} product
                       {brand._count.products !== 1 ? "s" : ""}
                     </p>
@@ -136,12 +151,13 @@ export default function BrandsPage() {
                     </Button>
                   ) : (
                     <button
+                      aria-label={`Merge and delete ${brand.name}`}
                       onClick={() => {
                         setMergeSource(brand.id);
                         setMergeTarget("");
                         setError("");
                       }}
-                      className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                      className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors focus-ring shrink-0"
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>

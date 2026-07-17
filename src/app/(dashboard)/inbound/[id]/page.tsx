@@ -4,11 +4,12 @@ import { useState, useEffect, use } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Loader2, Phone, CheckCircle2, Calendar, Truck, MapPin, RotateCcw, Save, Trash2, ShieldCheck, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Phone, CheckCircle2, Calendar, Truck, MapPin, RotateCcw, Save, Trash2, ShieldCheck, AlertTriangle } from "lucide-react";
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { usePermissions } from "@/lib/use-permissions";
 import { BIN_TRACKING_ENABLED, STOCK_LOCATIONS, DEFAULT_STOCK_LOCATION, stockLocationLabel, type StockLocation } from "@/lib/inventory-config";
@@ -477,7 +478,11 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
   };
 
   if (loading) {
-    return <div className="flex items-center justify-center py-20"><Loader2 className="h-6 w-6 animate-spin text-slate-400" /></div>;
+    return (
+      <div className="pt-2">
+        <SkeletonList count={5} type="card" />
+      </div>
+    );
   }
 
   if (!shipment) {
@@ -503,15 +508,13 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
 
   return (
     <div className="pb-4">
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/inbound" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <h1 className="text-lg font-bold text-slate-900">{shipment.shipmentNo}</h1>
-            <Badge className={`text-xs ${statusBadge.colorClass}`}>{statusBadge.label}</Badge>
-          </div>
-          <p className="text-xs text-slate-500">{shipment.brand.name} | Bill: {shipment.billNo}</p>
+      <div className="flex items-center gap-2 mb-4">
+        <Link href="/inbound" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-lg font-bold text-slate-900 tabular-nums truncate">{shipment.shipmentNo}</h1>
+          <p className="text-xs text-slate-500 tabular-nums truncate">{shipment.brand.name} | Bill: {shipment.billNo}</p>
         </div>
+        <Badge className={`text-xs shrink-0 ${statusBadge.colorClass}`}>{statusBadge.label}</Badge>
       </div>
 
       {/* Action Error */}
@@ -527,29 +530,29 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
         <CardContent className="p-3 space-y-2">
           <div className="flex justify-between items-center">
             <span className="text-xs text-slate-500">Bill Date</span>
-            <span className="text-sm font-medium text-slate-900">{formatDate(shipment.billDate)}</span>
+            <span className="text-sm font-semibold text-slate-900 tabular-nums">{formatDate(shipment.billDate)}</span>
           </div>
           <div className="flex justify-between items-center">
             <span className="text-xs text-slate-500">Expected Delivery</span>
-            <span className="text-sm font-medium text-amber-600 flex items-center gap-1">
+            <span className="text-sm font-semibold text-amber-600 flex items-center gap-1 tabular-nums">
               <Calendar className="h-3 w-3" /> {formatDate(shipment.expectedDeliveryDate)}
             </span>
           </div>
           {shipment.deliveredAt && (
             <div className="flex justify-between items-center">
               <span className="text-xs text-slate-500">Delivered</span>
-              <span className="text-sm font-medium text-green-600">{formatDate(shipment.deliveredAt)}</span>
+              <span className="text-sm font-semibold text-green-600 tabular-nums">{formatDate(shipment.deliveredAt)}</span>
             </div>
           )}
           {isAdmin && (
             <div className="flex justify-between items-center">
               <span className="text-xs text-slate-500">Total</span>
-              <span className="text-sm font-semibold text-slate-900">{formatINR(shipment.totalAmount)}</span>
+              <span className="text-sm font-semibold text-slate-900 tabular-nums">{formatINR(shipment.totalAmount)}</span>
             </div>
           )}
           <div className="flex justify-between items-center">
             <span className="text-xs text-slate-500">Items</span>
-            <span className="text-sm text-slate-700">{deliveredCount}/{shipment.totalItems} delivered</span>
+            <span className="text-sm font-semibold text-slate-700 tabular-nums">{deliveredCount}/{shipment.totalItems} delivered</span>
           </div>
           {BIN_TRACKING_ENABLED && needsBinCount > 0 && (
             <div className="flex justify-between items-center">
@@ -559,12 +562,12 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
           )}
           <div className="flex justify-between items-center">
             <span className="text-xs text-slate-500">Created by</span>
-            <span className="text-xs text-slate-700">{shipment.createdBy.name} on {formatDate(shipment.createdAt)}</span>
+            <span className="text-xs text-slate-700 tabular-nums">{shipment.createdBy.name} on {formatDate(shipment.createdAt)}</span>
           </div>
           {shipment.approvedBy && (
             <div className="flex justify-between items-center">
               <span className="text-xs text-slate-500">Approved by</span>
-              <span className="text-xs text-green-700 font-medium">{shipment.approvedBy.name} on {formatDate(shipment.approvedAt!)}</span>
+              <span className="text-xs text-green-700 font-medium tabular-nums">{shipment.approvedBy.name} on {formatDate(shipment.approvedAt!)}</span>
             </div>
           )}
           {shipment.deliveredBy && (
@@ -587,7 +590,7 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
         <div className="mb-3">
           {canApprove ? (
             <Button onClick={handleApprove} disabled={approveLoading}
-              className="w-full bg-indigo-600 hover:bg-indigo-700" size="lg">
+              className="w-full min-h-[48px] rounded-lg font-medium bg-indigo-600 hover:bg-indigo-700" size="lg">
               <ShieldCheck className="h-4 w-4 mr-2" /> {approveLoading ? "Approving..." : "Approve Inward"}
             </Button>
           ) : (
@@ -671,11 +674,11 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
       {canDeliver && isApproved && shipment.status === "IN_TRANSIT" && shipmentType !== null && (
         <div className="flex gap-2 mb-3">
           <Button onClick={() => handleMarkDelivered("DELIVERED")} disabled={actionLoading}
-            className="flex-1 bg-green-600 hover:bg-green-700" size="lg">
+            className="flex-1 min-h-[48px] rounded-lg font-medium bg-green-600 hover:bg-green-700" size="lg">
             <Truck className="h-4 w-4 mr-2" /> {actionLoading ? "..." : "Mark All Delivered"}
           </Button>
           <Button onClick={() => handleMarkDelivered("PARTIALLY_DELIVERED")} disabled={actionLoading}
-            variant="outline" className="flex-1" size="lg">
+            variant="outline" className="flex-1 min-h-[48px] rounded-lg font-medium" size="lg">
             Partial
           </Button>
         </div>
@@ -691,12 +694,12 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
           </p>
           <div className="flex gap-2">
             <Button onClick={() => handleMarkDelivered("DELIVERED")} disabled={actionLoading}
-              className="flex-1 bg-green-600 hover:bg-green-700" size="lg">
+              className="flex-1 min-h-[48px] rounded-lg font-medium bg-green-600 hover:bg-green-700" size="lg">
               <Truck className="h-4 w-4 mr-2" /> {actionLoading ? "..." : "Mark All Delivered"}
             </Button>
             {deliveredCount === 0 && (
               <Button onClick={() => setShowRevertConfirm(true)} disabled={actionLoading}
-                variant="outline" className="gap-1.5" size="lg">
+                variant="outline" className="gap-1.5 min-h-[48px] rounded-lg font-medium" size="lg">
                 <RotateCcw className="h-4 w-4" /> Undo
               </Button>
             )}
@@ -781,9 +784,9 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
               </div>
 
               <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
-                <span className="text-base font-bold text-slate-800">Qty: {li.quantity}</span>
-                {isAdmin && <span>Rate: {formatINR(li.rate)}</span>}
-                {isAdmin && <span className="font-medium text-slate-700">{formatINR(li.amount)}</span>}
+                <span className="text-base font-bold text-slate-800 tabular-nums">Qty: {li.quantity}</span>
+                {isAdmin && <span className="tabular-nums">Rate: {formatINR(li.rate)}</span>}
+                {isAdmin && <span className="font-medium text-slate-700 tabular-nums">{formatINR(li.amount)}</span>}
               </div>
 
               {/* Current bin assignment */}

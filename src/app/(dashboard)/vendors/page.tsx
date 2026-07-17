@@ -4,8 +4,8 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Search, Phone, Building2, Star } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { useDebounce } from "@/lib/utils";
 import { ExportButtons } from "@/components/export-buttons";
 import { FilterSheet } from "@/components/filter-sheet";
@@ -147,17 +147,7 @@ export default function VendorsPage() {
       <p className="text-xs text-slate-500 mb-2">Showing {filtered.length} of {total} vendors</p>
 
       {loading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="p-3 border border-slate-100 rounded-lg animate-pulse">
-              <div className="flex items-start justify-between">
-                <div className="flex-1 space-y-1.5"><div className="h-4 bg-slate-200 rounded w-3/4" /><div className="h-3 bg-slate-200 rounded w-1/2" /></div>
-                <div className="h-5 w-14 bg-slate-200 rounded-full" />
-              </div>
-              <div className="flex gap-3 mt-2"><div className="h-3 bg-slate-200 rounded w-20" /><div className="h-3 bg-slate-200 rounded w-16" /></div>
-            </div>
-          ))}
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : (
         <>
         <DesktopTable
@@ -197,49 +187,56 @@ export default function VendorsPage() {
         <div className="space-y-2 lg:hidden">
           {filtered.map((v) => {
             const stars = getStarRating(v._count.bills, allBillCounts);
+            const accent = v.outstandingBalance > 0
+              ? "border-l-red-500"
+              : v.isActive
+              ? "border-l-green-500"
+              : "border-l-slate-200";
             return (
-            <Link key={v.id} href={`/vendors/${v.id}`}>
-              <Card className="hover:border-slate-300 transition-colors mb-2">
-                <CardContent className="p-3">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0 mr-3">
-                      <div className="flex items-center gap-2">
-                        <Building2 className="h-4 w-4 text-slate-400 shrink-0" />
-                        <p className="text-sm font-medium text-slate-900">{v.name}</p>
-                        {stars > 0 && (
-                          <span className="flex items-center gap-0.5 shrink-0" title={`${stars}/5 — based on ${v._count.bills} bills`}>
-                            {Array.from({ length: stars }).map((_, i) => (
-                              <Star key={i} className="h-3 w-3 fill-amber-400 text-amber-400" />
-                            ))}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-500 mt-0.5 ml-6">
-                        {v.city || "—"} {v._count.bills > 0 ? `| ${v._count.bills} Bills` : ""}
-                      </p>
-                      <div className="flex items-center gap-2 mt-1.5 ml-6">
-                        <Badge variant={v.isActive ? "success" : "default"}>
-                          {v.isActive ? "Active" : "Inactive"}
-                        </Badge>
-                        {v.outstandingBalance > 0 && (
-                          <span className="text-xs font-medium text-red-600">
-                            ₹{v.outstandingBalance.toLocaleString("en-IN")} due
-                          </span>
-                        )}
-                      </div>
+            <Link
+              key={v.id}
+              href={`/vendors/${v.id}`}
+              className={`block rounded-xl border border-slate-200 border-l-4 ${accent} bg-white shadow-sm transition-colors active:bg-slate-50 focus-ring`}
+            >
+              <div className="p-3">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0 mr-3">
+                    <div className="flex items-center gap-2">
+                      <Building2 className="h-4 w-4 text-slate-400 shrink-0" />
+                      <p className="text-sm font-semibold text-slate-900 truncate">{v.name}</p>
+                      {stars > 0 && (
+                        <span className="flex items-center gap-0.5 shrink-0" title={`${stars}/5 — based on ${v._count.bills} bills`}>
+                          {Array.from({ length: stars }).map((_, i) => (
+                            <Star key={i} className="h-3 w-3 fill-amber-400 text-amber-400" />
+                          ))}
+                        </span>
+                      )}
                     </div>
-                    {v.phone && (
-                      <a
-                        href={`tel:${v.phone}`}
-                        onClick={(e) => e.stopPropagation()}
-                        className="p-2 rounded-full hover:bg-slate-100"
-                      >
-                        <Phone className="h-4 w-4 text-slate-500" />
-                      </a>
-                    )}
+                    <p className="text-xs text-slate-500 mt-0.5 ml-6">
+                      {v.city || "—"} {v._count.bills > 0 ? <span className="tabular-nums">| {v._count.bills} Bills</span> : ""}
+                    </p>
+                    <div className="flex items-center gap-2 mt-1.5 ml-6">
+                      <Badge variant={v.isActive ? "success" : "default"}>
+                        {v.isActive ? "Active" : "Inactive"}
+                      </Badge>
+                      {v.outstandingBalance > 0 && (
+                        <span className="text-xs font-semibold text-red-600 tabular-nums">
+                          ₹{v.outstandingBalance.toLocaleString("en-IN")} due
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </CardContent>
-              </Card>
+                  {v.phone && (
+                    <a
+                      href={`tel:${v.phone}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="p-2 rounded-full hover:bg-slate-100"
+                    >
+                      <Phone className="h-4 w-4 text-slate-500" />
+                    </a>
+                  )}
+                </div>
+              </div>
             </Link>
             );
           })}

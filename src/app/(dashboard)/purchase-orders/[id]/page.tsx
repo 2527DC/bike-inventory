@@ -6,6 +6,7 @@ import { ArrowLeft, Check, Send, MessageSquare } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface PODetail {
   id: string;
@@ -87,8 +88,8 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+      <div className="pt-2">
+        <SkeletonList count={5} type="card" />
       </div>
     );
   }
@@ -114,12 +115,12 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
       )}
 
       <div className="flex items-center gap-3 mb-4">
-        <Link href="/purchase-orders" className="p-1">
+        <Link href="/purchase-orders" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
-        <div className="flex-1">
-          <h1 className="text-lg font-bold text-slate-900">{po.poNumber}</h1>
-          <p className="text-xs text-slate-500">{po.vendor.name} ({po.vendor.code})</p>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-lg font-bold text-slate-900 tabular-nums truncate">{po.poNumber}</h1>
+          <p className="text-xs text-slate-500 tabular-nums truncate">{po.vendor.name} ({po.vendor.code})</p>
         </div>
         <Badge variant={po.status === "RECEIVED" ? "success" : po.status === "CANCELLED" ? "danger" : "warning"}>
           {po.status.replace(/_/g, " ")}
@@ -127,50 +128,52 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
       </div>
 
       {/* Action Buttons */}
-      <div className="flex gap-2 mb-4">
-        {(po.status === "DRAFT" || po.status === "PENDING_APPROVAL") && (
-          <Button onClick={handleApprove} disabled={actionLoading} size="sm" className="flex-1 bg-green-600 hover:bg-green-700">
-            <Check className="h-4 w-4 mr-1" /> Approve
-          </Button>
-        )}
-        {po.status === "APPROVED" && (
-          <>
-            <Button onClick={() => handleStatusChange("SENT_TO_VENDOR")} disabled={actionLoading} size="sm" className="flex-1">
-              <Send className="h-4 w-4 mr-1" /> Mark Sent
+      {((po.status === "DRAFT" || po.status === "PENDING_APPROVAL") || po.status === "APPROVED") && (
+        <div className="flex gap-2 mb-4">
+          {(po.status === "DRAFT" || po.status === "PENDING_APPROVAL") && (
+            <Button onClick={handleApprove} disabled={actionLoading} className="flex-1 min-h-[48px] rounded-lg font-medium bg-green-600 text-white hover:bg-green-700">
+              <Check className="h-4 w-4 mr-1.5" /> Approve
             </Button>
-            {whatsappLink && (
-              <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="flex-1">
-                <Button variant="outline" size="sm" className="w-full text-green-600 border-green-300">
-                  <MessageSquare className="h-4 w-4 mr-1" /> Send via WA
-                </Button>
-              </a>
-            )}
-          </>
-        )}
-      </div>
+          )}
+          {po.status === "APPROVED" && (
+            <>
+              <Button onClick={() => handleStatusChange("SENT_TO_VENDOR")} disabled={actionLoading} className="flex-1 min-h-[48px] rounded-lg font-medium">
+                <Send className="h-4 w-4 mr-1.5" /> Mark Sent
+              </Button>
+              {whatsappLink && (
+                <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="flex-1">
+                  <Button variant="outline" className="w-full min-h-[48px] rounded-lg font-medium text-green-600 border-green-300">
+                    <MessageSquare className="h-4 w-4 mr-1.5" /> Send via WA
+                  </Button>
+                </a>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* Order Info */}
       <Card className="mb-4">
         <CardContent className="p-3 space-y-2">
-          <div className="grid grid-cols-2 gap-2 text-sm">
+          <div className="grid grid-cols-2 gap-y-3 gap-x-2 text-sm">
             <div>
-              <span className="text-slate-500">Order Date</span>
-              <p className="font-medium">{new Date(po.orderDate).toLocaleDateString("en-IN")}</p>
+              <span className="text-[11px] text-slate-500">Order Date</span>
+              <p className="font-semibold text-slate-900 tabular-nums">{new Date(po.orderDate).toLocaleDateString("en-IN")}</p>
             </div>
             {po.expectedDate && (
               <div>
-                <span className="text-slate-500">Expected</span>
-                <p className="font-medium">{new Date(po.expectedDate).toLocaleDateString("en-IN")}</p>
+                <span className="text-[11px] text-slate-500">Expected</span>
+                <p className="font-semibold text-slate-900 tabular-nums">{new Date(po.expectedDate).toLocaleDateString("en-IN")}</p>
               </div>
             )}
             <div>
-              <span className="text-slate-500">Created By</span>
-              <p className="font-medium">{po.createdBy.name}</p>
+              <span className="text-[11px] text-slate-500">Created By</span>
+              <p className="font-semibold text-slate-900">{po.createdBy.name}</p>
             </div>
             {po.approvedBy && (
               <div>
-                <span className="text-slate-500">Approved By</span>
-                <p className="font-medium">{po.approvedBy.name}</p>
+                <span className="text-[11px] text-slate-500">Approved By</span>
+                <p className="font-semibold text-slate-900">{po.approvedBy.name}</p>
               </div>
             )}
           </div>
@@ -184,14 +187,14 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
         {po.items.map((item) => (
           <Card key={item.id}>
             <CardContent className="p-3">
-              <div className="flex items-start justify-between">
-                <div>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
                   <p className="text-sm font-medium text-slate-900">{item.product.name}</p>
-                  <p className="text-xs text-slate-500">{item.product.sku} | Stock: {item.product.currentStock}</p>
+                  <p className="text-xs text-slate-500 tabular-nums">{item.product.sku} | Stock: {item.product.currentStock}</p>
                 </div>
-                <p className="text-sm font-bold text-slate-900">{formatCurrency(item.amount * (1 + item.gstRate / 100))}</p>
+                <p className="text-sm font-bold text-slate-900 tabular-nums shrink-0">{formatCurrency(item.amount * (1 + item.gstRate / 100))}</p>
               </div>
-              <div className="flex gap-4 mt-1 text-xs text-slate-500">
+              <div className="flex gap-4 mt-1 text-xs text-slate-500 tabular-nums">
                 <span>Qty: {item.quantity}</span>
                 <span>Rcvd: {item.receivedQty}</span>
                 <span>@ {formatCurrency(item.unitPrice)}</span>
@@ -207,15 +210,15 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
         <CardContent className="p-3 space-y-1">
           <div className="flex justify-between text-sm">
             <span className="text-slate-500">Subtotal</span>
-            <span>{formatCurrency(po.subtotal)}</span>
+            <span className="tabular-nums">{formatCurrency(po.subtotal)}</span>
           </div>
           <div className="flex justify-between text-sm">
             <span className="text-slate-500">GST</span>
-            <span>{formatCurrency(po.gstTotal)}</span>
+            <span className="tabular-nums">{formatCurrency(po.gstTotal)}</span>
           </div>
           <div className="flex justify-between text-sm font-bold border-t pt-1">
             <span>Grand Total</span>
-            <span>{formatCurrency(po.grandTotal)}</span>
+            <span className="tabular-nums">{formatCurrency(po.grandTotal)}</span>
           </div>
         </CardContent>
       </Card>

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { useDebounce } from "@/lib/utils";
 
 interface TeamUser {
@@ -84,17 +85,7 @@ export default function TeamPage() {
       </div>
 
       {loading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="p-3 border border-slate-100 rounded-lg animate-pulse">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-full bg-slate-200 shrink-0" />
-                <div className="flex-1 space-y-1.5"><div className="h-4 bg-slate-200 rounded w-1/2" /><div className="h-3 bg-slate-200 rounded w-1/3" /></div>
-                <div className="h-5 w-16 bg-slate-200 rounded-full" />
-              </div>
-            </div>
-          ))}
-        </div>
+        <SkeletonList count={5} type="card" />
       ) : members.length === 0 ? (
         <div className="text-center py-12">
           <Users className="h-12 w-12 text-slate-300 mx-auto mb-3" />
@@ -119,31 +110,31 @@ export default function TeamPage() {
                 <div key={role}>
                   <div className="flex items-center gap-2 mb-1.5">
                     <Icon className="h-3.5 w-3.5 text-slate-400" />
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{rc.label}</p>
-                    <Badge variant={rc.color} className="text-[9px]">{grouped[role].length}</Badge>
+                    <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">{rc.label}</p>
+                    <Badge variant={rc.color} className="text-[11px] tabular-nums">{grouped[role].length}</Badge>
                   </div>
                   <div className="space-y-1.5">
                     {grouped[role].map(m => (
-                      <Link key={m.id} href={`/team/${m.id}`}>
-                        <Card className={`${!m.isActive ? "opacity-50" : ""}`}>
-                          <CardContent className="p-3 flex items-center gap-3">
+                      <Link key={m.id} href={`/team/${m.id}`} className="block rounded-xl focus-ring">
+                        <Card className={`border-l-4 ${m.isActive ? "border-l-green-500" : "border-l-slate-300 opacity-60"}`}>
+                          <CardContent className="p-3 flex items-center gap-3 min-h-[44px]">
                             <div className="h-10 w-10 rounded-full bg-slate-100 flex items-center justify-center shrink-0">
                               <Icon className="h-5 w-5 text-slate-500" />
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2">
                                 <p className="text-sm font-semibold text-slate-900 truncate">{m.name}</p>
-                                {!m.isActive && <Badge variant="danger" className="text-[9px]">Inactive</Badge>}
+                                {!m.isActive && <Badge variant="danger" className="text-[11px]">Inactive</Badge>}
                               </div>
                               <div className="flex items-center gap-2 mt-0.5">
                                 {m.role === "CUSTOM" && m.customRoleName && (
-                                  <Badge variant={rc.color} className="text-[9px]">{m.customRoleName}</Badge>
+                                  <Badge variant={rc.color} className="text-[11px]">{m.customRoleName}</Badge>
                                 )}
-                                <span className="text-[10px] text-slate-400">{m._count.transactions} transactions</span>
+                                <span className="text-[11px] text-slate-500 tabular-nums">{m._count.transactions} transactions</span>
                               </div>
                             </div>
                             <div className="text-right shrink-0">
-                              <p className="text-[10px] text-slate-400">
+                              <p className="text-[11px] text-slate-400 tabular-nums">
                                 {new Date(m.createdAt).toLocaleDateString("en-IN")}
                               </p>
                             </div>

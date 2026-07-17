@@ -4,11 +4,12 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   Search, AlertTriangle, Package, ChevronDown, ChevronUp,
-  Save, ShoppingCart, Share2, Loader2, MessageSquare,
+  Save, ShoppingCart, Share2, MessageSquare,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { FilterSheet } from "@/components/filter-sheet";
 import { useDebounce } from "@/lib/utils";
 
@@ -221,25 +222,25 @@ export default function ReorderDashboardPage() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-3 gap-2 mb-3">
-        <Card className="cursor-pointer" onClick={() => setFilter("all")}>
+        <Card className={`cursor-pointer transition-colors ${filter === "all" ? "ring-1 ring-slate-300 bg-slate-50" : ""}`} onClick={() => setFilter("all")}>
           <CardContent className="p-2.5 text-center">
             <Package className="h-4 w-4 mx-auto text-slate-400 mb-1" />
-            <p className="text-lg font-bold text-slate-900">{summary.totalProducts}</p>
-            <p className="text-[10px] text-slate-500">Total</p>
+            <p className="text-xl font-bold text-slate-900 tabular-nums">{summary.totalProducts}</p>
+            <p className="text-[11px] text-slate-500">Total</p>
           </CardContent>
         </Card>
-        <Card className="cursor-pointer" onClick={() => setFilter("low")}>
+        <Card className={`cursor-pointer transition-colors ${filter === "low" ? "ring-1 ring-amber-300 bg-amber-50" : ""}`} onClick={() => setFilter("low")}>
           <CardContent className="p-2.5 text-center">
             <AlertTriangle className="h-4 w-4 mx-auto text-amber-500 mb-1" />
-            <p className="text-lg font-bold text-amber-600">{summary.lowStockCount}</p>
-            <p className="text-[10px] text-slate-500">Low Stock</p>
+            <p className="text-xl font-bold text-amber-600 tabular-nums">{summary.lowStockCount}</p>
+            <p className="text-[11px] text-slate-500">Low Stock</p>
           </CardContent>
         </Card>
-        <Card className="cursor-pointer" onClick={() => setFilter("zero")}>
+        <Card className={`cursor-pointer transition-colors ${filter === "zero" ? "ring-1 ring-red-300 bg-red-50" : ""}`} onClick={() => setFilter("zero")}>
           <CardContent className="p-2.5 text-center">
             <AlertTriangle className="h-4 w-4 mx-auto text-red-500 mb-1" />
-            <p className="text-lg font-bold text-red-600">{summary.zeroStockCount}</p>
-            <p className="text-[10px] text-slate-500">Zero Stock</p>
+            <p className="text-xl font-bold text-red-600 tabular-nums">{summary.zeroStockCount}</p>
+            <p className="text-[11px] text-slate-500">Zero Stock</p>
           </CardContent>
         </Card>
       </div>
@@ -316,9 +317,7 @@ export default function ReorderDashboardPage() {
 
       {/* Product Groups */}
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : (
         <div className="space-y-2">
           {groups.map((group) => {
@@ -331,9 +330,9 @@ export default function ReorderDashboardPage() {
                 <div className="flex-1 min-w-0 text-left">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-slate-900">{group.name}</span>
-                    <Badge variant="default" className="text-[10px]">{group.products.length} items</Badge>
+                    <Badge variant="default" className="text-[11px] tabular-nums">{group.products.length} items</Badge>
                   </div>
-                  <p className="text-[10px] text-slate-500 mt-0.5">
+                  <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums">
                     Stock: {totalStock}
                     {zeroCount > 0 && <span className="text-red-500 ml-1">({zeroCount} at zero)</span>}
                   </p>
@@ -372,34 +371,34 @@ export default function ReorderDashboardPage() {
                             <button onClick={() => toggleSelectForPO(product.id)}
                               className="text-left">
                               <p className="text-sm font-medium text-slate-900">{product.name}</p>
-                              <p className="text-[10px] text-slate-500">{product.sku}</p>
+                              <p className="text-[11px] text-slate-500 tabular-nums">{product.sku}</p>
                             </button>
                           </div>
                           <div className="text-right shrink-0">
-                            <p className={`text-sm font-bold ${isZero ? "text-red-600" : isLow ? "text-amber-600" : "text-slate-900"}`}>
+                            <p className={`text-base font-bold tabular-nums ${isZero ? "text-red-600" : isLow ? "text-amber-600" : "text-slate-900"}`}>
                               {product.currentStock}
                             </p>
-                            <p className="text-[10px] text-slate-400">in stock</p>
+                            <p className="text-[11px] text-slate-400">in stock</p>
                           </div>
                         </div>
 
                         <div className="flex items-center gap-2">
                           <div className="flex-1">
-                            <label className="text-[10px] text-slate-400">Reorder Level</label>
+                            <label className="text-[11px] text-slate-400">Reorder Level</label>
                             <input
                               type="number"
                               inputMode="numeric"
                               value={editedLevel ?? String(product.reorderLevel)}
                               onChange={(e) => updateReorderLevel(product.id, e.target.value)}
-                              className="w-full rounded-md border border-slate-200 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-slate-900"
+                              className="w-full rounded-md border border-slate-200 px-2 py-1 text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-slate-900"
                             />
                           </div>
                           <div className="shrink-0 text-right">
-                            <label className="text-[10px] text-slate-400">Order Qty</label>
-                            <p className="text-xs font-medium text-slate-700 py-1">{product.reorderQty || "—"}</p>
+                            <label className="text-[11px] text-slate-400">Order Qty</label>
+                            <p className="text-xs font-medium text-slate-700 py-1 tabular-nums">{product.reorderQty || "—"}</p>
                           </div>
                           <div className="shrink-0">
-                            <label className="text-[10px] text-slate-400 block">Select</label>
+                            <label className="text-[11px] text-slate-400 block">Select</label>
                             <input
                               type="checkbox"
                               checked={isSelected}

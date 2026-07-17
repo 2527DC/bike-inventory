@@ -7,6 +7,7 @@ import { ArrowLeft, Phone, MessageSquare, FileText, CreditCard, Building2, Alert
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { SkeletonList } from "@/components/ui/skeleton";
 import type { Vendor, PurchaseOrder, VendorBill, VendorCredit } from "@/types";
 import { usePermissions } from "@/lib/use-permissions";
 
@@ -114,8 +115,8 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+      <div className="py-2">
+        <SkeletonList count={5} type="card" />
       </div>
     );
   }
@@ -160,12 +161,12 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
       )}
 
       <div className="flex items-center gap-3 mb-4">
-        <Link href="/vendors" className="p-1">
+        <Link href="/vendors" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
-        <div className="flex-1">
-          <h1 className="text-lg font-bold text-slate-900">{vendor.name}</h1>
-          <p className="text-xs text-slate-500">{vendor.code}</p>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-lg font-bold text-slate-900 truncate">{vendor.name}</h1>
+          <p className="text-xs text-slate-500 tabular-nums truncate">{vendor.code}</p>
         </div>
         {canEditBalance ? (
           <button
@@ -218,7 +219,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
         <Card className="bg-red-50 border-red-200 mb-4">
           <CardContent className="p-3 flex items-center justify-between">
             <span className="text-sm font-medium text-red-700">Outstanding</span>
-            <span className="text-lg font-bold text-red-700">{formatCurrency(totalOutstanding)}</span>
+            <span className="text-lg font-bold text-red-700 tabular-nums">{formatCurrency(totalOutstanding)}</span>
           </CardContent>
         </Card>
       )}
@@ -231,7 +232,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
               <div>
                 <p className="text-xs text-slate-500">Opening Balance (Apr 1)</p>
                 {!editingBalance ? (
-                  <p className="text-sm font-bold text-slate-900">
+                  <p className="text-sm font-bold text-slate-900 tabular-nums">
                     {formatCurrency(vendor.openingBalance || 0)}
                   </p>
                 ) : (
@@ -360,7 +361,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                 </div>
               ) : (
                 <div className="flex items-center gap-2">
-                  <p className="text-sm text-slate-700">{vendor.paymentTermDays} days</p>
+                  <p className="text-sm text-slate-700 tabular-nums">{vendor.paymentTermDays} days</p>
                   {canEditBalance && (
                     <button
                       onClick={() => { setTermsValue(String(vendor.paymentTermDays)); setEditingTerms(true); }}
@@ -374,7 +375,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
             </div>
             <div>
               <p className="text-xs text-slate-500 mb-0.5">Credit Limit</p>
-              <p className="text-sm text-slate-700">{formatCurrency(vendor.creditLimit)}</p>
+              <p className="text-sm text-slate-700 tabular-nums">{formatCurrency(vendor.creditLimit)}</p>
             </div>
           </div>
           <div>
@@ -422,7 +423,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
             ) : (
               <div className="flex items-center gap-2">
                 {vendor.cdPercentage && vendor.cdTermsDays ? (
-                  <p className="text-sm text-slate-700">{vendor.cdPercentage}% within {vendor.cdTermsDays} days</p>
+                  <p className="text-sm text-slate-700 tabular-nums">{vendor.cdPercentage}% within {vendor.cdTermsDays} days</p>
                 ) : (
                   <p className="text-sm text-slate-400">Not set</p>
                 )}
@@ -518,11 +519,11 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
               <Card className="hover:border-slate-300 mb-2">
                 <CardContent className="p-3 flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-medium text-slate-900">{po.poNumber}</p>
-                    <p className="text-xs text-slate-500">{new Date(po.orderDate).toLocaleDateString("en-IN")}</p>
+                    <p className="text-sm font-medium text-slate-900 tabular-nums">{po.poNumber}</p>
+                    <p className="text-xs text-slate-500 tabular-nums">{new Date(po.orderDate).toLocaleDateString("en-IN")}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm font-bold text-slate-900">{formatCurrency(po.grandTotal)}</p>
+                    <p className="text-sm font-bold text-slate-900 tabular-nums">{formatCurrency(po.grandTotal)}</p>
                     <Badge variant={po.status === "RECEIVED" ? "success" : po.status === "CANCELLED" ? "danger" : "warning"}>
                       {po.status.replace(/_/g, " ")}
                     </Badge>
@@ -549,13 +550,13 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                 <Card className={`hover:border-slate-300 mb-2 ${isOverdue ? "border-red-200" : ""}`}>
                   <CardContent className="p-3 flex items-center justify-between">
                     <div>
-                      <p className="text-sm font-medium text-slate-900">{bill.billNo}</p>
-                      <p className="text-xs text-slate-500">
+                      <p className="text-sm font-medium text-slate-900 tabular-nums">{bill.billNo}</p>
+                      <p className="text-xs text-slate-500 tabular-nums">
                         {new Date(bill.billDate).toLocaleDateString("en-IN")} · Due: {appDueDate.toLocaleDateString("en-IN")}
                       </p>
                     </div>
                     <div className="text-right">
-                      <p className={`text-sm font-bold ${remaining > 0 ? "text-red-600" : "text-green-600"}`}>
+                      <p className={`text-sm font-bold tabular-nums ${remaining > 0 ? "text-red-600" : "text-green-600"}`}>
                         {formatCurrency(remaining)}
                       </p>
                       <Badge variant={bill.status === "PAID" ? "success" : isOverdue ? "danger" : "warning"}>
@@ -578,13 +579,13 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
             <Card key={credit.id} className="mb-2">
               <CardContent className="p-3 flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-medium text-slate-900">{credit.creditNoteNo}</p>
-                  <p className="text-xs text-slate-500">{new Date(credit.creditDate).toLocaleDateString("en-IN")}</p>
+                  <p className="text-sm font-medium text-slate-900 tabular-nums">{credit.creditNoteNo}</p>
+                  <p className="text-xs text-slate-500 tabular-nums">{new Date(credit.creditDate).toLocaleDateString("en-IN")}</p>
                   {credit.reason && <p className="text-xs text-slate-400 mt-0.5">{credit.reason}</p>}
                 </div>
                 <div className="text-right">
-                  <p className="text-sm font-bold text-slate-900">{formatCurrency(credit.amount)}</p>
-                  <p className="text-xs text-slate-500">Used: {formatCurrency(credit.usedAmount)}</p>
+                  <p className="text-sm font-bold text-slate-900 tabular-nums">{formatCurrency(credit.amount)}</p>
+                  <p className="text-xs text-slate-500 tabular-nums">Used: {formatCurrency(credit.usedAmount)}</p>
                 </div>
               </CardContent>
             </Card>
@@ -628,18 +629,18 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
             <>
               <div className="flex items-center justify-between mb-3">
                 <div>
-                  <p className="text-[10px] text-slate-500">Opening Balance</p>
-                  <p className="text-sm font-medium text-slate-700">{formatCurrency(ledger.openingBalance)}</p>
+                  <p className="text-[11px] text-slate-500">Opening Balance</p>
+                  <p className="text-sm font-medium text-slate-700 tabular-nums">{formatCurrency(ledger.openingBalance)}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-[10px] text-slate-500">Current Balance</p>
-                  <p className={`text-sm font-bold ${ledger.currentBalance > 0 ? "text-red-600" : "text-green-600"}`}>
+                  <p className="text-[11px] text-slate-500">Current Balance</p>
+                  <p className={`text-sm font-bold tabular-nums ${ledger.currentBalance > 0 ? "text-red-600" : "text-green-600"}`}>
                     {formatCurrency(ledger.currentBalance)}
                   </p>
                 </div>
               </div>
               <div className="border rounded-lg overflow-hidden">
-                <div className="grid grid-cols-12 gap-0 bg-slate-100 px-2 py-1.5 text-[10px] font-semibold text-slate-600">
+                <div className="grid grid-cols-12 gap-0 bg-slate-100 px-2 py-1.5 text-[11px] font-semibold text-slate-600">
                   <div className="col-span-3">Date</div>
                   <div className="col-span-4">Description</div>
                   <div className="col-span-2 text-right">Debit</div>
@@ -647,16 +648,16 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                 </div>
                 {ledger.entries.map((entry) => (
                   <div key={entry.id} className={`grid grid-cols-12 gap-0 px-2 py-2 border-t border-slate-100 text-xs ${entry.type === "PAYMENT" ? "bg-green-50/50" : ""}`}>
-                    <div className="col-span-3 text-slate-500">{new Date(entry.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</div>
+                    <div className="col-span-3 text-slate-500 tabular-nums">{new Date(entry.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</div>
                     <div className="col-span-4 text-slate-900 truncate">{entry.description}</div>
-                    <div className="col-span-2 text-right">
+                    <div className="col-span-2 text-right tabular-nums">
                       {entry.type === "BILL" ? (
                         <span className="text-red-600">{formatCurrency(entry.debit)}</span>
                       ) : (
                         <span className="text-green-600">-{formatCurrency(entry.credit)}</span>
                       )}
                     </div>
-                    <div className="col-span-3 text-right font-medium">{formatCurrency(entry.balance)}</div>
+                    <div className="col-span-3 text-right font-medium tabular-nums">{formatCurrency(entry.balance)}</div>
                   </div>
                 ))}
                 {ledger.entries.length === 0 && (

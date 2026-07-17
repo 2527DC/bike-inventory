@@ -267,10 +267,10 @@ export default function NewPaymentPage() {
   return (
     <div>
       <div className="flex items-center gap-3 mb-4">
-        <Link href="/accounts" className="p-1">
+        <Link href="/accounts" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
-        <h1 className="text-lg font-bold text-slate-900">Record Payment</h1>
+        <h1 className="text-lg font-bold text-slate-900 truncate">Record Payment</h1>
       </div>
 
       {/* AI Screenshot Upload */}
@@ -333,7 +333,7 @@ export default function NewPaymentPage() {
           <label className="block text-sm font-medium text-slate-700 mb-1">Vendor *</label>
           <select value={vendorId}
             onChange={(e) => { setVendorId(e.target.value); setBillAllocations(new Map()); setAmount(""); }}
-            className="flex h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900">
+            className="flex h-10 min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900">
             <option value="">Select vendor...</option>
             {vendors.map((v) => (
               <option key={v.id} value={v.id}>{v.name} ({v.code})</option>
@@ -343,10 +343,10 @@ export default function NewPaymentPage() {
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Amount *</label>
-          <Input type="number" placeholder="0.00" value={amount} onChange={(e) => handleAmountChange(e.target.value)}
-            min="0.01" step="0.01" className="text-lg" />
+          <Input type="number" inputMode="decimal" placeholder="0.00" value={amount} onChange={(e) => handleAmountChange(e.target.value)}
+            min="0.01" step="0.01" className="text-lg min-h-[44px] tabular-nums" />
           {vendorId && bills.length > 0 && (
-            <p className="text-xs text-slate-500 mt-1">
+            <p className="text-xs text-slate-500 mt-1 tabular-nums">
               Total due: {formatCurrency(totalDue)}
               {totalAllocated > 0 && <span className="text-green-600 ml-1">| Allocating: {formatCurrency(totalAllocated)}</span>}
             </p>
@@ -374,20 +374,20 @@ export default function NewPaymentPage() {
                       className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-medium text-slate-900">{b.billNo}</span>
-                        {isOverdue && <span className="text-[9px] text-red-600 font-medium">OVERDUE</span>}
+                        <span className="text-xs font-medium text-slate-900 tabular-nums">{b.billNo}</span>
+                        {isOverdue && <span className="text-[11px] text-red-600 font-medium">OVERDUE</span>}
                       </div>
-                      <p className="text-[10px] text-slate-500">
+                      <p className="text-[11px] text-slate-500 tabular-nums">
                         Due: {formatDate(b.dueDate)} | Billed: {formatDate(b.billDate)}
                       </p>
                     </div>
                     <div className="text-right shrink-0">
-                      <p className="text-xs font-semibold text-slate-700">{formatCurrency(due)}</p>
+                      <p className="text-xs font-semibold text-slate-700 tabular-nums">{formatCurrency(due)}</p>
                       {isSelected && allocated < due && (
-                        <p className="text-[10px] text-blue-600">Paying: {formatCurrency(allocated)}</p>
+                        <p className="text-[11px] text-blue-600 tabular-nums">Paying: {formatCurrency(allocated)}</p>
                       )}
                       {isSelected && allocated >= due && (
-                        <p className="text-[10px] text-green-600">Full</p>
+                        <p className="text-[11px] text-green-600">Full</p>
                       )}
                     </div>
                   </label>
@@ -395,7 +395,7 @@ export default function NewPaymentPage() {
               })}
             </div>
             {billAllocations.size === 0 && parseFloat(amount) > 0 && (
-              <p className="text-[10px] text-amber-600 mt-1">No bills selected — payment will be recorded as advance</p>
+              <p className="text-[11px] text-amber-600 mt-1">No bills selected — payment will be recorded as advance</p>
             )}
           </div>
         )}
@@ -416,25 +416,32 @@ export default function NewPaymentPage() {
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Payment Date *</label>
-          <Input type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} />
+          <Input type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} className="min-h-[44px] tabular-nums" />
         </div>
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Reference No</label>
-          <Input placeholder="Cheque/UTR/Transaction No" value={referenceNo} onChange={(e) => setReferenceNo(e.target.value)} />
+          <Input placeholder="Cheque/UTR/Transaction No" value={referenceNo} onChange={(e) => setReferenceNo(e.target.value)} className="min-h-[44px]" />
         </div>
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
           <textarea placeholder="Any notes..." value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
-            className="flex w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900" />
+            className="flex w-full min-h-[44px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900" />
         </div>
 
-        <Button type="submit" size="lg" disabled={!vendorId || !amount || submitting} className="w-full bg-blue-600 hover:bg-blue-700">
-          {submitting ? "Recording..." : billAllocations.size > 1
-            ? `Record Payment (${billAllocations.size} bills)`
-            : "Record Payment"}
-        </Button>
+        <div>
+          <Button type="submit" size="lg" disabled={!vendorId || !amount || submitting} className="w-full min-h-[48px] bg-green-600 hover:bg-green-700 text-white">
+            {submitting ? "Recording..." : billAllocations.size > 1
+              ? `Record Payment (${billAllocations.size} bills)`
+              : "Record Payment"}
+          </Button>
+          {(!vendorId || !amount) && !submitting && (
+            <p className="text-xs text-slate-500 mt-1.5 text-center">
+              {!vendorId ? "Select a vendor to continue" : "Enter an amount to continue"}
+            </p>
+          )}
+        </div>
       </form>
     </div>
   );

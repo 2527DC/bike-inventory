@@ -12,6 +12,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DesktopTable } from "@/components/desktop-table";
 import { usePermissions } from "@/lib/use-permissions";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface ExpenseItem {
   id: string;
@@ -125,7 +126,7 @@ export default function ExpensesPage() {
         <Card className="bg-slate-50 mb-3">
           <CardContent className="p-3 flex items-center justify-between">
             <span className="text-sm text-slate-500">Total shown</span>
-            <span className="text-lg font-bold text-slate-900">{formatCurrency(totalAmount)}</span>
+            <span className="text-xl font-bold text-slate-900 tabular-nums">{formatCurrency(totalAmount)}</span>
           </CardContent>
         </Card>
       )}
@@ -144,9 +145,7 @@ export default function ExpensesPage() {
       />
 
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : (
         <>
         <DesktopTable
@@ -165,22 +164,25 @@ export default function ExpensesPage() {
         />
         <div className="space-y-2 lg:hidden">
           {visibleExpenses.map((exp) => (
-            <Card key={exp.id} className="mb-2">
-              <CardContent className="p-3">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0 mr-3">
-                    <p className="text-sm font-medium text-slate-900 truncate">{exp.description}</p>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {new Date(exp.date).toLocaleDateString("en-IN")} | {exp.paidBy} | {exp.paymentMode}
+            <div
+              key={exp.id}
+              className="block rounded-xl border border-slate-200 border-l-4 border-l-slate-200 bg-white shadow-sm"
+            >
+              <div className="p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-slate-900 truncate">{exp.description}</p>
+                    <p className="text-xs text-slate-500 tabular-nums mt-0.5 truncate">
+                      {new Date(exp.date).toLocaleDateString("en-IN")} · {exp.paidBy} · {exp.paymentMode}
                     </p>
-                    <span className={`inline-block mt-1 text-[10px] font-medium px-2 py-0.5 rounded-full ${CATEGORY_COLORS[exp.category] || "bg-slate-100 text-slate-700"}`}>
+                    <span className={`inline-block mt-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full ${CATEGORY_COLORS[exp.category] || "bg-slate-100 text-slate-700"}`}>
                       {exp.category.replace(/_/g, " ")}
                     </span>
                   </div>
-                  <p className="text-sm font-bold text-slate-900 shrink-0">{formatCurrency(exp.amount)}</p>
+                  <p className="text-sm font-bold text-slate-900 tabular-nums shrink-0">{formatCurrency(exp.amount)}</p>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           ))}
 
           {expenses.length === 0 && (

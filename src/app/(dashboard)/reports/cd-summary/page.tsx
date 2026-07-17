@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface Bill {
   id: string;
@@ -156,7 +157,11 @@ export default function CdSummaryPage() {
   return (
     <div>
       <div className="flex items-center gap-3 mb-4">
-        <Link href="/reports" className="p-1">
+        <Link
+          href="/reports"
+          aria-label="Back"
+          className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"
+        >
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
         <h1 className="text-lg font-bold text-slate-900">CD Discount Summary</h1>
@@ -167,20 +172,20 @@ export default function CdSummaryPage() {
         <div className="grid grid-cols-3 gap-2 mb-4">
           <Card className="bg-green-50 border-green-200">
             <CardContent className="p-3">
-              <p className="text-[10px] text-green-600 uppercase font-medium">Earned</p>
-              <p className="text-sm font-bold text-green-700">{fmt(totals.earned)}</p>
+              <p className="text-[11px] text-green-600 uppercase font-medium">Earned</p>
+              <p className="text-xl font-bold text-green-700 tabular-nums">{fmt(totals.earned)}</p>
             </CardContent>
           </Card>
           <Card className="bg-red-50 border-red-200">
             <CardContent className="p-3">
-              <p className="text-[10px] text-red-600 uppercase font-medium">Missed</p>
-              <p className="text-sm font-bold text-red-700">{fmt(totals.missed)}</p>
+              <p className="text-[11px] text-red-600 uppercase font-medium">Missed</p>
+              <p className="text-xl font-bold text-red-700 tabular-nums">{fmt(totals.missed)}</p>
             </CardContent>
           </Card>
           <Card className="bg-blue-50 border-blue-200">
             <CardContent className="p-3">
-              <p className="text-[10px] text-blue-600 uppercase font-medium">Eligible</p>
-              <p className="text-sm font-bold text-blue-700">{fmt(totals.eligible)}</p>
+              <p className="text-[11px] text-blue-600 uppercase font-medium">Eligible</p>
+              <p className="text-xl font-bold text-blue-700 tabular-nums">{fmt(totals.eligible)}</p>
             </CardContent>
           </Card>
         </div>
@@ -189,9 +194,7 @@ export default function CdSummaryPage() {
       <p className="text-xs text-slate-400 mb-3">Last 90 days</p>
 
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
-        </div>
+        <SkeletonList count={5} type="card" />
       ) : vendors.length === 0 ? (
         <p className="text-sm text-slate-400 text-center py-8">
           No vendors with CD terms configured
@@ -204,11 +207,11 @@ export default function CdSummaryPage() {
                 <div className="flex items-center justify-between mb-2">
                   <div>
                     <p className="text-sm font-semibold text-slate-900">{v.vendorName}</p>
-                    <p className="text-xs text-slate-500">
+                    <p className="text-xs text-slate-500 tabular-nums">
                       {v.cdPercentage}% in {v.cdTermsDays} days
                     </p>
                   </div>
-                  <Badge variant="info" className="text-[10px]">
+                  <Badge variant="info" className="text-[11px]">
                     {v.vendorCode}
                   </Badge>
                 </div>
@@ -216,45 +219,45 @@ export default function CdSummaryPage() {
                 <div className="grid grid-cols-3 gap-2 mt-2">
                   {/* Within window */}
                   <div className="bg-blue-50 rounded-lg p-2">
-                    <p className="text-[10px] text-blue-600 font-medium">Eligible</p>
-                    <p className="text-sm font-bold text-blue-700">
+                    <p className="text-[11px] text-blue-600 font-medium">Eligible</p>
+                    <p className="text-xl font-bold text-blue-700 tabular-nums">
                       {v.withinWindow.count}
                     </p>
-                    <p className="text-[10px] text-blue-500">
+                    <p className="text-[11px] text-blue-500 tabular-nums">
                       {fmt(v.withinWindow.totalDiscount)}
                     </p>
                   </div>
 
                   {/* CD used */}
                   <div className="bg-green-50 rounded-lg p-2">
-                    <p className="text-[10px] text-green-600 font-medium">Earned</p>
-                    <p className="text-sm font-bold text-green-700">
+                    <p className="text-[11px] text-green-600 font-medium">Earned</p>
+                    <p className="text-xl font-bold text-green-700 tabular-nums">
                       {v.cdUsed.count}
                     </p>
-                    <p className="text-[10px] text-green-500">
+                    <p className="text-[11px] text-green-500 tabular-nums">
                       {fmt(v.cdUsed.totalDiscount)}
                     </p>
                   </div>
 
                   {/* CD expired */}
                   <div className="bg-red-50 rounded-lg p-2">
-                    <p className="text-[10px] text-red-600 font-medium">Missed</p>
-                    <p className="text-sm font-bold text-red-700">
+                    <p className="text-[11px] text-red-600 font-medium">Missed</p>
+                    <p className="text-xl font-bold text-red-700 tabular-nums">
                       {v.cdExpired.count}
                     </p>
-                    <p className="text-[10px] text-red-500">
+                    <p className="text-[11px] text-red-500 tabular-nums">
                       {fmt(v.cdExpired.totalMissed)}
                     </p>
                   </div>
                 </div>
 
                 {v.withinWindow.bills.length > 0 && (
-                  <p className="text-[10px] text-blue-500 mt-2">
+                  <p className="text-[11px] text-blue-500 mt-2 tabular-nums">
                     Eligible bills: {v.withinWindow.bills.join(", ")}
                   </p>
                 )}
                 {v.cdExpired.bills.length > 0 && (
-                  <p className="text-[10px] text-red-400 mt-1">
+                  <p className="text-[11px] text-red-400 mt-1 tabular-nums">
                     Missed bills: {v.cdExpired.bills.join(", ")}
                   </p>
                 )}

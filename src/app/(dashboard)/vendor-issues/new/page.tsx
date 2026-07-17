@@ -244,10 +244,10 @@ export default function NewVendorIssuePage() {
   return (
     <div>
       <div className="flex items-center gap-3 mb-4">
-        <Link href="/vendor-issues" className="p-1">
+        <Link href="/vendor-issues" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
-        <h1 className="text-lg font-bold text-slate-900">New Ops Issue</h1>
+        <h1 className="text-lg font-bold text-slate-900 truncate">New Ops Issue</h1>
       </div>
 
       {error && (
@@ -284,9 +284,9 @@ export default function NewVendorIssuePage() {
               <div className="flex gap-2">
                 <input type="text" placeholder="Customer name..." value={clientName}
                   onChange={(e) => { setClientName(e.target.value); setShowZohoResults(false); }}
-                  className="flex h-10 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900" />
+                  className="flex h-10 min-h-[44px] flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900" />
                 <button type="button" onClick={searchZohoClient} disabled={zohoSearching || clientName.trim().length < 2}
-                  className="h-10 px-3 rounded-lg border border-blue-300 bg-blue-50 text-blue-700 text-xs font-medium disabled:opacity-40 flex items-center gap-1">
+                  className="h-10 min-h-[44px] px-3 rounded-lg border border-blue-300 bg-blue-50 text-blue-700 text-xs font-medium disabled:opacity-40 flex items-center gap-1">
                   {zohoSearching ? <Loader2 className="h-3 w-3 animate-spin" /> : <Search className="h-3 w-3" />}
                   Zoho
                 </button>
@@ -304,7 +304,7 @@ export default function NewVendorIssuePage() {
                       }}
                       className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 border-b last:border-b-0">
                       <p className="font-medium text-slate-800">{c.name}</p>
-                      <p className="text-[10px] text-slate-400">
+                      <p className="text-[11px] text-slate-400">
                         {c.phone || "No phone"}{c.city ? ` · ${c.city}` : ""}
                       </p>
                     </button>
@@ -316,7 +316,7 @@ export default function NewVendorIssuePage() {
               <label className="block text-sm font-medium text-slate-700 mb-1">Client Phone (optional)</label>
               <input type="tel" placeholder="Phone number..." value={clientPhone}
                 onChange={(e) => setClientPhone(e.target.value)}
-                className="flex h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900" />
+                className="flex h-10 min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900" />
             </div>
           </>
         )}
@@ -337,7 +337,7 @@ export default function NewVendorIssuePage() {
               if (!e.target.value) { setVendorId(""); setBillId(""); }
             }}
             onFocus={() => setShowVendorDropdown(true)}
-            className="flex h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
+            className="flex h-10 min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
           />
           {vendorId && (
             <button
@@ -433,7 +433,7 @@ export default function NewVendorIssuePage() {
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={4}
-            className="flex w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
+            className="flex w-full min-h-[44px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
           />
         </div>
 
@@ -448,7 +448,7 @@ export default function NewVendorIssuePage() {
             placeholder="Brand's ticket / reference no. (e.g. eMotorad)"
             value={ticketNo}
             onChange={(e) => setTicketNo(e.target.value)}
-            className="flex w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
+            className="flex w-full min-h-[44px] tabular-nums rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
           />
           <p className="mt-1 text-xs text-slate-400">Shown in the WhatsApp message so the brand can match it to their ticket.</p>
         </div>
@@ -561,7 +561,7 @@ export default function NewVendorIssuePage() {
             value={suggestedResolution}
             onChange={(e) => setSuggestedResolution(e.target.value)}
             rows={2}
-            className="flex w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
+            className="flex w-full min-h-[44px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
           />
         </div>
 
@@ -575,7 +575,7 @@ export default function NewVendorIssuePage() {
             placeholder="Paste a Drive/Sheet/photo link for the brand to verify…"
             value={docLink}
             onChange={(e) => setDocLink(e.target.value)}
-            className="flex h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
+            className="flex h-10 min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
           />
         </div>
 
@@ -588,7 +588,7 @@ export default function NewVendorIssuePage() {
             <select
               value={billId}
               onChange={(e) => setBillId(e.target.value)}
-              className="flex h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
+              className="flex h-10 min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
             >
               <option value="">No bill</option>
               {bills.map((b) => (
@@ -600,11 +600,23 @@ export default function NewVendorIssuePage() {
           </div>
         )}
 
+        {!submitting && ((issueSource === "VENDOR" ? !vendorId : !clientName.trim()) || !issueType || !description.trim()) && (
+          <p className="text-xs text-slate-500">
+            {issueSource === "VENDOR" && !vendorId
+              ? "Select a brand to continue."
+              : issueSource === "CLIENT" && !clientName.trim()
+              ? "Enter the client name to continue."
+              : !issueType
+              ? "Pick an issue type to continue."
+              : "Add a description to continue."}
+          </p>
+        )}
+
         <Button
           type="submit"
           size="lg"
           disabled={(issueSource === "VENDOR" ? !vendorId : !clientName.trim()) || !issueType || !description.trim() || submitting}
-          className="w-full bg-blue-600 hover:bg-blue-700"
+          className="w-full min-h-[48px] bg-green-600 hover:bg-green-700"
         >
           {submitting ? "Creating..." : "Create Issue"}
         </Button>

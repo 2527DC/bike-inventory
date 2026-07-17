@@ -4,11 +4,11 @@ import { useState, useEffect, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { Plus, ClipboardCheck, AlertTriangle } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { FilterSheet } from "@/components/filter-sheet";
 import { usePermissions } from "@/lib/use-permissions";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface StockCountItem {
   id: string;
@@ -116,9 +116,7 @@ export default function StockAuditPage() {
       />
 
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : sortedCounts.length === 0 ? (
         <div className="text-center py-12">
           <ClipboardCheck className="h-10 w-10 text-slate-300 mx-auto mb-2" />
@@ -129,44 +127,55 @@ export default function StockAuditPage() {
           {sortedCounts.map((c) => {
             const progress = c.totalItems > 0 ? Math.round((c.countedItems / c.totalItems) * 100) : 0;
             const overdue = isOverdue(c);
+            const accent = overdue || c.status === "REJECTED"
+              ? "border-l-red-500"
+              : c.status === "PENDING"
+              ? "border-l-amber-400"
+              : c.status === "IN_PROGRESS"
+              ? "border-l-blue-400"
+              : c.status === "COMPLETED" || c.status === "APPROVED"
+              ? "border-l-green-500"
+              : "border-l-slate-200";
             return (
-              <Link key={c.id} href={`/stock-audit/${c.id}`}>
-                <Card className={`mb-2 ${overdue ? "border-red-300 bg-red-50/30" : ""}`}>
-                  <CardContent className="p-3">
-                    <div className="flex items-start justify-between mb-1">
-                      <div className="flex-1 min-w-0 mr-2">
-                        <div className="flex items-center gap-1.5">
-                          {c.countNo && <span className="text-xs font-mono text-slate-400 shrink-0">{c.countNo}</span>}
-                          <p className="text-sm font-medium text-slate-900 truncate">{c.title}</p>
-                          {overdue && (
-                            <Badge variant="danger" className="shrink-0 flex items-center gap-0.5 text-xs px-1.5 py-0.5">
-                              <AlertTriangle className="h-2.5 w-2.5" /> Overdue
-                            </Badge>
-                          )}
-                        </div>
-                        <p className="text-xs text-slate-500">
-                          Assigned: {c.assignedTo.name} | Due: {new Date(c.dueDate).toLocaleDateString("en-IN")}
-                        </p>
+              <Link
+                key={c.id}
+                href={`/stock-audit/${c.id}`}
+                className={`block rounded-xl border border-slate-200 border-l-4 ${accent} bg-white shadow-sm transition-colors active:bg-slate-50 focus-ring`}
+              >
+                <div className="p-3">
+                  <div className="flex items-start justify-between mb-1">
+                    <div className="flex-1 min-w-0 mr-2">
+                      <div className="flex items-center gap-1.5">
+                        {c.countNo && <span className="text-xs font-mono text-slate-400 tabular-nums shrink-0">{c.countNo}</span>}
+                        <p className="text-sm font-semibold text-slate-900 truncate">{c.title}</p>
+                        {overdue && (
+                          <Badge variant="danger" className="shrink-0 flex items-center gap-0.5 text-xs px-1.5 py-0.5">
+                            <AlertTriangle className="h-2.5 w-2.5" /> Overdue
+                          </Badge>
+                        )}
                       </div>
-                      <Badge variant={STATUS_STYLE[c.status] as "warning" | "info" | "success" | "danger"}>
-                        {c.status === "IN_PROGRESS" ? "In Progress" : c.status.charAt(0) + c.status.slice(1).toLowerCase()}
-                      </Badge>
+                      <p className="text-xs text-slate-500">
+                        Assigned: {c.assignedTo.name} <span className="tabular-nums">| Due: {new Date(c.dueDate).toLocaleDateString("en-IN")}</span>
+                      </p>
                     </div>
-                    <div className="flex items-center gap-2 mt-2">
-                      <div className="flex-1 bg-slate-200 rounded-full h-1.5">
-                        <div
-                          className={`h-1.5 rounded-full transition-all ${
-                            progress === 100 ? "bg-green-500" : progress > 0 ? "bg-blue-500" : "bg-slate-300"
-                          }`}
-                          style={{ width: `${progress}%` }}
-                        />
-                      </div>
-                      <span className="text-lg font-bold text-slate-700 shrink-0">
-                        {c.countedItems}/{c.totalItems}
-                      </span>
+                    <Badge variant={STATUS_STYLE[c.status] as "warning" | "info" | "success" | "danger"}>
+                      {c.status === "IN_PROGRESS" ? "In Progress" : c.status.charAt(0) + c.status.slice(1).toLowerCase()}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <div className="flex-1 bg-slate-200 rounded-full h-1.5">
+                      <div
+                        className={`h-1.5 rounded-full transition-all ${
+                          progress === 100 ? "bg-green-500" : progress > 0 ? "bg-blue-500" : "bg-slate-300"
+                        }`}
+                        style={{ width: `${progress}%` }}
+                      />
                     </div>
-                  </CardContent>
-                </Card>
+                    <span className="text-lg font-bold text-slate-700 tabular-nums shrink-0">
+                      {c.countedItems}/{c.totalItems}
+                    </span>
+                  </div>
+                </div>
               </Link>
             );
           })}

@@ -6,6 +6,7 @@ import { ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface MovementProduct {
   id: string; name: string; sku: string; currentStock: number;
@@ -46,8 +47,8 @@ export default function MovementPage() {
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/reports" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+      <div className="flex items-center gap-2 mb-4">
+        <Link href="/reports" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
         <h1 className="text-lg font-bold text-slate-900">Movement Analysis</h1>
       </div>
 
@@ -65,16 +66,16 @@ export default function MovementPage() {
       {data && (
         <div className="grid grid-cols-3 gap-2 mb-4">
           <Card className="bg-green-50 border-green-200"><CardContent className="p-2 text-center">
-            <p className="text-lg font-bold text-green-700">{data.summary.fast}</p>
-            <p className="text-[10px] text-green-600 font-medium">Fast</p>
+            <p className="text-xl font-bold text-green-700 tabular-nums">{data.summary.fast}</p>
+            <p className="text-[11px] text-green-600 font-medium">Fast</p>
           </CardContent></Card>
           <Card className="bg-amber-50 border-amber-200"><CardContent className="p-2 text-center">
-            <p className="text-lg font-bold text-amber-700">{data.summary.slow}</p>
-            <p className="text-[10px] text-amber-600 font-medium">Slow</p>
+            <p className="text-xl font-bold text-amber-700 tabular-nums">{data.summary.slow}</p>
+            <p className="text-[11px] text-amber-600 font-medium">Slow</p>
           </CardContent></Card>
           <Card className="bg-red-50 border-red-200"><CardContent className="p-2 text-center">
-            <p className="text-lg font-bold text-red-700">{data.summary.dead}</p>
-            <p className="text-[10px] text-red-600 font-medium">Dead</p>
+            <p className="text-xl font-bold text-red-700 tabular-nums">{data.summary.dead}</p>
+            <p className="text-[11px] text-red-600 font-medium">Dead</p>
           </CardContent></Card>
         </div>
       )}
@@ -89,9 +90,7 @@ export default function MovementPage() {
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : (
         <div className="space-y-2">
           {filtered.map((p) => (
@@ -100,13 +99,13 @@ export default function MovementPage() {
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0 mr-2">
                     <p className="text-sm font-medium text-slate-900">{p.name}</p>
-                    <p className="text-xs text-slate-500">{p.sku} | {p.category} | Stock: {p.currentStock}</p>
+                    <p className="text-[11px] text-slate-500 tabular-nums">{p.sku} | {p.category} | Stock: {p.currentStock}</p>
                   </div>
                   <Badge variant={CLASSIFICATION_STYLE[p.classification] as "success" | "warning" | "danger"}>
                     {p.classification}
                   </Badge>
                 </div>
-                <div className="flex gap-4 mt-1.5 text-xs">
+                <div className="flex gap-4 mt-1.5 text-xs tabular-nums">
                   <span className="text-blue-600">In: {p.inward}</span>
                   <span className="text-orange-600">Out: {p.outward}</span>
                   <span className="text-slate-500">{p.monthlyOutward}/mo</span>

@@ -10,48 +10,42 @@ const reports = [
     description: "Total inventory value by category, brand, or type",
     href: "/reports/stock-value",
     icon: Package,
-    color: "bg-blue-50 text-blue-600 border-blue-200",
-    iconBg: "bg-blue-100",
+    iconBg: "bg-blue-100 text-blue-600",
   },
   {
     title: "Movement Analysis",
     description: "Fast, slow, and dead stock identification",
     href: "/reports/movement",
     icon: TrendingUp,
-    color: "bg-green-50 text-green-600 border-green-200",
-    iconBg: "bg-green-100",
+    iconBg: "bg-green-100 text-green-600",
   },
   {
     title: "Purchase Report",
     description: "Vendor-wise purchase summary",
     href: "/reports/purchase",
     icon: ShoppingCart,
-    color: "bg-purple-50 text-purple-600 border-purple-200",
-    iconBg: "bg-purple-100",
+    iconBg: "bg-purple-100 text-purple-600",
   },
   {
     title: "Expense Summary",
     description: "Category-wise expense breakdown",
     href: "/reports/expense-summary",
     icon: Receipt,
-    color: "bg-orange-50 text-orange-600 border-orange-200",
-    iconBg: "bg-orange-100",
+    iconBg: "bg-orange-100 text-orange-600",
   },
   {
     title: "CD Discount Summary",
     description: "Cash discount earned, missed, and eligible by vendor",
     href: "/reports/cd-summary",
     icon: Percent,
-    color: "bg-teal-50 text-teal-600 border-teal-200",
-    iconBg: "bg-teal-100",
+    iconBg: "bg-teal-100 text-teal-600",
   },
   {
     title: "Daily Activity",
     description: "Today's inwards, outwards, payments, expenses",
     href: "/reports/daily",
     icon: Calendar,
-    color: "bg-slate-50 text-slate-600 border-slate-200",
-    iconBg: "bg-slate-100",
+    iconBg: "bg-slate-100 text-slate-600",
   },
 ];
 
@@ -64,8 +58,8 @@ export default function ReportsPage() {
         {reports.map((report) => {
           const Icon = report.icon;
           return (
-            <Link key={report.href} href={report.href}>
-              <Card className={`hover:shadow-md transition-shadow ${report.color}`}>
+            <Link key={report.href} href={report.href} className="focus-ring rounded-xl">
+              <Card className="rounded-xl border border-slate-200 bg-white shadow-sm hover:shadow-md transition-shadow">
                 <CardContent className="p-4 flex items-center gap-3">
                   <div className={`h-10 w-10 rounded-lg ${report.iconBg} flex items-center justify-center shrink-0`}>
                     <Icon className="h-5 w-5" />
@@ -74,7 +68,7 @@ export default function ReportsPage() {
                     <p className="text-sm font-semibold text-slate-900">{report.title}</p>
                     <p className="text-xs text-slate-500 mt-0.5">{report.description}</p>
                   </div>
-                  <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
+                  <ChevronRight className="h-5 w-5 text-slate-400 shrink-0" />
                 </CardContent>
               </Card>
             </Link>

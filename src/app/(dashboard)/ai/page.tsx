@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 type Tab = "insights" | "reorder" | "forecast" | "alerts";
 
@@ -90,7 +91,7 @@ export default function AIPage() {
           const Icon = t.icon;
           return (
             <button key={t.key} onClick={() => setTab(t.key)}
-              className={`flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded-md text-xs font-medium transition-colors ${
+              className={`flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded-md text-xs font-medium transition-colors focus-ring ${
                 tab === t.key ? "bg-white shadow-sm text-slate-900" : "text-slate-500"
               }`}>
               <Icon className="h-3.5 w-3.5" />{t.label}
@@ -100,9 +101,7 @@ export default function AIPage() {
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="h-6 w-6 border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : (
         <>
           {/* Insights Tab */}
@@ -118,7 +117,7 @@ export default function AIPage() {
                 {insights.map((item) => (
                   <Card key={item.type} className={item.severity === "danger" ? "border-red-200 bg-red-50" : item.severity === "warning" ? "border-yellow-200 bg-yellow-50" : ""}>
                     <CardContent className="p-3">
-                      <Badge variant={SEVERITY_MAP[item.severity] || "info"} className="text-[9px] mb-1">{item.type.replace("_", " ")}</Badge>
+                      <Badge variant={SEVERITY_MAP[item.severity] || "info"} className="text-[11px] mb-1">{item.type.replace("_", " ")}</Badge>
                       <p className="text-xs text-slate-700 leading-tight">{item.title}</p>
                     </CardContent>
                   </Card>
@@ -143,21 +142,21 @@ export default function AIPage() {
                         <div className="flex items-start justify-between mb-1">
                           <div className="min-w-0 flex-1">
                             <p className="text-sm font-semibold text-slate-900">{item.product.name}</p>
-                            <p className="text-[10px] text-slate-500">{item.product.sku} | {item.product.category}</p>
+                            <p className="text-[11px] text-slate-500">{item.product.sku} | {item.product.category}</p>
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
                             <Clock className="h-3 w-3 text-slate-400" />
-                            <span className={`text-xs font-bold ${item.daysUntilStockout < 7 ? "text-red-600" : "text-slate-600"}`}>
+                            <span className={`text-xs font-bold tabular-nums ${item.daysUntilStockout < 7 ? "text-red-600" : "text-slate-600"}`}>
                               {item.daysUntilStockout}d
                             </span>
                           </div>
                         </div>
-                        <div className="flex items-center gap-3 text-[10px] text-slate-500">
-                          <span>Stock: <b className="text-slate-700">{item.currentStock}</b></span>
-                          <span>Reorder at: <b>{item.reorderPoint}</b></span>
-                          <span>Order: <b className="text-blue-600">{item.suggestedQty}</b></span>
+                        <div className="flex items-center gap-3 text-[11px] text-slate-500">
+                          <span>Stock: <b className="text-slate-700 tabular-nums">{item.currentStock}</b></span>
+                          <span>Reorder at: <b className="tabular-nums">{item.reorderPoint}</b></span>
+                          <span>Order: <b className="text-blue-600 tabular-nums">{item.suggestedQty}</b></span>
                         </div>
-                        {item.vendorName && <p className="text-[9px] text-slate-400 mt-1">Vendor: {item.vendorName}</p>}
+                        {item.vendorName && <p className="text-[11px] text-slate-400 mt-1">Vendor: {item.vendorName}</p>}
                       </CardContent>
                     </Card>
                   </Link>
@@ -182,18 +181,18 @@ export default function AIPage() {
                       <div className="flex items-start justify-between mb-1">
                         <div className="min-w-0 flex-1">
                           <p className="text-sm font-medium text-slate-900">{item.product.name}</p>
-                          <p className="text-[10px] text-slate-500">{item.product.sku}</p>
+                          <p className="text-[11px] text-slate-500">{item.product.sku}</p>
                         </div>
                         <div className="flex items-center gap-1.5">
-                          <Badge variant={CLASS_MAP[item.classification] || "info"} className="text-[9px]">{item.classification}</Badge>
+                          <Badge variant={CLASS_MAP[item.classification] || "info"} className="text-[11px]">{item.classification}</Badge>
                           <TrendIcon className={`h-3.5 w-3.5 ${item.trend === "INCREASING" ? "text-green-500" : item.trend === "DECREASING" ? "text-red-500" : "text-slate-400"}`} />
                         </div>
                       </div>
-                      <div className="flex items-center gap-3 text-[10px] text-slate-500">
-                        <span>30d: <b>{item.sales30}</b></span>
-                        <span>60d: <b>{item.sales60}</b></span>
-                        <span>90d: <b>{item.sales90}</b></span>
-                        <span>Stock: <b>{item.monthsOfStockLeft < 999 ? `${item.monthsOfStockLeft}mo` : "--"}</b></span>
+                      <div className="flex items-center gap-3 text-[11px] text-slate-500">
+                        <span>30d: <b className="tabular-nums">{item.sales30}</b></span>
+                        <span>60d: <b className="tabular-nums">{item.sales60}</b></span>
+                        <span>90d: <b className="tabular-nums">{item.sales90}</b></span>
+                        <span>Stock: <b className="tabular-nums">{item.monthsOfStockLeft < 999 ? `${item.monthsOfStockLeft}mo` : "--"}</b></span>
                       </div>
                     </CardContent>
                   </Card>
@@ -218,14 +217,14 @@ export default function AIPage() {
                         <div className="flex items-start justify-between mb-1">
                           <div className="min-w-0 flex-1">
                             <p className="text-sm font-semibold text-slate-900">{item.product.name}</p>
-                            <p className="text-[10px] text-slate-500">{item.product.sku} | {item.product.category}</p>
+                            <p className="text-[11px] text-slate-500">{item.product.sku} | {item.product.category}</p>
                           </div>
-                          <Badge variant={PRIORITY_MAP[item.priority] || "info"} className="text-[9px]">{item.priority}</Badge>
+                          <Badge variant={PRIORITY_MAP[item.priority] || "info"} className="text-[11px]">{item.priority}</Badge>
                         </div>
-                        <div className="flex items-center gap-3 text-[10px] text-slate-500">
-                          <span>Stock: <b className="text-red-600">{item.currentStock}</b></span>
-                          <span>Deficit: <b>{item.deficit}</b></span>
-                          <span>Stockout in: <b>{item.daysUntilStockout < 999 ? `${item.daysUntilStockout}d` : "--"}</b></span>
+                        <div className="flex items-center gap-3 text-[11px] text-slate-500">
+                          <span>Stock: <b className="text-red-600 tabular-nums">{item.currentStock}</b></span>
+                          <span>Deficit: <b className="tabular-nums">{item.deficit}</b></span>
+                          <span>Stockout in: <b className="tabular-nums">{item.daysUntilStockout < 999 ? `${item.daysUntilStockout}d` : "--"}</b></span>
                         </div>
                       </CardContent>
                     </Card>

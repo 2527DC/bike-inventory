@@ -93,11 +93,11 @@ export default function MorePage() {
             <Card key={group.title}>
               <button
                 onClick={() => toggleGroup(group.title)}
-                className="w-full flex items-center justify-between px-4 py-3"
+                className="w-full flex items-center justify-between px-4 py-3 min-h-[44px] focus-ring rounded-xl"
               >
-                <span className="text-sm font-bold text-slate-800">{group.title}</span>
+                <span className="text-[13px] font-bold uppercase tracking-wide text-slate-500">{group.title}</span>
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-slate-400">{visibleItems.length}</span>
+                  <span className="text-[11px] font-medium text-slate-400 tabular-nums">{visibleItems.length}</span>
                   {isExpanded ? (
                     <ChevronDown className="h-4 w-4 text-slate-400" />
                   ) : (
@@ -111,19 +111,19 @@ export default function MorePage() {
                     const Icon = item.icon;
                     if (item.comingSoon) {
                       return (
-                        <div key={item.label} className="flex items-center gap-3 px-4 py-2.5 opacity-50 cursor-not-allowed">
-                          <Icon className="h-4 w-4 text-slate-400" />
+                        <div key={item.label} className="flex items-center gap-3 px-4 py-2.5 min-h-[44px] opacity-50 cursor-not-allowed">
+                          <Icon className="h-4 w-4 text-slate-400 shrink-0" />
                           <span className="flex-1 text-sm text-slate-500">{item.label}</span>
                           <Badge variant="default">Soon</Badge>
                         </div>
                       );
                     }
                     return (
-                      <Link key={item.href} href={item.href}>
-                        <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50 transition-colors">
-                          <Icon className="h-4 w-4 text-slate-500" />
+                      <Link key={item.href} href={item.href} className="block focus-ring rounded-lg">
+                        <div className="flex items-center gap-3 px-4 py-2.5 min-h-[44px] hover:bg-slate-50 transition-colors">
+                          <Icon className="h-4 w-4 text-slate-500 shrink-0" />
                           <span className="flex-1 text-sm text-slate-700">{item.label}</span>
-                          <ChevronRight className="h-3.5 w-3.5 text-slate-300" />
+                          <ChevronRight className="h-4 w-4 text-slate-300 shrink-0" />
                         </div>
                       </Link>
                     );
@@ -135,16 +135,17 @@ export default function MorePage() {
         })}
       </div>
 
-      {/* Admin: Clear Stuck Syncs */}
+      {/* Admin: Clear Stuck Syncs — admin-only, hidden for non-admins */}
       {(role === "ADMIN" || role === "CEO") && (
-        <div className="mt-4 px-4 py-3 bg-slate-50 rounded-lg">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-slate-700">Zoho Sync</p>
-              <p className="text-xs text-slate-400">Clear stuck syncs if fetch shows &quot;already in progress&quot;</p>
+        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-amber-700 mb-2">Admin</p>
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-slate-800">Zoho Sync</p>
+              <p className="text-xs text-slate-500">Clear stuck syncs if fetch shows &quot;already in progress&quot;</p>
             </div>
             <button onClick={handleClearSync} disabled={syncClearing}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-100 text-amber-700 rounded-lg text-xs font-medium hover:bg-amber-200 disabled:opacity-50">
+              className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] bg-amber-100 text-amber-800 rounded-lg text-xs font-semibold hover:bg-amber-200 disabled:opacity-50 focus-ring shrink-0">
               <RefreshCw className={`h-3.5 w-3.5 ${syncClearing ? "animate-spin" : ""}`} />
               {syncClearing ? "Clearing..." : "Clear & Reset"}
             </button>
@@ -155,16 +156,16 @@ export default function MorePage() {
         </div>
       )}
 
-      {/* Sign Out */}
+      {/* Sign Out — destructive, set apart */}
       <button
         onClick={() => signOut({ callbackUrl: "/login" })}
-        className="flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-red-50 transition-colors w-full mt-4"
+        className="flex items-center gap-3 px-4 py-3 min-h-[44px] rounded-xl border border-red-200 bg-white hover:bg-red-50 transition-colors w-full mt-4 focus-ring"
       >
-        <LogOut className="h-5 w-5 text-red-500" />
-        <span className="text-sm font-medium text-red-600">Sign Out</span>
+        <LogOut className="h-5 w-5 text-red-500 shrink-0" />
+        <span className="text-sm font-semibold text-red-600">Sign Out</span>
       </button>
 
-      <p className="text-xs text-slate-300 text-center mt-8">
+      <p className="text-[11px] text-slate-400 text-center mt-8 tabular-nums">
         BCH OPS v0.8.0 | Final
       </p>
     </div>

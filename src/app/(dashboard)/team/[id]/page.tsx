@@ -8,6 +8,7 @@ import { ArrowLeft, Save, ShieldAlert, Trash2, Eye, Plus, Pencil, ShieldCheck, C
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { FEATURE_NAV_ITEMS, NAV_FEATURE_MAP } from "@/lib/nav-config";
 
 interface UserDetail {
@@ -184,8 +185,8 @@ export default function EditTeamMemberPage({ params }: { params: Promise<{ id: s
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+      <div className="space-y-3">
+        <SkeletonList count={5} type="card" />
       </div>
     );
   }
@@ -202,26 +203,27 @@ export default function EditTeamMemberPage({ params }: { params: Promise<{ id: s
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/team" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+      <div className="flex items-center gap-2 mb-4">
+        <Link href="/team" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
         <div className="flex-1 min-w-0">
           <h1 className="text-lg font-bold text-slate-900 truncate">{user.name}</h1>
-          <div className="flex items-center gap-2">
-            <Badge variant="info" className="text-[9px]">{ROLES.find(r => r.value === user.role)?.label || user.role}</Badge>
-            {!user.isActive && <Badge variant="danger" className="text-[9px]">Inactive</Badge>}
-          </div>
+          <p className="text-xs text-slate-500 truncate">{user.email}</p>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <Badge variant="info">{ROLES.find(r => r.value === user.role)?.label || user.role}</Badge>
+          {!user.isActive && <Badge variant="danger">Inactive</Badge>}
         </div>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3 mb-4">
         <div className="bg-slate-50 rounded-lg p-3 text-center">
-          <p className="text-lg font-bold text-slate-900">{user._count.transactions}</p>
-          <p className="text-[10px] text-slate-500">Transactions</p>
+          <p className="text-lg font-bold text-slate-900 tabular-nums">{user._count.transactions}</p>
+          <p className="text-[11px] text-slate-500">Transactions</p>
         </div>
         <div className="bg-slate-50 rounded-lg p-3 text-center">
-          <p className="text-lg font-bold text-slate-900">{user._count.stockCounts}</p>
-          <p className="text-[10px] text-slate-500">Stock Audits</p>
+          <p className="text-lg font-bold text-slate-900 tabular-nums">{user._count.stockCounts}</p>
+          <p className="text-[11px] text-slate-500">Stock Audits</p>
         </div>
       </div>
 
@@ -277,12 +279,12 @@ export default function EditTeamMemberPage({ params }: { params: Promise<{ id: s
               <div>
                 <p className="text-xs font-semibold text-slate-700 mb-2">Permissions</p>
                 <div className="flex items-center gap-2 mb-2 px-1 overflow-x-auto">
-                  <span className="flex items-center gap-0.5 text-[9px] text-slate-500 shrink-0"><Eye className="h-2.5 w-2.5" />View</span>
-                  <span className="flex items-center gap-0.5 text-[9px] text-slate-500 shrink-0"><Plus className="h-2.5 w-2.5" />Add</span>
-                  <span className="flex items-center gap-0.5 text-[9px] text-slate-500 shrink-0"><Pencil className="h-2.5 w-2.5" />Edit</span>
-                  <span className="flex items-center gap-0.5 text-[9px] text-slate-500 shrink-0"><Trash2 className="h-2.5 w-2.5" />Del</span>
-                  <span className="flex items-center gap-0.5 text-[9px] text-slate-500 shrink-0"><ShieldCheck className="h-2.5 w-2.5" />Appr</span>
-                  <span className="flex items-center gap-0.5 text-[9px] text-slate-500 shrink-0"><CloudDownload className="h-2.5 w-2.5" />Fetch</span>
+                  <span className="flex items-center gap-0.5 text-[11px] text-slate-500 shrink-0"><Eye className="h-2.5 w-2.5" />View</span>
+                  <span className="flex items-center gap-0.5 text-[11px] text-slate-500 shrink-0"><Plus className="h-2.5 w-2.5" />Add</span>
+                  <span className="flex items-center gap-0.5 text-[11px] text-slate-500 shrink-0"><Pencil className="h-2.5 w-2.5" />Edit</span>
+                  <span className="flex items-center gap-0.5 text-[11px] text-slate-500 shrink-0"><Trash2 className="h-2.5 w-2.5" />Del</span>
+                  <span className="flex items-center gap-0.5 text-[11px] text-slate-500 shrink-0"><ShieldCheck className="h-2.5 w-2.5" />Appr</span>
+                  <span className="flex items-center gap-0.5 text-[11px] text-slate-500 shrink-0"><CloudDownload className="h-2.5 w-2.5" />Fetch</span>
                 </div>
                 <div className="space-y-1">
                   {APP_FEATURES.map((f) => {
@@ -343,12 +345,12 @@ export default function EditTeamMemberPage({ params }: { params: Promise<{ id: s
 
             {/* Live preview */}
             <div className="flex items-center gap-1 flex-wrap mb-3 bg-slate-50 rounded-lg p-2">
-              <Badge variant="default" className="text-[10px]">Home</Badge>
+              <Badge variant="default" className="text-[11px]">Home</Badge>
               {navTabs.map((href) => {
                 const it = navItemByHref(href);
-                return <Badge key={href} variant="info" className="text-[10px]">{it?.label || href}</Badge>;
+                return <Badge key={href} variant="info" className="text-[11px]">{it?.label || href}</Badge>;
               })}
-              <Badge variant="default" className="text-[10px]">More</Badge>
+              <Badge variant="default" className="text-[11px]">More</Badge>
             </div>
 
             {/* Selected, ordered */}
@@ -359,10 +361,10 @@ export default function EditTeamMemberPage({ params }: { params: Promise<{ id: s
                   const permitted = canViewFeature(NAV_FEATURE_MAP[href]);
                   return (
                     <div key={href} className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg p-2">
-                      <span className="text-[10px] text-slate-400 w-4">{i + 1}</span>
+                      <span className="text-[11px] text-slate-400 w-4 tabular-nums">{i + 1}</span>
                       <span className="flex-1 text-sm text-slate-800">
                         {it?.label || href}
-                        {!permitted && <span className="text-[10px] text-red-500 ml-1">(no access — won&apos;t show)</span>}
+                        {!permitted && <span className="text-[11px] text-red-500 ml-1">(no access — won&apos;t show)</span>}
                       </span>
                       <button type="button" onClick={() => moveNavTab(i, -1)} disabled={i === 0}
                         className="p-1 rounded text-slate-400 hover:text-slate-700 disabled:opacity-30"><ArrowUp className="h-3.5 w-3.5" /></button>
@@ -394,14 +396,14 @@ export default function EditTeamMemberPage({ params }: { params: Promise<{ id: s
             </div>
           </div>
 
-          <Button onClick={handleSave} size="lg" disabled={saving} className="w-full bg-blue-600 hover:bg-blue-700">
+          <Button onClick={handleSave} size="lg" disabled={saving} className="w-full min-h-[48px] rounded-lg font-medium bg-green-600 hover:bg-green-700 text-white">
             <Save className="h-4 w-4 mr-2" />{saving ? "Saving..." : "Save Changes"}
           </Button>
 
           {/* Delete / Remove user */}
           {currentUser?.userId !== id && (
             <Button variant="outline" size="lg" disabled={deleting}
-              className="w-full border-red-300 text-red-600 hover:bg-red-50"
+              className="w-full min-h-[48px] rounded-lg font-medium border-red-300 text-red-600 hover:bg-red-50"
               onClick={async () => {
                 if (!confirm(`Remove ${user.name} from the team?`)) return;
                 setDeleting(true);
@@ -429,7 +431,7 @@ export default function EditTeamMemberPage({ params }: { params: Promise<{ id: s
           )}
 
           <p className="text-xs text-slate-400 text-center">
-            Member since {new Date(user.createdAt).toLocaleDateString("en-IN")}
+            Member since <span className="tabular-nums">{new Date(user.createdAt).toLocaleDateString("en-IN")}</span>
           </p>
         </div>
       ) : (
@@ -444,7 +446,7 @@ export default function EditTeamMemberPage({ params }: { params: Promise<{ id: s
           </div>
           <div className="bg-slate-50 rounded-lg p-3">
             <p className="text-xs text-slate-500">Member Since</p>
-            <p className="text-sm font-medium text-slate-900">{new Date(user.createdAt).toLocaleDateString("en-IN")}</p>
+            <p className="text-sm font-medium text-slate-900 tabular-nums">{new Date(user.createdAt).toLocaleDateString("en-IN")}</p>
           </div>
           <p className="text-xs text-slate-400 text-center mt-4">Only admins can edit team members</p>
         </div>

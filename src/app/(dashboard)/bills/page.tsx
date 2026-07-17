@@ -14,6 +14,7 @@ import { useDebounce } from "@/lib/utils";
 import { type DateRangeKey } from "@/components/date-filter";
 import { FilterSheet } from "@/components/filter-sheet";
 import { usePermissions } from "@/lib/use-permissions";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 const BILL_COLUMNS: ExportColumn[] = [
   { header: "Bill No", key: "billNo" },
@@ -417,13 +418,13 @@ export default function BillsPage() {
               <button
                 key={bucket.key}
                 onClick={() => setAgingFilter(agingFilter === bucket.key ? null : bucket.key)}
-                className={`p-2 rounded-lg border text-left transition-all ${
+                className={`p-2 rounded-lg border text-left transition-all min-h-[44px] ${
                   agingFilter === bucket.key ? `${bucket.bg} ring-2 ring-offset-1 ring-slate-400` : "bg-white border-slate-200 hover:border-slate-300"
                 }`}
               >
-                <p className="text-[10px] text-slate-500">{bucket.label}</p>
-                <p className={`text-sm font-bold ${bucket.color}`}>{bucket.data.count}</p>
-                <p className="text-[10px] text-slate-500 truncate">{formatCurrency(bucket.data.amount)}</p>
+                <p className="text-[11px] font-medium text-slate-600">{bucket.label}</p>
+                <p className={`text-xl font-bold tabular-nums leading-none mt-0.5 ${bucket.color}`}>{bucket.data.count}</p>
+                <p className="text-[10px] text-slate-500 tabular-nums truncate mt-0.5">{formatCurrency(bucket.data.amount)}</p>
               </button>
             ))}
           </div>
@@ -442,7 +443,7 @@ export default function BillsPage() {
               <Link key={w.billId} href={`/bills/${w.billId}`}
                 className="flex items-center justify-between text-xs hover:bg-amber-100 rounded px-1 py-0.5 transition-colors">
                 <span className="text-slate-700 truncate">{w.vendorName}</span>
-                <span className={`shrink-0 font-medium ${w.daysLeft <= 0 ? "text-red-600" : w.daysLeft <= 3 ? "text-orange-600" : "text-amber-600"}`}>
+                <span className={`shrink-0 font-medium tabular-nums ${w.daysLeft <= 0 ? "text-red-600" : w.daysLeft <= 3 ? "text-orange-600" : "text-amber-600"}`}>
                   {w.daysLeft <= 0 ? `Expired ${Math.abs(w.daysLeft)}d ago` : `${w.daysLeft}d left`} · {w.cdPercentage}% · {formatCurrency(w.balance)}
                 </span>
               </Link>
@@ -488,22 +489,7 @@ export default function BillsPage() {
       />
 
       {loading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="p-3 border border-slate-100 rounded-lg animate-pulse">
-              <div className="flex items-start justify-between">
-                <div className="flex-1 space-y-1.5">
-                  <div className="h-4 bg-slate-200 rounded w-3/4" />
-                  <div className="h-3 bg-slate-200 rounded w-1/2" />
-                </div>
-                <div className="text-right space-y-1.5">
-                  <div className="h-4 bg-slate-200 rounded w-16 ml-auto" />
-                  <div className="h-5 w-14 bg-slate-200 rounded-full ml-auto" />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : (
         <>
         <DesktopTable
@@ -537,44 +523,57 @@ export default function BillsPage() {
             const appDueDate = new Date(bill.billDate);
             appDueDate.setDate(appDueDate.getDate() + (bill.vendor.paymentTermDays || 30));
             const isOverdue = appDueDate < new Date() && remaining > 0;
+            const overdueDays = Math.floor((Date.now() - appDueDate.getTime()) / (1000 * 60 * 60 * 24));
+            const accent = isOverdue
+              ? "border-l-red-500"
+              : bill.status === "PAID"
+              ? "border-l-green-500"
+              : bill.status === "PARTIALLY_PAID" || bill.status === "PENDING"
+              ? "border-l-amber-400"
+              : "border-l-slate-200";
             return (
-              <Link key={bill.id} href={`/bills/${bill.id}`}>
-                <Card className={`hover:border-slate-300 transition-colors mb-2 ${isOverdue ? "border-red-200 bg-red-50/30" : ""}`}>
-                  <CardContent className="p-3">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1 min-w-0 mr-3">
-                        <div className="flex items-center gap-2">
-                          {isOverdue && <AlertTriangle className="h-3.5 w-3.5 text-red-500 shrink-0" />}
-                          <p className="text-sm font-medium text-slate-900">{bill.vendor.name}</p>
-                        </div>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          {bill.billNo} | Due: {appDueDate.toLocaleDateString("en-IN")}
-                        </p>
+              <Link
+                key={bill.id}
+                href={`/bills/${bill.id}`}
+                className={`block rounded-xl border border-slate-200 border-l-4 ${accent} bg-white shadow-sm transition-colors active:bg-slate-50 focus-ring`}
+              >
+                <div className="p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        {isOverdue && <AlertTriangle className="h-3.5 w-3.5 text-red-500 shrink-0" />}
+                        <p className="text-sm font-semibold text-slate-900 truncate">{bill.vendor.name}</p>
                       </div>
-                      <div className="text-right shrink-0">
-                        <p className={`text-sm font-bold ${remaining > 0 ? "text-red-600" : "text-green-600"}`}>
-                          {formatCurrency(remaining)}
-                        </p>
-                        <Badge variant={bill.status === "PAID" ? "success" : isOverdue ? "danger" : "warning"} className="text-[10px]">
-                          {isOverdue ? "OVERDUE" : bill.status.replace(/_/g, " ")}
-                        </Badge>
-                      </div>
+                      <p className="text-xs text-slate-500 tabular-nums truncate mt-0.5">
+                        {bill.billNo} · Due {appDueDate.toLocaleDateString("en-IN")}
+                      </p>
                     </div>
-                    {bill.paidAmount > 0 && remaining > 0 && (
-                      <div className="mt-2">
-                        <div className="w-full bg-slate-200 rounded-full h-1.5">
-                          <div
-                            className="bg-green-500 h-1.5 rounded-full"
-                            style={{ width: `${Math.min(100, (bill.paidAmount / bill.amount) * 100)}%` }}
-                          />
-                        </div>
-                        <p className="text-[10px] text-slate-400 mt-0.5">
-                          Paid {formatCurrency(bill.paidAmount)} of {formatCurrency(bill.amount)}
-                        </p>
+                    <div className="text-right shrink-0">
+                      <p className={`text-sm font-bold tabular-nums ${remaining > 0 ? "text-red-600" : "text-green-600"}`}>
+                        {formatCurrency(remaining)}
+                      </p>
+                      <Badge variant={bill.status === "PAID" ? "success" : isOverdue ? "danger" : "warning"} className="mt-1">
+                        {isOverdue ? "OVERDUE" : bill.status.replace(/_/g, " ")}
+                      </Badge>
+                    </div>
+                  </div>
+                  {isOverdue && (
+                    <p className="mt-1.5 text-xs font-semibold text-red-600 tabular-nums">{overdueDays}d overdue</p>
+                  )}
+                  {bill.paidAmount > 0 && remaining > 0 && (
+                    <div className="mt-2">
+                      <div className="w-full bg-slate-200 rounded-full h-1.5">
+                        <div
+                          className="bg-green-500 h-1.5 rounded-full"
+                          style={{ width: `${Math.min(100, (bill.paidAmount / bill.amount) * 100)}%` }}
+                        />
                       </div>
-                    )}
-                  </CardContent>
-                </Card>
+                      <p className="text-[11px] text-slate-400 tabular-nums mt-0.5">
+                        Paid {formatCurrency(bill.paidAmount)} of {formatCurrency(bill.amount)}
+                      </p>
+                    </div>
+                  )}
+                </div>
               </Link>
             );
           })}
@@ -592,19 +591,19 @@ export default function BillsPage() {
             <Card className="bg-slate-50 mt-3">
               <CardContent className="p-3">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-500">{bills.length} bill{bills.length !== 1 ? "s" : ""}</span>
+                  <span className="text-slate-500 tabular-nums">{bills.length} bill{bills.length !== 1 ? "s" : ""}</span>
                   <div className="flex gap-4">
                     <div className="text-right">
-                      <p className="text-[10px] text-slate-400">Total</p>
-                      <p className="text-sm font-bold text-slate-900">{formatCurrency(bills.reduce((s, b) => s + b.amount, 0))}</p>
+                      <p className="text-[11px] text-slate-500">Total</p>
+                      <p className="text-sm font-bold text-slate-900 tabular-nums">{formatCurrency(bills.reduce((s, b) => s + b.amount, 0))}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-[10px] text-slate-400">Paid</p>
-                      <p className="text-sm font-bold text-green-600">{formatCurrency(bills.reduce((s, b) => s + b.paidAmount, 0))}</p>
+                      <p className="text-[11px] text-slate-500">Paid</p>
+                      <p className="text-sm font-bold text-green-600 tabular-nums">{formatCurrency(bills.reduce((s, b) => s + b.paidAmount, 0))}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-[10px] text-slate-400">Balance</p>
-                      <p className="text-sm font-bold text-red-600">{formatCurrency(bills.reduce((s, b) => s + (b.amount - b.paidAmount), 0))}</p>
+                      <p className="text-[11px] text-slate-500">Balance</p>
+                      <p className="text-sm font-bold text-red-600 tabular-nums">{formatCurrency(bills.reduce((s, b) => s + (b.amount - b.paidAmount), 0))}</p>
                     </div>
                   </div>
                 </div>

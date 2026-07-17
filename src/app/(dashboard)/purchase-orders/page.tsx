@@ -4,15 +4,15 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { Plus, ShoppingCart, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ExportButtons } from "@/components/export-buttons";
 import { DesktopTable } from "@/components/desktop-table";
 import { exportToExcel, exportToPDF, type ExportColumn } from "@/lib/export";
-import { useDebounce, getAging, AGING_COLORS, AGING_BADGE } from "@/lib/utils";
+import { useDebounce, getAging, AGING_BADGE } from "@/lib/utils";
 import { type DateRangeKey } from "@/components/date-filter";
 import { FilterSheet } from "@/components/filter-sheet";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 const PO_COLUMNS: ExportColumn[] = [
   { header: "PO Number", key: "poNumber" },
@@ -118,23 +118,7 @@ export default function PurchaseOrdersPage() {
       />
 
       {loading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="p-3 border border-slate-100 rounded-lg animate-pulse">
-              <div className="flex items-start justify-between">
-                <div className="flex-1 space-y-1.5">
-                  <div className="h-4 bg-slate-200 rounded w-1/3" />
-                  <div className="h-3 bg-slate-200 rounded w-2/3" />
-                  <div className="h-3 bg-slate-200 rounded w-1/2" />
-                </div>
-                <div className="text-right space-y-1.5">
-                  <div className="h-4 bg-slate-200 rounded w-16 ml-auto" />
-                  <div className="h-5 w-20 bg-slate-200 rounded-full ml-auto" />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : (
         <>
         <DesktopTable
@@ -167,34 +151,44 @@ export default function PurchaseOrdersPage() {
           {orders.map((po) => {
             const needsTracking = ["SENT_TO_VENDOR", "PARTIALLY_RECEIVED"].includes(po.status);
             const aging = needsTracking ? getAging(po.orderDate) : null;
+            const isLate = aging && (aging.level === "danger" || aging.level === "critical");
+            const accent = isLate || po.status === "CANCELLED"
+              ? "border-l-red-500"
+              : po.status === "RECEIVED" || po.status === "APPROVED"
+              ? "border-l-green-500"
+              : po.status === "DRAFT"
+              ? "border-l-slate-200"
+              : "border-l-amber-400";
             return (
-            <Link key={po.id} href={`/purchase-orders/${po.id}`}>
-              <Card className={`hover:border-slate-300 transition-colors mb-2 ${aging ? AGING_COLORS[aging.level] : ""}`}>
-                <CardContent className="p-3">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0 mr-3">
-                      <p className="text-sm font-medium text-slate-900">{po.poNumber}</p>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        {po.vendor.name} | {new Date(po.orderDate).toLocaleDateString("en-IN")}
-                      </p>
-                      <p className="text-xs text-slate-400 mt-0.5">
-                        {po.items.reduce((s, i) => s + i.quantity, 0)} items | By: {po.createdBy.name}
-                      </p>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-sm font-bold text-slate-900">{formatCurrency(po.grandTotal)}</p>
-                      <Badge variant={statusVariant(po.status)} className="text-[10px] mt-1">
-                        {po.status.replace(/_/g, " ")}
-                      </Badge>
-                      {aging && aging.level !== "ok" && (
-                        <span className={`block text-[9px] font-medium px-1.5 py-0.5 rounded-full mt-1 ${AGING_BADGE[aging.level]}`}>
-                          {aging.text}
-                        </span>
-                      )}
-                    </div>
+            <Link
+              key={po.id}
+              href={`/purchase-orders/${po.id}`}
+              className={`block rounded-xl border border-slate-200 border-l-4 ${accent} bg-white shadow-sm transition-colors active:bg-slate-50 focus-ring`}
+            >
+              <div className="p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-slate-900 tabular-nums truncate">{po.poNumber}</p>
+                    <p className="text-xs text-slate-500 tabular-nums truncate mt-0.5">
+                      {po.vendor.name} · {new Date(po.orderDate).toLocaleDateString("en-IN")}
+                    </p>
+                    <p className="text-xs text-slate-400 tabular-nums truncate mt-0.5">
+                      {po.items.reduce((s, i) => s + i.quantity, 0)} items · By {po.createdBy.name}
+                    </p>
                   </div>
-                </CardContent>
-              </Card>
+                  <div className="text-right shrink-0">
+                    <p className="text-sm font-bold text-slate-900 tabular-nums">{formatCurrency(po.grandTotal)}</p>
+                    <Badge variant={statusVariant(po.status)} className="mt-1">
+                      {po.status.replace(/_/g, " ")}
+                    </Badge>
+                    {aging && aging.level !== "ok" && (
+                      <span className={`block text-[11px] font-semibold px-1.5 py-0.5 rounded-full tabular-nums mt-1 ${AGING_BADGE[aging.level]}`}>
+                        {aging.text}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
             </Link>
             );
           })}

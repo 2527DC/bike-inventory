@@ -13,6 +13,7 @@ import { ExportButtons } from "@/components/export-buttons";
 import { exportToExcel, exportToPDF, type ExportColumn } from "@/lib/export";
 import { usePermissions } from "@/lib/use-permissions";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
 
 const STOCK_COLUMNS: ExportColumn[] = [
@@ -94,6 +95,13 @@ function getStockBadge(p: ProductItem) {
   if (p.currentStock <= 0) return { variant: "danger" as const, label: "Out" };
   if (p.reorderLevel > 0 && p.currentStock <= p.reorderLevel) return { variant: "warning" as const, label: "Low" };
   return { variant: "success" as const, label: "OK" };
+}
+
+function getStockAccent(p: ProductItem) {
+  if (p.status === "INACTIVE") return "border-l-slate-200";
+  if (p.currentStock <= 0) return "border-l-red-500";
+  if (p.reorderLevel > 0 && p.currentStock <= p.reorderLevel) return "border-l-amber-400";
+  return "border-l-green-500";
 }
 
 export default function StockPage() {
@@ -792,12 +800,12 @@ export default function StockPage() {
 
       {/* Status bar */}
       <div className="flex items-center justify-between mb-2">
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-slate-500 tabular-nums">
           {quickFilter === "LOW_STOCK"
             ? `${filtered.length} low stock items`
             : `${filtered.length} of ${total.toLocaleString("en-IN")} products`}
         </p>
-        <div className="flex items-center gap-1 text-[10px] text-slate-400">
+        <div className="flex items-center gap-1 text-[11px] text-slate-400 tabular-nums">
           <RefreshCw className={`h-3 w-3 ${refreshing ? "animate-spin" : ""}`} />
           {secondsAgo < 5 ? "Just now" : `${secondsAgo}s ago`}
         </div>
@@ -805,19 +813,7 @@ export default function StockPage() {
 
       {/* Product list */}
       {loading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="p-3 border border-slate-100 rounded-lg animate-pulse">
-              <div className="flex items-start justify-between">
-                <div className="flex-1 space-y-1.5">
-                  <div className="h-4 bg-slate-200 rounded w-3/4" />
-                  <div className="h-3 bg-slate-200 rounded w-1/2" />
-                </div>
-                <div className="h-6 w-14 bg-slate-200 rounded-full" />
-              </div>
-            </div>
-          ))}
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : (
         <div className="space-y-2">
           {/* Select all / deselect all in select mode */}
@@ -834,7 +830,7 @@ export default function StockPage() {
             const badge = getStockBadge(p);
             const isSelected = selectedIds.has(p.id);
             const content = (
-              <Card className={`transition-colors mb-1.5 ${selectMode && isSelected ? "border-blue-400 bg-blue-50/30" : "hover:border-slate-300"}`}>
+              <Card className={`border-l-4 ${getStockAccent(p)} transition-colors mb-1.5 ${selectMode && isSelected ? "border-blue-400 bg-blue-50/30" : "active:bg-slate-50 hover:border-slate-300"}`}>
                 <CardContent className="p-3.5">
                   <div className="flex items-start justify-between">
                     {selectMode && (
@@ -845,9 +841,9 @@ export default function StockPage() {
                       </div>
                     )}
                     <div className="flex-1 min-w-0 mr-3">
-                      <p className="text-sm font-medium text-slate-900">{p.name}</p>
+                      <p className="text-sm font-semibold text-slate-900">{p.name}</p>
                       <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                        <span className="text-xs text-slate-400">{p.sku}</span>
+                        <span className="text-xs text-slate-400 tabular-nums">{p.sku}</span>
                         {p.brand && (
                           <span className="text-xs font-medium text-blue-600">{p.brand.name}</span>
                         )}
@@ -855,7 +851,7 @@ export default function StockPage() {
                           <span className="text-xs text-slate-400">{p.category.name}</span>
                         )}
                         {p.size && (
-                          <Badge variant="default" className="text-[9px] py-0">{p.size}</Badge>
+                          <Badge variant="default" className="text-[10px] py-0 tabular-nums">{p.size}</Badge>
                         )}
                       </div>
                       {p.bin && (
@@ -865,7 +861,7 @@ export default function StockPage() {
                       )}
                     </div>
                     <div className="text-right shrink-0">
-                      <p className={`text-xl font-bold ${getStockColor(p)}`}>{p.currentStock}</p>
+                      <p className={`text-xl font-bold tabular-nums ${getStockColor(p)}`}>{p.currentStock}</p>
                       <Badge variant={badge.variant} className="text-[10px]">{badge.label}</Badge>
                     </div>
                   </div>
@@ -885,7 +881,7 @@ export default function StockPage() {
           })}
 
           {hasMore && quickFilter !== "LOW_STOCK" && (
-            <Button variant="outline" className="w-full" onClick={loadMore} disabled={loadingMore}>
+            <Button variant="outline" className="w-full tabular-nums" onClick={loadMore} disabled={loadingMore}>
               {loadingMore
                 ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Loading...</>
                 : `Load More (${(total - products.length).toLocaleString("en-IN")} remaining)`}
@@ -1079,19 +1075,7 @@ function PerItemView({
 
       {/* Loading skeleton */}
       {loading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="p-3 border border-slate-100 rounded-lg animate-pulse">
-              <div className="flex items-start justify-between">
-                <div className="flex-1 space-y-1.5">
-                  <div className="h-4 bg-slate-200 rounded w-3/4" />
-                  <div className="h-3 bg-slate-200 rounded w-1/2" />
-                </div>
-                <div className="h-6 w-14 bg-slate-200 rounded-full" />
-              </div>
-            </div>
-          ))}
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : data.length === 0 ? (
         <div className="text-center py-12">
           <p className="text-sm text-slate-400">No products found</p>
@@ -1113,13 +1097,13 @@ function PerItemView({
             return (
               <div key={group.name}>
                 <Card
-                  className={`cursor-pointer transition-colors ${isExpanded ? "border-slate-400" : "hover:border-slate-300"}`}
+                  className={`cursor-pointer border-l-4 ${group.totalStock <= 0 ? "border-l-red-500" : "border-l-green-500"} transition-colors active:bg-slate-50 ${isExpanded ? "border-slate-400" : "hover:border-slate-300"}`}
                   onClick={() => onToggleExpand(group.name)}
                 >
                   <CardContent className="p-3">
                     <div className="flex items-start justify-between">
                       <div className="flex-1 min-w-0 mr-3">
-                        <p className="text-sm font-medium text-slate-900">{group.name}</p>
+                        <p className="text-sm font-semibold text-slate-900">{group.name}</p>
                         <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                           {group.brandName && (
                             <span className="text-xs font-medium text-blue-600">{group.brandName}</span>
@@ -1128,14 +1112,14 @@ function PerItemView({
                             <span className="text-xs text-slate-400">{group.categoryName}</span>
                           )}
                         </div>
-                        {BIN_TRACKING_ENABLED && <p className="text-[11px] text-slate-500 mt-1">{locationLine}</p>}
+                        {BIN_TRACKING_ENABLED && <p className="text-[11px] text-slate-500 mt-1 tabular-nums">{locationLine}</p>}
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <div className="text-right">
-                          <p className={`text-xl font-bold ${group.totalStock <= 0 ? "text-red-600" : "text-green-600"}`}>
+                          <p className={`text-xl font-bold tabular-nums ${group.totalStock <= 0 ? "text-red-600" : "text-green-600"}`}>
                             {group.totalStock}
                           </p>
-                          <span className="text-[10px] text-slate-400">total</span>
+                          <span className="text-[11px] text-slate-400">total</span>
                         </div>
                         <ChevronRight className={`h-4 w-4 text-slate-400 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
                       </div>
@@ -1164,27 +1148,27 @@ function PerItemView({
                                 )}
                               </div>
                             ) : (
-                              <span className="text-xs font-medium text-slate-700">{bin.sku}</span>
+                              <span className="text-xs font-medium text-slate-700 tabular-nums">{bin.sku}</span>
                             )}
                             {BIN_TRACKING_ENABLED && (
-                              <p className="text-[10px] text-slate-400 mt-0.5 ml-[18px]">
+                              <p className="text-[11px] text-slate-400 mt-0.5 ml-[18px] tabular-nums">
                                 SKU: {bin.sku}
                               </p>
                             )}
                             <div className="flex items-center gap-3 mt-1 ml-[18px]">
-                              <span className="text-[10px] text-slate-500">
-                                In: <span className="font-medium text-green-700">{formatRelativeDate(bin.lastInward)}</span>
+                              <span className="text-[11px] text-slate-500">
+                                In: <span className="font-medium text-green-700 tabular-nums">{formatRelativeDate(bin.lastInward)}</span>
                               </span>
-                              <span className="text-[10px] text-slate-500">
-                                Out: <span className="font-medium text-orange-700">{formatRelativeDate(bin.lastOutward)}</span>
+                              <span className="text-[11px] text-slate-500">
+                                Out: <span className="font-medium text-orange-700 tabular-nums">{formatRelativeDate(bin.lastOutward)}</span>
                               </span>
                             </div>
                           </div>
                           <div className="text-right shrink-0">
-                            <p className={`text-lg font-bold ${bin.stock <= 0 ? "text-red-600" : "text-slate-900"}`}>
+                            <p className={`text-lg font-bold tabular-nums ${bin.stock <= 0 ? "text-red-600" : "text-slate-900"}`}>
                               {bin.stock}
                             </p>
-                            <Badge variant={bin.stock <= 0 ? "danger" : "success"} className="text-[9px]">
+                            <Badge variant={bin.stock <= 0 ? "danger" : "success"} className="text-[10px]">
                               {bin.stock <= 0 ? "Out" : "In Stock"}
                             </Badge>
                           </div>

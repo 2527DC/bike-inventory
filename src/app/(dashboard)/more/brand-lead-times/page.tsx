@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface BrandLead {
   brandId: string;
@@ -53,16 +54,27 @@ export default function BrandLeadTimesPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
+      <div>
+        <div className="flex items-center gap-2 mb-4">
+          <Link href="/more" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring">
+            <ArrowLeft className="h-5 w-5 text-slate-600" />
+          </Link>
+          <div>
+            <h1 className="text-lg font-bold text-slate-900">Brand Lead Times</h1>
+            <p className="text-xs text-slate-500">Set delivery days per brand for inbound tracking</p>
+          </div>
+        </div>
+        <SkeletonList count={6} type="card" />
       </div>
     );
   }
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/more" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+      <div className="flex items-center gap-2 mb-4">
+        <Link href="/more" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring">
+          <ArrowLeft className="h-5 w-5 text-slate-600" />
+        </Link>
         <div>
           <h1 className="text-lg font-bold text-slate-900">Brand Lead Times</h1>
           <p className="text-xs text-slate-500">Set delivery days per brand for inbound tracking</p>
@@ -78,10 +90,10 @@ export default function BrandLeadTimesPage() {
                 <Clock className="h-4 w-4 text-slate-400 shrink-0" />
                 <span className="text-sm font-medium text-slate-900 flex-1">{b.brandName}</span>
                 <div className="flex items-center gap-2">
-                  <Input type="number" min="1" max="90"
+                  <Input type="number" min="1" max="90" inputMode="numeric"
                     value={editValues[b.brandId] || ""}
                     onChange={(e) => setEditValues((prev) => ({ ...prev, [b.brandId]: e.target.value }))}
-                    className="w-16 text-center text-sm" />
+                    className="w-16 text-center text-sm tabular-nums" />
                   <span className="text-xs text-slate-400">days</span>
                   {changed && (
                     <Button size="sm" variant="outline" onClick={() => handleSave(b.brandId)}

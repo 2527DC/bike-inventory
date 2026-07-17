@@ -7,6 +7,7 @@ import { ArrowLeft, Share2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface IssueNote {
   id: string;
@@ -332,8 +333,8 @@ export default function VendorIssueDetailPage({
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+      <div className="pt-2">
+        <SkeletonList count={5} type="card" />
       </div>
     );
   }
@@ -356,12 +357,12 @@ export default function VendorIssueDetailPage({
     <div>
       {/* Header */}
       <div className="flex items-center gap-3 mb-4">
-        <button onClick={goBack} className="p-1" aria-label="Back">
+        <button onClick={goBack} className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </button>
-        <div className="flex-1">
-          <h1 className="text-lg font-bold text-slate-900">{issue.issueNo}</h1>
-          <p className="text-xs text-slate-500">
+        <div className="flex-1 min-w-0">
+          <h1 className="text-lg font-bold text-slate-900 tabular-nums truncate">{issue.issueNo}</h1>
+          <p className="text-xs text-slate-500 truncate">
             {issue.issueSource === "CLIENT" ? `Client: ${issue.clientName || "Unknown"}` : `Brand: ${issue.vendor?.name || "Unknown"}`}
           </p>
         </div>
@@ -502,7 +503,7 @@ export default function VendorIssueDetailPage({
               <span className="text-xs text-slate-500">Bill:</span>
               <Link
                 href={`/bills/${issue.bill.id}`}
-                className="text-sm text-blue-600 hover:underline ml-1"
+                className="text-sm text-blue-600 hover:underline ml-1 tabular-nums"
               >
                 {issue.bill.billNo}
               </Link>
@@ -527,7 +528,7 @@ export default function VendorIssueDetailPage({
           </div>
           <div>
             <span className="text-xs text-slate-500">Created:</span>
-            <p className="text-sm text-slate-700">
+            <p className="text-sm text-slate-700 tabular-nums">
               {new Date(issue.createdAt).toLocaleDateString("en-IN", {
                 day: "2-digit",
                 month: "short",
@@ -604,7 +605,7 @@ export default function VendorIssueDetailPage({
                 {issue.resolution}
               </p>
               {issue.resolvedAt && (
-                <p className="text-[10px] text-slate-400 mt-2">
+                <p className="text-[11px] text-slate-400 mt-2 tabular-nums">
                   Resolved on:{" "}
                   {new Date(issue.resolvedAt).toLocaleDateString("en-IN", {
                     day: "2-digit",
@@ -635,20 +636,19 @@ export default function VendorIssueDetailPage({
             />
             <div className="flex gap-2">
               <Button
-                size="sm"
                 onClick={() => updateStatus("RESOLVED", resolutionText)}
                 disabled={updating || !resolutionText.trim()}
-                className="flex-1 bg-green-600 hover:bg-green-700"
+                className="flex-1 min-h-[48px] rounded-lg font-medium bg-green-600 text-white hover:bg-green-700"
               >
                 {updating ? "Saving..." : "Confirm Resolved"}
               </Button>
               <Button
-                size="sm"
                 variant="outline"
                 onClick={() => {
                   setShowResolution(false);
                   setResolutionText("");
                 }}
+                className="min-h-[48px] rounded-lg font-medium"
               >
                 Cancel
               </Button>
@@ -662,41 +662,37 @@ export default function VendorIssueDetailPage({
         <div className="space-y-2 mb-4">
           {issue.status === "OPEN" && (
             <Button
-              size="sm"
               onClick={() => updateStatus("IN_PROGRESS")}
               disabled={updating}
-              className="w-full bg-blue-600 hover:bg-blue-700"
+              className="w-full min-h-[48px] rounded-lg font-medium bg-blue-600 text-white hover:bg-blue-700"
             >
               {updating ? "Updating..." : "In Progress"}
             </Button>
           )}
           {issue.status === "IN_PROGRESS" && (
             <Button
-              size="sm"
               onClick={() => setShowResolution(true)}
               disabled={updating}
-              className="w-full bg-green-600 hover:bg-green-700"
+              className="w-full min-h-[48px] rounded-lg font-medium bg-green-600 text-white hover:bg-green-700"
             >
               Mark Resolved
             </Button>
           )}
           {issue.status === "RESOLVED" && (
             <Button
-              size="sm"
               onClick={() => updateStatus("CLOSED")}
               disabled={updating}
-              className="w-full"
+              className="w-full min-h-[48px] rounded-lg font-medium"
             >
               {updating ? "Updating..." : "Close Issue"}
             </Button>
           )}
           {issue.status !== "OPEN" && (
             <Button
-              size="sm"
               variant="outline"
               onClick={() => updateStatus("OPEN")}
               disabled={updating}
-              className="w-full"
+              className="w-full min-h-[48px] rounded-lg font-medium"
             >
               {updating ? "Updating..." : "Reopen"}
             </Button>
@@ -728,7 +724,7 @@ export default function VendorIssueDetailPage({
               {issue.notes.map((n) => (
                 <div key={n.id} className="border-l-2 border-slate-200 pl-3 py-0.5">
                   <p className="text-sm text-slate-800 whitespace-pre-wrap">{n.text}</p>
-                  <p className="text-[10px] text-slate-400 mt-0.5">
+                  <p className="text-[11px] text-slate-400 mt-0.5 tabular-nums">
                     {n.author?.name || "—"} ·{" "}
                     {new Date(n.createdAt).toLocaleString("en-IN", {
                       day: "2-digit",
@@ -748,9 +744,8 @@ export default function VendorIssueDetailPage({
 
       {/* WhatsApp Share */}
       <Button
-        size="sm"
         onClick={handleWhatsAppShare}
-        className="w-full bg-green-600 hover:bg-green-700 mb-1"
+        className="w-full min-h-[48px] rounded-lg font-medium bg-green-600 text-white hover:bg-green-700 mb-1"
       >
         <Share2 className="w-4 h-4 mr-1.5" />
         {contactDigits() ? `Share on WhatsApp → ${contactLabel()}` : "Share on WhatsApp"}

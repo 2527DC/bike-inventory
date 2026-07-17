@@ -166,29 +166,29 @@ export default function NewStockAuditPage() {
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/stock-audit" className="p-1">
+      <div className="flex items-center gap-2 mb-4">
+        <Link href="/stock-audit" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
-        <h1 className="text-lg font-bold text-slate-900">New Stock Count</h1>
+        <h1 className="text-lg font-bold text-slate-900 truncate">New Stock Count</h1>
       </div>
 
       <div className="space-y-3">
         {/* Scope — bin/location scoping is bin-derived; hidden while bins are dormant */}
         {BIN_TRACKING_ENABLED && (
           <div>
-            <label className="text-xs text-slate-500 mb-2 block">Count Scope</label>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Count Scope</label>
             <div className="flex gap-2">
               <button onClick={() => { setScope("bin"); setSelectedLocation(""); }}
-                className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                className={`flex-1 min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
                   scope === "bin" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
                 }`}>By Bin</button>
               <button onClick={() => { setScope("location"); setSelectedBin(""); }}
-                className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                className={`flex-1 min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
                   scope === "location" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
                 }`}>By Location</button>
               <button onClick={() => { setScope("all"); setSelectedBin(""); setSelectedLocation(""); }}
-                className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                className={`flex-1 min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
                   scope === "all" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
                 }`}>All Products</button>
             </div>
@@ -198,11 +198,11 @@ export default function NewStockAuditPage() {
         {/* Location (bins dormant) — required: a count always targets one location */}
         {!BIN_TRACKING_ENABLED && (
           <div>
-            <label className="text-xs text-slate-500 mb-2 block">Location *</label>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Location *</label>
             <div className="grid grid-cols-2 gap-2">
               {STOCK_LOCATIONS.map((loc) => (
                 <button key={loc.value} onClick={() => setStockLoc(loc.value)}
-                  className={`py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  className={`min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
                     stockLoc === loc.value ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
                   }`}>
                   {loc.label}
@@ -214,7 +214,7 @@ export default function NewStockAuditPage() {
 
         {/* Product Type */}
         <div>
-          <label className="text-xs text-slate-500 mb-2 block">Product Type</label>
+          <label className="block text-sm font-medium text-slate-700 mb-2">Product Type</label>
           <div className="flex gap-2 flex-wrap">
             {[
               { key: "", label: "All" },
@@ -223,7 +223,7 @@ export default function NewStockAuditPage() {
               { key: "ACCESSORY", label: "Accessories" },
             ].map((t) => (
               <button key={t.key} onClick={() => setProductType(t.key)}
-                className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                className={`min-h-[44px] px-4 rounded-full text-xs font-medium transition-colors focus-ring ${
                   productType === t.key ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
                 }`}>
                 {t.label}
@@ -235,7 +235,7 @@ export default function NewStockAuditPage() {
         {/* Bin Selector */}
         {scope === "bin" && (
           <div>
-            <label className="text-xs text-slate-500 mb-1 block">Select Bin *</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Select Bin *</label>
             <div className="space-y-2 max-h-[50vh] overflow-y-auto">
               {locations.map((loc) => (
                 <div key={loc}>
@@ -274,7 +274,7 @@ export default function NewStockAuditPage() {
         {/* Location Selector */}
         {scope === "location" && (
           <div>
-            <label className="text-xs text-slate-500 mb-1 block">Select Location *</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Select Location *</label>
             <div className="space-y-2">
               {locations.map((loc) => {
                 const group = locationGroups[loc];
@@ -320,21 +320,21 @@ export default function NewStockAuditPage() {
         )}
 
         <div>
-          <label className="text-xs text-slate-500 mb-1 block">Title *</label>
-          <Input placeholder="e.g. Stock Count - Assembly Bin" value={title} onChange={(e) => setTitle(e.target.value)} />
+          <label className="block text-sm font-medium text-slate-700 mb-1">Title *</label>
+          <Input placeholder="e.g. Stock Count - Assembly Bin" value={title} onChange={(e) => setTitle(e.target.value)} className="min-h-[44px]" />
         </div>
 
         <div>
-          <label className="text-xs text-slate-500 mb-1 block">Due Date *</label>
-          <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+          <label className="block text-sm font-medium text-slate-700 mb-1">Due Date *</label>
+          <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="min-h-[44px]" />
         </div>
 
         {/* Assign To — ADMIN must assign to someone else (cannot count themselves) */}
         {users.length > 0 && (
           <div>
-            <label className="text-xs text-slate-500 mb-1 block">Assign To *</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Assign To *</label>
             <select value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}
-              className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-900">
+              className="w-full min-h-[44px] rounded-lg border border-slate-300 px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent">
               <option value="">Select a team member...</option>
               {users.filter((u) => u.id !== (user as { userId?: string })?.userId).map((u) => (
                 <option key={u.id} value={u.id}>{u.name} ({ROLE_LABELS[u.role] || u.role})</option>
@@ -344,9 +344,9 @@ export default function NewStockAuditPage() {
         )}
 
         <div>
-          <label className="text-xs text-slate-500 mb-1 block">Notes</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
           <textarea
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900 min-h-[80px]"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent min-h-[80px]"
             placeholder="Any instructions for the person counting..."
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
@@ -359,11 +359,28 @@ export default function NewStockAuditPage() {
           </div>
         )}
 
-        <button onClick={handleSubmit}
-          disabled={!title || !dueDate || !assignedTo || (scope === "bin" && !selectedBin) || (scope === "location" && !selectedLocation) || (!BIN_TRACKING_ENABLED && !stockLoc) || submitting}
-          className="w-full bg-slate-900 text-white py-3 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed h-12">
-          {submitting ? "Creating..." : "Create Stock Count"}
-        </button>
+        {(() => {
+          const missing: string[] = [];
+          if (!BIN_TRACKING_ENABLED && !stockLoc) missing.push("location");
+          if (scope === "bin" && !selectedBin) missing.push("bin");
+          if (scope === "location" && !selectedLocation) missing.push("location");
+          if (!title) missing.push("title");
+          if (!dueDate) missing.push("due date");
+          if (!assignedTo) missing.push("assignee");
+          const disabled = missing.length > 0 || submitting;
+          return (
+            <>
+              <button onClick={handleSubmit}
+                disabled={disabled}
+                className="w-full min-h-[48px] bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">
+                {submitting ? "Creating..." : "Create Stock Count"}
+              </button>
+              {missing.length > 0 && !submitting && (
+                <p className="text-xs text-slate-500 text-center">Add {missing.join(", ")} to enable.</p>
+              )}
+            </>
+          );
+        })()}
       </div>
 
       <ActionConfirmation

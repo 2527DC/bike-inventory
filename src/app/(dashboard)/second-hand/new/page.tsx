@@ -3,7 +3,7 @@
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { ArrowLeft, Camera, CheckCircle2, Loader2, Search, X, Plus, ImageIcon } from "lucide-react";
+import { ArrowLeft, Camera, CheckCircle2, Loader2, Search, X, Plus } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -202,10 +202,12 @@ export default function NewSecondHandPage() {
 
   return (
     <div className="pb-8">
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/second-hand" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
-        <div>
-          <h1 className="text-lg font-bold text-slate-900">Add Second-Hand Cycle</h1>
+      <div className="flex items-center gap-2 mb-4">
+        <Link href="/second-hand" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
+          <ArrowLeft className="h-5 w-5 text-slate-600" />
+        </Link>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-lg font-bold text-slate-900 truncate">Add Second-Hand Cycle</h1>
           <p className="text-xs text-slate-500">Exchange intake</p>
         </div>
       </div>
@@ -217,13 +219,14 @@ export default function NewSecondHandPage() {
           <div className="flex gap-2">
             <Input placeholder="e.g. 017616" value={zohoInvoiceNo}
               onChange={(e) => setZohoInvoiceNo(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSearchInvoice()} />
+              onKeyDown={(e) => e.key === "Enter" && handleSearchInvoice()}
+              className="min-h-[44px]" />
             <Button type="button" variant="outline" onClick={handleSearchInvoice} disabled={searching}
-              className="shrink-0">
+              className="shrink-0 min-h-[44px]">
               {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
             </Button>
           </div>
-          <p className="text-[10px] text-slate-400 mt-0.5">Search to auto-fill customer details, or enter manually</p>
+          <p className="text-[11px] text-slate-400 mt-1">Search to auto-fill customer details, or enter manually</p>
         </div>
 
         {/* Customer Info */}
@@ -231,12 +234,12 @@ export default function NewSecondHandPage() {
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Customer Name *</label>
             <Input value={customerName} onChange={(e) => setCustomerName(e.target.value)}
-              placeholder="Who traded in" />
+              placeholder="Who traded in" className="min-h-[44px]" />
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Phone</label>
             <Input value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)}
-              placeholder="Phone number" />
+              placeholder="Phone number" inputMode="tel" className="min-h-[44px] tabular-nums" />
           </div>
         </div>
 
@@ -244,7 +247,7 @@ export default function NewSecondHandPage() {
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Cycle Name *</label>
           <Input value={cycleName} onChange={(e) => setCycleName(e.target.value)}
-            placeholder='e.g. "Hero Sprint 26" or "Firefox Road 700c"' />
+            placeholder='e.g. "Hero Sprint 26" or "Firefox Road 700c"' className="min-h-[44px]" />
         </div>
 
         {/* Size */}
@@ -253,7 +256,7 @@ export default function NewSecondHandPage() {
           <div className="grid grid-cols-4 gap-2">
             {['12"', '16"', '20"', '24"', '26"', '27.5"', '29"'].map((s) => (
               <button key={s} type="button" onClick={() => setCycleSize(s)}
-                className={`py-2 rounded-lg text-xs font-semibold border-2 transition-all ${
+                className={`min-h-[44px] rounded-lg text-xs font-semibold border-2 transition-all focus-ring ${
                   cycleSize === s ? "bg-indigo-100 border-indigo-400 text-indigo-700" : "bg-white border-slate-200 text-slate-500"
                 }`}>
                 {s}
@@ -268,7 +271,7 @@ export default function NewSecondHandPage() {
           <div className="grid grid-cols-4 gap-2">
             {CONDITIONS.map((c) => (
               <button key={c.value} type="button" onClick={() => setCondition(c.value)}
-                className={`py-2 rounded-lg text-xs font-semibold border-2 transition-all ${
+                className={`min-h-[44px] rounded-lg text-xs font-semibold border-2 transition-all focus-ring ${
                   condition === c.value ? c.color + " border-current" : "bg-white border-slate-200 text-slate-500"
                 }`}>
                 {c.label}
@@ -282,10 +285,10 @@ export default function NewSecondHandPage() {
           <label className="block text-sm font-medium text-slate-700 mb-1">Exchange Price (Cost) *</label>
           <div className="relative">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">₹</span>
-            <Input type="number" value={costPrice} onChange={(e) => setCostPrice(e.target.value)}
-              placeholder="0" className="pl-7 text-lg font-semibold" min="0" />
+            <Input type="number" inputMode="decimal" value={costPrice} onChange={(e) => setCostPrice(e.target.value)}
+              placeholder="0" className="pl-7 text-lg font-semibold tabular-nums min-h-[44px]" min="0" />
           </div>
-          <p className="text-[10px] text-slate-400 mt-0.5">Amount given to customer for old cycle</p>
+          <p className="text-[11px] text-slate-400 mt-1">Amount given to customer for old cycle</p>
         </div>
 
         {/* Photos (up to 5, first required) */}
@@ -310,7 +313,7 @@ export default function NewSecondHandPage() {
                   <X className="h-3.5 w-3.5" />
                 </button>
                 {index === 0 && (
-                  <span className="absolute bottom-1 left-1 bg-orange-600 text-white text-[9px] px-1.5 py-0.5 rounded font-medium">
+                  <span className="absolute bottom-1 left-1 bg-orange-600 text-white text-[11px] px-1.5 py-0.5 rounded font-medium">
                     Main
                   </span>
                 )}
@@ -327,18 +330,18 @@ export default function NewSecondHandPage() {
                 {photos.length === 0 ? (
                   <>
                     <Camera className="h-6 w-6 text-orange-400" />
-                    <span className="text-[10px] font-medium text-orange-600">Take Photo</span>
+                    <span className="text-[11px] font-medium text-orange-600">Take Photo</span>
                   </>
                 ) : (
                   <>
                     <Plus className="h-5 w-5 text-orange-400" />
-                    <span className="text-[10px] font-medium text-orange-600">Add More</span>
+                    <span className="text-[11px] font-medium text-orange-600">Add More</span>
                   </>
                 )}
               </button>
             )}
           </div>
-          <p className="text-[10px] text-slate-400 mt-1">First photo is required. Up to {MAX_PHOTOS} photos.</p>
+          <p className="text-[11px] text-slate-400 mt-1">First photo is required. Up to {MAX_PHOTOS} photos.</p>
         </div>
 
         {/* Notes */}
@@ -346,15 +349,20 @@ export default function NewSecondHandPage() {
           <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)}
             placeholder="Any additional details..." rows={2}
-            className="flex w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-600" />
+            className="flex w-full min-h-[44px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent" />
         </div>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
 
         <Button type="button" size="lg" disabled={!isValid || submitting} onClick={handleSubmit}
-          className="w-full bg-orange-600 hover:bg-orange-700">
+          className="w-full min-h-[48px] rounded-lg font-medium bg-green-600 hover:bg-green-700 text-white">
           {submitting ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Uploading & Saving...</> : "Add Second-Hand Cycle"}
         </Button>
+        {!isValid && !submitting && (
+          <p className="text-xs text-slate-500 text-center">
+            Add customer name, cycle name, size, condition, exchange price and at least 1 photo to enable.
+          </p>
+        )}
       </div>
     </div>
   );

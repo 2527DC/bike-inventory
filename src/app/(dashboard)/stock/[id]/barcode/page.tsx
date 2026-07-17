@@ -3,9 +3,9 @@
 import { use, useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { ArrowLeft, Printer, QrCode } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface SerialItem {
   id: string;
@@ -130,8 +130,10 @@ export default function BarcodePage({ params }: { params: Promise<{ id: string }
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href={`/stock/${id}`} className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+      <div className="flex items-center gap-2 mb-4">
+        <Link href={`/stock/${id}`} aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring">
+          <ArrowLeft className="h-5 w-5 text-slate-600" />
+        </Link>
         <div className="flex-1 min-w-0">
           <h1 className="text-lg font-bold text-slate-900 truncate">Barcodes</h1>
           <p className="text-xs text-slate-500">{productName} ({productSku})</p>
@@ -148,21 +150,22 @@ export default function BarcodePage({ params }: { params: Promise<{ id: string }
       <div className="flex items-center gap-2 mb-4">
         <div className="flex gap-1 bg-slate-100 rounded-lg p-1 flex-1">
           <button onClick={() => setBarcodeType("code128")}
-            className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${barcodeType === "code128" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}>
+            className={`flex-1 min-h-[44px] px-3 rounded-md text-[13px] font-medium transition-colors focus-ring ${barcodeType === "code128" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}>
             Barcode
           </button>
           <button onClick={() => setBarcodeType("qrcode")}
-            className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${barcodeType === "qrcode" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}>
+            className={`flex-1 min-h-[44px] px-3 rounded-md text-[13px] font-medium transition-colors focus-ring ${barcodeType === "qrcode" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}>
             QR Code
           </button>
         </div>
-        <Button variant="outline" size="sm" onClick={handlePrint}><Printer className="h-3.5 w-3.5 mr-1" />Print</Button>
+        <button onClick={handlePrint}
+          className="min-h-[48px] flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white px-5 rounded-lg font-medium transition-colors focus-ring">
+          <Printer className="h-5 w-5" />Print
+        </button>
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
-        </div>
+        <SkeletonList count={4} type="card" />
       ) : serials.length === 0 ? (
         <div className="text-center py-12">
           <QrCode className="h-12 w-12 text-slate-300 mx-auto mb-3" />
@@ -181,9 +184,9 @@ export default function BarcodePage({ params }: { params: Promise<{ id: string }
                     <span className="font-mono text-xs text-slate-500">{serial.serialCode}</span>
                   </div>
                 )}
-                <p className="font-mono text-[10px] text-slate-500 mt-1">{serial.serialCode}</p>
-                <Badge variant={serial.condition === "NEW" ? "success" : "warning"} className="text-[9px] mt-1">{serial.condition}</Badge>
-                <p className="product-name text-[9px] text-slate-400 mt-0.5">{productName}</p>
+                <p className="font-mono text-[13px] font-bold text-slate-900 tabular-nums mt-1.5 break-all">{serial.serialCode}</p>
+                <Badge variant={serial.condition === "NEW" ? "success" : "warning"} className="text-[11px] mt-1">{serial.condition}</Badge>
+                <p className="product-name text-[11px] text-slate-500 mt-1">{productName}</p>
               </CardContent>
             </Card>
           ))}

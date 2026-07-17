@@ -636,32 +636,36 @@ export default function AppLogicPage() {
     <div className="pb-20">
       {/* Header */}
       <div className="flex items-center gap-2 mb-3">
-        <button onClick={() => router.back()} className="text-slate-400">
+        <button
+          onClick={() => router.back()}
+          aria-label="Back"
+          className="p-2 -ml-2 rounded-lg text-slate-600 hover:bg-slate-100 focus-ring"
+        >
           <ArrowLeft className="h-5 w-5" />
         </button>
         <div className="flex-1">
           <h1 className="text-lg font-bold text-slate-900">App Logic</h1>
-          <p className="text-[10px] text-slate-400">Single Source of Truth — BCH Operating System</p>
+          <p className="text-[11px] text-slate-500">Single Source of Truth — BCH Operating System</p>
         </div>
       </div>
 
       {/* Summary Stats */}
       <div className="grid grid-cols-4 gap-1.5 mb-3">
-        <div className="bg-blue-50 rounded-lg p-2 text-center">
-          <p className="text-lg font-bold text-blue-700">{totalEntries}</p>
-          <p className="text-[9px] text-blue-500 font-medium">Total Logic</p>
+        <div className="rounded-xl border border-blue-100 bg-blue-50 p-2 text-center">
+          <p className="text-lg font-bold text-blue-700 tabular-nums">{totalEntries}</p>
+          <p className="text-[11px] leading-tight text-blue-600 font-medium">Total Logic</p>
         </div>
-        <div className="bg-red-50 rounded-lg p-2 text-center">
-          <p className="text-lg font-bold text-red-700">{fetchEntries}</p>
-          <p className="text-[9px] text-red-500 font-medium">Fetch Points</p>
+        <div className="rounded-xl border border-red-100 bg-red-50 p-2 text-center">
+          <p className="text-lg font-bold text-red-700 tabular-nums">{fetchEntries}</p>
+          <p className="text-[11px] leading-tight text-red-600 font-medium">Fetch Points</p>
         </div>
-        <div className="bg-amber-50 rounded-lg p-2 text-center">
-          <p className="text-lg font-bold text-amber-700">{ruleEntries}</p>
-          <p className="text-[9px] text-amber-500 font-medium">Business Rules</p>
+        <div className="rounded-xl border border-amber-100 bg-amber-50 p-2 text-center">
+          <p className="text-lg font-bold text-amber-700 tabular-nums">{ruleEntries}</p>
+          <p className="text-[11px] leading-tight text-amber-600 font-medium">Business Rules</p>
         </div>
-        <div className="bg-purple-50 rounded-lg p-2 text-center">
-          <p className="text-lg font-bold text-purple-700">{importantEntries}</p>
-          <p className="text-[9px] text-purple-500 font-medium">Critical</p>
+        <div className="rounded-xl border border-purple-100 bg-purple-50 p-2 text-center">
+          <p className="text-lg font-bold text-purple-700 tabular-nums">{importantEntries}</p>
+          <p className="text-[11px] leading-tight text-purple-600 font-medium">Critical</p>
         </div>
       </div>
 
@@ -680,7 +684,7 @@ export default function AppLogicPage() {
       <div className="flex gap-1.5 overflow-x-auto pb-2 mb-2 no-scrollbar">
         <button
           onClick={() => setTypeFilter("all")}
-          className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-colors ${
+          className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-semibold border transition-colors focus-ring ${
             typeFilter === "all" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 border-slate-200"
           }`}
         >
@@ -690,7 +694,7 @@ export default function AppLogicPage() {
           <button
             key={key}
             onClick={() => setTypeFilter(key)}
-            className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-colors ${
+            className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-semibold border transition-colors focus-ring ${
               typeFilter === key ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 border-slate-200"
             }`}
           >
@@ -700,12 +704,12 @@ export default function AppLogicPage() {
       </div>
 
       {/* Expand/Collapse All */}
-      <div className="flex gap-2 mb-3">
-        <button onClick={expandAll} className="text-[10px] text-blue-600 font-medium">Expand All</button>
+      <div className="flex items-center gap-2 mb-3">
+        <button onClick={expandAll} className="text-[11px] text-blue-600 font-medium rounded focus-ring">Expand All</button>
         <span className="text-slate-300">|</span>
-        <button onClick={collapseAll} className="text-[10px] text-blue-600 font-medium">Collapse All</button>
-        <span className="text-[10px] text-slate-400 ml-auto">
-          {filteredSections.reduce((s, sec) => s + sec.entries.length, 0)} entries shown
+        <button onClick={collapseAll} className="text-[11px] text-blue-600 font-medium rounded focus-ring">Collapse All</button>
+        <span className="text-[11px] text-slate-500 ml-auto">
+          <span className="tabular-nums">{filteredSections.reduce((s, sec) => s + sec.entries.length, 0)}</span> entries shown
         </span>
       </div>
 
@@ -716,20 +720,20 @@ export default function AppLogicPage() {
           const isExpanded = expandedSections.has(section.id);
 
           return (
-            <Card key={section.id} className="border overflow-hidden">
+            <Card key={section.id} className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
               {/* Section Header */}
               <button
                 onClick={() => toggleSection(section.id)}
-                className="w-full flex items-center gap-2.5 p-3 text-left hover:bg-slate-50 transition-colors"
+                className="w-full min-h-[44px] flex items-center gap-2.5 p-3 text-left hover:bg-slate-50 transition-colors focus-ring"
               >
                 <div className={`h-8 w-8 rounded-lg ${section.color} flex items-center justify-center shrink-0`}>
                   <Icon className="h-4 w-4" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-bold text-slate-800">{section.title}</p>
-                  <p className="text-[10px] text-slate-400 truncate">{section.description}</p>
+                  <p className="text-[11px] text-slate-500 truncate">{section.description}</p>
                 </div>
-                <Badge variant="default" className="text-[9px] shrink-0">{section.entries.length}</Badge>
+                <Badge variant="default" className="text-[11px] tabular-nums shrink-0">{section.entries.length}</Badge>
                 {isExpanded ? <ChevronDown className="h-4 w-4 text-slate-400 shrink-0" /> : <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />}
               </button>
 
@@ -741,21 +745,21 @@ export default function AppLogicPage() {
                     const isEntryExpanded = expandedEntries.has(entryKey);
 
                     return (
-                      <div key={entryKey} className={`${entry.important ? "bg-yellow-50/50" : ""}`}>
+                      <div key={entryKey} className={`${entry.important ? "bg-amber-50/60 border-l-2 border-amber-400" : ""}`}>
                         <button
                           onClick={() => toggleEntry(entryKey)}
-                          className="w-full flex items-start gap-2 p-2.5 text-left hover:bg-slate-50/50 transition-colors"
+                          className="w-full min-h-[44px] flex items-start gap-2 p-2.5 text-left hover:bg-slate-50/50 transition-colors focus-ring"
                         >
-                          {entry.important && <span className="text-[10px] mt-0.5">!!</span>}
+                          {entry.important && <AlertCircle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" aria-label="Critical" />}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <Badge className={`${TYPE_COLORS[entry.type]} text-[8px] px-1.5 py-0 font-semibold border-0`}>
+                              <Badge className={`${TYPE_COLORS[entry.type]} text-[11px] px-1.5 py-0 font-semibold border-0`}>
                                 {TYPE_LABELS[entry.type]}
                               </Badge>
                               <span className="text-xs font-semibold text-slate-700">{entry.label}</span>
                             </div>
                             {!isEntryExpanded && (
-                              <p className="text-[10px] text-slate-400 mt-0.5 line-clamp-1">{entry.detail}</p>
+                              <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">{entry.detail}</p>
                             )}
                           </div>
                           {isEntryExpanded ? <ChevronDown className="h-3.5 w-3.5 text-slate-300 shrink-0 mt-0.5" /> : <ChevronRight className="h-3.5 w-3.5 text-slate-300 shrink-0 mt-0.5" />}
@@ -766,20 +770,20 @@ export default function AppLogicPage() {
                             <p className="text-[11px] text-slate-600 leading-relaxed">{entry.detail}</p>
                             {entry.api && (
                               <div className="flex items-start gap-1">
-                                <span className="text-[9px] font-bold text-purple-600 shrink-0 mt-px">API:</span>
-                                <code className="text-[9px] text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded break-all">{entry.api}</code>
+                                <span className="text-[11px] font-bold text-purple-600 shrink-0 mt-px">API:</span>
+                                <code className="text-[11px] text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded break-all">{entry.api}</code>
                               </div>
                             )}
                             {entry.affects && (
                               <div className="flex items-start gap-1">
-                                <span className="text-[9px] font-bold text-orange-600 shrink-0 mt-px">AFFECTS:</span>
-                                <span className="text-[9px] text-orange-700">{entry.affects}</span>
+                                <span className="text-[11px] font-bold text-orange-600 shrink-0 mt-px">AFFECTS:</span>
+                                <span className="text-[11px] text-orange-700">{entry.affects}</span>
                               </div>
                             )}
                             {entry.roles && (
                               <div className="flex items-start gap-1">
-                                <span className="text-[9px] font-bold text-teal-600 shrink-0 mt-px">ROLES:</span>
-                                <span className="text-[9px] text-teal-700">{entry.roles}</span>
+                                <span className="text-[11px] font-bold text-teal-600 shrink-0 mt-px">ROLES:</span>
+                                <span className="text-[11px] text-teal-700">{entry.roles}</span>
                               </div>
                             )}
                           </div>

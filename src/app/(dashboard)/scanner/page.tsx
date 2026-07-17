@@ -6,6 +6,7 @@ import { ArrowLeft, Search, QrCode, Camera, X, Package, AlertCircle, CheckCircle
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface SerialResult {
   id: string;
@@ -136,8 +137,10 @@ export default function ScannerPage() {
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/more" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+      <div className="flex items-center gap-2 mb-4">
+        <Link href="/more" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring">
+          <ArrowLeft className="h-5 w-5 text-slate-600" />
+        </Link>
         <h1 className="text-lg font-bold text-slate-900">Search & Scanner</h1>
       </div>
 
@@ -145,31 +148,32 @@ export default function ScannerPage() {
       {cameraActive ? (
         <div className="relative mb-4">
           <div id="barcode-scanner-region" ref={scannerRef} className="rounded-xl overflow-hidden" />
-          <button onClick={stopCamera} className="absolute top-2 right-2 z-10 bg-black/50 text-white p-1.5 rounded-full">
-            <X className="h-4 w-4" />
+          <button onClick={stopCamera} aria-label="Stop camera"
+            className="absolute top-2 right-2 z-10 bg-black/50 text-white p-2 rounded-full focus-ring">
+            <X className="h-5 w-5" />
           </button>
           {lastScanned && (
-            <div className="flex items-center gap-2 mt-2 bg-green-50 border border-green-200 rounded-lg p-2.5">
-              <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />
+            <div className="flex items-center gap-3 mt-2 bg-green-50 border border-green-200 rounded-xl p-3">
+              <CheckCircle2 className="h-7 w-7 text-green-600 shrink-0" />
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium text-green-800">Scanned</p>
-                <p className="text-xs font-mono text-green-700 truncate">{lastScanned}</p>
+                <p className="text-[11px] font-medium text-green-800 uppercase tracking-wide">Scanned</p>
+                <p className="text-base font-mono font-bold text-green-700 tabular-nums truncate">{lastScanned}</p>
               </div>
             </div>
           )}
         </div>
       ) : (
         <button onClick={startCamera}
-          className="w-full flex items-center justify-center gap-2 bg-slate-100 rounded-xl py-6 mb-4 hover:bg-slate-200 transition-colors">
+          className="w-full min-h-[56px] flex items-center justify-center gap-2 bg-slate-100 rounded-xl py-6 mb-4 font-medium hover:bg-slate-200 transition-colors focus-ring">
           <Camera className="h-6 w-6 text-slate-500" />
           <span className="text-sm font-medium text-slate-600">Tap to scan barcode</span>
         </button>
       )}
 
       {cameraError && (
-        <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg p-2.5 mb-3">
-          <AlertCircle className="h-4 w-4 text-red-500 shrink-0" />
-          <p className="text-xs text-red-600">{cameraError}</p>
+        <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg p-3 mb-3">
+          <AlertCircle className="h-5 w-5 text-red-500 shrink-0" />
+          <p className="text-sm text-red-600">{cameraError}</p>
         </div>
       )}
 
@@ -184,7 +188,7 @@ export default function ScannerPage() {
           className="pl-9 pr-16"
         />
         <button onClick={() => handleSearch(search)}
-          className="absolute right-2 top-1/2 -translate-y-1/2 bg-slate-900 text-white px-3 py-1 rounded-md text-xs font-medium">
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 bg-slate-900 text-white px-3.5 py-2 rounded-md text-xs font-medium focus-ring">
           Search
         </button>
       </div>
@@ -200,9 +204,7 @@ export default function ScannerPage() {
 
       {/* Results */}
       {loading ? (
-        <div className="flex items-center justify-center py-8">
-          <div className="h-5 w-5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
-        </div>
+        <SkeletonList count={3} type="card" />
       ) : totalResults > 0 ? (
         <div className="space-y-3">
           <p className="text-xs text-slate-500">{totalResults} result{totalResults !== 1 ? "s" : ""}</p>
@@ -224,7 +226,7 @@ export default function ScannerPage() {
                           {p.currentStock > 0 ? `${p.currentStock} in stock` : "Out of stock"}
                         </Badge>
                       </div>
-                      <div className="flex gap-3 text-xs mt-1.5">
+                      <div className="flex gap-3 text-xs mt-1.5 tabular-nums">
                         <span className="text-green-600">Sell: {fmt(p.sellingPrice)}</span>
                         <span className="text-slate-500">MRP: {fmt(p.mrp)}</span>
                         {p.bin && <span className="text-slate-500">Bin: {p.bin.code} ({p.bin.location})</span>}
@@ -245,7 +247,7 @@ export default function ScannerPage() {
                   <CardContent className="p-3">
                     <div className="flex items-start justify-between mb-1.5">
                       <div className="flex-1 min-w-0 mr-2">
-                        <p className="text-sm font-mono font-bold text-slate-900">{s.serialCode}</p>
+                        <p className="text-lg font-mono font-bold text-slate-900 tabular-nums break-all">{s.serialCode}</p>
                         <p className="text-sm text-slate-700">{s.product.name}</p>
                         <p className="text-xs text-slate-500">{s.product.sku} | {s.product.type}</p>
                       </div>
@@ -253,7 +255,7 @@ export default function ScannerPage() {
                         {s.status.replace(/_/g, " ")}
                       </Badge>
                     </div>
-                    <div className="flex gap-3 text-xs mt-2">
+                    <div className="flex gap-3 text-xs mt-2 tabular-nums">
                       <span className="text-green-600">Sell: {fmt(s.product.sellingPrice)}</span>
                       <span className="text-slate-500">MRP: {fmt(s.product.mrp)}</span>
                       {s.bin && <span className="text-slate-500">Bin: {s.bin.code}</span>}

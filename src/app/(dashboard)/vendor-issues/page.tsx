@@ -5,9 +5,9 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { Search, AlertCircle, Plus, Trash2, Share2, Building2, Users, CalendarCheck, MessagesSquare, X, Loader2, Copy, ChevronDown } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { useDebounce } from "@/lib/utils";
 import { type DateRangeKey } from "@/components/date-filter";
 import { FilterSheet } from "@/components/filter-sheet";
@@ -441,25 +441,39 @@ export default function VendorIssuesPage() {
     } catch { setActionError("Network error"); }
   };
 
-  const renderIssueCard = (issue: IssueItem) => (
-    <Link key={issue.id} href={`/vendor-issues/${issue.id}`}>
-      <Card className="hover:border-slate-300 transition-colors mb-2">
-        <CardContent className="p-3">
+  const renderIssueCard = (issue: IssueItem) => {
+    const active = issue.status !== "CLOSED" && issue.status !== "RESOLVED";
+    const days = active ? overdueDays(issue.createdAt) : 0;
+    const overdue = days > 0;
+    const accent = overdue || issue.priority === "URGENT"
+      ? "border-l-red-500"
+      : issue.status === "OPEN" || issue.status === "IN_PROGRESS"
+      ? "border-l-amber-400"
+      : issue.status === "RESOLVED"
+      ? "border-l-green-500"
+      : "border-l-slate-200";
+    return (
+      <Link
+        key={issue.id}
+        href={`/vendor-issues/${issue.id}`}
+        className={`block rounded-xl border border-slate-200 border-l-4 ${accent} bg-white shadow-sm transition-colors active:bg-slate-50 focus-ring mb-2`}
+      >
+        <div className="p-3">
           <div className="flex items-start justify-between">
             <div className="flex-1 min-w-0 mr-3">
               <div className="flex items-center gap-2 mb-0.5">
-                <p className="text-sm font-bold text-slate-900">{issue.issueNo}</p>
-                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${ISSUE_TYPE_COLORS[issue.issueType] || ISSUE_TYPE_COLORS.OTHER}`}>
+                <p className="text-sm font-semibold text-slate-900 tabular-nums truncate">{issue.issueNo}</p>
+                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium shrink-0 ${ISSUE_TYPE_COLORS[issue.issueType] || ISSUE_TYPE_COLORS.OTHER}`}>
                   {issue.issueType.replace(/_/g, " ")}
                 </span>
               </div>
               {(issue.ticketNo || (issue.serviceLocation && SERVICE_LOCATION_SHORT[issue.serviceLocation])) && (
                 <div className="flex items-center gap-1.5 mb-1 flex-wrap">
                   {issue.ticketNo && (
-                    <span className="inline-flex items-center rounded-full bg-slate-100 text-slate-600 px-2 py-0.5 text-[10px] font-medium">🎫 {issue.ticketNo}</span>
+                    <span className="inline-flex items-center rounded-full bg-slate-100 text-slate-600 px-2 py-0.5 text-[11px] font-medium tabular-nums">🎫 {issue.ticketNo}</span>
                   )}
                   {issue.serviceLocation && SERVICE_LOCATION_SHORT[issue.serviceLocation] && (
-                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${SERVICE_LOCATION_BADGE[issue.serviceLocation]}`}>{SERVICE_LOCATION_SHORT[issue.serviceLocation]}</span>
+                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${SERVICE_LOCATION_BADGE[issue.serviceLocation]}`}>{SERVICE_LOCATION_SHORT[issue.serviceLocation]}</span>
                   )}
                 </div>
               )}
@@ -473,18 +487,15 @@ export default function VendorIssuesPage() {
               <p className="text-xs text-slate-600 line-clamp-2">{issue.description}</p>
             </div>
             <div className="text-right shrink-0 space-y-1">
-              <Badge variant={PRIORITY_VARIANT[issue.priority] || "default"} className="text-[10px]">{issue.priority}</Badge>
+              <Badge variant={PRIORITY_VARIANT[issue.priority] || "default"} className="text-[11px]">{issue.priority}</Badge>
               <br />
-              <Badge variant={STATUS_VARIANT[issue.status] || "default"} className="text-[10px]">{issue.status.replace(/_/g, " ")}</Badge>
+              <Badge variant={STATUS_VARIANT[issue.status] || "default"} className="text-[11px]">{issue.status.replace(/_/g, " ")}</Badge>
             </div>
           </div>
           <div className="flex items-center justify-between mt-1.5">
-            <p className="text-[10px] text-slate-400">
+            <p className="text-[11px] text-slate-400 tabular-nums">
               {new Date(issue.createdAt).toLocaleDateString("en-IN")}
-              {issue.status !== "CLOSED" && issue.status !== "RESOLVED" && (() => {
-                const days = overdueDays(issue.createdAt);
-                return days > 0 ? <span className="text-red-500 font-medium ml-1">({days}d overdue)</span> : null;
-              })()}
+              {overdue && <span className="text-red-600 font-bold ml-1">· {days}d overdue</span>}
             </p>
             {isAdmin && (
               <button
@@ -495,10 +506,10 @@ export default function VendorIssuesPage() {
               </button>
             )}
           </div>
-        </CardContent>
-      </Card>
-    </Link>
-  );
+        </div>
+      </Link>
+    );
+  };
 
   // Desktop: dense table; mobile: the existing cards.
   const renderIssueList = (list: IssueItem[]) => (
@@ -611,12 +622,24 @@ export default function VendorIssuesPage() {
         })}
       </div>
 
-      {/* Summary */}
+      {/* Summary — tap a card to filter by status */}
       {!loading && issues.length > 0 && (
-        <div className="flex gap-2 mb-3">
-          <Badge variant="warning" className="text-xs">Open: {openCount}</Badge>
-          <Badge variant="info" className="text-xs">In Progress: {inProgressCount}</Badge>
-          <Badge variant="success" className="text-xs">Resolved: {resolvedCount}</Badge>
+        <div className="grid grid-cols-3 gap-2 mb-3">
+          {([
+            { key: "OPEN", label: "Open", count: openCount, activeCls: "border-amber-400 bg-amber-50 ring-1 ring-amber-300", hoverCls: "hover:border-amber-300", numCls: "text-amber-600" },
+            { key: "IN_PROGRESS", label: "In Progress", count: inProgressCount, activeCls: "border-blue-400 bg-blue-50 ring-1 ring-blue-300", hoverCls: "hover:border-blue-300", numCls: "text-blue-600" },
+            { key: "RESOLVED", label: "Resolved", count: resolvedCount, activeCls: "border-green-400 bg-green-50 ring-1 ring-green-300", hoverCls: "hover:border-green-300", numCls: "text-green-600" },
+          ]).map((s) => (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => setStatusFilter(statusFilter === s.key ? "ALL" : s.key)}
+              className={`rounded-xl border p-2.5 text-center transition-colors min-h-[44px] ${statusFilter === s.key ? s.activeCls : `border-slate-200 bg-white ${s.hoverCls}`}`}
+            >
+              <p className={`text-xl font-bold tabular-nums leading-none ${s.numCls}`}>{s.count}</p>
+              <p className="text-[11px] font-medium text-slate-600 mt-1">{s.label}</p>
+            </button>
+          ))}
         </div>
       )}
 
@@ -696,16 +719,7 @@ export default function VendorIssuesPage() {
 
       {/* Content */}
       {loading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="p-3 border border-slate-100 rounded-lg animate-pulse">
-              <div className="flex items-start justify-between">
-                <div className="flex-1 space-y-1.5"><div className="h-4 bg-slate-200 rounded w-3/4" /><div className="h-3 bg-slate-200 rounded w-1/2" /></div>
-                <div className="h-5 w-14 bg-slate-200 rounded-full ml-auto" />
-              </div>
-            </div>
-          ))}
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : (
         <>
           {/* ALL tab: show both sections */}

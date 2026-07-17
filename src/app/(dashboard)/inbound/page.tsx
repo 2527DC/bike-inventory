@@ -12,6 +12,7 @@ import { type DateRangeKey } from "@/components/date-filter";
 import { FilterSheet } from "@/components/filter-sheet";
 import { usePermissions } from "@/lib/use-permissions";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface InboundShipment {
   id: string;
@@ -78,14 +79,6 @@ function daysUntil(d: string) {
   return `${diff} days`;
 }
 
-function getAgingBadge(createdAt: string) {
-  const hours = (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60);
-  if (hours > 72) return { text: `${Math.floor(hours / 24)}d`, cls: "bg-red-200 text-red-900 animate-pulse" };
-  if (hours > 48) return { text: "48h+", cls: "bg-red-100 text-red-800" };
-  if (hours > 24) return { text: "24h+", cls: "bg-yellow-100 text-yellow-800" };
-  return null; // <24h = no badge (green/ok)
-}
-
 const STATUS_BADGE: Record<string, { variant: "success" | "warning" | "info" | "default"; label: string }> = {
   IN_TRANSIT: { variant: "warning", label: "In Transit" },
   DELIVERED: { variant: "success", label: "Delivered" },
@@ -131,7 +124,6 @@ export default function InboundPage() {
   const [billSearchNo, setBillSearchNo] = useState("");
   const [billPreviews, setBillPreviews] = useState<ZohoBillPreview[]>([]);
   const [selectedBills, setSelectedBills] = useState<Set<string>>(new Set());
-  const [expandedShipment, setExpandedShipment] = useState<string | null>(null);
 
   const fetchData = useCallback(() => {
     setLoading(true);
@@ -476,29 +468,41 @@ export default function InboundPage() {
         </div>
       )}
 
-      {/* Stats */}
+      {/* Stats — tap a card to filter the list */}
       {stats && (
-        <div className="grid grid-cols-4 gap-1.5 mb-3">
-          <Card className="bg-amber-50 border-amber-200"><CardContent className="p-2 text-center">
-            <p className="text-lg font-bold text-amber-700">{stats.inTransit.items}</p>
-            <p className="text-[9px] text-amber-600">In Transit</p>
-            <p className="text-[9px] text-amber-500">{stats.inTransit.shipments} bills</p>
-          </CardContent></Card>
-          <Card className="bg-blue-50 border-blue-200"><CardContent className="p-2 text-center">
-            <p className="text-lg font-bold text-blue-700">{stats.arrivingThisWeek.items}</p>
-            <p className="text-[9px] text-blue-600">This Week</p>
-            <p className="text-[9px] text-blue-500">{stats.arrivingThisWeek.shipments} bills</p>
-          </CardContent></Card>
-          <Card className="bg-purple-50 border-purple-200"><CardContent className="p-2 text-center">
-            <p className="text-lg font-bold text-purple-700">{stats.preBookingsWaiting}</p>
-            <p className="text-[9px] text-purple-600">Pre-booked</p>
-            <p className="text-[9px] text-purple-500">Waiting</p>
-          </CardContent></Card>
-          <Card className="bg-green-50 border-green-200"><CardContent className="p-2 text-center">
-            <p className="text-lg font-bold text-green-700">{stats.deliveredThisMonth}</p>
-            <p className="text-[9px] text-green-600">Delivered</p>
-            <p className="text-[9px] text-green-500">This Month</p>
-          </CardContent></Card>
+        <div className="grid grid-cols-4 gap-2 mb-3">
+          <button
+            type="button"
+            onClick={() => setFilter(filter === "IN_TRANSIT" ? "ALL" : "IN_TRANSIT")}
+            className={`rounded-xl border p-2.5 text-center transition-colors min-h-[44px] ${filter === "IN_TRANSIT" ? "border-amber-400 bg-amber-50 ring-1 ring-amber-300" : "border-slate-200 bg-white hover:border-amber-300"}`}
+          >
+            <p className="text-xl font-bold text-amber-600 tabular-nums leading-none">{stats.inTransit.items}</p>
+            <p className="text-[11px] font-medium text-slate-600 mt-1">In Transit</p>
+            <p className="text-[10px] text-slate-400 tabular-nums">{stats.inTransit.shipments} bills</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => setFilter(filter === "arriving_this_week" ? "ALL" : "arriving_this_week")}
+            className={`rounded-xl border p-2.5 text-center transition-colors min-h-[44px] ${filter === "arriving_this_week" ? "border-blue-400 bg-blue-50 ring-1 ring-blue-300" : "border-slate-200 bg-white hover:border-blue-300"}`}
+          >
+            <p className="text-xl font-bold text-blue-600 tabular-nums leading-none">{stats.arrivingThisWeek.items}</p>
+            <p className="text-[11px] font-medium text-slate-600 mt-1">This Week</p>
+            <p className="text-[10px] text-slate-400 tabular-nums">{stats.arrivingThisWeek.shipments} bills</p>
+          </button>
+          <div className="rounded-xl border border-slate-200 bg-white p-2.5 text-center flex flex-col justify-center">
+            <p className="text-xl font-bold text-slate-700 tabular-nums leading-none">{stats.preBookingsWaiting}</p>
+            <p className="text-[11px] font-medium text-slate-600 mt-1">Pre-booked</p>
+            <p className="text-[10px] text-slate-400">Waiting</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setFilter(filter === "DELIVERED" ? "ALL" : "DELIVERED")}
+            className={`rounded-xl border p-2.5 text-center transition-colors min-h-[44px] ${filter === "DELIVERED" ? "border-green-400 bg-green-50 ring-1 ring-green-300" : "border-slate-200 bg-white hover:border-green-300"}`}
+          >
+            <p className="text-xl font-bold text-green-600 tabular-nums leading-none">{stats.deliveredThisMonth}</p>
+            <p className="text-[11px] font-medium text-slate-600 mt-1">Delivered</p>
+            <p className="text-[10px] text-slate-400">This Month</p>
+          </button>
         </div>
       )}
 
@@ -531,9 +535,7 @@ export default function InboundPage() {
 
       {/* List */}
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : isLegacy ? (
         legacyInwards.length === 0 ? (
           <div className="text-center py-12">
@@ -584,77 +586,54 @@ export default function InboundPage() {
         <div className="space-y-2">
           {shipments.map((s) => {
             const badge = STATUS_BADGE[s.status] || { variant: "default" as const, label: s.status };
-            const isExpanded = expandedShipment === s.id;
+            const overdue = s.status === "IN_TRANSIT" && daysUntil(s.expectedDeliveryDate).includes("overdue");
+            const accent = overdue
+              ? "border-l-red-500"
+              : s.status === "IN_TRANSIT"
+              ? "border-l-amber-400"
+              : s.status === "PARTIALLY_DELIVERED"
+              ? "border-l-blue-400"
+              : s.status === "DELIVERED"
+              ? "border-l-green-500"
+              : "border-l-slate-200";
             return (
-              <Card key={s.id} className="hover:border-slate-300 transition-colors mb-2">
-                <CardContent className="p-3">
-                  <button
-                    onClick={() => setExpandedShipment(isExpanded ? null : s.id)}
-                    className="w-full text-left"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1 min-w-0 mr-2">
-                        <p className="text-sm font-semibold text-slate-900">{s.brand.name}</p>
-                        <p className="text-xs text-slate-500">Bill: {s.billNo} | {s.shipmentNo}</p>
-                      </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <Badge variant={badge.variant}>{badge.label}</Badge>
-                        {["IN_TRANSIT", "PARTIALLY_DELIVERED"].includes(s.status) && (() => {
-                          const aging = getAgingBadge(s.createdAt);
-                          return aging ? (
-                            <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full ${aging.cls}`}>
-                              {aging.text}
-                            </span>
-                          ) : null;
-                        })()}
-                        <span className="text-slate-400 text-xs">{isExpanded ? "▾" : "▸"}</span>
-                      </div>
+              <Link
+                key={s.id}
+                href={`/inbound/${s.id}`}
+                className={`block rounded-xl border border-slate-200 border-l-4 ${accent} bg-white shadow-sm transition-colors active:bg-slate-50 focus-ring`}
+              >
+                <div className="p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-900 truncate">{s.brand.name}</p>
+                      <p className="text-xs text-slate-500 tabular-nums truncate">Bill {s.billNo} · {s.shipmentNo}</p>
                     </div>
+                    <Badge variant={badge.variant} className="shrink-0">{badge.label}</Badge>
+                  </div>
 
-                    <div className="flex items-center gap-3 mt-1.5">
-                      <span className="text-xs text-slate-500">Billed: {formatDate(s.billDate)}</span>
-                      <span className="text-xs text-slate-400">{s.lineItems.length} items</span>
-                      {s.status === "IN_TRANSIT" && (
-                        <div className="flex items-center gap-1 text-xs ml-auto">
-                          <Calendar className="h-3 w-3 text-amber-500" />
-                          <span className={`font-medium ${
-                            daysUntil(s.expectedDeliveryDate).includes("overdue") ? "text-red-600" : "text-amber-600"
-                          }`}>
-                            {daysUntil(s.expectedDeliveryDate)}
-                          </span>
-                        </div>
-                      )}
-                      {s.status === "DELIVERED" && s.deliveredAt && (
-                        <span className="text-xs text-green-600 ml-auto">
-                          {formatDate(s.deliveredAt)}
-                        </span>
-                      )}
-                      {s._count.preBookings > 0 && (
-                        <span className="text-[10px] px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded-full font-medium ml-auto">
-                          {s._count.preBookings} pre-booked
-                        </span>
-                      )}
-                    </div>
-                  </button>
+                  <div className="mt-2 flex items-center gap-3 text-xs">
+                    <span className="text-slate-500 tabular-nums">Billed {formatDate(s.billDate)}</span>
+                    <span className="text-slate-400 tabular-nums">{s.lineItems.length} items</span>
+                    {s.status === "IN_TRANSIT" && (
+                      <span className={`ml-auto inline-flex items-center gap-1 font-semibold tabular-nums ${overdue ? "text-red-600" : "text-amber-600"}`}>
+                        <Calendar className="h-3.5 w-3.5" />
+                        {daysUntil(s.expectedDeliveryDate)}
+                      </span>
+                    )}
+                    {s.status === "DELIVERED" && s.deliveredAt && (
+                      <span className="ml-auto text-green-600 tabular-nums">{formatDate(s.deliveredAt)}</span>
+                    )}
+                  </div>
 
-                  {isExpanded && (
-                    <div className="mt-2 pt-2 border-t border-slate-100">
-                      <div className="space-y-0.5 mb-2">
-                        {s.lineItems.map((li, idx) => (
-                          <p key={idx} className="text-xs text-slate-600">
-                            {li.productName} <span className="text-slate-400">x {li.quantity}</span>
-                            {li.isDelivered && <span className="text-green-500 ml-1">✓</span>}
-                          </p>
-                        ))}
-                      </div>
-                      <Link href={`/inbound/${s.id}`}
-                        className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700">
-                        Open Details →
-                      </Link>
+                  {s._count.preBookings > 0 && (
+                    <div className="mt-1.5">
+                      <span className="inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-[11px] font-medium text-purple-700 tabular-nums">
+                        {s._count.preBookings} pre-booked
+                      </span>
                     </div>
                   )}
-                </CardContent>
-              </Card>
+                </div>
+              </Link>
             );
           })}
         </div>

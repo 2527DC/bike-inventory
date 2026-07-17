@@ -7,6 +7,7 @@ import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface Bin {
   id: string;
@@ -144,8 +145,12 @@ export default function BinsPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+      <div>
+        <div className="flex items-center gap-3 mb-4">
+          <Link href="/more" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+          <h1 className="text-lg font-bold text-slate-900 flex-1">Bins &amp; Locations</h1>
+        </div>
+        <SkeletonList count={5} type="card" />
       </div>
     );
   }
@@ -153,8 +158,8 @@ export default function BinsPage() {
   return (
     <div>
       <div className="flex items-center gap-3 mb-4">
-        <Link href="/more" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
-        <h1 className="text-lg font-bold text-slate-900 flex-1">Bins & Locations</h1>
+        <Link href="/more" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+        <h1 className="text-lg font-bold text-slate-900 flex-1">Bins &amp; Locations</h1>
         {isAdmin && (
           <Button size="sm" onClick={() => { setShowAdd(!showAdd); if (showAdd) resetForm(); }} variant={showAdd ? "outline" : "default"}>
             <Plus className="h-4 w-4 mr-1" /> {showAdd ? "Cancel" : "Add Bin"}
@@ -284,10 +289,10 @@ export default function BinsPage() {
                 {/* Preview */}
                 {generatedCode && (
                   <div className="rounded-lg bg-slate-50 p-3 border border-slate-200">
-                    <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1">Preview</p>
+                    <p className="text-[11px] uppercase tracking-wider text-slate-500 mb-1">Preview</p>
                     <div className="flex items-center gap-3">
                       <div className="h-10 w-10 rounded-lg bg-white border border-slate-200 flex items-center justify-center">
-                        <span className="text-xs font-bold text-slate-700">{generatedCode}</span>
+                        <span className="text-xs font-bold text-slate-700 tabular-nums">{generatedCode}</span>
                       </div>
                       <div>
                         <p className="text-sm font-medium text-slate-900">{binName || "—"}</p>
@@ -328,9 +333,9 @@ export default function BinsPage() {
         <div className="space-y-2">
           {bins.map((bin) => (
             <Card key={bin.id}>
-              <CardContent className="p-3 flex items-center gap-3">
+              <CardContent className="p-3 flex items-center gap-3 min-h-[44px]">
                 <div className="h-10 w-10 rounded-lg bg-slate-100 flex items-center justify-center">
-                  <span className="text-sm font-bold text-slate-600">{bin.code}</span>
+                  <span className="text-sm font-bold text-slate-600 tabular-nums">{bin.code}</span>
                 </div>
                 <div className="flex-1">
                   <p className="text-sm font-medium text-slate-900">{bin.name}</p>
@@ -340,7 +345,8 @@ export default function BinsPage() {
                   <button
                     onClick={() => handleDelete(bin.id, bin.code)}
                     disabled={deleting === bin.id}
-                    className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50"
+                    aria-label={`Delete bin ${bin.code}`}
+                    className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50 focus-ring"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>

@@ -11,6 +11,7 @@ import { FilterSheet } from "@/components/filter-sheet";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { usePermissions } from "@/lib/use-permissions";
@@ -192,17 +193,7 @@ export default function TransfersPage() {
       )}
 
       {loading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="p-3 border border-slate-100 rounded-lg animate-pulse">
-              <div className="flex items-start justify-between mb-2">
-                <div className="flex-1 space-y-1.5"><div className="h-4 bg-slate-200 rounded w-3/4" /><div className="h-3 bg-slate-200 rounded w-1/2" /></div>
-                <div className="h-5 w-16 bg-slate-200 rounded-full" />
-              </div>
-              <div className="h-10 bg-slate-100 rounded-lg" />
-            </div>
-          ))}
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : orders.length === 0 ? (
         <div className="text-center py-12">
           <ArrowRightLeft className="h-10 w-10 text-slate-300 mx-auto mb-3" />
@@ -213,18 +204,26 @@ export default function TransfersPage() {
         </div>
       ) : (
         <div className="space-y-2">
-          {orders.map((order) => (
-            <Card key={order.id} className="overflow-hidden">
+          {orders.map((order) => {
+            const accent = order.status === "APPROVED"
+              ? "border-l-green-500"
+              : order.status === "REJECTED"
+              ? "border-l-red-500"
+              : order.status === "PENDING"
+              ? "border-l-amber-400"
+              : "border-l-slate-200";
+            return (
+            <Card key={order.id} className={`overflow-hidden border-l-4 ${accent}`}>
               <CardContent className="p-3">
                 {/* Header */}
                 <div className="flex items-start justify-between mb-2">
                   <div className="flex-1 min-w-0 mr-2">
                     <div className="flex items-center gap-2">
-                      <p className="text-base font-semibold text-slate-900">{order.orderNo}</p>
+                      <p className="text-base font-semibold text-slate-900 tabular-nums truncate">{order.orderNo}</p>
                       {statusBadge(order.status)}
                     </div>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      {order._count.items} item{order._count.items !== 1 ? "s" : ""} | By {order.createdBy.name} | {new Date(order.createdAt).toLocaleDateString("en-IN")}
+                      <span className="tabular-nums">{order._count.items}</span> item{order._count.items !== 1 ? "s" : ""} | By {order.createdBy.name} | <span className="tabular-nums">{new Date(order.createdAt).toLocaleDateString("en-IN")}</span>
                     </p>
                   </div>
                 </div>
@@ -237,7 +236,7 @@ export default function TransfersPage() {
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-slate-800 truncate">{item.product.name}</p>
                         <div className="flex items-center gap-1 text-xs text-slate-500">
-                          <span>Qty: {item.quantity}</span>
+                          <span className="tabular-nums">Qty: {item.quantity}</span>
                           <span>|</span>
                           <span>{endpointLabel(item.fromBin, item.fromLocation)}</span>
                           <ArrowRight className="h-2.5 w-2.5 text-purple-500" />
@@ -288,7 +287,8 @@ export default function TransfersPage() {
                 </div>
               </CardContent>
             </Card>
-          ))}
+            );
+          })}
         </div>
       )}
 

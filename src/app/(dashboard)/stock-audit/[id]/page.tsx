@@ -5,7 +5,7 @@ import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  ArrowLeft, Play, CheckCircle2, Save, Search, Loader2, Trash2, Table,
+  ArrowLeft, Play, CheckCircle2, Save, Search, Trash2, Table,
   ShieldCheck, XCircle, RefreshCw, Plus, Minus, Zap, AlertTriangle,
   Info,
 } from "lucide-react";
@@ -13,6 +13,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { useDebounce, fuzzyMatch } from "@/lib/utils";
 
 interface StockCountItemData {
@@ -337,16 +338,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
 
 
   if (loadingSummary) {
-    return (
-      <div className="space-y-3">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="p-3 border border-slate-100 rounded-lg animate-pulse">
-            <div className="h-4 bg-slate-200 rounded w-3/4 mb-2" />
-            <div className="h-3 bg-slate-200 rounded w-1/2" />
-          </div>
-        ))}
-      </div>
-    );
+    return <SkeletonList count={5} type="card" />;
   }
 
   if (!summary) {
@@ -371,13 +363,13 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
       )}
 
       {/* Header */}
-      <div className="flex items-center gap-3 mb-3">
-        <Link href="/stock-audit" className="p-1">
+      <div className="flex items-center gap-2 mb-3">
+        <Link href="/stock-audit" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
         <div className="flex-1 min-w-0">
           <h1 className="text-lg font-bold text-slate-900 truncate">{summary.title}</h1>
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-slate-500 tabular-nums truncate">
             {summary.countNo && <span className="font-mono text-slate-400">{summary.countNo} | </span>}
             {summary.assignedTo.name} | Due: {new Date(summary.dueDate).toLocaleDateString("en-IN")}
             {summary.bin && ` | ${summary.bin.name} (${summary.bin.location})`}
@@ -386,8 +378,8 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
         <Badge variant={STATUS_STYLE[summary.status] as "warning" | "info" | "success" | "danger"}>
           {summary.status === "IN_PROGRESS" ? "In Progress" : summary.status.charAt(0) + summary.status.slice(1).toLowerCase()}
         </Badge>
-        <button onClick={() => setShowDeleteConfirm(true)} disabled={deleting}
-          className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg disabled:opacity-50">
+        <button onClick={() => setShowDeleteConfirm(true)} disabled={deleting} aria-label="Delete stock count"
+          className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg disabled:opacity-50 focus-ring">
           <Trash2 className="h-4 w-4" />
         </button>
       </div>
@@ -411,7 +403,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
         <Card className="mb-3 border-amber-200 bg-amber-50">
           <CardContent className="p-2.5 flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
-            <p className="text-xs text-amber-800 flex-1">
+            <p className="text-xs text-amber-800 flex-1 tabular-nums">
               {staleCount} item{staleCount > 1 ? "s" : ""} had stock movements since count started
             </p>
             <button onClick={handleRefreshSystemQty} disabled={refreshing}
@@ -427,7 +419,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
         <CardContent className="p-3">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-xs text-slate-500">Progress</span>
-            <span className="text-xs font-medium text-slate-700">
+            <span className="text-xs font-medium text-slate-700 tabular-nums">
               {summary.countedItems} of {summary.totalItems} counted{remaining > 0 ? ` — ${remaining} left` : " — all done!"}
             </span>
           </div>
@@ -442,10 +434,10 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
               <span className="text-green-600 font-medium">All counts match the system</span>
             ) : (
               <span className="text-slate-600">
-                <span className="font-semibold text-slate-800">{summary.itemsWithVariance}</span>
+                <span className="font-semibold text-slate-800 tabular-nums">{summary.itemsWithVariance}</span>
                 {summary.itemsWithVariance === 1 ? " item differs" : " items differ"} from system
                 <span className="text-slate-400"> · </span>
-                <span className="font-medium text-slate-700">
+                <span className="font-medium text-slate-700 tabular-nums">
                   net {summary.totalVariance > 0 ? "+" : ""}{summary.totalVariance} {Math.abs(summary.totalVariance) === 1 ? "unit" : "units"}
                 </span>
                 {summary.totalVariance !== 0 && (
@@ -464,7 +456,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
             <ShieldCheck className="h-5 w-5 text-green-600 shrink-0" />
             <div>
               <p className="text-sm font-medium text-green-900">Approved</p>
-              <p className="text-[10px] text-green-700">
+              <p className="text-[11px] text-green-700 tabular-nums">
                 By {summary.approvedBy?.name} on {summary.approvedAt ? new Date(summary.approvedAt).toLocaleDateString("en-IN") : "—"}
               </p>
             </div>
@@ -477,7 +469,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
             <XCircle className="h-5 w-5 text-red-600 shrink-0" />
             <div>
               <p className="text-sm font-medium text-red-900">Rejected</p>
-              {summary.rejectionReason && <p className="text-[10px] text-red-700">{summary.rejectionReason}</p>}
+              {summary.rejectionReason && <p className="text-[11px] text-red-700">{summary.rejectionReason}</p>}
             </div>
           </CardContent>
         </Card>
@@ -486,7 +478,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
       {/* Action Buttons */}
       {(summary.status === "COMPLETED" || summary.status === "APPROVED") && (
         <Link href={`/stock-audit/${id}/review`}>
-          <button className="w-full flex items-center justify-center gap-2 bg-slate-900 text-white py-2.5 rounded-lg text-sm font-medium mb-3">
+          <button className="w-full flex items-center justify-center gap-2 bg-slate-900 text-white min-h-[48px] rounded-lg text-sm font-medium mb-3 focus-ring">
             <Table className="h-4 w-4" /> Review Table View
           </button>
         </Link>
@@ -496,21 +488,21 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
         <div className="mb-3 space-y-2">
           <div className="flex gap-2">
             <button onClick={() => handleStatusChange("APPROVED")} disabled={actionLoading}
-              className="flex-1 flex items-center justify-center gap-2 bg-green-600 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50">
+              className="flex-1 flex items-center justify-center gap-2 bg-green-600 text-white min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50 focus-ring">
               <ShieldCheck className="h-4 w-4" /> {actionLoading ? "..." : "Approve (verify only)"}
             </button>
             <button onClick={() => setShowRejectModal(true)}
-              className="flex-1 flex items-center justify-center gap-2 bg-red-600 text-white py-2.5 rounded-lg text-sm font-medium">
+              className="flex-1 flex items-center justify-center gap-2 bg-red-600 text-white min-h-[48px] rounded-lg text-sm font-medium focus-ring">
               <XCircle className="h-4 w-4" /> Reject
             </button>
           </div>
           {isAdmin && (
             <button onClick={() => handleStatusChange("APPROVED", { applyToStock: true })} disabled={actionLoading}
-              className="w-full flex items-center justify-center gap-2 border border-amber-300 bg-amber-50 text-amber-800 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50">
+              className="w-full flex items-center justify-center gap-2 border border-amber-300 bg-amber-50 text-amber-800 min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50 focus-ring">
               <ShieldCheck className="h-4 w-4" /> Approve &amp; correct stock levels
             </button>
           )}
-          <p className="text-[11px] text-slate-400">
+          <p className="text-[11px] text-slate-500">
             <span className="font-medium">Verify only</span> records the count without changing stock (Inwards adds stock).
             {isAdmin ? " Correct stock levels overwrites each item's stock at this location with the counted quantity — admin only." : ""}
           </p>
@@ -519,14 +511,14 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
 
       {summary.status === "REJECTED" && !isAdmin && (
         <button onClick={() => handleStatusChange("IN_PROGRESS")} disabled={actionLoading}
-          className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium mb-3 disabled:opacity-50">
+          className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white min-h-[48px] rounded-lg text-sm font-medium mb-3 disabled:opacity-50 focus-ring">
           <Play className="h-4 w-4" /> {actionLoading ? "Starting..." : "Re-start Counting"}
         </button>
       )}
 
       {summary.status === "PENDING" && !isAdmin && (
         <button onClick={() => handleStatusChange("IN_PROGRESS")} disabled={actionLoading}
-          className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium mb-3 disabled:opacity-50">
+          className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white min-h-[48px] rounded-lg text-sm font-medium mb-3 disabled:opacity-50 focus-ring">
           <Play className="h-4 w-4" /> {actionLoading ? "Starting..." : "Start Counting"}
         </button>
       )}
@@ -534,7 +526,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
       {summary.status === "IN_PROGRESS" && (
         <div className="flex gap-2 mb-3">
           <button onClick={handleManualSave} disabled={saving || dirtyRef.current.size === 0}
-            className="flex-1 flex items-center justify-center gap-2 bg-slate-900 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50">
+            className="flex-1 flex items-center justify-center gap-2 bg-slate-900 text-white min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50 focus-ring">
             <Save className="h-4 w-4" />
             {saving ? "Saving..." : autoSaveStatus === "saved" ? "Saved ✓" : `Save (${dirtyRef.current.size})`}
           </button>
@@ -548,7 +540,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
             }
             handleStatusChange("COMPLETED");
           }} disabled={actionLoading || saving}
-            className="flex-1 flex items-center justify-center gap-2 bg-green-600 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50">
+            className="flex-1 flex items-center justify-center gap-2 bg-green-600 text-white min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50 focus-ring">
             <CheckCircle2 className="h-4 w-4" /> {actionLoading ? "..." : "Complete"}
           </button>
         </div>
@@ -568,7 +560,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
           const count = t === "uncounted" ? tabCounts.uncounted : t === "counted" ? tabCounts.counted : tabCounts.total;
           return (
             <button key={t} onClick={() => { setTab(t); setSearch(""); }}
-              className={`flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-colors ${
+              className={`flex-1 px-2 py-1.5 rounded-md text-xs font-medium tabular-nums transition-colors ${
                 tab === t ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
               }`}>
               {t.charAt(0).toUpperCase() + t.slice(1)} ({count})
@@ -614,9 +606,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
 
       {/* Items */}
       {loadingItems ? (
-        <div className="flex items-center justify-center py-8">
-          <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
-        </div>
+        <SkeletonList count={5} type="card" />
       ) : (
         <div className="space-y-2">
           {items.filter((item) => {
@@ -638,11 +628,11 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                   className={`flex items-center gap-2 p-2 rounded-lg border ${isCounted ? "border-green-200 bg-green-50/50" : "border-slate-200"}`}>
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-medium text-slate-900 truncate">{item.product.name}</p>
-                    <p className="text-[10px] text-slate-400">{item.product.sku} {item.product.brand ? `| ${item.product.brand.name}` : ""}</p>
+                    <p className="text-[11px] text-slate-400 tabular-nums">{item.product.sku} {item.product.brand ? `| ${item.product.brand.name}` : ""}</p>
                   </div>
                   <div className="text-right shrink-0 mr-1">
-                    <p className="text-[10px] text-slate-400">Sys</p>
-                    <p className="text-xs font-medium text-slate-600">{item.systemQty}</p>
+                    <p className="text-[11px] text-slate-400">Sys</p>
+                    <p className="text-xs font-semibold text-slate-600 tabular-nums">{item.systemQty}</p>
                   </div>
                   <div className="flex items-center gap-0 shrink-0">
                     <button onClick={() => decrement(item.id)}
@@ -657,7 +647,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                           if (!isNaN(n) && n >= 0) setCount(item.id, n);
                         }
                       }}
-                      className="h-9 min-w-[44px] flex items-center justify-center bg-white border-y border-slate-200 text-sm font-bold text-slate-900">
+                      className="h-9 min-w-[44px] flex items-center justify-center bg-white border-y border-slate-200 text-sm font-bold text-slate-900 tabular-nums">
                       {displayVal ?? 0}
                     </button>
                     <button onClick={() => increment(item.id)}
@@ -666,7 +656,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                     </button>
                   </div>
                   {variance !== null && (
-                    <p className={`text-xs font-bold shrink-0 min-w-[30px] text-right ${variance === 0 ? "text-green-600" : "text-red-600"}`}>
+                    <p className={`text-xs font-bold shrink-0 min-w-[30px] text-right tabular-nums ${variance === 0 ? "text-green-600" : "text-red-600"}`}>
                       {variance > 0 ? "+" : ""}{variance}
                     </p>
                   )}
@@ -682,7 +672,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                   <div className="flex items-start justify-between mb-1">
                     <div className="flex-1 min-w-0 mr-2">
                       <p className="text-sm font-medium text-slate-900">{item.product.name}</p>
-                      <p className="text-xs text-slate-500">
+                      <p className="text-xs text-slate-500 tabular-nums">
                         {item.product.sku}
                         {item.product.brand ? ` | ${item.product.brand.name}` : ""}
                         {item.product.category ? ` | ${item.product.category.name}` : ""}
@@ -691,7 +681,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                     </div>
                     <div className="text-right shrink-0">
                       <p className="text-xs text-slate-500">System</p>
-                      <p className="text-sm font-bold text-slate-900">{item.systemQty}</p>
+                      <p className="text-sm font-bold text-slate-900 tabular-nums">{item.systemQty}</p>
                     </div>
                   </div>
 
@@ -712,7 +702,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                                 if (!isNaN(n) && n >= 0) setCount(item.id, n);
                               }
                             }}
-                            className="h-10 flex-1 flex items-center justify-center bg-white border-y border-slate-200 text-lg font-bold text-slate-900 min-w-[60px]">
+                            className="h-10 flex-1 flex items-center justify-center bg-white border-y border-slate-200 text-lg font-bold text-slate-900 min-w-[60px] tabular-nums">
                             {displayVal ?? 0}
                           </button>
                           <button onClick={() => increment(item.id)}
@@ -723,12 +713,12 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                         {variance !== null && (
                           <div className={`text-right shrink-0 min-w-[50px] ${variance === 0 ? "text-green-600" : "text-red-600"}`}>
                             <p className="text-xs">Var</p>
-                            <p className="text-sm font-bold">{variance > 0 ? "+" : ""}{variance}</p>
+                            <p className="text-sm font-bold tabular-nums">{variance > 0 ? "+" : ""}{variance}</p>
                           </div>
                         )}
                       </div>
                       <div className="mt-1">
-                        <label className="text-[10px] text-slate-400 mb-0.5 block">
+                        <label className="text-[11px] text-slate-500 mb-0.5 block">
                           Brand {item.product.brand ? `(current: ${item.product.brand.name})` : ""}
                         </label>
                         <select
@@ -767,7 +757,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                       </div>
                     </div>
                   ) : item.countedQty !== null ? (
-                    <div className="flex items-center gap-2 mt-2 text-xs">
+                    <div className="flex items-center gap-2 mt-2 text-xs tabular-nums">
                       <span className="text-slate-700">Counted <span className="font-semibold">{item.countedQty}</span></span>
                       {item.variance === 0 ? (
                         <span className="text-green-600">· matches</span>

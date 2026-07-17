@@ -3,11 +3,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { Search, Plus, Bike, Loader2, Archive } from "lucide-react";
+import { Search, Plus, Bike, Archive } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { useDebounce } from "@/lib/utils";
 import { usePermissions } from "@/lib/use-permissions";
 import { FilterSheet } from "@/components/filter-sheet";
@@ -134,25 +135,33 @@ export default function SecondHandPage() {
         </div>
       )}
 
-      {/* Stats */}
+      {/* Stats — tap a card to filter the list */}
       {stats && (
         <div className={`grid ${isAdmin ? "grid-cols-3" : "grid-cols-2"} gap-1.5 mb-3`}>
-          <Card className="bg-green-50 border-green-200"><CardContent className="p-2 text-center">
-            <p className="text-lg font-bold text-green-700">{stats.inStock.count}</p>
-            <p className="text-[9px] text-green-600">In Stock</p>
-            {isAdmin && <p className="text-[9px] text-green-500">{formatINR(stats.inStock.totalCostValue)}</p>}
-          </CardContent></Card>
-          <Card className="bg-blue-50 border-blue-200"><CardContent className="p-2 text-center">
-            <p className="text-lg font-bold text-blue-700">{stats.soldThisMonth.count}</p>
-            <p className="text-[9px] text-blue-600">Sold (Month)</p>
-            {isAdmin && <p className="text-[9px] text-blue-500">{formatINR(stats.soldThisMonth.revenue)}</p>}
-          </CardContent></Card>
+          <button
+            type="button"
+            onClick={() => setFilter(filter === "IN_STOCK" ? "ALL" : "IN_STOCK")}
+            className={`rounded-xl border p-2.5 text-center transition-colors min-h-[44px] ${filter === "IN_STOCK" ? "border-green-400 bg-green-50 ring-1 ring-green-300" : "border-green-200 bg-green-50 hover:border-green-300"}`}
+          >
+            <p className="text-xl font-bold text-green-700 tabular-nums leading-none">{stats.inStock.count}</p>
+            <p className="text-[11px] font-medium text-green-600 mt-1">In Stock</p>
+            {isAdmin && <p className="text-[11px] text-green-500 tabular-nums">{formatINR(stats.inStock.totalCostValue)}</p>}
+          </button>
+          <button
+            type="button"
+            onClick={() => setFilter(filter === "SOLD" ? "ALL" : "SOLD")}
+            className={`rounded-xl border p-2.5 text-center transition-colors min-h-[44px] ${filter === "SOLD" ? "border-blue-400 bg-blue-50 ring-1 ring-blue-300" : "border-blue-200 bg-blue-50 hover:border-blue-300"}`}
+          >
+            <p className="text-xl font-bold text-blue-700 tabular-nums leading-none">{stats.soldThisMonth.count}</p>
+            <p className="text-[11px] font-medium text-blue-600 mt-1">Sold (Month)</p>
+            {isAdmin && <p className="text-[11px] text-blue-500 tabular-nums">{formatINR(stats.soldThisMonth.revenue)}</p>}
+          </button>
           {isAdmin && (
-            <Card className="bg-purple-50 border-purple-200"><CardContent className="p-2 text-center">
-              <p className="text-lg font-bold text-purple-700">{formatINR(stats.avgMargin)}</p>
-              <p className="text-[9px] text-purple-600">Avg Margin</p>
+            <Card className="bg-purple-50 border-purple-200"><CardContent className="p-2.5 text-center">
+              <p className="text-xl font-bold text-purple-700 tabular-nums leading-none">{formatINR(stats.avgMargin)}</p>
+              <p className="text-[11px] font-medium text-purple-600 mt-1">Avg Margin</p>
               {stats.aging.over30 > 0 && (
-                <p className="text-[9px] text-red-500">{stats.aging.over30} &gt;30d</p>
+                <p className="text-[11px] text-red-500 tabular-nums">{stats.aging.over30} &gt;30d</p>
               )}
             </CardContent></Card>
           )}
@@ -216,9 +225,7 @@ export default function SecondHandPage() {
 
       {/* List */}
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : cycles.length === 0 ? (
         <div className="text-center py-12">
           <Bike className="h-10 w-10 text-slate-300 mx-auto mb-3" />
@@ -231,11 +238,23 @@ export default function SecondHandPage() {
         </div>
       ) : (
         <div className="space-y-2">
-          {cycles.map((c) => (
+          {cycles.map((c) => {
+            const accent = c.isArchived
+              ? "border-l-slate-200"
+              : c.isVerified === false
+              ? "border-l-amber-400"
+              : c.status === "SOLD"
+              ? "border-l-green-500"
+              : c.condition === "SCRAP"
+              ? "border-l-red-500"
+              : "border-l-blue-400";
+            return (
             <div key={c.id} className="relative">
-              <Link href={`/second-hand/${c.id}`}>
-                <Card className={`hover:border-slate-300 transition-colors mb-2 ${c.isArchived ? "opacity-50" : ""}`}>
-                  <CardContent className="p-3">
+              <Link
+                href={`/second-hand/${c.id}`}
+                className={`block rounded-xl border border-slate-200 border-l-4 ${accent} bg-white shadow-sm transition-colors active:bg-slate-50 focus-ring ${c.isArchived ? "opacity-50" : ""}`}
+              >
+                <div className="p-3">
                     <div className="flex gap-3">
                       {/* Photo thumbnail */}
                       <div className="w-16 h-16 rounded-lg bg-slate-100 overflow-hidden shrink-0">
@@ -250,49 +269,48 @@ export default function SecondHandPage() {
                       </div>
 
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <p className="text-sm font-medium text-slate-900">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-slate-900 truncate">
                               {c.name}
                               {c.isArchived && <span className="ml-1 text-[10px] text-amber-600 font-normal">(Archived)</span>}
                             </p>
-                            <p className="text-xs text-slate-500">{c.sku} | {c.customerName}</p>
+                            <p className="text-xs text-slate-500 truncate"><span className="tabular-nums">{c.sku}</span> | {c.customerName}</p>
                           </div>
-                          <Badge variant={c.status === "IN_STOCK" ? "success" : "default"}>
+                          <Badge variant={c.status === "IN_STOCK" ? "success" : "default"} className="shrink-0">
                             {c.status === "IN_STOCK" ? "In Stock" : "Sold"}
                           </Badge>
                         </div>
 
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${CONDITION_COLORS[c.condition] || ""}`}>
+                        <div className="flex items-center gap-2 mt-1 flex-wrap">
+                          <span className={`text-[11px] px-1.5 py-0.5 rounded-full font-medium ${CONDITION_COLORS[c.condition] || ""}`}>
                             {c.condition}
                           </span>
                           {c.size && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-indigo-100 text-indigo-700">
+                            <span className="text-[11px] px-1.5 py-0.5 rounded-full font-medium bg-indigo-100 text-indigo-700 tabular-nums">
                               {c.size}
                             </span>
                           )}
                           {c.isVerified === false && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">
+                            <span className="text-[11px] px-1.5 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">
                               Pending
                             </span>
                           )}
                           {isAdmin && c.costPrice != null && (
-                            <span className="text-xs font-medium text-slate-700">
+                            <span className="text-xs font-medium text-slate-700 tabular-nums">
                               Cost: {formatINR(c.costPrice)}
                             </span>
                           )}
                           {isAdmin && c.sellingPrice && (
-                            <span className="text-xs font-medium text-green-600">
+                            <span className="text-xs font-medium text-green-600 tabular-nums">
                               Sell: {formatINR(c.sellingPrice)}
                             </span>
                           )}
                         </div>
-                        <p className="text-[10px] text-slate-400 mt-0.5">{new Date(c.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</p>
+                        <p className="text-[11px] text-slate-400 mt-0.5 tabular-nums">{new Date(c.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</p>
                       </div>
                     </div>
-                  </CardContent>
-                </Card>
+                </div>
               </Link>
               {isAdmin && !c.isArchived && (
                 <button
@@ -304,7 +322,8 @@ export default function SecondHandPage() {
                 </button>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

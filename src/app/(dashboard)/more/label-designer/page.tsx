@@ -133,20 +133,20 @@ export default function LabelDesignerPage() {
     <div className="pb-20">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
-          <Link href="/more" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+          <Link href="/more" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
           <h1 className="text-lg font-bold text-slate-900">Label Designer</h1>
         </div>
         <div className="flex gap-1.5">
           <button onClick={handlePrintPreview}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200">
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 focus-ring">
             <Printer className="h-3.5 w-3.5" /> Test
           </button>
           <button onClick={handleReset}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200">
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 focus-ring">
             <RotateCcw className="h-3.5 w-3.5" /> Reset
           </button>
           <button onClick={handleSave}
-            className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium ${
+            className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium focus-ring ${
               saved ? "bg-green-600 text-white" : "bg-slate-900 text-white"
             }`}>
             <Save className="h-3.5 w-3.5" /> {saved ? "Saved!" : "Save"}
@@ -156,11 +156,11 @@ export default function LabelDesignerPage() {
 
       {/* Label Size Selector */}
       <div className="mb-4">
-        <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wide mb-1.5">Label Size</p>
+        <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide mb-1.5">Label Size</p>
         <div className="flex gap-2">
           {LABEL_SIZES.map((s) => (
             <button key={s.label} onClick={() => { setTemplate((t) => ({ ...t, width: s.w, height: s.h })); setSaved(false); }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors focus-ring ${
                 template.width === s.w && template.height === s.h
                   ? "bg-slate-900 text-white border-slate-900"
                   : "bg-white text-slate-600 border-slate-200 hover:border-slate-400"
@@ -173,7 +173,7 @@ export default function LabelDesignerPage() {
 
       {/* Live Preview */}
       <div className="mb-4">
-        <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wide mb-1.5">Preview</p>
+        <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide mb-1.5">Preview</p>
         <div className="bg-slate-100 rounded-xl p-4 flex items-center justify-center">
           <div ref={printRef}>
             <div className="label-inner bg-white border border-slate-300 shadow-sm flex flex-col justify-center overflow-hidden"
@@ -224,16 +224,16 @@ export default function LabelDesignerPage() {
         <p className="text-xs text-slate-600">Barcode Height</p>
         <div className="flex items-center gap-1.5">
           <button onClick={() => { setTemplate((t) => ({ ...t, barcodeHeight: Math.max(4, t.barcodeHeight - 1) })); setSaved(false); }}
-            className="p-1 rounded bg-slate-100 hover:bg-slate-200"><Minus className="h-3 w-3" /></button>
-          <span className="text-xs font-mono w-8 text-center">{template.barcodeHeight}mm</span>
+            aria-label="Decrease barcode height" className="p-1 rounded bg-slate-100 hover:bg-slate-200 focus-ring"><Minus className="h-3 w-3" /></button>
+          <span className="text-xs font-mono tabular-nums w-8 text-center">{template.barcodeHeight}mm</span>
           <button onClick={() => { setTemplate((t) => ({ ...t, barcodeHeight: Math.min(20, t.barcodeHeight + 1) })); setSaved(false); }}
-            className="p-1 rounded bg-slate-100 hover:bg-slate-200"><Plus className="h-3 w-3" /></button>
+            aria-label="Increase barcode height" className="p-1 rounded bg-slate-100 hover:bg-slate-200 focus-ring"><Plus className="h-3 w-3" /></button>
         </div>
       </div>
 
       {/* Element Editor (drag to reorder) */}
       <div>
-        <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wide mb-1.5">Elements (drag to reorder)</p>
+        <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide mb-1.5">Elements (drag to reorder)</p>
         <div className="space-y-1.5">
           {template.elements.map((el, idx) => (
             <Card key={el.id}
@@ -251,7 +251,8 @@ export default function LabelDesignerPage() {
 
                   {/* Visibility Toggle */}
                   <button onClick={() => updateElement(el.id, { visible: !el.visible })}
-                    className={`shrink-0 p-1 rounded ${el.visible ? "text-green-600" : "text-slate-300"}`}>
+                    aria-label={el.visible ? `Hide ${el.label}` : `Show ${el.label}`}
+                    className={`shrink-0 p-1 rounded focus-ring ${el.visible ? "text-green-600" : "text-slate-300"}`}>
                     {el.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
                   </button>
 
@@ -263,28 +264,32 @@ export default function LabelDesignerPage() {
                     <div className="flex items-center gap-1">
                       {/* Font Size */}
                       <button onClick={() => updateElement(el.id, { fontSize: Math.max(4, el.fontSize - 1) })}
-                        className="p-0.5 rounded bg-slate-100 hover:bg-slate-200"><Minus className="h-2.5 w-2.5" /></button>
-                      <span className="text-[10px] font-mono w-5 text-center">{el.fontSize}</span>
+                        aria-label="Decrease font size" className="p-0.5 rounded bg-slate-100 hover:bg-slate-200 focus-ring"><Minus className="h-2.5 w-2.5" /></button>
+                      <span className="text-[11px] font-mono tabular-nums w-5 text-center">{el.fontSize}</span>
                       <button onClick={() => updateElement(el.id, { fontSize: Math.min(14, el.fontSize + 1) })}
-                        className="p-0.5 rounded bg-slate-100 hover:bg-slate-200"><Plus className="h-2.5 w-2.5" /></button>
+                        aria-label="Increase font size" className="p-0.5 rounded bg-slate-100 hover:bg-slate-200 focus-ring"><Plus className="h-2.5 w-2.5" /></button>
 
                       {/* Bold */}
                       <button onClick={() => updateElement(el.id, { bold: !el.bold })}
-                        className={`p-1 rounded ${el.bold ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500"}`}>
+                        aria-label="Toggle bold" aria-pressed={el.bold}
+                        className={`p-1 rounded focus-ring ${el.bold ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500"}`}>
                         <Bold className="h-3 w-3" />
                       </button>
 
                       {/* Alignment */}
                       <button onClick={() => updateElement(el.id, { align: "left" })}
-                        className={`p-1 rounded ${el.align === "left" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500"}`}>
+                        aria-label="Align left" aria-pressed={el.align === "left"}
+                        className={`p-1 rounded focus-ring ${el.align === "left" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500"}`}>
                         <AlignLeft className="h-3 w-3" />
                       </button>
                       <button onClick={() => updateElement(el.id, { align: "center" })}
-                        className={`p-1 rounded ${el.align === "center" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500"}`}>
+                        aria-label="Align center" aria-pressed={el.align === "center"}
+                        className={`p-1 rounded focus-ring ${el.align === "center" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500"}`}>
                         <AlignCenter className="h-3 w-3" />
                       </button>
                       <button onClick={() => updateElement(el.id, { align: "right" })}
-                        className={`p-1 rounded ${el.align === "right" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500"}`}>
+                        aria-label="Align right" aria-pressed={el.align === "right"}
+                        className={`p-1 rounded focus-ring ${el.align === "right" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500"}`}>
                         <AlignRight className="h-3 w-3" />
                       </button>
                     </div>

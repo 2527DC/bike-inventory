@@ -6,11 +6,13 @@ import {
   ArrowLeft, Cloud, CheckCircle2, XCircle,
   Package, Users, Loader2, Clock,
   RefreshCw, FileText, ShoppingCart, ChevronDown, ChevronUp,
+  BookOpen, Store, Boxes,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface ZohoStatus {
   connected: boolean;
@@ -334,27 +336,27 @@ export default function ZohoSettingsPage() {
           </div>
         )}
         <div>
-          <label className="block text-[10px] font-medium text-slate-600 mb-0.5">Client ID *</label>
+          <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Client ID *</label>
           <Input placeholder="1000.XXXX..." value={form.clientId} onChange={(e) => setForm({ ...form, clientId: e.target.value })} className="h-8 text-xs" />
         </div>
         <div>
-          <label className="block text-[10px] font-medium text-slate-600 mb-0.5">Client Secret *</label>
+          <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Client Secret *</label>
           <Input type="password" placeholder="XXXX..." value={form.clientSecret} onChange={(e) => setForm({ ...form, clientSecret: e.target.value })} className="h-8 text-xs" />
         </div>
         <div>
-          <label className="block text-[10px] font-medium text-slate-600 mb-0.5">Grant Token *</label>
+          <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Grant Token *</label>
           <Input type="password" placeholder="1000.XXXX..." value={form.grantToken} onChange={(e) => setForm({ ...form, grantToken: e.target.value })} className="h-8 text-xs" />
-          <p className="text-[9px] text-slate-400 mt-0.5">Expires in 2 min — paste quickly</p>
+          <p className="text-[11px] text-slate-400 mt-0.5">Expires in 2 min — paste quickly</p>
         </div>
         <div>
-          <label className="block text-[10px] font-medium text-slate-600 mb-0.5">Organization ID</label>
-          <Input placeholder="123456789" value={form.orgId} onChange={(e) => setForm({ ...form, orgId: e.target.value })} className="h-8 text-xs" />
+          <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Organization ID</label>
+          <Input placeholder="123456789" value={form.orgId} onChange={(e) => setForm({ ...form, orgId: e.target.value })} className="h-8 text-xs tabular-nums" />
         </div>
         <div>
-          <label className="block text-[10px] font-medium text-slate-600 mb-0.5">Organization Name</label>
+          <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Organization Name</label>
           <Input placeholder="My Bike Store" value={form.orgName} onChange={(e) => setForm({ ...form, orgName: e.target.value })} className="h-8 text-xs" />
         </div>
-        <Button type="submit" size="sm" disabled={!form.clientId || !form.clientSecret || !form.grantToken || isConnecting} className="w-full bg-blue-600 hover:bg-blue-700 text-xs">
+        <Button type="submit" disabled={!form.clientId || !form.clientSecret || !form.grantToken || isConnecting} className="w-full min-h-[48px] bg-green-600 hover:bg-green-700 text-sm focus-ring">
           {isConnecting ? "Connecting..." : `Connect to ${label}`}
         </Button>
       </form>
@@ -363,8 +365,10 @@ export default function ZohoSettingsPage() {
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/more" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+      <div className="flex items-center gap-2 mb-4">
+        <Link href="/more" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring">
+          <ArrowLeft className="h-5 w-5 text-slate-600" />
+        </Link>
         <div>
           <h1 className="text-lg font-bold text-slate-900">Zoho Settings</h1>
           <p className="text-xs text-slate-500">Manage Zoho connections</p>
@@ -372,53 +376,52 @@ export default function ZohoSettingsPage() {
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
-        </div>
+        <SkeletonList count={3} />
       ) : (
         <>
           {/* 3-Source Connection Cards */}
+          <h2 className="text-sm font-semibold text-slate-900 mb-2">Connections</h2>
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-2 mb-4">
             {/* Zoho Books Card */}
             <Card className={`border ${status?.connected ? "border-green-200 bg-green-50" : "border-slate-200"}`}>
               <CardContent className="p-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-base">📚</span>
+                  <BookOpen className="h-5 w-5 text-slate-500 shrink-0" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-slate-900">Zoho Books</p>
-                    <p className="text-[10px] text-slate-500">Bills & Vendors</p>
+                    <p className="text-[11px] text-slate-500">Bills & Vendors</p>
                   </div>
-                  <Badge variant={status?.connected ? "success" : "danger"} className="text-[9px] shrink-0">
+                  <Badge variant={status?.connected ? "success" : "danger"} className="text-[11px] shrink-0">
                     {status?.connected ? "Connected" : "Not connected"}
                   </Badge>
                 </div>
                 <div className="flex items-center gap-2 mt-1.5">
                   {status?.connected ? (
-                    <CheckCircle2 className="h-3 w-3 text-green-600 shrink-0" />
+                    <CheckCircle2 className="h-3.5 w-3.5 text-green-600 shrink-0" />
                   ) : (
-                    <XCircle className="h-3 w-3 text-red-400 shrink-0" />
+                    <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />
                   )}
-                  <span className="text-[10px] text-slate-500">1000 calls/day</span>
+                  <span className="text-[11px] text-slate-500 tabular-nums">1000 calls/day</span>
                   {status?.connected && status.lastSyncAt && (
                     <>
-                      <span className="text-[10px] text-slate-300">|</span>
-                      <span className="text-[10px] text-slate-500">
+                      <span className="text-[11px] text-slate-300">|</span>
+                      <span className="text-[11px] text-slate-500 tabular-nums">
                         Last sync: {new Date(status.lastSyncAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
                       </span>
                     </>
                   )}
                 </div>
                 {status?.connected ? (
-                  <button onClick={handleDisconnect} className="mt-2 text-xs text-red-500 hover:text-red-600 font-medium">
+                  <button onClick={handleDisconnect} className="mt-2 w-full min-h-[48px] flex items-center justify-center rounded-lg border border-red-200 text-sm text-red-600 hover:bg-red-50 font-medium focus-ring">
                     Disconnect
                   </button>
                 ) : (
                   <>
                     <button
                       onClick={() => setBooksExpanded(!booksExpanded)}
-                      className="mt-2 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium"
+                      className="mt-2 flex items-center gap-1 text-sm text-green-700 hover:text-green-800 font-medium focus-ring rounded-lg"
                     >
-                      Connect {booksExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                      Connect {booksExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                     </button>
                     {booksExpanded && (
                       <form onSubmit={handleConnect} className="mt-2 space-y-2">
@@ -428,27 +431,27 @@ export default function ZohoSettingsPage() {
                           </div>
                         )}
                         <div>
-                          <label className="block text-[10px] font-medium text-slate-600 mb-0.5">Client ID *</label>
+                          <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Client ID *</label>
                           <Input placeholder="1000.XXXX..." value={clientId} onChange={(e) => setClientId(e.target.value)} className="h-8 text-xs" />
                         </div>
                         <div>
-                          <label className="block text-[10px] font-medium text-slate-600 mb-0.5">Client Secret *</label>
+                          <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Client Secret *</label>
                           <Input type="password" placeholder="XXXX..." value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} className="h-8 text-xs" />
                         </div>
                         <div>
-                          <label className="block text-[10px] font-medium text-slate-600 mb-0.5">Grant Token *</label>
+                          <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Grant Token *</label>
                           <Input type="password" placeholder="1000.XXXX..." value={grantToken} onChange={(e) => setGrantToken(e.target.value)} className="h-8 text-xs" />
-                          <p className="text-[9px] text-slate-400 mt-0.5">Expires in 2 min — paste quickly</p>
+                          <p className="text-[11px] text-slate-400 mt-0.5">Expires in 2 min — paste quickly</p>
                         </div>
                         <div>
-                          <label className="block text-[10px] font-medium text-slate-600 mb-0.5">Organization ID</label>
-                          <Input placeholder="123456789" value={orgId} onChange={(e) => setOrgId(e.target.value)} className="h-8 text-xs" />
+                          <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Organization ID</label>
+                          <Input placeholder="123456789" value={orgId} onChange={(e) => setOrgId(e.target.value)} className="h-8 text-xs tabular-nums" />
                         </div>
                         <div>
-                          <label className="block text-[10px] font-medium text-slate-600 mb-0.5">Organization Name</label>
+                          <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Organization Name</label>
                           <Input placeholder="My Bike Store" value={orgName} onChange={(e) => setOrgName(e.target.value)} className="h-8 text-xs" />
                         </div>
-                        <Button type="submit" size="sm" disabled={!clientId || !clientSecret || !grantToken || connecting} className="w-full bg-blue-600 hover:bg-blue-700 text-xs">
+                        <Button type="submit" disabled={!clientId || !clientSecret || !grantToken || connecting} className="w-full min-h-[48px] bg-green-600 hover:bg-green-700 text-sm focus-ring">
                           {connecting ? "Connecting..." : "Connect to Zoho Books"}
                         </Button>
                       </form>
@@ -462,42 +465,42 @@ export default function ZohoSettingsPage() {
             <Card className={`border ${posStatus?.connected ? "border-green-200 bg-green-50" : "border-slate-200"}`}>
               <CardContent className="p-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-base">🛒</span>
+                  <Store className="h-5 w-5 text-slate-500 shrink-0" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-slate-900">Zakya POS</p>
-                    <p className="text-[10px] text-slate-500">Sales & Invoices</p>
+                    <p className="text-[11px] text-slate-500">Sales & Invoices</p>
                   </div>
-                  <Badge variant={posStatus?.connected ? "success" : "danger"} className="text-[9px] shrink-0">
+                  <Badge variant={posStatus?.connected ? "success" : "danger"} className="text-[11px] shrink-0">
                     {posStatus?.connected ? "Connected" : "Not connected"}
                   </Badge>
                 </div>
                 <div className="flex items-center gap-2 mt-1.5">
                   {posStatus?.connected ? (
-                    <CheckCircle2 className="h-3 w-3 text-green-600 shrink-0" />
+                    <CheckCircle2 className="h-3.5 w-3.5 text-green-600 shrink-0" />
                   ) : (
-                    <XCircle className="h-3 w-3 text-red-400 shrink-0" />
+                    <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />
                   )}
-                  <span className="text-[10px] text-slate-500">2500 calls/day</span>
+                  <span className="text-[11px] text-slate-500 tabular-nums">2500 calls/day</span>
                   {posStatus?.connected && posStatus.lastSyncAt && (
                     <>
-                      <span className="text-[10px] text-slate-300">|</span>
-                      <span className="text-[10px] text-slate-500">
+                      <span className="text-[11px] text-slate-300">|</span>
+                      <span className="text-[11px] text-slate-500 tabular-nums">
                         Last sync: {new Date(posStatus.lastSyncAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
                       </span>
                     </>
                   )}
                 </div>
                 {posStatus?.connected ? (
-                  <button onClick={handleDisconnectPos} className="mt-2 text-xs text-red-500 hover:text-red-600 font-medium">
+                  <button onClick={handleDisconnectPos} className="mt-2 w-full min-h-[48px] flex items-center justify-center rounded-lg border border-red-200 text-sm text-red-600 hover:bg-red-50 font-medium focus-ring">
                     Disconnect
                   </button>
                 ) : (
                   <>
                     <button
                       onClick={() => setPosExpanded(!posExpanded)}
-                      className="mt-2 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium"
+                      className="mt-2 flex items-center gap-1 text-sm text-green-700 hover:text-green-800 font-medium focus-ring rounded-lg"
                     >
-                      Connect {posExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                      Connect {posExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                     </button>
                     {posExpanded && renderConnectForm(posForm, setPosForm, handleConnectPos, connectingPos, posError, "Zakya POS")}
                   </>
@@ -509,42 +512,42 @@ export default function ZohoSettingsPage() {
             <Card className={`border ${invStatus?.connected ? "border-green-200 bg-green-50" : "border-slate-200"}`}>
               <CardContent className="p-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-base">📦</span>
+                  <Boxes className="h-5 w-5 text-slate-500 shrink-0" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-slate-900">Zoho Inventory</p>
-                    <p className="text-[10px] text-slate-500">Items & Stock</p>
+                    <p className="text-[11px] text-slate-500">Items & Stock</p>
                   </div>
-                  <Badge variant={invStatus?.connected ? "success" : "danger"} className="text-[9px] shrink-0">
+                  <Badge variant={invStatus?.connected ? "success" : "danger"} className="text-[11px] shrink-0">
                     {invStatus?.connected ? "Connected" : "Not connected"}
                   </Badge>
                 </div>
                 <div className="flex items-center gap-2 mt-1.5">
                   {invStatus?.connected ? (
-                    <CheckCircle2 className="h-3 w-3 text-green-600 shrink-0" />
+                    <CheckCircle2 className="h-3.5 w-3.5 text-green-600 shrink-0" />
                   ) : (
-                    <XCircle className="h-3 w-3 text-red-400 shrink-0" />
+                    <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />
                   )}
-                  <span className="text-[10px] text-slate-500">1000 calls/day</span>
+                  <span className="text-[11px] text-slate-500 tabular-nums">1000 calls/day</span>
                   {invStatus?.connected && invStatus.lastSyncAt && (
                     <>
-                      <span className="text-[10px] text-slate-300">|</span>
-                      <span className="text-[10px] text-slate-500">
+                      <span className="text-[11px] text-slate-300">|</span>
+                      <span className="text-[11px] text-slate-500 tabular-nums">
                         Last sync: {new Date(invStatus.lastSyncAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
                       </span>
                     </>
                   )}
                 </div>
                 {invStatus?.connected ? (
-                  <button onClick={handleDisconnectInv} className="mt-2 text-xs text-red-500 hover:text-red-600 font-medium">
+                  <button onClick={handleDisconnectInv} className="mt-2 w-full min-h-[48px] flex items-center justify-center rounded-lg border border-red-200 text-sm text-red-600 hover:bg-red-50 font-medium focus-ring">
                     Disconnect
                   </button>
                 ) : (
                   <>
                     <button
                       onClick={() => setInvExpanded(!invExpanded)}
-                      className="mt-2 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium"
+                      className="mt-2 flex items-center gap-1 text-sm text-green-700 hover:text-green-800 font-medium focus-ring rounded-lg"
                     >
-                      Connect {invExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                      Connect {invExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                     </button>
                     {invExpanded && renderConnectForm(invForm, setInvForm, handleConnectInv, connectingInv, invError, "Zoho Inventory")}
                   </>
@@ -561,9 +564,9 @@ export default function ZohoSettingsPage() {
             <CardContent className="p-3">
               <div className="flex items-center gap-2 mb-1">
                 <Clock className="h-4 w-4 text-blue-600" />
-                <p className="text-xs font-semibold text-blue-900">Auto-Sync: Daily at 1 PM IST</p>
+                <p className="text-sm font-semibold text-blue-900">Auto-Sync: Daily at 1 PM IST</p>
               </div>
-              <p className="text-[10px] text-blue-700 mb-3">
+              <p className="text-[11px] text-blue-700 mb-3">
                 Pulls new vendors, items, bills, and invoices. All data goes to preview for approval first.
               </p>
 
@@ -583,7 +586,7 @@ export default function ZohoSettingsPage() {
                       {pullError || stepMessage}
                     </p>
                     {!pullError && (
-                      <span className="text-xs font-bold text-blue-600">{progress}%</span>
+                      <span className="text-xs font-bold text-blue-600 tabular-nums">{progress}%</span>
                     )}
                   </div>
 
@@ -618,7 +621,7 @@ export default function ZohoSettingsPage() {
                               <Icon className="h-3 w-3 text-slate-300" />
                             )}
                           </div>
-                          <span className={`text-[9px] text-center leading-tight ${
+                          <span className={`text-[11px] text-center leading-tight ${
                             isDone ? "text-green-600 font-medium" : isActive ? "text-blue-600 font-medium" : "text-slate-400"
                           }`}>{s.label}</span>
                         </div>
@@ -639,8 +642,8 @@ export default function ZohoSettingsPage() {
                         return (
                           <div key={r.label} className="text-center p-1.5 rounded-lg bg-green-50 border border-green-100">
                             <RIcon className="h-3.5 w-3.5 text-green-600 mx-auto mb-0.5" />
-                            <p className="text-sm font-bold text-green-800">{r.count}</p>
-                            <p className="text-[9px] text-green-600">{r.label}</p>
+                            <p className="text-sm font-bold text-green-800 tabular-nums">{r.count}</p>
+                            <p className="text-[11px] text-green-600">{r.label}</p>
                           </div>
                         );
                       })}
@@ -650,10 +653,10 @@ export default function ZohoSettingsPage() {
                   {/* Errors */}
                   {pullErrors.length > 0 && (
                     <details className="mt-2">
-                      <summary className="text-[10px] text-orange-600 cursor-pointer">{pullErrors.length} warning(s)</summary>
+                      <summary className="text-[11px] text-orange-600 cursor-pointer">{pullErrors.length} warning(s)</summary>
                       <div className="mt-1 space-y-0.5">
                         {pullErrors.map((e, i) => (
-                          <p key={i} className="text-[10px] text-orange-500">{e}</p>
+                          <p key={i} className="text-[11px] text-orange-500">{e}</p>
                         ))}
                       </div>
                     </details>
@@ -663,12 +666,12 @@ export default function ZohoSettingsPage() {
                   {(pullDone || pullError) && !pulling && (
                     <div className="mt-3 flex gap-2">
                       <button onClick={dismissPull}
-                        className="flex-1 text-xs text-slate-500 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">
+                        className="flex-1 min-h-[48px] text-sm text-slate-600 rounded-lg border border-slate-200 hover:bg-slate-50 focus-ring">
                         Dismiss
                       </button>
                       {pullDone && totalNew > 0 && (
                         <Link href="/more/zoho/pull-review"
-                          className="flex-1 text-xs text-center text-white bg-green-600 py-1.5 rounded-lg font-medium hover:bg-green-700">
+                          className="flex-1 min-h-[48px] flex items-center justify-center text-sm text-center text-white bg-green-600 rounded-lg font-medium hover:bg-green-700 focus-ring">
                           Review & Approve
                         </Link>
                       )}
@@ -686,7 +689,7 @@ export default function ZohoSettingsPage() {
                   disabled={pulling}
                   className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                 />
-                <span className="text-xs text-slate-600">
+                <span className="text-xs text-slate-600 tabular-nums">
                   Full import (all items, ~27 API calls for 5000+ items)
                 </span>
               </label>
@@ -696,14 +699,14 @@ export default function ZohoSettingsPage() {
                 <button
                   onClick={handleTriggerPull}
                   disabled={pulling}
-                  className="flex-1 flex items-center justify-center gap-1.5 border border-blue-300 text-blue-700 px-3 py-2.5 rounded-lg text-xs font-medium hover:bg-blue-100 disabled:opacity-50 transition-colors"
+                  className="flex-1 min-h-[48px] flex items-center justify-center gap-1.5 bg-green-600 text-white px-3 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 transition-colors focus-ring"
                 >
-                  {pulling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                  {pulling ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                   {pulling ? "Pulling..." : fullImport ? "Full Import" : "Pull Now"}
                 </button>
                 <Link href="/more/zoho/pull-review"
-                  className="flex-1 flex items-center justify-center gap-1.5 bg-blue-600 text-white px-3 py-2.5 rounded-lg text-xs font-medium hover:bg-blue-700 transition-colors">
-                  <CheckCircle2 className="h-3.5 w-3.5" /> Review Pulls
+                  className="flex-1 min-h-[48px] flex items-center justify-center gap-1.5 border border-slate-200 text-slate-700 px-3 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors focus-ring">
+                  <CheckCircle2 className="h-4 w-4" /> Review Pulls
                 </Link>
               </div>
             </CardContent>
@@ -720,11 +723,11 @@ export default function ZohoSettingsPage() {
                     <Clock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium text-slate-700 capitalize">{log.syncType}</p>
-                      <p className="text-[10px] text-slate-500">
+                      <p className="text-[11px] text-slate-500 tabular-nums">
                         {new Date(log.startedAt).toLocaleString("en-IN")} — {log.synced}/{log.totalItems} synced
                       </p>
                     </div>
-                    <Badge variant={log.status === "success" ? "success" : log.status === "partial" ? "warning" : "danger"} className="text-[9px]">
+                    <Badge variant={log.status === "success" ? "success" : log.status === "partial" ? "warning" : "danger"} className="text-[11px]">
                       {log.status}
                     </Badge>
                   </div>
@@ -787,26 +790,26 @@ function CleanupSection() {
     <Card className="mt-4 border-red-200">
       <CardContent className="p-3">
         <h2 className="text-sm font-semibold text-red-700 mb-1">Cleanup Zoho Imports</h2>
-        <p className="text-[10px] text-slate-500 mb-2">
+        <p className="text-[11px] text-slate-500 mb-2">
           Delete all Zoho-imported transactions and vendor bills. Stock count entries are preserved.
         </p>
         <div className="flex gap-2 flex-wrap">
-          <Button size="sm" variant="outline" onClick={loadPreview} disabled={loading} className="text-xs h-7">
+          <Button size="sm" variant="outline" onClick={loadPreview} disabled={loading} className="text-xs h-9 focus-ring">
             {loading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null} Preview
           </Button>
           {preview && (
             <>
-              <Button size="sm" variant="destructive" onClick={() => runCleanup(true)} disabled={loading} className="text-xs h-7">
+              <Button size="sm" variant="destructive" onClick={() => runCleanup(true)} disabled={loading} className="text-xs h-9 focus-ring">
                 Delete & Reverse Stock ({preview.verifiedTransactions} verified)
               </Button>
-              <Button size="sm" variant="outline" onClick={() => runCleanup(false)} disabled={loading} className="text-xs h-7 border-red-200 text-red-600">
+              <Button size="sm" variant="outline" onClick={() => runCleanup(false)} disabled={loading} className="text-xs h-9 border-red-200 text-red-600 focus-ring">
                 Delete & Keep Stock
               </Button>
             </>
           )}
         </div>
         {preview && (
-          <p className="text-[10px] text-slate-400 mt-1">
+          <p className="text-[11px] text-slate-400 mt-1 tabular-nums">
             {preview.transactions} transactions ({preview.verifiedTransactions} verified) | {preview.vendorBills} bills | {preview.previews} previews
           </p>
         )}

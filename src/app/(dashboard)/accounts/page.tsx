@@ -20,6 +20,7 @@ import {
   Calculator,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { SkeletonDashboard } from "@/components/ui/skeleton";
 import { usePermissions } from "@/lib/use-permissions";
 
 interface AccountsSummary {
@@ -75,8 +76,11 @@ export default function AccountsPage() {
 
   if (sessionStatus === "loading" || loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+      <div>
+        <div className="mb-4">
+          <div className="h-5 w-28 rounded bg-slate-200 animate-pulse" />
+        </div>
+        <SkeletonDashboard />
       </div>
     );
   }
@@ -102,9 +106,14 @@ export default function AccountsPage() {
     { label: "Daily Settlement", href: "/accounts/settlement", icon: Calculator },
   ];
 
+  const todayLabel = new Date().toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
+
   return (
     <div>
-      <h1 className="text-lg font-bold text-slate-900 mb-3">Accounts</h1>
+      <div className="mb-4">
+        <h1 className="text-lg font-bold text-slate-900">Accounts</h1>
+        <p className="text-[11px] text-slate-500 tabular-nums">{todayLabel}</p>
+      </div>
 
       {/* Quick Actions */}
       <div className="flex gap-2 mb-4 overflow-x-auto scrollbar-hide pb-1">
@@ -130,51 +139,55 @@ export default function AccountsPage() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 gap-2 mb-4">
-        <Card className="bg-red-50 border-red-200">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-2 mb-1">
-              <IndianRupee className="h-4 w-4 text-red-600" />
-              <span className="text-xs text-red-600 font-medium">Vendor Payable</span>
-            </div>
-            <p className="text-lg font-bold text-red-700">
-              {formatCurrency(s?.outstandingPayable || 0)}
-            </p>
-          </CardContent>
-        </Card>
-
-        <Link href="/receivables">
-          <Card className="bg-blue-50 border-blue-200">
+        <Link href="/bills" className="focus-ring rounded-xl">
+          <Card className="bg-red-50 border-red-200 h-full transition-colors active:bg-red-100">
             <CardContent className="p-3">
-              <div className="flex items-center gap-2 mb-1">
-                <HandCoins className="h-4 w-4 text-blue-600" />
-                <span className="text-xs text-blue-600 font-medium">Receivable</span>
+              <div className="flex items-center gap-1.5 mb-1">
+                <IndianRupee className="h-4 w-4 text-red-600 shrink-0" />
+                <span className="text-[11px] text-red-600 font-medium">Vendor Payable</span>
               </div>
-              <p className="text-lg font-bold text-blue-700">
-                {s?.pendingReceivables || 0} pending
+              <p className="text-xl font-bold text-red-700 tabular-nums">
+                {formatCurrency(s?.outstandingPayable || 0)}
               </p>
             </CardContent>
           </Card>
         </Link>
 
-        <Card className="bg-amber-50 border-amber-200">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-2 mb-1">
-              <AlertTriangle className="h-4 w-4 text-amber-600" />
-              <span className="text-xs text-amber-600 font-medium">Overdue</span>
-            </div>
-            <p className="text-lg font-bold text-amber-700">
-              {s?.overdueBills || 0} bills
-            </p>
-          </CardContent>
-        </Card>
+        <Link href="/receivables" className="focus-ring rounded-xl">
+          <Card className="bg-blue-50 border-blue-200 h-full transition-colors active:bg-blue-100">
+            <CardContent className="p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <HandCoins className="h-4 w-4 text-blue-600 shrink-0" />
+                <span className="text-[11px] text-blue-600 font-medium">Receivable</span>
+              </div>
+              <p className="text-xl font-bold text-blue-700 tabular-nums">
+                {s?.pendingReceivables || 0} <span className="text-sm font-semibold">pending</span>
+              </p>
+            </CardContent>
+          </Card>
+        </Link>
+
+        <Link href="/bills" className="focus-ring rounded-xl">
+          <Card className="bg-amber-50 border-amber-200 h-full transition-colors active:bg-amber-100">
+            <CardContent className="p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                <span className="text-[11px] text-amber-600 font-medium">Overdue</span>
+              </div>
+              <p className="text-xl font-bold text-amber-700 tabular-nums">
+                {s?.overdueBills || 0} <span className="text-sm font-semibold">bills</span>
+              </p>
+            </CardContent>
+          </Card>
+        </Link>
 
         <Card>
           <CardContent className="p-3">
-            <div className="flex items-center gap-2 mb-1">
-              <CreditCard className="h-4 w-4 text-green-600" />
-              <span className="text-xs text-slate-500 font-medium">Paid (30d)</span>
+            <div className="flex items-center gap-1.5 mb-1">
+              <CreditCard className="h-4 w-4 text-green-600 shrink-0" />
+              <span className="text-[11px] text-slate-500 font-medium">Paid (30d)</span>
             </div>
-            <p className="text-lg font-bold text-green-700">
+            <p className="text-xl font-bold text-green-700 tabular-nums">
               {formatCurrency(s?.totalPaid30d || 0)}
             </p>
           </CardContent>
@@ -191,7 +204,7 @@ export default function AccountsPage() {
                 <Icon className="h-5 w-5 text-slate-500" />
                 <span className="flex-1 text-sm font-medium text-slate-700">{link.label}</span>
                 {link.count !== undefined && (
-                  <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{link.count}</span>
+                  <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full tabular-nums">{link.count}</span>
                 )}
                 <ChevronRight className="h-4 w-4 text-slate-400" />
               </div>
@@ -212,10 +225,10 @@ export default function AccountsPage() {
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="text-sm font-medium text-slate-900">{bill.vendor.name}</p>
-                        <p className="text-xs text-slate-500">{bill.billNo} | Due: {new Date(bill.dueDate).toLocaleDateString("en-IN")}</p>
+                        <p className="text-xs text-slate-500 tabular-nums">{bill.billNo} | Due: {new Date(bill.dueDate).toLocaleDateString("en-IN")}</p>
                       </div>
                       <div className="text-right">
-                        <p className="text-sm font-bold text-red-600">
+                        <p className="text-sm font-bold text-red-600 tabular-nums">
                           {formatCurrency(bill.amount - bill.paidAmount)}
                         </p>
                       </div>
@@ -239,11 +252,11 @@ export default function AccountsPage() {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium text-slate-900">{payment.vendor.name}</p>
-                      <p className="text-xs text-slate-500">
+                      <p className="text-xs text-slate-500 tabular-nums">
                         {payment.bill?.billNo || "Advance"} | {new Date(payment.paymentDate).toLocaleDateString("en-IN")}
                       </p>
                     </div>
-                    <p className="text-sm font-bold text-green-600">{formatCurrency(payment.amount)}</p>
+                    <p className="text-sm font-bold text-green-600 tabular-nums">{formatCurrency(payment.amount)}</p>
                   </div>
                 </CardContent>
               </Card>

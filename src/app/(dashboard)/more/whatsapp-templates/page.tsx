@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowLeft, Save, Loader2, RotateCcw, MessageCircle } from "lucide-react";
+import { ArrowLeft, Save, RotateCcw, MessageCircle } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 const PLACEHOLDERS: Record<string, string[]> = {
   scheduled: ["{{customerName}}", "{{productName}}", "{{deliveryDate}}"],
@@ -92,7 +93,15 @@ export default function WhatsAppTemplatesPage() {
   };
 
   if (loading) {
-    return <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-slate-400" /></div>;
+    return (
+      <div>
+        <div className="flex items-center gap-3 mb-4">
+          <Link href="/more" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+          <h1 className="text-lg font-bold text-slate-900">WhatsApp Templates</h1>
+        </div>
+        <SkeletonList count={4} type="card" />
+      </div>
+    );
   }
 
   const TABS = [
@@ -104,7 +113,7 @@ export default function WhatsAppTemplatesPage() {
   return (
     <div>
       <div className="flex items-center gap-3 mb-4">
-        <Link href="/more" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+        <Link href="/more" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
         <div>
           <h1 className="text-lg font-bold text-slate-900">WhatsApp Templates</h1>
           <p className="text-xs text-slate-500">Customize delivery messages sent to customers</p>
@@ -117,12 +126,12 @@ export default function WhatsAppTemplatesPage() {
             <MessageCircle className="h-4 w-4 text-green-600" />
             <p className="text-xs font-semibold text-green-900">Template Placeholders</p>
           </div>
-          <p className="text-[10px] text-green-700">
+          <p className="text-[11px] text-green-700">
             Use these placeholders in your messages. They get replaced with actual values when sending.
           </p>
           <div className="flex flex-wrap gap-1 mt-1.5">
             {PLACEHOLDERS[activeTab].map((p) => (
-              <span key={p} className="text-[10px] bg-green-100 text-green-800 px-1.5 py-0.5 rounded font-mono">{p}</span>
+              <span key={p} className="text-[11px] bg-green-100 text-green-800 px-1.5 py-0.5 rounded font-mono">{p}</span>
             ))}
           </div>
         </CardContent>
@@ -132,7 +141,7 @@ export default function WhatsAppTemplatesPage() {
       <div className="flex gap-1.5 mb-3">
         {TABS.map((tab) => (
           <button key={tab.key} onClick={() => setActiveTab(tab.key)}
-            className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${
+            className={`flex-1 min-h-[44px] py-2 rounded-lg text-xs font-medium transition-colors focus-ring ${
               activeTab === tab.key ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
             }`}>
             {tab.label}
@@ -142,7 +151,11 @@ export default function WhatsAppTemplatesPage() {
 
       {/* Template Editor */}
       <div className="mb-3">
+        <label htmlFor="template-editor" className="block text-sm font-medium text-slate-700 mb-1.5">
+          Message template
+        </label>
         <textarea
+          id="template-editor"
           value={templates[activeTab] || ""}
           onChange={(e) => setTemplates((prev) => ({ ...prev, [activeTab]: e.target.value }))}
           rows={12}
@@ -153,13 +166,13 @@ export default function WhatsAppTemplatesPage() {
 
       {/* Reset to Default */}
       <button onClick={() => handleReset(activeTab)}
-        className="flex items-center gap-1.5 text-xs text-slate-500 mb-4 hover:text-slate-700">
+        className="flex items-center gap-1.5 min-h-[44px] text-xs text-slate-500 mb-4 hover:text-slate-700 focus-ring rounded-lg">
         <RotateCcw className="h-3 w-3" /> Reset to default
       </button>
 
       {/* Save */}
       <button onClick={handleSave} disabled={saving}
-        className="w-full flex items-center justify-center gap-2 bg-green-600 text-white py-3 rounded-lg text-sm font-medium disabled:opacity-50">
+        className="w-full flex items-center justify-center gap-2 min-h-[48px] bg-green-600 text-white py-3 rounded-lg text-sm font-medium disabled:opacity-50 focus-ring">
         <Save className="h-4 w-4" />
         {saving ? "Saving..." : saved ? "Saved!" : "Save All Templates"}
       </button>

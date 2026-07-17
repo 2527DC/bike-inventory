@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface ExpenseSummaryData {
   total: number;
@@ -48,7 +49,7 @@ export default function ExpenseSummaryPage() {
   return (
     <div>
       <div className="flex items-center gap-3 mb-4">
-        <Link href="/reports" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+        <Link href="/reports" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
         <h1 className="text-lg font-bold text-slate-900">Expense Summary</h1>
       </div>
 
@@ -60,21 +61,19 @@ export default function ExpenseSummaryPage() {
       {data && (
         <div className="grid grid-cols-2 gap-2 mb-4">
           <Card className="bg-red-50 border-red-200"><CardContent className="p-3">
-            <p className="text-xs text-red-600">Total Expenses</p>
-            <p className="text-lg font-bold text-red-700">{fmt(data.total)}</p>
-            <p className="text-[10px] text-red-500">{data.totalCount} entries</p>
+            <p className="text-[11px] text-red-600">Total Expenses</p>
+            <p className="text-xl font-bold text-red-700 tabular-nums">{fmt(data.total)}</p>
+            <p className="text-[11px] text-red-500 tabular-nums">{data.totalCount} entries</p>
           </CardContent></Card>
           <Card><CardContent className="p-3">
-            <p className="text-xs text-slate-500">Daily Average</p>
-            <p className="text-lg font-bold text-slate-900">{fmt(data.dailyAvg)}</p>
+            <p className="text-[11px] text-slate-500">Daily Average</p>
+            <p className="text-xl font-bold text-slate-900 tabular-nums">{fmt(data.dailyAvg)}</p>
           </CardContent></Card>
         </div>
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : (
         <div className="space-y-2">
           {data?.categories.map((cat) => (
@@ -82,11 +81,11 @@ export default function ExpenseSummaryPage() {
               <CardContent className="p-3">
                 <div className="flex items-center justify-between mb-1">
                   <p className="text-sm font-medium text-slate-900">{cat.category.replace(/_/g, " ")}</p>
-                  <p className="text-sm font-bold text-slate-900">{fmt(cat.amount)}</p>
+                  <p className="text-sm font-bold text-slate-900 tabular-nums">{fmt(cat.amount)}</p>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-500">{cat.count} entries</span>
-                  <span className="text-xs text-slate-500">{cat.percentage}%</span>
+                  <span className="text-xs text-slate-500 tabular-nums">{cat.count} entries</span>
+                  <span className="text-xs text-slate-500 tabular-nums">{cat.percentage}%</span>
                 </div>
                 <div className="w-full bg-slate-200 rounded-full h-1.5 mt-1.5">
                   <div className="bg-slate-500 h-1.5 rounded-full" style={{ width: `${cat.percentage}%` }} />

@@ -5,8 +5,8 @@ import Link from "next/link";
 import { ArrowLeft, CreditCard, Phone, MessageSquare } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface InvoiceDetail {
   id: string;
@@ -113,11 +113,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   }
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
+    return <SkeletonList count={5} type="card" />;
   }
 
   if (!invoice) return (
@@ -143,12 +139,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     <div>
       {/* Header */}
       <div className="flex items-center gap-3 mb-4">
-        <Link href="/receivables" className="p-1">
+        <Link href="/receivables" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
-        <div className="flex-1">
-          <h1 className="text-lg font-bold text-slate-900">{invoice.invoiceNo}</h1>
-          <p className="text-xs text-slate-500">{invoice.customer.name}</p>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-lg font-bold text-slate-900 tabular-nums truncate">{invoice.invoiceNo}</h1>
+          <p className="text-xs text-slate-500 truncate">{invoice.customer.name}</p>
         </div>
         <Badge variant={invoice.status === "PAID" ? "success" : isOverdue ? "danger" : "warning"}>
           {isOverdue ? "OVERDUE" : invoice.status.replace(/_/g, " ")}
@@ -160,12 +156,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         <CardContent className="p-4">
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm text-slate-500">Total Amount</span>
-            <span className="text-lg font-bold text-slate-900">{formatCurrency(invoice.amount)}</span>
+            <span className="text-lg font-bold text-slate-900 tabular-nums">{formatCurrency(invoice.amount)}</span>
           </div>
           <div className="w-full bg-slate-200 rounded-full h-2 mb-2">
             <div className="bg-green-500 h-2 rounded-full transition-all" style={{ width: `${paidPercent}%` }} />
           </div>
-          <div className="flex justify-between text-xs">
+          <div className="flex justify-between text-xs tabular-nums">
             <span className="text-green-600">Paid: {formatCurrency(invoice.paidAmount)}</span>
             <span className={remaining > 0 ? "text-red-600 font-medium" : "text-green-600"}>
               {remaining > 0 ? `Due: ${formatCurrency(remaining)}` : "Fully Paid"}
@@ -177,25 +173,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       {/* Actions */}
       {remaining > 0 && (
         <div className="flex gap-2 mb-4">
-          <Button
-            size="sm"
-            className="flex-1 bg-blue-600 hover:bg-blue-700"
+          <button
             onClick={() => setShowPaymentForm(!showPaymentForm)}
+            className="flex-1 flex items-center justify-center gap-2 min-h-[48px] rounded-lg font-medium bg-green-600 hover:bg-green-700 text-white focus-ring"
           >
-            <CreditCard className="h-4 w-4 mr-1" /> Record Payment
-          </Button>
+            <CreditCard className="h-4 w-4" /> Record Payment
+          </button>
           {whatsappLink && (
-            <a href={whatsappLink} target="_blank" rel="noopener noreferrer">
-              <Button variant="outline" size="sm" className="text-green-600 border-green-300">
-                <MessageSquare className="h-4 w-4" />
-              </Button>
+            <a href={whatsappLink} target="_blank" rel="noopener noreferrer" aria-label="Send WhatsApp reminder"
+              className="flex items-center justify-center min-h-[48px] w-12 rounded-lg border border-green-300 text-green-600 hover:bg-green-50 focus-ring">
+              <MessageSquare className="h-4 w-4" />
             </a>
           )}
           {invoice.customer.phone && (
-            <a href={`tel:${invoice.customer.phone}`}>
-              <Button variant="outline" size="sm">
-                <Phone className="h-4 w-4" />
-              </Button>
+            <a href={`tel:${invoice.customer.phone}`} aria-label="Call customer"
+              className="flex items-center justify-center min-h-[48px] w-12 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 focus-ring">
+              <Phone className="h-4 w-4" />
             </a>
           )}
         </div>
@@ -206,11 +199,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         <CardContent className="p-3 grid grid-cols-2 gap-2 text-sm">
           <div>
             <span className="text-slate-500">Invoice Date</span>
-            <p className="font-medium">{new Date(invoice.invoiceDate).toLocaleDateString("en-IN")}</p>
+            <p className="font-semibold tabular-nums">{new Date(invoice.invoiceDate).toLocaleDateString("en-IN")}</p>
           </div>
           <div>
             <span className="text-slate-500">Due Date</span>
-            <p className={`font-medium ${isOverdue ? "text-red-600" : ""}`}>{new Date(invoice.dueDate).toLocaleDateString("en-IN")}</p>
+            <p className={`font-semibold tabular-nums ${isOverdue ? "text-red-600" : ""}`}>{new Date(invoice.dueDate).toLocaleDateString("en-IN")}</p>
           </div>
         </CardContent>
       </Card>
@@ -226,14 +219,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 <label className="block text-xs font-medium text-slate-700 mb-1">Amount *</label>
                 <Input
                   type="number"
+                  inputMode="decimal"
                   placeholder="0.00"
                   value={payAmount}
                   onChange={(e) => setPayAmount(e.target.value)}
                   min="0.01"
                   step="0.01"
-                  className="text-lg"
+                  className="text-lg tabular-nums"
                 />
-                <p className="text-xs text-slate-500 mt-1">Remaining: {formatCurrency(remaining)}</p>
+                <p className="text-xs text-slate-500 mt-1 tabular-nums">Remaining: {formatCurrency(remaining)}</p>
               </div>
 
               <div>
@@ -276,22 +270,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               </div>
 
               <div className="flex gap-2">
-                <Button
+                <button
                   type="submit"
-                  size="sm"
                   disabled={!payAmount || !payDate || paySubmitting}
-                  className="flex-1 bg-blue-600 hover:bg-blue-700"
+                  className="flex-1 flex items-center justify-center min-h-[48px] rounded-lg font-medium bg-green-600 hover:bg-green-700 text-white disabled:opacity-50 focus-ring"
                 >
                   {paySubmitting ? "Recording..." : "Submit Payment"}
-                </Button>
-                <Button
+                </button>
+                <button
                   type="button"
-                  variant="outline"
-                  size="sm"
                   onClick={() => { setShowPaymentForm(false); setPayError(""); }}
+                  className="flex items-center justify-center min-h-[48px] px-4 rounded-lg font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 focus-ring"
                 >
                   Cancel
-                </Button>
+                </button>
               </div>
             </form>
           </CardContent>
@@ -305,14 +297,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           <Card key={p.id} className="mb-2">
             <CardContent className="p-3 flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-green-700">{formatCurrency(p.amount)}</p>
-                <p className="text-xs text-slate-500">
+                <p className="text-sm font-semibold text-green-700 tabular-nums">{formatCurrency(p.amount)}</p>
+                <p className="text-xs text-slate-500 tabular-nums">
                   {p.paymentMode} | {new Date(p.paymentDate).toLocaleDateString("en-IN")}
                   {p.referenceNo ? ` | Ref: ${p.referenceNo}` : ""}
                 </p>
                 {p.notes && <p className="text-xs text-slate-400 mt-0.5">{p.notes}</p>}
               </div>
-              <span className="text-[10px] text-slate-400">{p.recordedBy.name}</span>
+              <span className="text-[11px] text-slate-400 shrink-0 ml-2">{p.recordedBy.name}</span>
             </CardContent>
           </Card>
         ))}

@@ -7,6 +7,7 @@ import Link from "next/link";
 import { ArrowLeft, QrCode, MapPin, Tag, Package, IndianRupee, Pencil, Save, X, Power } from "lucide-react";
 import { LabelPrintButton } from "@/components/label-print";
 import { Badge } from "@/components/ui/badge";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -115,8 +116,8 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+      <div className="space-y-3">
+        <SkeletonList count={5} type="card" />
       </div>
     );
   }
@@ -194,9 +195,12 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
         </div>
       )}
 
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/stock" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
-        <h1 className="text-lg font-bold text-slate-900 truncate flex-1">{product.name}</h1>
+      <div className="flex items-center gap-2 mb-4">
+        <Link href="/stock" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-lg font-bold text-slate-900 truncate">{product.name}</h1>
+          <p className="text-xs text-slate-500 tabular-nums truncate">{product.sku}</p>
+        </div>
         {canEdit && (
           <button
             onClick={async () => {
@@ -240,7 +244,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
 
             {/* Type selector — visible to ALL users */}
             <div>
-              <label className="text-[10px] text-slate-500 uppercase tracking-wide font-medium">Item Type</label>
+              <label className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">Item Type</label>
               <div className="grid grid-cols-3 gap-1.5 mt-1">
                 {([
                   { key: "BICYCLE", label: "Cycle" },
@@ -267,11 +271,11 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
             {canEdit && (
               <>
                 <div>
-                  <label className="text-[10px] text-slate-500">Name</label>
+                  <label className="text-[11px] text-slate-500">Name</label>
                   <Input value={editData.name as string} onChange={(e) => setEditData({ ...editData, name: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-[10px] text-slate-500">Brand</label>
+                  <label className="text-[11px] text-slate-500">Brand</label>
                   <select value={editData.brandId as string} onChange={(e) => setEditData({ ...editData, brandId: e.target.value })}
                     className="w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                     <option value="">No brand</option>
@@ -280,7 +284,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
                 </div>
                 {BIN_TRACKING_ENABLED && (
                   <div>
-                    <label className="text-[10px] text-slate-500">Bin / Location</label>
+                    <label className="text-[11px] text-slate-500">Bin / Location</label>
                     <select value={editData.binId as string} onChange={(e) => setEditData({ ...editData, binId: e.target.value })}
                       className="w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                       <option value="">No bin</option>
@@ -290,25 +294,25 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
                 )}
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-[10px] text-slate-500">Size</label>
+                    <label className="text-[11px] text-slate-500">Size</label>
                     <Input value={editData.size as string} onChange={(e) => setEditData({ ...editData, size: e.target.value })} placeholder='e.g. 26"' />
                   </div>
                   <div>
-                    <label className="text-[10px] text-slate-500">Color</label>
+                    <label className="text-[11px] text-slate-500">Color</label>
                     <Input value={editData.color as string} onChange={(e) => setEditData({ ...editData, color: e.target.value })} placeholder="e.g. Red" />
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-2">
                   <div>
-                    <label className="text-[10px] text-slate-500">Selling Price</label>
+                    <label className="text-[11px] text-slate-500">Selling Price</label>
                     <Input type="number" value={editData.sellingPrice as number} onChange={(e) => setEditData({ ...editData, sellingPrice: Number(e.target.value) })} />
                   </div>
                   <div>
-                    <label className="text-[10px] text-slate-500">MRP</label>
+                    <label className="text-[11px] text-slate-500">MRP</label>
                     <Input type="number" value={editData.mrp as number} onChange={(e) => setEditData({ ...editData, mrp: Number(e.target.value) })} />
                   </div>
                   <div>
-                    <label className="text-[10px] text-slate-500">Reorder Level</label>
+                    <label className="text-[11px] text-slate-500">Reorder Level</label>
                     <Input type="number" value={editData.reorderLevel as number} onChange={(e) => setEditData({ ...editData, reorderLevel: Number(e.target.value) })} />
                   </div>
                 </div>
@@ -328,33 +332,34 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
       )}
 
       {/* Identity badges */}
-      <div className="flex flex-wrap gap-2 mb-3">
-        <Badge variant="info">{product.sku}</Badge>
-        {product.brand && <Badge variant="default" className="font-semibold">{product.brand.name}</Badge>}
-        {product.type === "BICYCLE" && product.size && <Badge variant="default">{product.size}</Badge>}
-        {product.condition !== "NEW" && <Badge variant="warning">{product.condition.replace("_", " ")}</Badge>}
-      </div>
+      {(product.brand || (product.type === "BICYCLE" && product.size) || product.condition !== "NEW") && (
+        <div className="flex flex-wrap gap-2 mb-3">
+          {product.brand && <Badge variant="default" className="font-semibold">{product.brand.name}</Badge>}
+          {product.type === "BICYCLE" && product.size && <Badge variant="default">{product.size}</Badge>}
+          {product.condition !== "NEW" && <Badge variant="warning">{product.condition.replace("_", " ")}</Badge>}
+        </div>
+      )}
 
       {/* Stock + Location combined card (most important info first) */}
       <Card className="mb-3">
         <CardContent className="p-4">
           <div className="grid grid-cols-3 gap-4 text-center mb-3">
             <div>
-              <p className={`text-2xl font-bold ${
+              <p className={`text-2xl font-bold tabular-nums ${
                 product.currentStock <= 0 ? "text-red-600" :
                 product.reorderLevel > 0 && product.currentStock <= product.reorderLevel ? "text-yellow-600" : "text-green-600"
               }`}>{product.currentStock}</p>
               <p className="text-xs text-slate-500">In Stock</p>
               {product.reservedStock > 0 && (
-                <p className="text-[10px] text-orange-600 mt-0.5">{product.currentStock - product.reservedStock} avail · {product.reservedStock} reserved</p>
+                <p className="text-[11px] text-orange-600 mt-0.5 tabular-nums">{product.currentStock - product.reservedStock} avail · {product.reservedStock} reserved</p>
               )}
             </div>
             <div>
-              <p className="text-2xl font-bold text-yellow-600">{product.reorderLevel}</p>
+              <p className="text-2xl font-bold text-yellow-600 tabular-nums">{product.reorderLevel}</p>
               <p className="text-xs text-slate-500">Reorder Level</p>
             </div>
             <div>
-              <p className="text-2xl font-bold text-slate-400">{product.maxStock}</p>
+              <p className="text-2xl font-bold text-slate-400 tabular-nums">{product.maxStock}</p>
               <p className="text-xs text-slate-500">Max Stock</p>
             </div>
           </div>
@@ -382,11 +387,11 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
           <CardHeader><CardTitle className="flex items-center gap-1.5"><IndianRupee className="h-3.5 w-3.5" /> Pricing</CardTitle></CardHeader>
           <CardContent>
             <div className="grid grid-cols-3 gap-3 text-sm">
-              <div><p className="text-slate-500">Cost</p><p className={`font-medium ${product.costPrice === 0 ? "text-amber-600" : ""}`}>{fmt(product.costPrice)}</p>{product.costPrice === 0 && <p className="text-[10px] text-amber-600 mt-0.5">COGS will be inaccurate</p>}</div>
-              <div><p className="text-slate-500">Selling</p><p className="font-medium">{fmt(product.sellingPrice)}</p></div>
-              <div><p className="text-slate-500">MRP</p><p className="font-medium">{fmt(product.mrp)}</p></div>
+              <div><p className="text-slate-500">Cost</p><p className={`font-semibold tabular-nums ${product.costPrice === 0 ? "text-amber-600" : "text-slate-900"}`}>{fmt(product.costPrice)}</p>{product.costPrice === 0 && <p className="text-[11px] text-amber-600 mt-0.5">COGS will be inaccurate</p>}</div>
+              <div><p className="text-slate-500">Selling</p><p className="font-semibold tabular-nums text-slate-900">{fmt(product.sellingPrice)}</p></div>
+              <div><p className="text-slate-500">MRP</p><p className="font-semibold tabular-nums text-slate-900">{fmt(product.mrp)}</p></div>
             </div>
-            <div className="mt-2 text-xs text-slate-500">
+            <div className="mt-2 text-xs text-slate-500 tabular-nums">
               GST: {product.gstRate}% {product.hsnCode && `| HSN: ${product.hsnCode}`}
             </div>
           </CardContent>
@@ -405,8 +410,8 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
             {product.serialItems.slice(0, 5).map((s) => (
               <div key={s.id} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
                 <div>
-                  <p className="text-sm font-mono font-medium">{s.serialCode}</p>
-                  <p className="text-xs text-slate-500">{s.bin?.code || "No bin"} | {s.condition}</p>
+                  <p className="text-sm font-mono font-medium tabular-nums">{s.serialCode}</p>
+                  <p className="text-xs text-slate-500 tabular-nums">{s.bin?.code || "No bin"} | {s.condition}</p>
                 </div>
                 <Badge variant={s.status === "IN_STOCK" ? "success" : s.status === "SOLD" ? "info" : "warning"}>
                   {s.status.replace("_", " ")}

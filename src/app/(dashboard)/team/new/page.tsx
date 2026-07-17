@@ -102,7 +102,9 @@ export default function NewTeamMemberPage() {
   return (
     <div>
       <div className="flex items-center gap-3 mb-4">
-        <Link href="/team" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+        <Link href="/team" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring">
+          <ArrowLeft className="h-5 w-5 text-slate-600" />
+        </Link>
         <h1 className="text-lg font-bold text-slate-900">Add Team Member</h1>
       </div>
 
@@ -115,18 +117,18 @@ export default function NewTeamMemberPage() {
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Name *</label>
-          <Input placeholder="Full name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+          <Input placeholder="Full name" value={name} onChange={(e) => setName(e.target.value)} autoFocus className="min-h-[44px]" />
         </div>
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Email *</label>
-          <Input type="email" placeholder="name@bikeinventory.local" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <Input type="email" placeholder="name@bikeinventory.local" value={email} onChange={(e) => setEmail(e.target.value)} className="min-h-[44px]" />
         </div>
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Role *</label>
           <select value={role} onChange={(e) => setRole(e.target.value)}
-            className="flex h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900">
+            className="flex min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus-ring">
             {ROLES.map((r) => (<option key={r.value} value={r.value}>{r.label}</option>))}
           </select>
         </div>
@@ -134,8 +136,8 @@ export default function NewTeamMemberPage() {
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Access Code *</label>
           <Input placeholder="e.g. JOHN123" value={accessCode} onChange={(e) => setAccessCode(e.target.value.toUpperCase())}
-            className="font-mono uppercase" />
-          <p className="text-xs text-slate-400 mt-1">Used to log in. Must be unique.</p>
+            className="font-mono uppercase tabular-nums min-h-[44px]" />
+          <p className="text-xs text-slate-500 mt-1">Used to log in. Must be unique.</p>
         </div>
 
         {/* Custom role config */}
@@ -144,18 +146,18 @@ export default function NewTeamMemberPage() {
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Role Name *</label>
               <Input placeholder="e.g. Store Helper, Mechanic" value={customRoleName}
-                onChange={(e) => setCustomRoleName(e.target.value)} />
+                onChange={(e) => setCustomRoleName(e.target.value)} className="min-h-[44px]" />
             </div>
 
             <div>
               <p className="text-sm font-medium text-slate-700 mb-2">Permissions</p>
               <div className="flex items-center gap-3 mb-2 px-1 overflow-x-auto">
-                <span className="flex items-center gap-1 text-[10px] text-slate-500 shrink-0"><Eye className="h-3 w-3" /> View</span>
-                <span className="flex items-center gap-1 text-[10px] text-slate-500 shrink-0"><Plus className="h-3 w-3" /> Add</span>
-                <span className="flex items-center gap-1 text-[10px] text-slate-500 shrink-0"><Pencil className="h-3 w-3" /> Edit</span>
-                <span className="flex items-center gap-1 text-[10px] text-slate-500 shrink-0"><Trash2 className="h-3 w-3" /> Del</span>
-                <span className="flex items-center gap-1 text-[10px] text-slate-500 shrink-0"><ShieldCheck className="h-3 w-3" /> Appr</span>
-                <span className="flex items-center gap-1 text-[10px] text-slate-500 shrink-0"><CloudDownload className="h-3 w-3" /> Fetch</span>
+                <span className="flex items-center gap-1 text-[11px] text-slate-500 shrink-0"><Eye className="h-3 w-3" /> View</span>
+                <span className="flex items-center gap-1 text-[11px] text-slate-500 shrink-0"><Plus className="h-3 w-3" /> Add</span>
+                <span className="flex items-center gap-1 text-[11px] text-slate-500 shrink-0"><Pencil className="h-3 w-3" /> Edit</span>
+                <span className="flex items-center gap-1 text-[11px] text-slate-500 shrink-0"><Trash2 className="h-3 w-3" /> Del</span>
+                <span className="flex items-center gap-1 text-[11px] text-slate-500 shrink-0"><ShieldCheck className="h-3 w-3" /> Appr</span>
+                <span className="flex items-center gap-1 text-[11px] text-slate-500 shrink-0"><CloudDownload className="h-3 w-3" /> Fetch</span>
               </div>
               <div className="space-y-1">
                 {APP_FEATURES.map((f) => {
@@ -205,7 +207,7 @@ export default function NewTeamMemberPage() {
 
         <Button type="submit" size="lg"
           disabled={!name || !email || !accessCode || (role === "CUSTOM" && !customRoleName.trim()) || submitting}
-          className="w-full bg-blue-600 hover:bg-blue-700">
+          className="w-full min-h-[48px] bg-emerald-600 hover:bg-emerald-700 focus-ring">
           {submitting ? "Creating..." : "Add Member"}
         </Button>
       </form>

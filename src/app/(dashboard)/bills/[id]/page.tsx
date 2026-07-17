@@ -6,6 +6,7 @@ import { ArrowLeft, CreditCard, Phone, MessageSquare } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface BillDetail {
   id: string;
@@ -72,8 +73,8 @@ export default function BillDetailPage({ params }: { params: Promise<{ id: strin
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+      <div className="pt-2">
+        <SkeletonList count={5} type="card" />
       </div>
     );
   }
@@ -102,15 +103,15 @@ export default function BillDetailPage({ params }: { params: Promise<{ id: strin
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/bills" className="p-1">
+      <div className="flex items-center gap-2 mb-4">
+        <Link href="/bills" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
-        <div className="flex-1">
-          <h1 className="text-lg font-bold text-slate-900">{bill.billNo}</h1>
-          <p className="text-xs text-slate-500">{bill.vendor.name}</p>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-lg font-bold text-slate-900 tabular-nums truncate">{bill.billNo}</h1>
+          <p className="text-xs text-slate-500 truncate">{bill.vendor.name}</p>
           {bill.vendorBalance !== undefined && (
-            <p className={`text-xs font-medium ${bill.vendorBalance > 0 ? "text-red-600" : "text-green-600"}`}>
+            <p className={`text-xs font-medium tabular-nums ${bill.vendorBalance > 0 ? "text-red-600" : "text-green-600"}`}>
               Balance: {formatCurrency(bill.vendorBalance)}
             </p>
           )}
@@ -123,10 +124,10 @@ export default function BillDetailPage({ params }: { params: Promise<{ id: strin
       {/* CD Status */}
       {cdInfo && cdInfo.eligible && (
         <div className="mb-3 rounded-lg border border-green-200 bg-green-50 px-3 py-2 flex items-center justify-between">
-          <span className="text-xs font-medium text-green-800">
+          <span className="text-xs font-medium text-green-800 tabular-nums">
             CD: {cdInfo.cdPercentage}% ({cdInfo.daysRemaining}d left)
           </span>
-          <span className="text-xs text-green-600">
+          <span className="text-xs text-green-600 tabular-nums">
             Save {formatCurrency(cdInfo.discountAmount || 0)}
           </span>
         </div>
@@ -142,14 +143,14 @@ export default function BillDetailPage({ params }: { params: Promise<{ id: strin
         <CardContent className="p-4">
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm text-slate-500">Total Amount</span>
-            <span className="text-lg font-bold text-slate-900">{formatCurrency(bill.amount)}</span>
+            <span className="text-lg font-bold text-slate-900 tabular-nums">{formatCurrency(bill.amount)}</span>
           </div>
           <div className="w-full bg-slate-200 rounded-full h-2 mb-2">
             <div className="bg-green-500 h-2 rounded-full transition-all" style={{ width: `${paidPercent}%` }} />
           </div>
           <div className="flex justify-between text-xs">
-            <span className="text-green-600">Paid: {formatCurrency(bill.paidAmount)}</span>
-            <span className={remaining > 0 ? "text-red-600 font-medium" : "text-green-600"}>
+            <span className="text-green-600 tabular-nums">Paid: {formatCurrency(bill.paidAmount)}</span>
+            <span className={`tabular-nums ${remaining > 0 ? "text-red-600 font-medium" : "text-green-600"}`}>
               {remaining > 0 ? `Due: ${formatCurrency(remaining)}` : "Fully Paid"}
             </span>
           </div>
@@ -160,20 +161,20 @@ export default function BillDetailPage({ params }: { params: Promise<{ id: strin
       {remaining > 0 && (
         <div className="flex gap-2 mb-4">
           <Link href={`/payments/new?vendorId=${bill.vendorId}&billId=${bill.id}`} className="flex-1">
-            <Button size="sm" className="w-full bg-blue-600 hover:bg-blue-700">
-              <CreditCard className="h-4 w-4 mr-1" /> Record Payment
+            <Button className="w-full min-h-[48px] rounded-lg font-medium bg-green-600 hover:bg-green-700 text-white">
+              <CreditCard className="h-4 w-4 mr-1.5" /> Record Payment
             </Button>
           </Link>
           {whatsappLink && (
-            <a href={whatsappLink} target="_blank" rel="noopener noreferrer">
-              <Button variant="outline" size="sm" className="text-green-600 border-green-300">
+            <a href={whatsappLink} target="_blank" rel="noopener noreferrer" aria-label="Send WhatsApp reminder">
+              <Button variant="outline" className="min-h-[48px] min-w-[48px] rounded-lg text-green-600 border-green-300">
                 <MessageSquare className="h-4 w-4" />
               </Button>
             </a>
           )}
           {bill.vendor.phone && (
-            <a href={`tel:${bill.vendor.phone}`}>
-              <Button variant="outline" size="sm">
+            <a href={`tel:${bill.vendor.phone}`} aria-label="Call vendor">
+              <Button variant="outline" className="min-h-[48px] min-w-[48px] rounded-lg">
                 <Phone className="h-4 w-4" />
               </Button>
             </a>
@@ -186,12 +187,12 @@ export default function BillDetailPage({ params }: { params: Promise<{ id: strin
         <CardContent className="p-3 grid grid-cols-2 gap-2 text-sm">
           <div>
             <span className="text-slate-500">Bill Date</span>
-            <p className="font-medium">{new Date(bill.billDate).toLocaleDateString("en-IN")}</p>
+            <p className="font-semibold tabular-nums">{new Date(bill.billDate).toLocaleDateString("en-IN")}</p>
           </div>
           <div>
             <span className="text-slate-500">Due Date</span>
-            <p className={`font-medium ${isOverdue ? "text-red-600" : ""}`}>{appDueDate.toLocaleDateString("en-IN")}</p>
-            <p className="text-[10px] text-slate-400">{bill.vendor.paymentTermDays || 30} day terms</p>
+            <p className={`font-semibold tabular-nums ${isOverdue ? "text-red-600" : ""}`}>{appDueDate.toLocaleDateString("en-IN")}</p>
+            <p className="text-[11px] text-slate-400 tabular-nums">{bill.vendor.paymentTermDays || 30} day terms</p>
           </div>
         </CardContent>
       </Card>
@@ -203,15 +204,15 @@ export default function BillDetailPage({ params }: { params: Promise<{ id: strin
           <Card key={p.id} className="mb-2">
             <CardContent className="p-3 flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-green-700">
+                <p className="text-sm font-semibold text-green-700 tabular-nums">
                   {formatCurrency(p.amount)}
                   {p.cdDiscountAmount && p.cdDiscountAmount > 0 && (
-                    <span className="text-xs text-green-500 ml-1">
+                    <span className="text-xs text-green-500 ml-1 tabular-nums">
                       + {formatCurrency(p.cdDiscountAmount)} CD
                     </span>
                   )}
                 </p>
-                <p className="text-xs text-slate-500">
+                <p className="text-xs text-slate-500 tabular-nums">
                   {p.paymentMode} | {new Date(p.paymentDate).toLocaleDateString("en-IN")}
                   {p.referenceNo ? ` | Ref: ${p.referenceNo}` : ""}
                 </p>

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { FilterSheet } from "@/components/filter-sheet";
 import { DesktopTable } from "@/components/desktop-table";
 import { usePermissions } from "@/lib/use-permissions";
@@ -351,9 +352,7 @@ export default function PreBookingsPage() {
 
       {/* List */}
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : preBookings.length === 0 ? (
         <div className="text-center py-12">
           <UserCheck className="h-10 w-10 text-slate-300 mx-auto mb-3" />
@@ -411,18 +410,29 @@ export default function PreBookingsPage() {
         <div className="space-y-2 lg:hidden">
           {preBookings.map((pb) => {
             const badge = STATUS_BADGE[pb.status] || { variant: "default" as const, label: pb.status };
+            const active = pb.status !== "FULFILLED" && pb.status !== "CANCELLED";
+            const ageDays = Math.floor((Date.now() - new Date(pb.createdAt).getTime()) / 86400000);
+            const accent = pb.status === "WAITING" && ageDays >= 15
+              ? "border-l-red-500"
+              : pb.status === "WAITING"
+              ? "border-l-amber-400"
+              : pb.status === "MATCHED"
+              ? "border-l-blue-400"
+              : pb.status === "FULFILLED"
+              ? "border-l-green-500"
+              : "border-l-slate-200";
             return (
-              <Card key={pb.id} className="hover:border-slate-300 transition-colors">
-                <CardContent className="p-3">
+              <div key={pb.id} className={`rounded-xl border border-slate-200 border-l-4 ${accent} bg-white shadow-sm`}>
+                <div className="p-3">
                   <div className="flex items-start justify-between mb-1">
                     <div className="flex-1 min-w-0 mr-2">
-                      <p className="text-sm font-medium text-slate-900">{pb.customerName}</p>
+                      <p className="text-sm font-semibold text-slate-900 truncate">{pb.customerName}</p>
                       <p className="text-xs text-slate-500">{pb.productName}</p>
                     </div>
                     <div className="flex flex-col items-end gap-1">
                       <Badge variant={badge.variant}>{badge.label}</Badge>
-                      {pb.status !== "FULFILLED" && pb.status !== "CANCELLED" && (
-                        <span className={`inline-flex items-center gap-0.5 text-[9px] font-medium px-1.5 py-0.5 rounded-full ${agingColor(pb.createdAt)}`}>
+                      {active && (
+                        <span className={`inline-flex items-center gap-0.5 text-[11px] font-medium px-1.5 py-0.5 rounded-full tabular-nums ${agingColor(pb.createdAt)}`}>
                           <Clock className="h-2.5 w-2.5" /> {daysAgo(pb.createdAt)}
                         </span>
                       )}
@@ -430,16 +440,16 @@ export default function PreBookingsPage() {
                   </div>
 
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    <span className="text-[10px] text-slate-400">Invoice: {pb.zohoInvoiceNo}</span>
-                    {pb.brand && <span className="text-[10px] text-slate-400">| {pb.brand.name}</span>}
-                    {pb.salesPerson && <span className="text-[10px] text-slate-400">| Sales: {pb.salesPerson}</span>}
+                    <span className="text-[11px] text-slate-400 tabular-nums">Invoice: {pb.zohoInvoiceNo}</span>
+                    {pb.brand && <span className="text-[11px] text-slate-400">| {pb.brand.name}</span>}
+                    {pb.salesPerson && <span className="text-[11px] text-slate-400">| Sales: {pb.salesPerson}</span>}
                   </div>
 
                   {/* Matched — show shipment tracking */}
                   {pb.matchedShipment && (
                     <Link href={`/inbound/${pb.matchedShipment.id}`}
                       className="mt-2 bg-blue-50 rounded-lg p-2 flex items-center justify-between">
-                      <p className="text-xs text-blue-700">
+                      <p className="text-xs text-blue-700 tabular-nums">
                         Matched: {pb.matchedShipment.shipmentNo} |{" "}
                         ETA: {new Date(pb.matchedShipment.expectedDeliveryDate).toLocaleDateString("en-IN")}
                       </p>
@@ -456,7 +466,7 @@ export default function PreBookingsPage() {
                   )}
 
                   <div className="flex items-center justify-between mt-2">
-                    <span className="text-[10px] text-slate-400">
+                    <span className="text-[11px] text-slate-400 tabular-nums">
                       {new Date(pb.createdAt).toLocaleDateString("en-IN")} by {pb.createdBy.name}
                     </span>
                     {pb.customerPhone && (
@@ -467,8 +477,8 @@ export default function PreBookingsPage() {
                       </a>
                     )}
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </div>
             );
           })}
         </div>

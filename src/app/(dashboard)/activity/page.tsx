@@ -3,12 +3,13 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import {
-  Loader2, Package, Truck, ArrowDownCircle, ArrowRightLeft,
+  Package, Truck, ArrowDownCircle, ArrowRightLeft,
   Receipt, IndianRupee, FileText, AlertTriangle, Share2,
   ChevronLeft, ChevronRight, User,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface Activity {
   id: string;
@@ -206,17 +207,17 @@ export default function ActivityPage() {
       {/* Stats */}
       <div className="grid grid-cols-3 gap-2 mb-3">
         <Card><CardContent className="p-2.5 text-center">
-          <p className="text-lg font-bold text-slate-900">{totalActions}</p>
-          <p className="text-[9px] text-slate-500">Actions</p>
+          <p className="text-lg font-bold text-slate-900 tabular-nums">{totalActions}</p>
+          <p className="text-[11px] text-slate-500">Actions</p>
         </CardContent></Card>
         <Card><CardContent className="p-2.5 text-center">
-          <p className="text-lg font-bold text-slate-900">{userSummary.length}</p>
-          <p className="text-[9px] text-slate-500">People</p>
+          <p className="text-lg font-bold text-slate-900 tabular-nums">{userSummary.length}</p>
+          <p className="text-[11px] text-slate-500">People</p>
         </CardContent></Card>
         <Card className={errorCount > 0 ? "bg-red-50 border-red-200" : ""}>
           <CardContent className="p-2.5 text-center">
-            <p className={`text-lg font-bold ${errorCount > 0 ? "text-red-600" : "text-slate-900"}`}>{errorCount}</p>
-            <p className="text-[9px] text-slate-500">Errors</p>
+            <p className={`text-lg font-bold tabular-nums ${errorCount > 0 ? "text-red-600" : "text-slate-900"}`}>{errorCount}</p>
+            <p className="text-[11px] text-slate-500">Errors</p>
           </CardContent>
         </Card>
       </div>
@@ -232,9 +233,9 @@ export default function ActivityPage() {
                 <span className="text-sm font-medium text-slate-800">{u.name}</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500">{u.actions} actions</span>
+                <span className="text-xs text-slate-500 tabular-nums">{u.actions} actions</span>
                 {u.errors > 0 && (
-                  <Badge variant="danger" className="text-[9px]">{u.errors} errors</Badge>
+                  <Badge variant="danger" className="text-[11px] tabular-nums">{u.errors} errors</Badge>
                 )}
               </div>
             </button>
@@ -244,9 +245,7 @@ export default function ActivityPage() {
 
       {/* Activity Feed */}
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
-        </div>
+        <SkeletonList count={6} type="transaction" />
       ) : activities.length === 0 ? (
         <div className="text-center py-12">
           <Package className="h-8 w-8 text-slate-300 mx-auto mb-2" />
@@ -258,20 +257,24 @@ export default function ActivityPage() {
             const cfg = CATEGORY_CONFIG[a.category] || CATEGORY_CONFIG.STOCK;
             const Icon = cfg.icon;
             return (
-              <div key={a.id} className={`flex gap-3 p-3 rounded-lg border ${a.isError ? "bg-red-50 border-red-200" : "bg-white border-slate-200"}`}>
+              <div key={a.id} className={`flex gap-3 p-3 rounded-xl border ${a.isError ? "bg-red-50 border-red-200" : "bg-white border-slate-200"}`}>
                 <div className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 ${cfg.color}`}>
                   {a.isError ? <AlertTriangle className="h-4 w-4 text-red-500" /> : <Icon className="h-4 w-4" />}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <p className="text-xs font-semibold text-slate-900">{a.action}</p>
-                    <span className="text-[10px] text-slate-400">{formatTime(a.timestamp)}</span>
+                    <span className="text-[11px] text-slate-400 tabular-nums shrink-0">{formatTime(a.timestamp)}</span>
                   </div>
                   <p className="text-[11px] text-slate-600 truncate">{a.detail}</p>
-                  {a.amount && <p className="text-[10px] text-slate-500 font-medium">{formatINR(a.amount)}</p>}
-                  {a.isError && <p className="text-[10px] text-red-600 mt-0.5">⚠ {a.errorDetail}</p>}
+                  {a.amount && <p className="text-[11px] text-slate-500 font-medium tabular-nums">{formatINR(a.amount)}</p>}
+                  {a.isError && (
+                    <p className="flex items-center gap-1 text-[11px] text-red-600 mt-0.5">
+                      <AlertTriangle className="h-3 w-3 shrink-0" /> {a.errorDetail}
+                    </p>
+                  )}
                   {isAdmin && !selectedUser && (
-                    <p className="text-[10px] text-purple-500">{a.userName}</p>
+                    <p className="text-[11px] text-purple-500">{a.userName}</p>
                   )}
                 </div>
               </div>

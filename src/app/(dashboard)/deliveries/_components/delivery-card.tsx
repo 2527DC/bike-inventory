@@ -3,9 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2, Trash2, Package, AlertTriangle } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { getAging, AGING_COLORS, AGING_BADGE } from "@/lib/utils";
+import { getAging, AGING_BADGE } from "@/lib/utils";
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
 
 interface DeliveryItem {
@@ -59,16 +58,26 @@ export function DeliveryCard({
   const items = d.lineItems || [];
   const isPending = ["PENDING", "VERIFIED", "SCHEDULED"].includes(d.status);
   const aging = isPending ? getAging(d.invoiceDate) : null;
+  const accent =
+    (aging && (aging.level === "critical" || aging.level === "danger")) || d.status === "FLAGGED"
+      ? "border-l-red-500"
+      : d.status === "PENDING"
+      ? "border-l-amber-400"
+      : d.status === "VERIFIED" || d.status === "SCHEDULED" || d.status === "OUT_FOR_DELIVERY"
+      ? "border-l-blue-400"
+      : d.status === "DELIVERED" || d.status === "WALK_OUT"
+      ? "border-l-green-500"
+      : "border-l-slate-200";
 
   return (
-    <Card
-      className={`${aging ? AGING_COLORS[aging.level] : ""} cursor-pointer`}
+    <div
+      className={`block rounded-xl border border-slate-200 border-l-4 ${accent} bg-white shadow-sm transition-colors active:bg-slate-50 focus-ring cursor-pointer`}
       onClick={() => router.push(`/deliveries/${d.id}`)}
     >
-      <CardContent className="p-3.5">
+      <div className="p-3.5">
         <div className="flex items-start justify-between mb-1.5">
           <div className="flex-1 min-w-0 mr-2">
-            <p className="text-base font-semibold text-slate-900">{d.invoiceNo}</p>
+            <p className="text-base font-semibold text-slate-900 tabular-nums">{d.invoiceNo}</p>
             <p className="text-sm font-medium text-slate-600">{d.customerName}</p>
             {items.length > 0 && (
               <p className="text-xs text-slate-700 font-medium mt-0.5">
@@ -84,7 +93,7 @@ export function DeliveryCard({
             {d.salesPerson && (
               <p className="text-xs text-purple-600">Sales: {d.salesPerson}</p>
             )}
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-slate-400 tabular-nums">
               {formatINR(d.invoiceAmount)} |{" "}
               {new Date(d.invoiceDate).toLocaleDateString("en-IN")}
             </p>
@@ -115,7 +124,7 @@ export function DeliveryCard({
 
         {/* Scheduled date (read-only) */}
         {d.scheduledDate && (
-          <p className="text-xs text-blue-600 mb-1.5">
+          <p className="text-xs text-blue-600 mb-1.5 tabular-nums">
             Delivery: {new Date(d.scheduledDate).toLocaleDateString("en-IN")}
             {d.customerArea && ` | ${d.customerArea}`}
           </p>
@@ -188,8 +197,8 @@ export function DeliveryCard({
             </button>
           )}
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 

@@ -90,13 +90,19 @@ export default function NewInvoicePage() {
     }
   }
 
+  const disabled = !customerId || !invoiceNo || !invoiceDate || !dueDate || !amount || submitting;
+
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/receivables" className="p-1">
+      <div className="flex items-center gap-2 mb-4">
+        <Link
+          href="/receivables"
+          aria-label="Back"
+          className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"
+        >
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
-        <h1 className="text-lg font-bold text-slate-900">New Invoice</h1>
+        <h1 className="text-lg font-bold text-slate-900 truncate">New Invoice</h1>
       </div>
 
       {error && <div className="bg-red-50 text-red-700 text-sm p-3 rounded-lg mb-4">{error}</div>}
@@ -109,7 +115,7 @@ export default function NewInvoicePage() {
             <button
               type="button"
               onClick={() => setShowNewCustomer(!showNewCustomer)}
-              className="text-xs text-blue-600 font-medium flex items-center gap-1"
+              className="text-xs text-green-700 font-medium flex items-center gap-1 rounded-lg px-2 py-1 -mr-2 min-h-[44px] hover:bg-slate-100 focus-ring"
             >
               <Plus className="h-3 w-3" /> New Customer
             </button>
@@ -117,7 +123,7 @@ export default function NewInvoicePage() {
           <select
             value={customerId}
             onChange={(e) => setCustomerId(e.target.value)}
-            className="flex h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
+            className="flex min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent"
           >
             <option value="">Select customer...</option>
             {customers.map((c) => (
@@ -130,25 +136,35 @@ export default function NewInvoicePage() {
 
         {/* Inline New Customer Form */}
         {showNewCustomer && (
-          <div className="border border-blue-200 bg-blue-50/50 rounded-lg p-3 space-y-2">
-            <p className="text-xs font-medium text-blue-700">Quick Add Customer</p>
-            <Input
-              placeholder="Customer name *"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-            />
-            <Input
-              placeholder="Phone (optional)"
-              value={newPhone}
-              onChange={(e) => setNewPhone(e.target.value)}
-            />
+          <div className="border border-slate-200 bg-slate-50 rounded-xl p-3 space-y-2 shadow-sm">
+            <p className="text-xs font-medium text-slate-700">Quick Add Customer</p>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Customer Name *</label>
+              <Input
+                className="min-h-[44px]"
+                placeholder="Customer name"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Phone</label>
+              <Input
+                className="min-h-[44px] tabular-nums"
+                type="tel"
+                inputMode="tel"
+                placeholder="Phone (optional)"
+                value={newPhone}
+                onChange={(e) => setNewPhone(e.target.value)}
+              />
+            </div>
             <div className="flex gap-2">
               <Button
                 type="button"
                 size="sm"
                 onClick={handleCreateCustomer}
                 disabled={!newName.trim() || creatingCustomer}
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-green-600 hover:bg-green-700 text-white"
               >
                 {creatingCustomer ? "Creating..." : "Add"}
               </Button>
@@ -168,6 +184,7 @@ export default function NewInvoicePage() {
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Invoice No *</label>
           <Input
+            className="min-h-[44px] tabular-nums"
             placeholder="INV-001"
             value={invoiceNo}
             onChange={(e) => setInvoiceNo(e.target.value)}
@@ -177,13 +194,13 @@ export default function NewInvoicePage() {
         {/* Invoice Date */}
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Invoice Date *</label>
-          <Input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
+          <Input className="min-h-[44px]" type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
         </div>
 
         {/* Due Date */}
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Due Date *</label>
-          <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+          <Input className="min-h-[44px]" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
         </div>
 
         {/* Amount */}
@@ -191,12 +208,13 @@ export default function NewInvoicePage() {
           <label className="block text-sm font-medium text-slate-700 mb-1">Amount *</label>
           <Input
             type="number"
+            inputMode="decimal"
             placeholder="0.00"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
             min="0.01"
             step="0.01"
-            className="text-lg"
+            className="min-h-[44px] text-lg tabular-nums"
           />
         </div>
 
@@ -208,18 +226,23 @@ export default function NewInvoicePage() {
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             rows={2}
-            className="flex w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
+            className="flex min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent"
           />
         </div>
 
-        <Button
-          type="submit"
-          size="lg"
-          disabled={!customerId || !invoiceNo || !invoiceDate || !dueDate || !amount || submitting}
-          className="w-full bg-blue-600 hover:bg-blue-700"
-        >
-          {submitting ? "Creating..." : "Create Invoice"}
-        </Button>
+        <div className="space-y-1">
+          <Button
+            type="submit"
+            size="lg"
+            disabled={disabled}
+            className="w-full min-h-[48px] bg-green-600 hover:bg-green-700 text-white"
+          >
+            {submitting ? "Creating..." : "Create Invoice"}
+          </Button>
+          {!customerId || !invoiceNo || !invoiceDate || !dueDate || !amount ? (
+            <p className="text-xs text-slate-500 text-center">Customer, invoice no, dates and amount are required.</p>
+          ) : null}
+        </div>
       </form>
     </div>
   );

@@ -47,13 +47,19 @@ export default function NewVendorPage() {
     }
   }
 
+  const disabled = !form.name || !form.code || submitting;
+
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/vendors" className="p-1">
+      <div className="flex items-center gap-2 mb-4">
+        <Link
+          href="/vendors"
+          aria-label="Back"
+          className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"
+        >
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
-        <h1 className="text-lg font-bold text-slate-900">Add Vendor</h1>
+        <h1 className="text-lg font-bold text-slate-900 truncate">Add Vendor</h1>
       </div>
 
       {error && (
@@ -64,84 +70,89 @@ export default function NewVendorPage() {
         <div className="grid grid-cols-2 gap-3">
           <div className="col-span-2">
             <label className="block text-sm font-medium text-slate-700 mb-1">Vendor Name *</label>
-            <Input placeholder="Hero Cycles Ltd" value={form.name} onChange={(e) => update("name", e.target.value)} />
+            <Input className="min-h-[44px]" placeholder="Hero Cycles Ltd" value={form.name} onChange={(e) => update("name", e.target.value)} />
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Code *</label>
-            <Input placeholder="HERO" value={form.code} onChange={(e) => update("code", e.target.value.toUpperCase())} />
+            <Input className="min-h-[44px]" placeholder="HERO" value={form.code} onChange={(e) => update("code", e.target.value.toUpperCase())} />
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">GSTIN</label>
-            <Input placeholder="22AAAAA0000A1Z5" value={form.gstin} onChange={(e) => update("gstin", e.target.value.toUpperCase())} />
+            <Input className="min-h-[44px]" placeholder="22AAAAA0000A1Z5" value={form.gstin} onChange={(e) => update("gstin", e.target.value.toUpperCase())} />
           </div>
         </div>
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">PAN</label>
-          <Input placeholder="AAAAA0000A" value={form.pan} onChange={(e) => update("pan", e.target.value.toUpperCase())} />
+          <Input className="min-h-[44px]" placeholder="AAAAA0000A" value={form.pan} onChange={(e) => update("pan", e.target.value.toUpperCase())} />
         </div>
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Address</label>
-          <Input placeholder="Street address" value={form.addressLine1} onChange={(e) => update("addressLine1", e.target.value)} />
+          <Input className="min-h-[44px]" placeholder="Street address" value={form.addressLine1} onChange={(e) => update("addressLine1", e.target.value)} />
         </div>
 
         <div className="grid grid-cols-3 gap-3">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">City</label>
-            <Input value={form.city} onChange={(e) => update("city", e.target.value)} />
+            <Input className="min-h-[44px]" value={form.city} onChange={(e) => update("city", e.target.value)} />
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">State</label>
-            <Input value={form.state} onChange={(e) => update("state", e.target.value)} />
+            <Input className="min-h-[44px]" value={form.state} onChange={(e) => update("state", e.target.value)} />
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Pincode</label>
-            <Input value={form.pincode} onChange={(e) => update("pincode", e.target.value)} maxLength={6} />
+            <Input className="min-h-[44px] tabular-nums" inputMode="numeric" value={form.pincode} onChange={(e) => update("pincode", e.target.value)} maxLength={6} />
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Phone</label>
-            <Input type="tel" value={form.phone} onChange={(e) => update("phone", e.target.value)} />
+            <Input className="min-h-[44px] tabular-nums" type="tel" inputMode="tel" value={form.phone} onChange={(e) => update("phone", e.target.value)} />
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">WhatsApp</label>
-            <Input type="tel" value={form.whatsappNumber} onChange={(e) => update("whatsappNumber", e.target.value)} />
+            <Input className="min-h-[44px] tabular-nums" type="tel" inputMode="tel" value={form.whatsappNumber} onChange={(e) => update("whatsappNumber", e.target.value)} />
           </div>
         </div>
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
-          <Input type="email" value={form.email} onChange={(e) => update("email", e.target.value)} />
+          <Input className="min-h-[44px]" type="email" inputMode="email" value={form.email} onChange={(e) => update("email", e.target.value)} />
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Payment Terms (days)</label>
-            <Input type="number" value={form.paymentTermDays} onChange={(e) => update("paymentTermDays", parseInt(e.target.value) || 0)} />
+            <Input className="min-h-[44px] tabular-nums" type="number" inputMode="numeric" value={form.paymentTermDays} onChange={(e) => update("paymentTermDays", parseInt(e.target.value) || 0)} />
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Credit Limit</label>
-            <Input type="number" value={form.creditLimit} onChange={(e) => update("creditLimit", parseFloat(e.target.value) || 0)} />
+            <Input className="min-h-[44px] tabular-nums" type="number" inputMode="decimal" value={form.creditLimit} onChange={(e) => update("creditLimit", parseFloat(e.target.value) || 0)} />
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">CD Terms (days)</label>
-            <Input type="number" value={form.cdTermsDays} onChange={(e) => update("cdTermsDays", parseInt(e.target.value) || 0)} />
+            <Input className="min-h-[44px] tabular-nums" type="number" inputMode="numeric" value={form.cdTermsDays} onChange={(e) => update("cdTermsDays", parseInt(e.target.value) || 0)} />
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">CD %</label>
-            <Input type="number" step="0.1" value={form.cdPercentage} onChange={(e) => update("cdPercentage", parseFloat(e.target.value) || 0)} />
+            <Input className="min-h-[44px] tabular-nums" type="number" inputMode="decimal" step="0.1" value={form.cdPercentage} onChange={(e) => update("cdPercentage", parseFloat(e.target.value) || 0)} />
           </div>
         </div>
 
-        <Button type="submit" size="lg" disabled={!form.name || !form.code || submitting} className="w-full bg-blue-600 hover:bg-blue-700">
-          {submitting ? "Creating..." : "Create Vendor"}
-        </Button>
+        <div className="space-y-1">
+          <Button type="submit" size="lg" disabled={disabled} className="w-full min-h-[48px] bg-green-600 hover:bg-green-700 text-white">
+            {submitting ? "Creating..." : "Create Vendor"}
+          </Button>
+          {!form.name || !form.code ? (
+            <p className="text-xs text-slate-500 text-center">Vendor name and code are required.</p>
+          ) : null}
+        </div>
       </form>
     </div>
   );

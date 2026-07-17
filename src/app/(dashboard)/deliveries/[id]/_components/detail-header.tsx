@@ -20,12 +20,12 @@ export function DetailHeader({ data }: DetailHeaderProps) {
     <>
       {/* Header row */}
       <div className="flex items-center gap-3 mb-3">
-        <Link href="/deliveries" className="p-1">
+        <Link href="/deliveries" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
         <div className="flex-1 min-w-0">
-          <h1 className="text-lg font-bold text-slate-900">{data.invoiceNo}</h1>
-          <p className="text-xs text-slate-500">
+          <h1 className="text-lg font-bold text-slate-900 truncate tabular-nums">{data.invoiceNo}</h1>
+          <p className="text-xs text-slate-500 tabular-nums truncate">
             {data.customerName} | {formatINR(data.invoiceAmount)}
           </p>
         </div>

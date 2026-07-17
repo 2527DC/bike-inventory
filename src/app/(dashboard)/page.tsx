@@ -12,8 +12,23 @@ import { DashboardCard } from "@/components/dashboard-card";
 import { TransactionItem } from "@/components/transaction-item";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { SkeletonDashboard } from "@/components/ui/skeleton";
 import { formatINR, formatTime } from "@/lib/utils";
 import type { Role } from "@/types";
+
+const ROLE_LABELS: Record<string, string> = {
+  CEO: "Owner",
+  ADMIN: "Administrator",
+  SUPERVISOR: "Supervisor",
+  PURCHASE_MANAGER: "Purchase Manager",
+  ACCOUNTS_MANAGER: "Accounts Manager",
+  INWARDS_EXECUTIVE: "Inwards Executive",
+  OUTWARDS_EXECUTIVE: "Outwards Executive",
+  STORE_MANAGER: "Store Manager",
+  SALES_MANAGER: "Sales Manager",
+  SERVICE_MANAGER: "Service Manager",
+  CUSTOM: "Team Member",
+};
 
 interface CEOData {
   // Revenue & Finance
@@ -109,7 +124,7 @@ function ShareDailyReport() {
         </div>
       )}
       <button onClick={handleShare} disabled={sharing}
-        className="flex items-center gap-1.5 bg-green-600 text-white px-3 py-2 rounded-lg text-xs font-medium disabled:opacity-50 w-full justify-center">
+        className="flex items-center gap-1.5 bg-green-600 text-white px-3 py-2 min-h-[44px] rounded-lg text-xs font-medium disabled:opacity-50 w-full justify-center focus-ring">
         {sharing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Share2 className="h-3.5 w-3.5" />}
         {sharing ? "Loading..." : "Share Daily Report via WhatsApp"}
       </button>
@@ -194,7 +209,7 @@ function InwardsEODReport() {
         </div>
       )}
       <button onClick={handleShare} disabled={sharing}
-        className="flex items-center gap-1.5 bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-medium disabled:opacity-50 w-full justify-center mb-2">
+        className="flex items-center gap-1.5 bg-blue-600 text-white px-3 py-2 min-h-[44px] rounded-lg text-xs font-medium disabled:opacity-50 w-full justify-center mb-2 focus-ring">
         {sharing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Share2 className="h-3.5 w-3.5" />}
         {sharing ? "Loading..." : "Share Inwards EOD Report"}
       </button>
@@ -253,18 +268,7 @@ function AdminDashboard() {
   }, []);
 
   if (loading) {
-    return (
-      <div className="space-y-4 animate-pulse">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          {[1, 2, 3, 4, 5, 6].map((i) => (
-            <div key={i} className="p-3 border border-slate-100 rounded-lg space-y-2">
-              <div className="h-3 bg-slate-200 rounded w-16" />
-              <div className="h-6 bg-slate-200 rounded w-20" />
-            </div>
-          ))}
-        </div>
-      </div>
-    );
+    return <SkeletonDashboard />;
   }
 
   if (error || !data) {
@@ -278,20 +282,20 @@ function AdminDashboard() {
 
   return (
     <>
-      {/* Critical Alerts — needs CEO attention first */}
+      {/* What needs me now — Critical Alerts first */}
       {data.criticalAlerts.length > 0 && (
         <Card className="mb-3 border-red-300 bg-red-50">
           <CardHeader className="pb-1">
             <CardTitle className="flex items-center gap-1.5 text-red-700">
               <ShieldAlert className="h-4 w-4" />
-              Alerts
+              What needs you now
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-1.5">
             {data.criticalAlerts.map((alert, i) => (
-              <div key={i} className="flex items-center justify-between py-1">
+              <div key={i} className="flex items-center justify-between gap-2 py-1">
                 <p className="text-xs text-red-700 font-medium">{alert.message}</p>
-                <Badge variant="danger" className="text-[9px] animate-pulse">{alert.owner}</Badge>
+                <Badge variant="danger" className="text-[10px] shrink-0 animate-pulse">{alert.owner}</Badge>
               </div>
             ))}
           </CardContent>
@@ -300,35 +304,35 @@ function AdminDashboard() {
 
       {/* Financial Overview */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Link href="/accounts">
-          <Card className="bg-red-50 border-red-200">
+        <Link href="/accounts" className="focus-ring rounded-xl">
+          <Card className="bg-red-50 border-red-200 min-h-[44px]">
             <CardContent className="p-3">
-              <p className="text-[10px] text-red-600 font-medium uppercase tracking-wide">Payable</p>
-              <p className="text-lg font-bold text-red-700">{formatINR(data.outstandingPayable)}</p>
+              <p className="text-[11px] text-red-600 font-medium uppercase tracking-wide">Payable</p>
+              <p className="text-lg font-bold text-red-700 tabular-nums">{formatINR(data.outstandingPayable)}</p>
             </CardContent>
           </Card>
         </Link>
-        <Link href="/receivables">
-          <Card className="bg-blue-50 border-blue-200">
+        <Link href="/receivables" className="focus-ring rounded-xl">
+          <Card className="bg-blue-50 border-blue-200 min-h-[44px]">
             <CardContent className="p-3">
-              <p className="text-[10px] text-blue-600 font-medium uppercase tracking-wide">Receivable</p>
-              <p className="text-lg font-bold text-blue-700">{formatINR(data.outstandingReceivable)}</p>
+              <p className="text-[11px] text-blue-600 font-medium uppercase tracking-wide">Receivable</p>
+              <p className="text-lg font-bold text-blue-700 tabular-nums">{formatINR(data.outstandingReceivable)}</p>
             </CardContent>
           </Card>
         </Link>
-        <Link href="/stock">
-          <Card className="bg-green-50 border-green-200">
+        <Link href="/stock" className="focus-ring rounded-xl">
+          <Card className="bg-green-50 border-green-200 min-h-[44px]">
             <CardContent className="p-3">
-              <p className="text-[10px] text-green-600 font-medium uppercase tracking-wide">Stock Value</p>
-              <p className="text-lg font-bold text-green-700">{formatINR(data.totalStockValue)}</p>
+              <p className="text-[11px] text-green-600 font-medium uppercase tracking-wide">Stock Value</p>
+              <p className="text-lg font-bold text-green-700 tabular-nums">{formatINR(data.totalStockValue)}</p>
             </CardContent>
           </Card>
         </Link>
-        <Link href="/bills">
-          <Card className={data.overdueBills > 0 ? "bg-amber-50 border-amber-300" : ""}>
+        <Link href="/bills" className="focus-ring rounded-xl">
+          <Card className={`min-h-[44px] ${data.overdueBills > 0 ? "bg-amber-50 border-amber-300" : ""}`}>
             <CardContent className="p-3">
-              <p className="text-[10px] text-slate-500 font-medium uppercase tracking-wide">Overdue Bills</p>
-              <p className={`text-lg font-bold ${data.overdueBills > 0 ? "text-amber-600" : "text-green-600"}`}>
+              <p className="text-[11px] text-slate-500 font-medium uppercase tracking-wide">Overdue Bills</p>
+              <p className={`text-lg font-bold tabular-nums ${data.overdueBills > 0 ? "text-amber-600" : "text-green-600"}`}>
                 {data.overdueBills > 0 ? data.overdueBills : "None"}
               </p>
             </CardContent>
@@ -338,39 +342,39 @@ function AdminDashboard() {
 
       {/* Operations + Service Row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mt-3">
-        <Link href="/reorder">
-          <Card>
+        <Link href="/reorder" className="focus-ring rounded-xl">
+          <Card className={`min-h-[44px] ${data.lowStockCount > 0 ? "border-red-200" : ""}`}>
             <CardContent className="p-2.5 text-center">
               <AlertTriangle className="h-4 w-4 text-red-500 mx-auto mb-0.5" />
-              <p className="text-base font-bold text-slate-900">{data.lowStockCount}</p>
-              <p className="text-[9px] text-slate-500">Low Stock</p>
+              <p className="text-xl font-bold text-slate-900 tabular-nums leading-none">{data.lowStockCount}</p>
+              <p className="text-[11px] font-medium text-slate-500 mt-1">Low Stock</p>
             </CardContent>
           </Card>
         </Link>
-        <Link href="/inbound">
-          <Card className={data.inboundInTransit > 0 ? "border-amber-200" : ""}>
+        <Link href="/inbound" className="focus-ring rounded-xl">
+          <Card className={`min-h-[44px] ${data.inboundInTransit > 0 ? "border-amber-200" : ""}`}>
             <CardContent className="p-2.5 text-center">
               <Truck className="h-4 w-4 text-amber-500 mx-auto mb-0.5" />
-              <p className="text-base font-bold text-slate-900">{data.inboundInTransit}</p>
-              <p className="text-[9px] text-slate-500">In Transit</p>
+              <p className="text-xl font-bold text-slate-900 tabular-nums leading-none">{data.inboundInTransit}</p>
+              <p className="text-[11px] font-medium text-slate-500 mt-1">In Transit</p>
             </CardContent>
           </Card>
         </Link>
-        <Link href="/vendor-issues">
-          <Card className={data.openVendorIssues > 0 ? "border-red-200" : ""}>
+        <Link href="/vendor-issues" className="focus-ring rounded-xl">
+          <Card className={`min-h-[44px] ${data.openVendorIssues > 0 ? "border-red-200" : ""}`}>
             <CardContent className="p-2.5 text-center">
               <ShieldAlert className="h-4 w-4 text-red-500 mx-auto mb-0.5" />
-              <p className="text-base font-bold text-slate-900">{data.openVendorIssues}</p>
-              <p className="text-[9px] text-slate-500">Ops Issues</p>
+              <p className="text-xl font-bold text-slate-900 tabular-nums leading-none">{data.openVendorIssues}</p>
+              <p className="text-[11px] font-medium text-slate-500 mt-1">Ops Issues</p>
             </CardContent>
           </Card>
         </Link>
-        <Link href="/ai">
-          <Card>
+        <Link href="/ai" className="focus-ring rounded-xl">
+          <Card className="min-h-[44px]">
             <CardContent className="p-2.5 text-center">
               <Brain className="h-4 w-4 text-purple-500 mx-auto mb-0.5" />
-              <p className="text-base font-bold text-slate-900">{data.insights.length}</p>
-              <p className="text-[9px] text-slate-500">AI Insights</p>
+              <p className="text-xl font-bold text-slate-900 tabular-nums leading-none">{data.insights.length}</p>
+              <p className="text-[11px] font-medium text-slate-500 mt-1">AI Insights</p>
             </CardContent>
           </Card>
         </Link>
@@ -381,15 +385,15 @@ function AdminDashboard() {
         <Card className="flex-1">
           <CardContent className="p-3 text-center">
             <ArrowDownCircle className="h-4 w-4 text-blue-500 mx-auto mb-1" />
-            <p className="text-lg font-bold text-slate-900">{data.todayInwards}</p>
-            <p className="text-[10px] text-slate-500">Inwards Today</p>
+            <p className="text-xl font-bold text-slate-900 tabular-nums leading-none">{data.todayInwards}</p>
+            <p className="text-[11px] font-medium text-slate-500 mt-1">Inwards Today</p>
           </CardContent>
         </Card>
         <Card className="flex-1">
           <CardContent className="p-3 text-center">
             <ArrowUpCircle className="h-4 w-4 text-orange-500 mx-auto mb-1" />
-            <p className="text-lg font-bold text-slate-900">{data.todayOutwards}</p>
-            <p className="text-[10px] text-slate-500">Outwards Today</p>
+            <p className="text-xl font-bold text-slate-900 tabular-nums leading-none">{data.todayOutwards}</p>
+            <p className="text-[11px] font-medium text-slate-500 mt-1">Outwards Today</p>
           </CardContent>
         </Card>
       </div>
@@ -410,13 +414,13 @@ function AdminDashboard() {
           <CardContent className="space-y-2">
             {data.insights.slice(0, 4).map((item) => (
               <div key={item.type} className="flex items-center gap-2">
-                <Badge variant={item.severity === "danger" ? "danger" : item.severity === "warning" ? "warning" : item.severity === "success" ? "success" : "info"} className="text-[9px] shrink-0">
+                <Badge variant={item.severity === "danger" ? "danger" : item.severity === "warning" ? "warning" : item.severity === "success" ? "success" : "info"} className="text-[10px] shrink-0">
                   {item.severity === "danger" ? "!" : item.severity === "warning" ? "~" : "i"}
                 </Badge>
                 <p className="text-xs text-slate-700">{item.title}</p>
               </div>
             ))}
-            <Link href="/ai" className="text-xs text-blue-600 font-medium block pt-1">View all insights</Link>
+            <Link href="/ai" className="text-xs text-blue-600 font-medium block pt-1 focus-ring rounded">View all insights</Link>
           </CardContent>
         </Card>
       )}
@@ -437,26 +441,26 @@ function AdminDashboard() {
               <div key={person.name} className="flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0">
                 <div>
                   <p className="text-sm font-medium text-slate-900">{person.name}</p>
-                  <p className="text-[10px] text-slate-500">{person.role}</p>
+                  <p className="text-[11px] text-slate-500">{person.role}</p>
                 </div>
                 <div className="flex items-center gap-1.5">
                   {person.overdue72h > 0 && (
-                    <span className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-red-200 text-red-900 animate-pulse">
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-red-200 text-red-900 tabular-nums animate-pulse">
                       {person.overdue72h} 72h+
                     </span>
                   )}
                   {person.overdue48h > person.overdue72h && (
-                    <span className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-red-100 text-red-800">
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-red-100 text-red-800 tabular-nums">
                       {person.overdue48h - person.overdue72h} 48h+
                     </span>
                   )}
                   {person.overdue24h > person.overdue48h && (
-                    <span className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-yellow-100 text-yellow-800">
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-yellow-100 text-yellow-800 tabular-nums">
                       {person.overdue24h - person.overdue48h} 24h+
                     </span>
                   )}
-                  <span className="text-xs font-bold text-slate-700">{person.pending}</span>
-                  <span className="text-[10px] text-slate-400">pending</span>
+                  <span className="text-sm font-bold text-slate-700 tabular-nums">{person.pending}</span>
+                  <span className="text-[11px] text-slate-400">pending</span>
                 </div>
               </div>
             ))}
@@ -477,27 +481,27 @@ function AdminDashboard() {
             <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
               <div className="flex justify-between py-1 border-b border-slate-50">
                 <span className="text-slate-500">Inwards verified</span>
-                <span className="font-medium text-green-600">{data.todaySummary.inwardsVerified || 0}</span>
+                <span className="font-medium text-green-600 tabular-nums">{data.todaySummary.inwardsVerified || 0}</span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-50">
                 <span className="text-slate-500">Inwards pending</span>
-                <span className={`font-medium ${(data.todaySummary.inwardsPending || 0) > 0 ? "text-amber-600" : "text-green-600"}`}>{data.todaySummary.inwardsPending || 0}</span>
+                <span className={`font-medium tabular-nums ${(data.todaySummary.inwardsPending || 0) > 0 ? "text-amber-600" : "text-green-600"}`}>{data.todaySummary.inwardsPending || 0}</span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-50">
                 <span className="text-slate-500">Deliveries closed</span>
-                <span className="font-medium text-green-600">{data.todaySummary.deliveriesClosed || 0}</span>
+                <span className="font-medium text-green-600 tabular-nums">{data.todaySummary.deliveriesClosed || 0}</span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-50">
                 <span className="text-slate-500">Deliveries pending</span>
-                <span className={`font-medium ${(data.todaySummary.deliveriesPending || 0) > 0 ? "text-amber-600" : "text-green-600"}`}>{data.todaySummary.deliveriesPending || 0}</span>
+                <span className={`font-medium tabular-nums ${(data.todaySummary.deliveriesPending || 0) > 0 ? "text-amber-600" : "text-green-600"}`}>{data.todaySummary.deliveriesPending || 0}</span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-50">
                 <span className="text-slate-500">Expenses today</span>
-                <span className="font-medium">{data.todaySummary.expensesRecorded || 0}</span>
+                <span className="font-medium tabular-nums">{data.todaySummary.expensesRecorded || 0}</span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-50">
                 <span className="text-slate-500">POs no tracking</span>
-                <span className={`font-medium ${(data.todaySummary.posWithoutTracking || 0) > 0 ? "text-red-600" : "text-green-600"}`}>{data.todaySummary.posWithoutTracking || 0}</span>
+                <span className={`font-medium tabular-nums ${(data.todaySummary.posWithoutTracking || 0) > 0 ? "text-red-600" : "text-green-600"}`}>{data.todaySummary.posWithoutTracking || 0}</span>
               </div>
             </div>
           </CardContent>
@@ -510,13 +514,13 @@ function AdminDashboard() {
           <CardHeader><CardTitle className="text-red-600">Overdue Bills</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             {data.overdueBillsList.slice(0, 5).map((bill) => (
-              <Link key={bill.id} href={`/bills/${bill.id}`}>
-                <div className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
-                  <div>
-                    <p className="text-sm font-medium text-slate-900">{bill.vendor.name}</p>
-                    <p className="text-xs text-slate-500">{bill.billNo} | Due: {new Date(bill.dueDate).toLocaleDateString("en-IN")}</p>
+              <Link key={bill.id} href={`/bills/${bill.id}`} className="block focus-ring rounded-lg">
+                <div className="flex items-center justify-between gap-2 py-2 border-b border-slate-100 last:border-0">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-slate-900 truncate">{bill.vendor.name}</p>
+                    <p className="text-xs text-slate-500 tabular-nums">{bill.billNo} | Due: {new Date(bill.dueDate).toLocaleDateString("en-IN")}</p>
                   </div>
-                  <p className="text-sm font-bold text-red-600">{formatINR(bill.amount - bill.paidAmount)}</p>
+                  <p className="text-sm font-bold text-red-600 tabular-nums shrink-0">{formatINR(bill.amount - bill.paidAmount)}</p>
                 </div>
               </Link>
             ))}
@@ -579,18 +583,7 @@ function SupervisorDashboard() {
   }, []);
 
   if (loading) {
-    return (
-      <div className="space-y-4 animate-pulse">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="p-3 border border-slate-100 rounded-lg space-y-2">
-              <div className="h-3 bg-slate-200 rounded w-16" />
-              <div className="h-6 bg-slate-200 rounded w-20" />
-            </div>
-          ))}
-        </div>
-      </div>
-    );
+    return <SkeletonDashboard />;
   }
 
   if (!data) {
@@ -604,45 +597,39 @@ function SupervisorDashboard() {
 
   return (
     <>
-      {/* Tasks */}
-      {/* Daily Report */}
-      <div className="mb-3">
-        <ShareDailyReport />
-      </div>
-
-      {/* Top Cards — Srinu's priorities */}
+      {/* What needs me now — priorities first */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Link href="/accounts">
-          <Card className="bg-red-50 border-red-200">
+        <Link href="/accounts" className="focus-ring rounded-xl">
+          <Card className="bg-red-50 border-red-200 min-h-[44px]">
             <CardContent className="p-3">
-              <p className="text-[10px] text-red-600 font-medium">Outstanding Payable</p>
-              <p className="text-lg font-bold text-red-700">{formatINR(data.outstandingPayable)}</p>
+              <p className="text-[11px] text-red-600 font-medium">Outstanding Payable</p>
+              <p className="text-lg font-bold text-red-700 tabular-nums">{formatINR(data.outstandingPayable)}</p>
             </CardContent>
           </Card>
         </Link>
-        <Link href="/receivables">
-          <Card className="bg-blue-50 border-blue-200">
+        <Link href="/receivables" className="focus-ring rounded-xl">
+          <Card className="bg-blue-50 border-blue-200 min-h-[44px]">
             <CardContent className="p-3">
-              <p className="text-[10px] text-blue-600 font-medium">Outstanding Receivable</p>
-              <p className="text-lg font-bold text-blue-700">{formatINR(data.outstandingReceivable)}</p>
+              <p className="text-[11px] text-blue-600 font-medium">Outstanding Receivable</p>
+              <p className="text-lg font-bold text-blue-700 tabular-nums">{formatINR(data.outstandingReceivable)}</p>
             </CardContent>
           </Card>
         </Link>
-        <Link href="/bills">
-          <Card className={data.overdueBills > 0 ? "bg-red-50 border-red-300" : ""}>
+        <Link href="/bills" className="focus-ring rounded-xl">
+          <Card className={`min-h-[44px] ${data.overdueBills > 0 ? "bg-red-50 border-red-300" : ""}`}>
             <CardContent className="p-3">
-              <p className="text-[10px] text-slate-500 font-medium">Overdue Bills</p>
-              <p className={`text-lg font-bold ${data.overdueBills > 0 ? "text-red-600" : "text-green-600"}`}>
+              <p className="text-[11px] text-slate-500 font-medium">Overdue Bills</p>
+              <p className={`text-lg font-bold tabular-nums ${data.overdueBills > 0 ? "text-red-600" : "text-green-600"}`}>
                 {data.overdueBills > 0 ? data.overdueBills : "None"}
               </p>
             </CardContent>
           </Card>
         </Link>
-        <Link href="/vendor-issues">
-          <Card className={data.openIssues > 0 ? "bg-orange-50 border-orange-200" : ""}>
+        <Link href="/vendor-issues" className="focus-ring rounded-xl">
+          <Card className={`min-h-[44px] ${data.openIssues > 0 ? "bg-orange-50 border-orange-200" : ""}`}>
             <CardContent className="p-3">
-              <p className="text-[10px] text-slate-500 font-medium">Open Issues</p>
-              <p className={`text-lg font-bold ${data.openIssues > 0 ? "text-orange-600" : "text-green-600"}`}>
+              <p className="text-[11px] text-slate-500 font-medium">Open Issues</p>
+              <p className={`text-lg font-bold tabular-nums ${data.openIssues > 0 ? "text-orange-600" : "text-green-600"}`}>
                 {data.openIssues > 0 ? data.openIssues : "None"}
               </p>
             </CardContent>
@@ -655,17 +642,22 @@ function SupervisorDashboard() {
         <Card className="flex-1">
           <CardContent className="p-3 text-center">
             <ArrowDownCircle className="h-4 w-4 text-blue-500 mx-auto mb-1" />
-            <p className="text-lg font-bold text-slate-900">{data.todayInwards}</p>
-            <p className="text-[10px] text-slate-500">Inwards Today</p>
+            <p className="text-xl font-bold text-slate-900 tabular-nums leading-none">{data.todayInwards}</p>
+            <p className="text-[11px] font-medium text-slate-500 mt-1">Inwards Today</p>
           </CardContent>
         </Card>
         <Card className="flex-1">
           <CardContent className="p-3 text-center">
             <ArrowUpCircle className="h-4 w-4 text-orange-500 mx-auto mb-1" />
-            <p className="text-lg font-bold text-slate-900">{data.todayOutwards}</p>
-            <p className="text-[10px] text-slate-500">Outwards Today</p>
+            <p className="text-xl font-bold text-slate-900 tabular-nums leading-none">{data.todayOutwards}</p>
+            <p className="text-[11px] font-medium text-slate-500 mt-1">Outwards Today</p>
           </CardContent>
         </Card>
+      </div>
+
+      {/* Daily Report */}
+      <div className="mt-3">
+        <ShareDailyReport />
       </div>
 
       {/* Overdue Bills */}
@@ -674,13 +666,13 @@ function SupervisorDashboard() {
           <CardHeader><CardTitle className="text-red-600">Overdue Bills</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             {data.overdueBillsList.slice(0, 5).map((bill) => (
-              <Link key={bill.id} href={`/bills/${bill.id}`}>
-                <div className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
-                  <div>
-                    <p className="text-sm font-medium text-slate-900">{bill.vendor.name}</p>
-                    <p className="text-xs text-slate-500">{bill.billNo} | Due: {new Date(bill.dueDate).toLocaleDateString("en-IN")}</p>
+              <Link key={bill.id} href={`/bills/${bill.id}`} className="block focus-ring rounded-lg">
+                <div className="flex items-center justify-between gap-2 py-2 border-b border-slate-100 last:border-0">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-slate-900 truncate">{bill.vendor.name}</p>
+                    <p className="text-xs text-slate-500 tabular-nums">{bill.billNo} | Due: {new Date(bill.dueDate).toLocaleDateString("en-IN")}</p>
                   </div>
-                  <p className="text-sm font-bold text-red-600">{formatINR(bill.amount - bill.paidAmount)}</p>
+                  <p className="text-sm font-bold text-red-600 tabular-nums shrink-0">{formatINR(bill.amount - bill.paidAmount)}</p>
                 </div>
               </Link>
             ))}
@@ -710,7 +702,7 @@ function ClerkDashboard({ type }: { type: "inward" | "outward" }) {
   }, [type]);
 
   if (loading) {
-    return <div className="animate-pulse space-y-3 py-4">{[1,2,3].map(i=><div key={i} className="flex items-center gap-3 py-2 border-b border-slate-100"><div className="h-9 w-9 rounded-full bg-slate-200 shrink-0"/><div className="flex-1 space-y-1.5"><div className="h-4 bg-slate-200 rounded w-2/3"/><div className="h-3 bg-slate-200 rounded w-1/3"/></div></div>)}</div>;
+    return <SkeletonDashboard />;
   }
 
   const totalQty = transactions.reduce((s, t) => s + t.quantity, 0);
@@ -722,7 +714,7 @@ function ClerkDashboard({ type }: { type: "inward" | "outward" }) {
       <div className="flex justify-end mb-3 relative">
         <button
           onClick={() => setShareOpen(!shareOpen)}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm text-slate-600 hover:bg-slate-50"
+          className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg border border-slate-200 bg-white text-sm text-slate-600 hover:bg-slate-50 focus-ring"
         >
           <Share2 className="h-4 w-4" />
           Share
@@ -746,8 +738,8 @@ function ClerkDashboard({ type }: { type: "inward" | "outward" }) {
         <Card>
           <CardContent className="p-3 text-center">
             <ArrowDownCircle className="h-5 w-5 text-blue-500 mx-auto mb-1" />
-            <p className="text-2xl font-bold text-slate-900">{totalQty}</p>
-            <p className="text-sm font-medium text-slate-500">
+            <p className="text-2xl font-bold text-slate-900 tabular-nums leading-none">{totalQty}</p>
+            <p className="text-[11px] font-medium text-slate-500 mt-1">
               {type === "inward" ? "Received Today" : "Dispatched Today"}
             </p>
           </CardContent>
@@ -755,12 +747,12 @@ function ClerkDashboard({ type }: { type: "inward" | "outward" }) {
         <Card>
           <CardContent className="p-3 text-center">
             <Clock className="h-5 w-5 text-amber-500 mx-auto mb-1" />
-            <p className="text-2xl font-bold text-slate-900">
+            <p className="text-2xl font-bold text-slate-900 tabular-nums leading-none">
               {type === "inward"
                 ? (deliveryStats?.pending ?? 0)
                 : ((deliveryStats?.packed ?? 0) + (deliveryStats?.scheduled ?? 0))}
             </p>
-            <p className="text-sm font-medium text-slate-500">
+            <p className="text-[11px] font-medium text-slate-500 mt-1">
               {type === "inward" ? "Pending Verify" : "Pending Dispatch"}
             </p>
           </CardContent>
@@ -772,12 +764,12 @@ function ClerkDashboard({ type }: { type: "inward" | "outward" }) {
             ) : (
               <Users className="h-5 w-5 text-green-500 mx-auto mb-1" />
             )}
-            <p className="text-2xl font-bold text-slate-900">
+            <p className="text-2xl font-bold text-slate-900 tabular-nums leading-none">
               {type === "inward"
                 ? ((deliveryStats?.pending ?? 0) + (deliveryStats?.verified ?? 0))
                 : (deliveryStats?.pending ?? 0)}
             </p>
-            <p className="text-sm font-medium text-slate-500">
+            <p className="text-[11px] font-medium text-slate-500 mt-1">
               {type === "inward" ? "Stock Out Queue" : "Walk-outs Today"}
             </p>
           </CardContent>
@@ -785,8 +777,8 @@ function ClerkDashboard({ type }: { type: "inward" | "outward" }) {
       </div>
 
       {/* Quick action button */}
-      <Link href={type === "inward" ? "/inbound" : "/deliveries"} className="block mt-4">
-        <button className="w-full h-14 text-base font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center justify-center gap-2 mb-4">
+      <Link href={type === "inward" ? "/inbound" : "/deliveries"} className="block mt-4 focus-ring rounded-lg">
+        <button className="w-full min-h-[44px] h-14 text-base font-semibold bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center justify-center gap-2 mb-4">
           {type === "inward" ? (
             <><ArrowDownCircle className="h-5 w-5" /> Receive Shipment</>
           ) : (
@@ -824,7 +816,7 @@ function OutwardsClerkDashboard() {
   }, []);
 
   if (loading) {
-    return <div className="animate-pulse space-y-3 py-4"><div className="grid grid-cols-3 gap-3">{[1,2,3].map(i=><div key={i} className="p-3 border border-slate-100 rounded-lg space-y-2"><div className="h-3 bg-slate-200 rounded w-16"/><div className="h-6 bg-slate-200 rounded w-20"/></div>)}</div></div>;
+    return <SkeletonDashboard />;
   }
   if (!stats) {
     return <div className="text-center py-12"><AlertTriangle className="h-8 w-8 text-red-400 mx-auto mb-2" /><p className="text-sm text-slate-500">Failed to load dashboard.</p></div>;
@@ -836,7 +828,7 @@ function OutwardsClerkDashboard() {
       <div className="flex justify-end mb-3 relative">
         <button
           onClick={() => setShareOpen(!shareOpen)}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm text-slate-600 hover:bg-slate-50"
+          className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg border border-slate-200 bg-white text-sm text-slate-600 hover:bg-slate-50 focus-ring"
         >
           <Share2 className="h-4 w-4" />
           Share
@@ -850,16 +842,16 @@ function OutwardsClerkDashboard() {
         )}
       </div>
 
-      {/* Walk-out nudge — urgent if pending > 0 */}
+      {/* What needs me now — Walk-out nudge, urgent if pending > 0 */}
       {stats.pending > 0 && (
-        <Link href="/deliveries/walkout">
+        <Link href="/deliveries/walkout" className="block focus-ring rounded-xl">
           <Card className="mb-3 border-amber-300 bg-amber-50 animate-pulse-slow">
             <CardContent className="p-3 flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-amber-200 flex items-center justify-center flex-shrink-0">
                 <CheckCircle2 className="h-5 w-5 text-amber-700" />
               </div>
               <div className="flex-1">
-                <p className="text-base font-bold text-amber-800">{stats.pending} Walk-outs pending</p>
+                <p className="text-base font-bold text-amber-800 tabular-nums">{stats.pending} Walk-outs pending</p>
                 <p className="text-xs text-amber-600">Verify walk-out deliveries before end of day</p>
               </div>
               <ChevronRight className="h-4 w-4 text-amber-400" />
@@ -873,29 +865,29 @@ function OutwardsClerkDashboard() {
         <Card>
           <CardContent className="p-3 text-center">
             <ArrowUpCircle className="h-5 w-5 text-orange-500 mx-auto mb-1" />
-            <p className="text-2xl font-bold text-slate-900">{stats.delivered || stats.deliveredToday || 0}</p>
-            <p className="text-sm font-medium text-slate-500">Dispatched Today</p>
+            <p className="text-2xl font-bold text-slate-900 tabular-nums leading-none">{stats.delivered || stats.deliveredToday || 0}</p>
+            <p className="text-[11px] font-medium text-slate-500 mt-1">Dispatched Today</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-3 text-center">
             <Clock className="h-5 w-5 text-amber-500 mx-auto mb-1" />
-            <p className="text-2xl font-bold text-slate-900">{(stats.packed ?? 0) + stats.scheduled}</p>
-            <p className="text-sm font-medium text-slate-500">Pending Dispatch</p>
+            <p className="text-2xl font-bold text-slate-900 tabular-nums leading-none">{(stats.packed ?? 0) + stats.scheduled}</p>
+            <p className="text-[11px] font-medium text-slate-500 mt-1">Pending Dispatch</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-3 text-center">
             <Users className="h-5 w-5 text-green-500 mx-auto mb-1" />
-            <p className="text-2xl font-bold text-slate-900">{stats.pending}</p>
-            <p className="text-sm font-medium text-slate-500">Walk-outs Today</p>
+            <p className="text-2xl font-bold text-slate-900 tabular-nums leading-none">{stats.pending}</p>
+            <p className="text-[11px] font-medium text-slate-500 mt-1">Walk-outs Today</p>
           </CardContent>
         </Card>
       </div>
 
       {/* Quick action button */}
-      <Link href="/deliveries" className="block mt-4">
-        <button className="w-full h-14 text-base font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center justify-center gap-2 mb-4">
+      <Link href="/deliveries" className="block mt-4 focus-ring rounded-lg">
+        <button className="w-full min-h-[44px] h-14 text-base font-semibold bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center justify-center gap-2 mb-4">
           <ArrowUpCircle className="h-5 w-5" /> Process Outward
         </button>
       </Link>
@@ -946,19 +938,22 @@ function PurchaseManagerDashboard() {
   }, []);
 
   if (loading) {
-    return <div className="animate-pulse space-y-3 py-4"><div className="grid grid-cols-2 lg:grid-cols-4 gap-3">{[1,2,3,4].map(i=><div key={i} className="p-3 border border-slate-100 rounded-lg space-y-2"><div className="h-3 bg-slate-200 rounded w-16"/><div className="h-6 bg-slate-200 rounded w-20"/></div>)}</div></div>;
+    return <SkeletonDashboard />;
   }
   if (!stats) {
     return <div className="text-center py-12"><AlertTriangle className="h-8 w-8 text-red-400 mx-auto mb-2" /><p className="text-sm text-slate-500">Failed to load dashboard.</p></div>;
   }
   return (
     <>
-    <ShareDailyReport />
+    {/* What needs me now — Low Stock first */}
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <Link href="/reorder" className="focus-ring rounded-xl"><DashboardCard label="Low Stock" value={stats.lowStock} icon={AlertTriangle} color="bg-red-100 text-red-600" /></Link>
       <DashboardCard label="Total Products" value={stats.totalProducts} icon={Package} color="bg-blue-100 text-blue-700" />
-      <Link href="/reorder"><DashboardCard label="Low Stock" value={stats.lowStock} icon={AlertTriangle} color="bg-red-100 text-red-600" /></Link>
       <DashboardCard label="Inwards Today" value={stats.todayInwards} icon={ArrowDownCircle} color="bg-blue-100 text-blue-600" />
-      <Link href="/purchase-orders"><DashboardCard label="Pending POs" value="—" icon={Package} color="bg-orange-100 text-orange-600" /></Link>
+      <Link href="/purchase-orders" className="focus-ring rounded-xl"><DashboardCard label="Pending POs" value="—" icon={Package} color="bg-orange-100 text-orange-600" /></Link>
+    </div>
+    <div className="mt-3">
+      <ShareDailyReport />
     </div>
     </>
   );
@@ -988,18 +983,21 @@ function AccountsManagerDashboard() {
   }, []);
 
   if (loading) {
-    return <div className="animate-pulse space-y-3 py-4">{[1,2,3].map(i=><div key={i} className="flex items-center gap-3 py-2 border-b border-slate-100"><div className="h-9 w-9 rounded-full bg-slate-200 shrink-0"/><div className="flex-1 space-y-1.5"><div className="h-4 bg-slate-200 rounded w-2/3"/><div className="h-3 bg-slate-200 rounded w-1/3"/></div></div>)}</div>;
+    return <SkeletonDashboard />;
   }
   if (!stats) {
     return <div className="text-center py-12"><AlertTriangle className="h-8 w-8 text-red-400 mx-auto mb-2" /><p className="text-sm text-slate-500">Failed to load dashboard.</p></div>;
   }
   return (
     <>
-    <ShareDailyReport />
+    {/* What needs me now — Ops Issues first */}
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-      <Link href="/vendor-issues"><DashboardCard label="Ops Issues" value={stats.openIssues} icon={ShieldAlert} color={stats.openIssues > 0 ? "bg-red-100 text-red-600" : "bg-green-100 text-green-600"} /></Link>
-      <Link href="/stock-audit"><DashboardCard label="Pending Audits" value={stats.pendingAudits} icon={Package} color="bg-blue-100 text-blue-700" /></Link>
-      <Link href="/expenses"><DashboardCard label="Expenses (30d)" value={formatINR(stats.expenses30d)} icon={IndianRupee} color="bg-green-100 text-green-700" /></Link>
+      <Link href="/vendor-issues" className="focus-ring rounded-xl"><DashboardCard label="Ops Issues" value={stats.openIssues} icon={ShieldAlert} color={stats.openIssues > 0 ? "bg-red-100 text-red-600" : "bg-green-100 text-green-600"} /></Link>
+      <Link href="/stock-audit" className="focus-ring rounded-xl"><DashboardCard label="Pending Audits" value={stats.pendingAudits} icon={Package} color="bg-blue-100 text-blue-700" /></Link>
+      <Link href="/expenses" className="focus-ring rounded-xl"><DashboardCard label="Expenses (30d)" value={formatINR(stats.expenses30d)} icon={IndianRupee} color="bg-green-100 text-green-700" /></Link>
+    </div>
+    <div className="mt-3">
+      <ShareDailyReport />
     </div>
     </>
   );
@@ -1014,9 +1012,10 @@ export default function DashboardPage() {
     <div>
       <div className="mb-4">
         <h1 className="text-lg font-bold text-slate-900">Hello, {userName}</h1>
-        <p className="text-sm text-slate-500">
+        <p className="text-sm text-slate-500 tabular-nums">
           {new Date().toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
         </p>
+        <p className="text-xs font-medium text-slate-400 mt-0.5">{ROLE_LABELS[role] || "Team Member"}</p>
       </div>
 
       {/* Morning SOP Nudge — shows for all roles */}

@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { ArrowLeft, TrendingUp, TrendingDown, Truck, Package } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface StockValueData {
   totalItems: number;
@@ -52,7 +53,7 @@ export default function StockValuePage() {
   return (
     <div>
       <div className="flex items-center gap-3 mb-4">
-        <Link href="/reports" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+        <Link href="/reports" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
         <h1 className="text-lg font-bold text-slate-900">Stock Value</h1>
       </div>
 
@@ -61,8 +62,8 @@ export default function StockValuePage() {
         <Card className="bg-indigo-50 border-indigo-200 mb-3">
           <CardContent className="p-4">
             <p className="text-xs text-indigo-600 font-medium mb-1">Effective Stock Value</p>
-            <p className="text-2xl font-bold text-indigo-800">{fmt(data.effectiveCostValue)}</p>
-            <p className="text-[10px] text-indigo-500 mt-1">
+            <p className="text-2xl font-bold text-indigo-800 tabular-nums">{fmt(data.effectiveCostValue)}</p>
+            <p className="text-[11px] text-indigo-500 mt-1 tabular-nums">
               {data.effectiveQty.toLocaleString("en-IN")} units (current + in-transit − outward pending)
             </p>
           </CardContent>
@@ -79,10 +80,10 @@ export default function StockValuePage() {
                 <Package className="h-4 w-4 text-blue-500" />
                 <div>
                   <p className="text-xs font-medium text-slate-700">Current Stock</p>
-                  <p className="text-[10px] text-slate-400">{data.totalItems.toLocaleString("en-IN")} units</p>
+                  <p className="text-[11px] text-slate-400 tabular-nums">{data.totalItems.toLocaleString("en-IN")} units</p>
                 </div>
               </div>
-              <p className="text-sm font-bold text-blue-700">{fmt(data.totalCostValue)}</p>
+              <p className="text-sm font-bold text-blue-700 tabular-nums">{fmt(data.totalCostValue)}</p>
             </CardContent>
           </Card>
 
@@ -93,10 +94,10 @@ export default function StockValuePage() {
                 <TrendingUp className="h-4 w-4 text-amber-500" />
                 <div>
                   <p className="text-xs font-medium text-amber-700">+ In Transit (Inbound)</p>
-                  <p className="text-[10px] text-amber-500">{data.totalInTransitQty.toLocaleString("en-IN")} units arriving</p>
+                  <p className="text-[11px] text-amber-500 tabular-nums">{data.totalInTransitQty.toLocaleString("en-IN")} units arriving</p>
                 </div>
               </div>
-              <p className="text-sm font-bold text-amber-700">+ {fmt(data.totalInTransitValue)}</p>
+              <p className="text-sm font-bold text-amber-700 tabular-nums">+ {fmt(data.totalInTransitValue)}</p>
             </CardContent>
           </Card>
 
@@ -107,10 +108,10 @@ export default function StockValuePage() {
                 <TrendingDown className="h-4 w-4 text-red-500" />
                 <div>
                   <p className="text-xs font-medium text-red-700">− Outward Pending (Deliveries)</p>
-                  <p className="text-[10px] text-red-500">{data.totalOutwardQty.toLocaleString("en-IN")} units to dispatch</p>
+                  <p className="text-[11px] text-red-500 tabular-nums">{data.totalOutwardQty.toLocaleString("en-IN")} units to dispatch</p>
                 </div>
               </div>
-              <p className="text-sm font-bold text-red-700">− {fmt(data.totalOutwardValue)}</p>
+              <p className="text-sm font-bold text-red-700 tabular-nums">− {fmt(data.totalOutwardValue)}</p>
             </CardContent>
           </Card>
         </div>
@@ -120,12 +121,12 @@ export default function StockValuePage() {
       {data && (
         <div className="grid grid-cols-2 gap-2 mb-4">
           <Card className="bg-green-50 border-green-200"><CardContent className="p-3">
-            <p className="text-xs text-green-600">Selling Value</p>
-            <p className="text-lg font-bold text-green-700">{fmt(data.totalSellingValue)}</p>
+            <p className="text-[11px] text-green-600">Selling Value</p>
+            <p className="text-xl font-bold text-green-700 tabular-nums">{fmt(data.totalSellingValue)}</p>
           </CardContent></Card>
           <Card className="bg-purple-50 border-purple-200"><CardContent className="p-3">
-            <p className="text-xs text-purple-600">MRP Value</p>
-            <p className="text-lg font-bold text-purple-700">{fmt(data.totalMrpValue)}</p>
+            <p className="text-[11px] text-purple-600">MRP Value</p>
+            <p className="text-xl font-bold text-purple-700 tabular-nums">{fmt(data.totalMrpValue)}</p>
           </CardContent></Card>
         </div>
       )}
@@ -134,16 +135,14 @@ export default function StockValuePage() {
       <div className="flex gap-1 mb-4 bg-slate-100 rounded-lg p-1">
         {TABS.map((t) => (
           <button key={t.key} onClick={() => setTab(t.key)}
-            className={`flex-1 text-xs font-medium py-2 rounded-md transition-colors ${tab === t.key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"}`}>
+            className={`flex-1 text-xs font-medium py-2 rounded-md transition-colors focus-ring ${tab === t.key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"}`}>
             {t.label}
           </button>
         ))}
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : (
         <div className="space-y-2">
           {data?.breakdown.map((group, i) => (
@@ -151,19 +150,19 @@ export default function StockValuePage() {
               <CardContent className="p-3">
                 <div className="flex items-center justify-between mb-1">
                   <p className="text-sm font-medium text-slate-900">{group.name}</p>
-                  <span className="text-xs text-slate-500">{group.count} products | {group.qty} units</span>
+                  <span className="text-xs text-slate-500 tabular-nums">{group.count} products | {group.qty} units</span>
                 </div>
                 <div className="flex gap-4 text-xs">
-                  <span className="text-blue-600">Cost: {fmt(group.costValue)}</span>
-                  <span className="text-green-600">Sell: {fmt(group.sellingValue)}</span>
+                  <span className="text-blue-600 tabular-nums">Cost: {fmt(group.costValue)}</span>
+                  <span className="text-green-600 tabular-nums">Sell: {fmt(group.sellingValue)}</span>
                 </div>
                 {(group.inTransitQty > 0 || group.outwardQty > 0) && (
-                  <div className="flex gap-4 text-[10px] mt-1">
+                  <div className="flex gap-4 text-[11px] mt-1">
                     {group.inTransitQty > 0 && (
-                      <span className="text-amber-600">+{group.inTransitQty} incoming</span>
+                      <span className="text-amber-600 tabular-nums">+{group.inTransitQty} incoming</span>
                     )}
                     {group.outwardQty > 0 && (
-                      <span className="text-red-600">−{group.outwardQty} outward</span>
+                      <span className="text-red-600 tabular-nums">−{group.outwardQty} outward</span>
                     )}
                   </div>
                 )}

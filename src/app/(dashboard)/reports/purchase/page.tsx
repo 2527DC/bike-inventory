@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { SkeletonList } from "@/components/ui/skeleton";
 
 interface PurchaseData {
   totalOrders: number;
@@ -35,8 +36,8 @@ export default function PurchaseReportPage() {
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/reports" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+      <div className="flex items-center gap-2 mb-4">
+        <Link href="/reports" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
         <h1 className="text-lg font-bold text-slate-900">Purchase Report</h1>
       </div>
 
@@ -48,34 +49,32 @@ export default function PurchaseReportPage() {
       {data && (
         <div className="grid grid-cols-2 gap-2 mb-4">
           <Card><CardContent className="p-3">
-            <p className="text-xs text-slate-500">Total Orders</p>
-            <p className="text-lg font-bold text-slate-900">{data.totalOrders}</p>
+            <p className="text-[11px] text-slate-500">Total Orders</p>
+            <p className="text-xl font-bold text-slate-900 tabular-nums">{data.totalOrders}</p>
           </CardContent></Card>
           <Card className="bg-purple-50 border-purple-200"><CardContent className="p-3">
-            <p className="text-xs text-purple-600">Total Amount</p>
-            <p className="text-lg font-bold text-purple-700">{fmt(data.totalAmount)}</p>
+            <p className="text-[11px] text-purple-600">Total Amount</p>
+            <p className="text-xl font-bold text-purple-700 tabular-nums">{fmt(data.totalAmount)}</p>
           </CardContent></Card>
         </div>
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : (
         <div className="space-y-2">
           {data?.vendors.map((v, i) => (
             <Card key={i}>
               <CardContent className="p-3">
                 <div className="flex items-center justify-between mb-1">
-                  <div>
-                    <p className="text-sm font-medium text-slate-900">{v.name}</p>
-                    <p className="text-xs text-slate-500">{v.code} | {v.orderCount} orders</p>
+                  <div className="min-w-0 mr-2">
+                    <p className="text-sm font-medium text-slate-900 truncate">{v.name}</p>
+                    <p className="text-[11px] text-slate-500 tabular-nums">{v.code} | {v.orderCount} orders</p>
                   </div>
-                  <p className="text-sm font-bold text-slate-900">{fmt(v.totalAmount)}</p>
+                  <p className="text-sm font-bold text-slate-900 tabular-nums shrink-0">{fmt(v.totalAmount)}</p>
                 </div>
                 {v.pendingAmount > 0 && (
-                  <p className="text-xs text-amber-600">Pending: {fmt(v.pendingAmount)}</p>
+                  <p className="text-xs text-amber-600 tabular-nums">Pending: {fmt(v.pendingAmount)}</p>
                 )}
               </CardContent>
             </Card>

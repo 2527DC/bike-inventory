@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { usePermissions } from "@/lib/use-permissions";
 
 interface SecondHandDetail {
@@ -129,8 +130,8 @@ export default function SecondHandDetailPage({ params }: { params: Promise<{ id:
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
+      <div className="space-y-3">
+        <SkeletonList count={5} type="card" />
       </div>
     );
   }
@@ -156,17 +157,15 @@ export default function SecondHandDetailPage({ params }: { params: Promise<{ id:
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/second-hand" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <h1 className="text-lg font-bold text-slate-900">{cycle.sku}</h1>
-            <Badge variant={cycle.status === "IN_STOCK" ? "success" : "default"}>
-              {cycle.status === "IN_STOCK" ? "In Stock" : "Sold"}
-            </Badge>
-          </div>
-          <p className="text-xs text-slate-500">{cycle.name}</p>
+      <div className="flex items-center gap-2 mb-4">
+        <Link href="/second-hand" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-lg font-bold text-slate-900 truncate tabular-nums">{cycle.sku}</h1>
+          <p className="text-xs text-slate-500 truncate">{cycle.name}</p>
         </div>
+        <Badge variant={cycle.status === "IN_STOCK" ? "success" : "default"} className="shrink-0">
+          {cycle.status === "IN_STOCK" ? "In Stock" : "Sold"}
+        </Badge>
       </div>
 
       {/* Image Gallery */}
@@ -276,19 +275,19 @@ export default function SecondHandDetailPage({ params }: { params: Promise<{ id:
           {cycle.size && (
             <div className="flex justify-between items-center">
               <span className="text-xs text-slate-500">Wheel Size</span>
-              <span className="text-sm font-semibold text-indigo-700">{cycle.size}</span>
+              <span className="text-sm font-semibold text-indigo-700 tabular-nums">{cycle.size}</span>
             </div>
           )}
           {isAdmin && cycle.costPrice != null && (
             <div className="flex justify-between items-center">
               <span className="text-xs text-slate-500">Cost Price (Exchange)</span>
-              <span className="text-sm font-semibold text-slate-900">{formatINR(cycle.costPrice)}</span>
+              <span className="text-sm font-semibold text-slate-900 tabular-nums">{formatINR(cycle.costPrice)}</span>
             </div>
           )}
           {isAdmin && (
             <div className="flex justify-between items-center">
               <span className="text-xs text-slate-500">Selling Price</span>
-              <span className={`text-sm font-semibold ${cycle.sellingPrice ? "text-green-600" : "text-slate-400"}`}>
+              <span className={`text-sm font-semibold tabular-nums ${cycle.sellingPrice ? "text-green-600" : "text-slate-400"}`}>
                 {cycle.sellingPrice ? formatINR(cycle.sellingPrice) : "Not set"}
               </span>
             </div>
@@ -296,14 +295,14 @@ export default function SecondHandDetailPage({ params }: { params: Promise<{ id:
           {margin !== null && (
             <div className="flex justify-between items-center">
               <span className="text-xs text-slate-500">Margin</span>
-              <span className={`text-sm font-semibold ${margin >= 0 ? "text-green-600" : "text-red-600"}`}>
+              <span className={`text-sm font-semibold tabular-nums ${margin >= 0 ? "text-green-600" : "text-red-600"}`}>
                 {formatINR(margin)}
               </span>
             </div>
           )}
           <div className="flex justify-between items-center">
             <span className="text-xs text-slate-500">Location</span>
-            <span className="text-xs text-slate-700">{cycle.bin ? `${cycle.bin.code} (${cycle.bin.name})` : "—"}</span>
+            <span className="text-xs text-slate-700 tabular-nums">{cycle.bin ? `${cycle.bin.code} (${cycle.bin.name})` : "—"}</span>
           </div>
           {cycle.zohoItemId && (
             <div className="flex justify-between items-center">
@@ -321,7 +320,7 @@ export default function SecondHandDetailPage({ params }: { params: Promise<{ id:
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-slate-900">{cycle.customerName}</p>
-              {cycle.zohoInvoiceNo && <p className="text-xs text-slate-500">Invoice: {cycle.zohoInvoiceNo}</p>}
+              {cycle.zohoInvoiceNo && <p className="text-xs text-slate-500 tabular-nums">Invoice: {cycle.zohoInvoiceNo}</p>}
             </div>
             {cycle.customerPhone && (
               <a href={`https://wa.me/91${cycle.customerPhone.replace(/\D/g, "").slice(-10)}`}
@@ -342,8 +341,8 @@ export default function SecondHandDetailPage({ params }: { params: Promise<{ id:
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-slate-900">{cycle.soldToName || "—"}</p>
-                {cycle.soldInvoiceNo && <p className="text-xs text-slate-500">Invoice: {cycle.soldInvoiceNo}</p>}
-                {cycle.soldAt && <p className="text-[10px] text-slate-400">{new Date(cycle.soldAt).toLocaleDateString("en-IN")}</p>}
+                {cycle.soldInvoiceNo && <p className="text-xs text-slate-500 tabular-nums">Invoice: {cycle.soldInvoiceNo}</p>}
+                {cycle.soldAt && <p className="text-[11px] text-slate-400 tabular-nums">{new Date(cycle.soldAt).toLocaleDateString("en-IN")}</p>}
               </div>
               {cycle.soldToPhone && (
                 <a href={`https://wa.me/91${cycle.soldToPhone.replace(/\D/g, "").slice(-10)}`}
@@ -382,8 +381,8 @@ export default function SecondHandDetailPage({ params }: { params: Promise<{ id:
         <>
           {!showSellForm ? (
             <Button onClick={() => setShowSellForm(true)} size="lg"
-              className="w-full bg-green-600 hover:bg-green-700 mb-3">
-              Mark as Sold
+              className="w-full min-h-[48px] rounded-lg font-medium bg-green-600 hover:bg-green-700 text-white mb-3">
+              <CheckCircle2 className="h-4 w-4 mr-2" />Mark as Sold
             </Button>
           ) : (
             <Card className="mb-3 border-green-200 bg-green-50/50">
@@ -398,7 +397,7 @@ export default function SecondHandDetailPage({ params }: { params: Promise<{ id:
                 <div className="flex gap-2">
                   <Button variant="outline" onClick={() => setShowSellForm(false)} className="flex-1">Cancel</Button>
                   <Button onClick={handleMarkSold} disabled={selling || !soldToName}
-                    className="flex-1 bg-green-600 hover:bg-green-700">
+                    className="flex-1 min-h-[48px] rounded-lg font-medium bg-green-600 hover:bg-green-700 text-white">
                     {selling ? <Loader2 className="h-4 w-4 animate-spin" /> : "Confirm Sale"}
                   </Button>
                 </div>
@@ -411,8 +410,8 @@ export default function SecondHandDetailPage({ params }: { params: Promise<{ id:
       {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
 
       {/* Meta */}
-      <p className="text-[10px] text-slate-400 text-center mt-4">
-        Added by {cycle.createdBy.name} on {new Date(cycle.createdAt).toLocaleDateString("en-IN")}
+      <p className="text-[11px] text-slate-400 text-center mt-4">
+        Added by {cycle.createdBy.name} on <span className="tabular-nums">{new Date(cycle.createdAt).toLocaleDateString("en-IN")}</span>
         {cycle.notes && ` | ${cycle.notes}`}
       </p>
     </div>

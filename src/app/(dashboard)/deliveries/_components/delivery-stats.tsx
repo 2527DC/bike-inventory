@@ -42,8 +42,8 @@ export function DeliveryStats({ stats, onFilterChange }: DeliveryStatsProps) {
             onClick={() => onFilterChange(filterKey)}
           >
             <CardContent className="p-2 text-center">
-              <p className={`text-lg font-bold ${c.text}`}>{value}</p>
-              <p className={`text-[11px] ${c.sub}`}>{c.label}</p>
+              <p className={`text-xl font-bold tabular-nums leading-none ${c.text}`}>{value}</p>
+              <p className={`text-[11px] mt-1 ${c.sub}`}>{c.label}</p>
             </CardContent>
           </Card>
         );

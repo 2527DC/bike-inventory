@@ -114,10 +114,10 @@ export default function NewPurchaseOrderPage() {
   return (
     <div>
       <div className="flex items-center gap-3 mb-4">
-        <Link href="/purchase-orders" className="p-1">
+        <Link href="/purchase-orders" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
-        <h1 className="text-lg font-bold text-slate-900">New Purchase Order</h1>
+        <h1 className="text-lg font-bold text-slate-900 truncate">New Purchase Order</h1>
       </div>
 
       {error && <div className="bg-red-50 text-red-700 text-sm p-3 rounded-lg mb-4">{error}</div>}
@@ -128,7 +128,7 @@ export default function NewPurchaseOrderPage() {
           <select
             value={vendorId}
             onChange={(e) => setVendorId(e.target.value)}
-            className="flex h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
+            className="flex h-10 min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
           >
             <option value="">Select vendor...</option>
             {vendors.map((v) => (
@@ -139,7 +139,7 @@ export default function NewPurchaseOrderPage() {
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Expected Delivery</label>
-          <Input type="date" value={expectedDate} onChange={(e) => setExpectedDate(e.target.value)} />
+          <Input type="date" value={expectedDate} onChange={(e) => setExpectedDate(e.target.value)} className="min-h-[44px]" />
         </div>
 
         {/* Add Products */}
@@ -150,6 +150,7 @@ export default function NewPurchaseOrderPage() {
               placeholder="Search product by name or SKU..."
               value={productSearch}
               onChange={(e) => setProductSearch(e.target.value)}
+              className="min-h-[44px]"
             />
             {productResults.length > 0 && (
               <div className="absolute top-full left-0 right-0 z-10 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
@@ -186,35 +187,38 @@ export default function NewPurchaseOrderPage() {
                   </div>
                   <div className="grid grid-cols-3 gap-2">
                     <div>
-                      <label className="text-xs text-slate-500">Qty</label>
+                      <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Qty</label>
                       <Input
                         type="number"
+                        inputMode="numeric"
                         value={item.quantity}
                         onChange={(e) => updateItem(index, "quantity", parseInt(e.target.value) || 0)}
                         min="1"
-                        className="text-sm"
+                        className="text-sm min-h-[44px] tabular-nums"
                       />
                     </div>
                     <div>
-                      <label className="text-xs text-slate-500">Unit Price</label>
+                      <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Unit Price</label>
                       <Input
                         type="number"
+                        inputMode="decimal"
                         value={item.unitPrice}
                         onChange={(e) => updateItem(index, "unitPrice", parseFloat(e.target.value) || 0)}
-                        className="text-sm"
+                        className="text-sm min-h-[44px] tabular-nums"
                       />
                     </div>
                     <div>
-                      <label className="text-xs text-slate-500">GST %</label>
+                      <label className="block text-[11px] font-medium text-slate-600 mb-0.5">GST %</label>
                       <Input
                         type="number"
+                        inputMode="decimal"
                         value={item.gstRate}
                         onChange={(e) => updateItem(index, "gstRate", parseFloat(e.target.value) || 0)}
-                        className="text-sm"
+                        className="text-sm min-h-[44px] tabular-nums"
                       />
                     </div>
                   </div>
-                  <p className="text-xs text-right text-slate-500 mt-1">
+                  <p className="text-xs text-right text-slate-500 mt-1 tabular-nums">
                     Line: {formatCurrency(item.quantity * item.unitPrice * (1 + item.gstRate / 100))}
                   </p>
                 </CardContent>
@@ -226,15 +230,15 @@ export default function NewPurchaseOrderPage() {
               <CardContent className="p-3 space-y-1">
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-500">Subtotal</span>
-                  <span className="text-slate-700">{formatCurrency(subtotal)}</span>
+                  <span className="text-slate-700 tabular-nums">{formatCurrency(subtotal)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-500">GST</span>
-                  <span className="text-slate-700">{formatCurrency(gstTotal)}</span>
+                  <span className="text-slate-700 tabular-nums">{formatCurrency(gstTotal)}</span>
                 </div>
                 <div className="flex justify-between text-sm font-bold border-t pt-1">
                   <span className="text-slate-900">Grand Total</span>
-                  <span className="text-slate-900">{formatCurrency(subtotal + gstTotal)}</span>
+                  <span className="text-slate-900 tabular-nums">{formatCurrency(subtotal + gstTotal)}</span>
                 </div>
               </CardContent>
             </Card>
@@ -248,13 +252,20 @@ export default function NewPurchaseOrderPage() {
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             rows={2}
-            className="flex w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
+            className="flex w-full min-h-[44px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
           />
         </div>
 
-        <Button type="submit" size="lg" disabled={!vendorId || items.length === 0 || submitting} className="w-full bg-blue-600 hover:bg-blue-700">
-          {submitting ? "Creating..." : "Create Purchase Order"}
-        </Button>
+        <div>
+          <Button type="submit" size="lg" disabled={!vendorId || items.length === 0 || submitting} className="w-full min-h-[48px] bg-green-600 hover:bg-green-700 text-white">
+            {submitting ? "Creating..." : "Create Purchase Order"}
+          </Button>
+          {(!vendorId || items.length === 0) && !submitting && (
+            <p className="text-xs text-slate-500 mt-1.5 text-center">
+              {!vendorId ? "Select a vendor to continue" : "Add at least one product to continue"}
+            </p>
+          )}
+        </div>
       </form>
     </div>
   );

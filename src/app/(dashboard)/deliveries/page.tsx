@@ -8,6 +8,7 @@ import { Loader2, Truck, Trash2 } from "lucide-react";
 import { useDebounce, getAging, AGING_BADGE } from "@/lib/utils";
 import { usePermissions } from "@/lib/use-permissions";
 import { Badge } from "@/components/ui/badge";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
 import { DesktopTable } from "@/components/desktop-table";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
@@ -245,9 +246,7 @@ export default function DeliveriesPage() {
 
       {/* Delivery Cards */}
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
-        </div>
+        <SkeletonList count={6} type="card" />
       ) : deliveries.length === 0 ? (
         <div className="text-center py-12">
           <Truck className="h-8 w-8 text-slate-300 mx-auto mb-2" />
