@@ -4,12 +4,12 @@ export const maxDuration = 60; // Approve step now fetches bill details from Zoh
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // POST — approve or reject a pull
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireAuth(["ADMIN", "SUPERVISOR", "INWARDS_EXECUTIVE", "OUTWARDS_EXECUTIVE", "ACCOUNTS_MANAGER", "PURCHASE_MANAGER"]);
+    const user = await requireFeature("zoho", "approve");
     const body = await req.json();
     const { pullId, action, entityType, previewIds, source } = body as {
       pullId: string; action: "approve" | "reject"; entityType?: string; previewIds?: string[]; source?: string;
@@ -79,7 +79,12 @@ export async function POST(req: NextRequest) {
       defaultBrand = await prisma.brand.create({ data: { name: "Imported" } });
     }
 
-    const adminUser = await prisma.user.findFirst({ where: { role: "ADMIN" } });
+    // Imported records are attributed to a system-role account when one exists, so the audit
+    // trail doesn't credit whoever happened to click Approve.
+    const adminUser = await prisma.user.findFirst({
+      where: { role: { isSystem: true }, isActive: true },
+      orderBy: { createdAt: "asc" },
+    });
     const systemUserId = adminUser?.id || user.id;
 
     for (const preview of previews) {

@@ -3,15 +3,16 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { userCan } from "@/lib/rbac";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireAuth(["ADMIN", "SUPERVISOR", "PURCHASE_MANAGER", "ACCOUNTS_MANAGER", "INWARDS_EXECUTIVE", "OUTWARDS_EXECUTIVE"]);
+    const user = await requireFeature("stock_audit", "view");
     const { id } = await params;
 
     // Clerks/Mechanic can only access their assigned stock counts
-    if (["INWARDS_EXECUTIVE", "OUTWARDS_EXECUTIVE"].includes(user.role)) {
+    if (!(await userCan(user.id, "stock_audit", "approve"))) {
       const sc = await prisma.stockCount.findUnique({ where: { id }, select: { assignedToId: true } });
       if (!sc) return errorResponse("Stock count not found", 404);
       if (sc.assignedToId !== user.id) return errorResponse("You can only access stock counts assigned to you", 403);
@@ -103,14 +104,14 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireAuth(["ADMIN", "SUPERVISOR", "PURCHASE_MANAGER", "ACCOUNTS_MANAGER", "INWARDS_EXECUTIVE", "OUTWARDS_EXECUTIVE"]);
+    const user = await requireFeature("stock_audit", "edit");
     const { id } = await params;
 
     // ADMIN cannot save counts — only approve/reject
-    if (user.role === "ADMIN") return errorResponse("Admin can only approve or reject stock counts", 403);
+    if (await userCan(user.id, "stock_audit", "approve")) return errorResponse("Admin can only approve or reject stock counts", 403);
 
     // Clerks/Mechanic can only edit their assigned stock counts
-    if (["INWARDS_EXECUTIVE", "OUTWARDS_EXECUTIVE"].includes(user.role)) {
+    if (!(await userCan(user.id, "stock_audit", "approve"))) {
       const sc = await prisma.stockCount.findUnique({ where: { id }, select: { assignedToId: true } });
       if (!sc) return errorResponse("Stock count not found", 404);
       if (sc.assignedToId !== user.id) return errorResponse("You can only edit stock counts assigned to you", 403);
@@ -156,11 +157,11 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 // PATCH — Refresh systemQty from current product stock
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireAuth(["ADMIN", "SUPERVISOR", "PURCHASE_MANAGER", "ACCOUNTS_MANAGER", "INWARDS_EXECUTIVE", "OUTWARDS_EXECUTIVE"]);
+    const user = await requireFeature("stock_audit", "edit");
     const { id } = await params;
 
     // Clerks/Mechanic can only refresh their assigned stock counts
-    if (["INWARDS_EXECUTIVE", "OUTWARDS_EXECUTIVE"].includes(user.role)) {
+    if (!(await userCan(user.id, "stock_audit", "approve"))) {
       const sc = await prisma.stockCount.findUnique({ where: { id }, select: { assignedToId: true } });
       if (!sc) return errorResponse("Stock count not found", 404);
       if (sc.assignedToId !== user.id) return errorResponse("You can only access stock counts assigned to you", 403);

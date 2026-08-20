@@ -3,14 +3,14 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { parseExcelBuffer } from "@/lib/excel-parser";
 import { parsePdfWithAI } from "@/lib/pdf-parser";
 import { runMatchPipeline, populateBchContext } from "@/lib/brand-stock-matcher";
 
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireAuth(["ADMIN", "PURCHASE_MANAGER", "SUPERVISOR"]);
+    const user = await requireFeature("purchase_orders", "create");
 
     const formData = await req.formData();
     const file = formData.get("file") as File | null;

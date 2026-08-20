@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 const DEFAULT_TEMPLATES = {
   scheduled: `Hello {{customerName}},
@@ -45,7 +45,7 @@ Thank you!
 
 export async function GET() {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR", "OUTWARDS_EXECUTIVE"]);
+    await requireFeature("whatsapp_templates", "view");
 
     const config = await prisma.alertConfig.findUnique({ where: { id: "singleton" } });
     const templates = (config?.whatsappTemplates as Record<string, string>) || {};

@@ -2,7 +2,7 @@ export const revalidate = 120; // cache 2 min
 
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 interface PersonStats {
   name: string;
@@ -22,7 +22,7 @@ interface CriticalAlert {
 
 export async function GET() {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("dashboard", "view");
 
     const now = new Date();
     const todayStart = new Date(now);

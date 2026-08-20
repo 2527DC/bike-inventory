@@ -3,12 +3,12 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // GET — List daily settlements
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR", "ACCOUNTS_MANAGER"]);
+    await requireFeature("pos", "view");
     const { searchParams } = new URL(req.url);
     const dateFrom = searchParams.get("dateFrom");
     const dateTo = searchParams.get("dateTo");
@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
 // POST — Create a daily settlement from POS sessions for a given date
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR", "ACCOUNTS_MANAGER"]);
+    await requireFeature("pos", "create");
     const body = await req.json();
     const { date } = body as { date: string };
 
@@ -104,7 +104,7 @@ export async function POST(req: NextRequest) {
 // DELETE — Delete a settlement and its linked sessions (admin only)
 export async function DELETE(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("pos", "delete");
     const body = await req.json();
     const { id, deleteType, sessionId } = body as { id?: string; deleteType?: "settlement" | "session"; sessionId?: string };
 

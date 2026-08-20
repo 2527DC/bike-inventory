@@ -80,7 +80,7 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
   const router = useRouter();
   const { data: session } = useSession();
   const role = (session?.user as { role?: string })?.role || "";
-  const { canEdit: canEditCheck, canApprove: canApproveCheck } = usePermissions(role);
+  const { canEdit: canEditCheck, canApprove: canApproveCheck } = usePermissions();
   const isAdmin = role === "ADMIN" || role === "CEO";
   const canDeliver = canEditCheck("inbound");
   const canApprove = canApproveCheck("inbound");

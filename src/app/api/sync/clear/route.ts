@@ -2,12 +2,12 @@ export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // GET — show stuck syncs
 export async function GET() {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("zoho", "fetch");
 
     const [runningSyncs, stuckPulls] = await Promise.all([
       prisma.syncLog.findMany({
@@ -36,7 +36,7 @@ export async function GET() {
 // POST — clear all stuck syncs
 export async function POST() {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("zoho", "fetch");
 
     const [clearedSyncs, clearedPulls] = await Promise.all([
       prisma.syncLog.updateMany({

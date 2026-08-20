@@ -115,7 +115,7 @@ export default function SettlementDetailPage({ params }: { params: Promise<{ id:
   const { id } = use(params);
   const { data: session } = useSession();
   const role = (session?.user as { role?: string })?.role || "";
-  const { canView } = usePermissions(role);
+  const { canView } = usePermissions();
   const canAccess = canView("bills");
 
   const [settlement, setSettlement] = useState<Settlement | null>(null);

@@ -110,29 +110,39 @@ export const stockCountUpdateSchema = z.object({
     .optional(),
 });
 
+// Roles are rows now, not an enum — the client sends the role's id and the API verifies it
+// exists. Permissions are never accepted on a user; they belong to the role.
 export const userSchema = z.object({
   name: z.string().min(1, "Name is required"),
   email: z.string().email("Invalid email"),
-  password: z.string().min(6, "Password must be at least 6 characters"),
-  role: z.enum([
-    "ADMIN",
-    "SUPERVISOR",
-    "PURCHASE_MANAGER",
-    "ACCOUNTS_MANAGER",
-    "INWARDS_EXECUTIVE",
-    "OUTWARDS_EXECUTIVE",
-    "CUSTOM",
-  ]),
+  roleId: z.string().min(1, "Role is required"),
   accessCode: z.string().min(1, "Access code is required"),
-  customRoleName: z.string().optional(),
-  permissions: z.record(z.string(), z.object({
-    view: z.boolean(),
-    create: z.boolean(),
-    edit: z.boolean(),
-    delete: z.boolean(),
-    approve: z.boolean(),
-    fetch: z.boolean(),
-  })).optional(),
+  isActive: z.boolean().optional(),
+});
+
+export const userUpdateSchema = userSchema.partial().extend({
+  accessCode: z.string().min(1).optional(),
+});
+
+// ─── RBAC ────────────────────────────────────────────────────────────────────
+
+export const roleCreateSchema = z.object({
+  key: z
+    .string()
+    .min(2, "Key is required")
+    .max(40)
+    .regex(/^[A-Za-z][A-Za-z0-9_ -]*$/, "Key must start with a letter"),
+  name: z.string().min(1, "Name is required").max(60),
+  description: z.string().max(300).optional(),
+  permissionIds: z.array(z.string()).optional(),
+});
+
+export const roleUpdateSchema = z.object({
+  name: z.string().min(1).max(60).optional(),
+  description: z.string().max(300).nullable().optional(),
+  isActive: z.boolean().optional(),
+  // The complete desired grant set. Omit to leave grants untouched.
+  permissionIds: z.array(z.string()).optional(),
 });
 
 export const vendorSchema = z.object({

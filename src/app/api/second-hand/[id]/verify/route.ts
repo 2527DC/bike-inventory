@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // POST: Verify a second-hand cycle (Ranju or Admin)
 export async function POST(
@@ -10,7 +10,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await requireAuth(["ADMIN", "SUPERVISOR"]);
+    const user = await requireFeature("second_hand", "approve");
     const { id } = await params;
 
     const cycle = await prisma.secondHandCycle.findUnique({ where: { id } });

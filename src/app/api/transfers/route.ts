@@ -3,7 +3,8 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, paginatedResponse, parseSearchParams } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { userCan } from "@/lib/rbac";
 import { z } from "zod";
 
 const transferSchema = z.object({
@@ -17,7 +18,7 @@ const transferSchema = z.object({
 // GET: List transfers
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth();
+    await requireFeature("transfers", "view");
     const { page, limit, skip, searchParams } = parseSearchParams(req.url);
     const status = searchParams.get("status"); // PENDING, APPROVED, REJECTED, all
 
@@ -52,7 +53,7 @@ export async function GET(req: NextRequest) {
 // POST: Create a transfer request
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireAuth(["ADMIN", "SUPERVISOR", "INWARDS_EXECUTIVE"]);
+    const user = await requireFeature("transfers", "create");
     const body = await req.json();
     const data = transferSchema.parse(body);
 
@@ -76,7 +77,7 @@ export async function POST(req: NextRequest) {
     }
 
     // For ADMIN: auto-approve. For others: create as pending
-    const isAutoApprove = user.role === "ADMIN";
+    const isAutoApprove = await userCan(user.id, "transfers", "approve");
     const status = isAutoApprove ? "APPROVED" : "PENDING";
 
     const result = await prisma.$transaction(async (tx) => {

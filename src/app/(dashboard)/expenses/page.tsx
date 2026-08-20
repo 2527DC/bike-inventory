@@ -45,7 +45,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 export default function ExpensesPage() {
   const { data: session, status: sessionStatus } = useSession();
   const role = (session?.user as { role?: string })?.role || "";
-  const { canView } = usePermissions(role);
+  const { canView } = usePermissions();
   const canAccess = canView("expenses");
 
   const [expenses, setExpenses] = useState<ExpenseItem[]>([]);

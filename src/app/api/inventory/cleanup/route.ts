@@ -4,13 +4,13 @@ export const maxDuration = 60;
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // DELETE — remove all Zoho-imported transactions + optionally reverse stock
 // Query param: ?reverse=true (default) reverses stock, ?reverse=false keeps stock
 export async function DELETE(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("stock", "delete");
 
     const reverseStock = req.nextUrl.searchParams.get("reverse") !== "false";
     let stockReversals = 0;
@@ -68,7 +68,7 @@ export async function DELETE(req: NextRequest) {
 // GET — preview what would be deleted (dry run)
 export async function GET() {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("stock", "view");
 
     const zohoTransactions = await prisma.inventoryTransaction.count({
       where: { notes: { contains: "[ZOHO]" } },

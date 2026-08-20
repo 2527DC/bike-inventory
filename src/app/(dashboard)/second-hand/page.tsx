@@ -53,7 +53,7 @@ function formatINR(n: number) {
 export default function SecondHandPage() {
   const { data: session } = useSession();
   const role = (session?.user as { role?: string })?.role || "";
-  const { canCreate: canCreateCheck } = usePermissions(role);
+  const { canCreate: canCreateCheck } = usePermissions();
   const canAdd = canCreateCheck("second_hand");
   const isAdmin = role === "ADMIN" || role === "CEO";
 

@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 interface PriceCheckItem {
   productId: string;
@@ -22,7 +22,7 @@ interface PriceCheckItem {
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("stock", "view");
 
     const { searchParams } = new URL(req.url);
     const mismatchOnly = searchParams.get("mismatchOnly") === "true";

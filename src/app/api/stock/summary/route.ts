@@ -2,11 +2,11 @@ export const revalidate = 120; // cache stock summary 2 minutes
 
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function GET() {
   try {
-    await requireAuth();
+    await requireFeature("stock", "view");
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 

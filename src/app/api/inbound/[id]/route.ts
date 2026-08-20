@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { BIN_TRACKING_ENABLED, DEFAULT_STOCK_LOCATION, isStockLocation, stockLocationLabel, type StockLocation } from "@/lib/inventory-config";
 import { adjustLocationQty } from "@/lib/stock-location";
 
@@ -13,7 +13,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireAuth();
+    await requireFeature("inbound", "view");
     const { id } = await params;
 
     const shipment = await prisma.inboundShipment.findUnique({
@@ -52,7 +52,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await requireAuth(["ADMIN", "SUPERVISOR", "INWARDS_EXECUTIVE", "PURCHASE_MANAGER"]);
+    const user = await requireFeature("inbound", "edit");
     const { id } = await params;
     const body = await req.json();
 
@@ -210,7 +210,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("inbound", "delete");
     const { id } = await params;
 
     const shipment = await prisma.inboundShipment.findUnique({

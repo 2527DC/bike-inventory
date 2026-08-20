@@ -3,11 +3,11 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function GET() {
   try {
-    await requireAuth();
+    await requireFeature("problems", "view");
     const problems = await prisma.appProblem.findMany({
       include: { user: { select: { name: true } } },
       orderBy: { createdAt: "desc" },
@@ -22,7 +22,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireAuth();
+    const user = await requireFeature("problems", "create");
     const body = await req.json();
     const { text, category } = body as { text: string; category?: string };
 
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "CEO"]);
+    await requireFeature("problems", "edit");
     const body = await req.json();
     const { id, status } = body as { id: string; status: string };
 

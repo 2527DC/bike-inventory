@@ -21,16 +21,13 @@ export default function DesktopLayout({ children }: { children: React.ReactNode 
     redirect("/login");
   }
 
-  const userRole = (session?.user as { role?: string })?.role;
-  if (!userRole) {
+  if (!(session?.user as { userId?: string })?.userId) {
     redirect("/login");
   }
 
-  const role = userRole as Role;
-
   return (
     <div className="flex h-screen bg-slate-50">
-      <Sidebar role={role} />
+      <Sidebar />
       <div className="flex-1 flex flex-col overflow-hidden">
         <DesktopHeader />
         <main className="flex-1 overflow-y-auto p-6">

@@ -48,7 +48,7 @@ function formatCurrency(amount: number) {
 export default function ReceivablesPage() {
   const { data: session } = useSession();
   const role = (session?.user as { role?: string })?.role || "";
-  const { canFetch: canFetchCheck } = usePermissions(role);
+  const { canFetch: canFetchCheck } = usePermissions();
   const canFetch = canFetchCheck("customers");
 
   const [invoices, setInvoices] = useState<InvoiceItem[]>([]);

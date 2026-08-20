@@ -52,7 +52,7 @@ type StatusFilter = "all" | "PENDING" | "APPROVED" | "REJECTED";
 export default function TransfersPage() {
   const { data: session } = useSession();
   const role = (session?.user as { role?: string })?.role || "";
-  const { canApprove: canApproveCheck } = usePermissions(role);
+  const { canApprove: canApproveCheck } = usePermissions();
   const canApprove = canApproveCheck("transfers");
   const [orders, setOrders] = useState<TransferOrder[]>([]);
   const [loading, setLoading] = useState(true);

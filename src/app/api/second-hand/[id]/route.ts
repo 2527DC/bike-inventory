@@ -3,7 +3,8 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { userCan } from "@/lib/rbac";
 import { z } from "zod";
 
 const updateSchema = z.object({
@@ -22,7 +23,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await requireAuth();
+    const user = await requireFeature("second_hand", "view");
     const { id } = await params;
 
     const cycle = await prisma.secondHandCycle.findUnique({
@@ -36,7 +37,7 @@ export async function GET(
     if (!cycle) return errorResponse("Not found", 404);
 
     // Hide cost/price from non-admin
-    if (user.role !== "ADMIN") {
+    if (!(await userCan(user.id, "second_hand", "approve"))) {
       const { costPrice, sellingPrice, ...rest } = cycle;
       return successResponse(rest);
     }
@@ -53,7 +54,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await requireAuth(["ADMIN", "OUTWARDS_EXECUTIVE"]);
+    const user = await requireFeature("second_hand", "edit");
     const { id } = await params;
     const body = await req.json();
     const data = updateSchema.parse(body);
@@ -62,12 +63,12 @@ export async function PUT(
     if (!existing) return errorResponse("Not found", 404);
 
     // Only ADMIN can set selling price
-    if (data.sellingPrice !== undefined && user.role !== "ADMIN") {
+    if (data.sellingPrice !== undefined && !(await userCan(user.id, "second_hand", "approve"))) {
       return errorResponse("Only admin can set selling price", 403);
     }
 
     // Only ADMIN can archive
-    if (data.isArchived !== undefined && user.role !== "ADMIN") {
+    if (data.isArchived !== undefined && !(await userCan(user.id, "second_hand", "approve"))) {
       return errorResponse("Only admin can archive cycles", 403);
     }
 

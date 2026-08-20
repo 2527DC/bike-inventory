@@ -1,11 +1,11 @@
 export const dynamic = "force-dynamic";
 
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function GET() {
   try {
-    await requireAuth();
+    await requireFeature("dashboard", "view");
     return successResponse({
       note: "Tasks, SOPs, and checklists have been moved to the Ops Hub app.",
       tasks: { total: 0, pending: 0, inProgress: 0, blocked: 0, doneThisWeek: 0 },

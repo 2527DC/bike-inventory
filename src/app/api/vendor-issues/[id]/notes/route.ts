@@ -13,7 +13,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await requireFeature("vendor_issues", "edit", ["ADMIN", "SUPERVISOR", "PURCHASE_MANAGER", "ACCOUNTS_MANAGER", "STORE_MANAGER", "SERVICE_MANAGER"]);
+    const user = await requireFeature("vendor_issues", "edit");
     const { id } = await params;
     const { text } = vendorIssueNoteSchema.parse(await req.json());
 

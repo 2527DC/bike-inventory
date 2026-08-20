@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db";
 import { ZohoClient } from "@/lib/zoho";
 import { ZakyaClient } from "@/lib/zakya";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 /*
  * Lightweight invoice search — single Zoho API call, no pull pipeline.
@@ -14,7 +14,7 @@ import { requireAuth, AuthError } from "@/lib/auth-helpers";
  */
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR", "ACCOUNTS_MANAGER", "OUTWARDS_EXECUTIVE", "INWARDS_EXECUTIVE"]);
+    await requireFeature("deliveries", "fetch");
     const { query } = (await req.json()) as { query: string };
 
     if (!query || query.trim().length < 3) {

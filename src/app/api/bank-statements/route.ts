@@ -3,12 +3,12 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError, getServerSession } from "@/lib/auth-helpers";
+import { requireFeature, AuthError, getServerSession } from "@/lib/auth-helpers";
 
 // GET — List uploaded statements
 export async function GET() {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR", "ACCOUNTS_MANAGER"]);
+    await requireFeature("bills", "view");
 
     const statements = await prisma.bankStatement.findMany({
       orderBy: { createdAt: "desc" },
@@ -27,7 +27,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession();
-    await requireAuth(["ADMIN", "SUPERVISOR", "ACCOUNTS_MANAGER"]);
+    await requireFeature("bills", "create");
     const userId = (session?.user as { userId?: string })?.userId || "";
 
     const formData = await req.formData();

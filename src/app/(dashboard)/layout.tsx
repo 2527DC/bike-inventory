@@ -26,17 +26,14 @@ export default function DashboardLayout({
     redirect("/login");
   }
 
-  const userRole = (session?.user as { role?: string })?.role;
-  if (!userRole) {
+  if (!(session?.user as { userId?: string })?.userId) {
     redirect("/login");
   }
-
-  const role = userRole as Role;
 
   return (
     <div className="flex min-h-screen">
       {/* Desktop sidebar (lg+) */}
-      <AppSidebar role={role} className="hidden lg:flex" />
+      <AppSidebar className="hidden lg:flex" />
 
       <div className="flex flex-col flex-1 min-w-0 min-h-screen">
         {/* Mobile top header (hidden on desktop — sidebar carries branding/user) */}
@@ -50,7 +47,7 @@ export default function DashboardLayout({
 
         {/* Mobile bottom nav (hidden on desktop) */}
         <div className="lg:hidden">
-          <BottomNav role={role} />
+          <BottomNav />
         </div>
       </div>
     </div>

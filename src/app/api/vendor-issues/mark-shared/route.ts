@@ -10,9 +10,7 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 // page view so the ops manager — including CUSTOM roles with vendor_issues access — can trigger it.
 export async function PATCH(req: NextRequest) {
   try {
-    const user = await requireFeature("vendor_issues", "view", [
-      "ADMIN", "CEO", "SUPERVISOR", "PURCHASE_MANAGER", "ACCOUNTS_MANAGER", "STORE_MANAGER", "SERVICE_MANAGER",
-    ]);
+    const user = await requireFeature("vendor_issues", "view");
 
     const body = await req.json();
     const ids: string[] = Array.isArray(body?.ids)

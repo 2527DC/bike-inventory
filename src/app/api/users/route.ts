@@ -5,11 +5,11 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, paginatedResponse, parseSearchParams } from "@/lib/api-utils";
 import { userSchema } from "@/lib/validations";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR", "ACCOUNTS_MANAGER"]);
+    await requireFeature("team", "view");
     const { page, limit, skip, search } = parseSearchParams(req.url);
 
     const where = {
@@ -28,8 +28,8 @@ export async function GET(req: NextRequest) {
           id: true,
           name: true,
           email: true,
-          role: true,
-          customRoleName: true,
+          roleId: true,
+          role: { select: { id: true, key: true, name: true } },
           isActive: true,
           createdAt: true,
           updatedAt: true,
@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("team", "create");
     const body = await req.json();
     const data = userSchema.parse(body);
 
@@ -68,6 +68,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // The role must exist and be usable. Permissions are never set on the user — they come
+    // from whatever the role holds, which is what makes access editable after the fact.
+    const role = await prisma.role.findUnique({
+      where: { id: data.roleId },
+      select: { id: true, isActive: true },
+    });
+    if (!role) return errorResponse("Role not found", 400);
+    if (!role.isActive) return errorResponse("That role is deactivated", 400);
+
     // Access code IS the login credential — hash it as the password
     const hashedPassword = await bcrypt.hash(data.accessCode.toUpperCase(), 10);
 
@@ -76,19 +85,14 @@ export async function POST(req: NextRequest) {
         name: data.name,
         email: data.email,
         password: hashedPassword,
-        role: data.role,
+        roleId: role.id,
         accessCode: data.accessCode.toUpperCase(),
-        ...(data.role === "CUSTOM" ? {
-          customRoleName: data.customRoleName || "Custom",
-          permissions: (data.permissions || {}) as object,
-        } : {}),
       },
       select: {
         id: true,
         name: true,
         email: true,
-        role: true,
-        customRoleName: true,
+        role: { select: { id: true, key: true, name: true } },
         isActive: true,
         createdAt: true,
       },

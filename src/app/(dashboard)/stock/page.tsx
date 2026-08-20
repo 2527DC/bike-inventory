@@ -109,7 +109,7 @@ export default function StockPage() {
   const userRole = (session?.user as { role?: string })?.role || "";
   const canBulkEdit = ["ADMIN", "SUPERVISOR", "ACCOUNTS_MANAGER"].includes(userRole);
 
-  const { canFetch } = usePermissions(userRole);
+  const { canFetch } = usePermissions();
   const canFetchItems = canFetch("stock");
 
   // Fetch Items from Zoho

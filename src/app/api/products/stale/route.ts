@@ -3,12 +3,12 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // GET: Find products with no inward transactions in 90+ days
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR", "PURCHASE_MANAGER", "ACCOUNTS_MANAGER"]);
+    await requireFeature("stock", "view");
     const { searchParams } = new URL(req.url);
     const days = parseInt(searchParams.get("days") || "90", 10);
     const cutoff = new Date();
@@ -65,7 +65,7 @@ export async function GET(req: NextRequest) {
 // POST: Mark selected products as INACTIVE
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("stock", "create");
     const body = await req.json();
     const { productIds } = body;
 

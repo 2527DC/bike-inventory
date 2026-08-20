@@ -3,7 +3,8 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, paginatedResponse, parseSearchParams } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { userCan } from "@/lib/rbac";
 import { z } from "zod";
 import { BIN_TRACKING_ENABLED, stockLocationLabel } from "@/lib/inventory-config";
 import { adjustLocationQty, getLocationBreakdown } from "@/lib/stock-location";
@@ -25,7 +26,7 @@ const createSchema = z.object({
 // GET: List transfer orders
 export async function GET(req: NextRequest) {
   try {
-    const user = await requireAuth();
+    const user = await requireFeature("transfers", "view");
     const { page, limit, skip, searchParams } = parseSearchParams(req.url);
     const status = searchParams.get("status"); // PENDING, APPROVED, REJECTED, all
 
@@ -33,7 +34,7 @@ export async function GET(req: NextRequest) {
     const dateTo = searchParams.get("dateTo") || undefined;
 
     // Non-admin/supervisor users only see their own transfers
-    const canSeeAll = ["ADMIN", "SUPERVISOR"].includes(user.role);
+    const canSeeAll = await userCan(user.id, "transfers", "approve");
 
     const where = {
       ...(!canSeeAll && { createdById: user.id }),
@@ -80,7 +81,7 @@ export async function GET(req: NextRequest) {
 // POST: Create a new transfer order (any role)
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireAuth();
+    const user = await requireFeature("transfers", "create");
     const body = await req.json();
     const data = createSchema.parse(body);
 
@@ -138,7 +139,7 @@ export async function POST(req: NextRequest) {
     const orderNo = `${prefix}-${String(seq).padStart(4, "0")}`;
 
     // Auto-approve for ADMIN
-    const isAutoApprove = user.role === "ADMIN";
+    const isAutoApprove = await userCan(user.id, "transfers", "approve");
     const status = isAutoApprove ? "APPROVED" : "PENDING";
 
     const result = await prisma.$transaction(async (tx) => {

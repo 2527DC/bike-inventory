@@ -52,7 +52,7 @@ export default function SecondHandDetailPage({ params }: { params: Promise<{ id:
   const { id } = use(params);
   const { data: session } = useSession();
   const role = (session?.user as { role?: string })?.role || "";
-  const { canEdit: canEditCheck } = usePermissions(role);
+  const { canEdit: canEditCheck } = usePermissions();
   const isAdmin = role === "ADMIN" || role === "CEO";
   const canSell = canEditCheck("second_hand");
 

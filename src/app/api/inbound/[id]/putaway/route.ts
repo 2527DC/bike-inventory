@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // POST: Assign bins to delivered line items (post-delivery putaway)
 export async function POST(
@@ -11,7 +11,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await requireAuth(["ADMIN", "SUPERVISOR", "INWARDS_EXECUTIVE"]);
+    const user = await requireFeature("inbound", "approve");
     const { id } = await params;
     const body = await req.json();
     const items: Array<{ lineItemId: string; binId: string }> = body.items || [];

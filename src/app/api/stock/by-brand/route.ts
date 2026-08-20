@@ -2,11 +2,11 @@ export const revalidate = 60; // cache brand stock 1 minute
 
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function GET() {
   try {
-    await requireAuth();
+    await requireFeature("stock", "view");
 
     // Fetch brand summaries using groupBy — no need to load all 2765 products
     const [brands, brandStats, locStats] = await Promise.all([

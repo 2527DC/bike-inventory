@@ -9,15 +9,16 @@ import {
   parseSearchParams,
 } from "@/lib/api-utils";
 import { productSchema } from "@/lib/validations";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { userCan } from "@/lib/rbac";
 
 export async function GET(req: NextRequest) {
   try {
-    const user = await requireAuth();
+    const user = await requireFeature("stock", "view");
     const { page, limit, skip, sortBy, sortOrder, search, searchParams } =
       parseSearchParams(req.url);
 
-    const isAdmin = user.role === "ADMIN" || user.role === "CEO";
+    const isAdmin = await userCan(user.id, "cost_price", "view");
 
     const categoryId = searchParams.get("categoryId") || undefined;
     const brandId = searchParams.get("brandId") || undefined;
@@ -87,7 +88,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireAuth(["ADMIN", "PURCHASE_MANAGER"]);
+    const user = await requireFeature("stock", "create");
     const body = await req.json();
     const data = productSchema.parse(body);
 

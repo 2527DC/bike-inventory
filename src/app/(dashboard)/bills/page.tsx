@@ -63,7 +63,7 @@ function formatCurrency(amount: number) {
 export default function BillsPage() {
   const { data: session } = useSession();
   const role = (session?.user as { role?: string })?.role || "";
-  const { canFetch: canFetchCheck } = usePermissions(role);
+  const { canFetch: canFetchCheck } = usePermissions();
   const canFetchBills = canFetchCheck("bills");
 
   const [bills, setBills] = useState<BillItem[]>([]);

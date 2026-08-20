@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 interface LastDatesRow {
   productId: string;
@@ -10,7 +10,7 @@ interface LastDatesRow {
 
 export async function GET(request: Request) {
   try {
-    await requireAuth();
+    await requireFeature("stock", "view");
 
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search") || undefined;

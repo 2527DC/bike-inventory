@@ -2,12 +2,12 @@ export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // POST: Auto-match waiting pre-bookings to in-transit shipment line items
 export async function POST() {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR"]);
+    await requireFeature("deliveries", "approve");
 
     const waitingPreBookings = await prisma.preBooking.findMany({
       where: { status: "WAITING" },

@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { prisma } from "@/lib/db";
 import { ZohoClient } from "@/lib/zoho";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 interface ImportedItem {
   sku: string;
@@ -19,7 +19,7 @@ interface ImportedItem {
 
 export async function POST() {
   try {
-    const user = await requireAuth(["ADMIN"]);
+    const user = await requireFeature("zoho", "fetch");
 
     const zoho = new ZohoClient();
     const ready = await zoho.init();

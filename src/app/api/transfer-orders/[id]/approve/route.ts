@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { BIN_TRACKING_ENABLED, stockLocationLabel, type StockLocation } from "@/lib/inventory-config";
 import { adjustLocationQty, getLocationBreakdown } from "@/lib/stock-location";
 
@@ -13,7 +13,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await requireAuth(["ADMIN", "SUPERVISOR", "ACCOUNTS_MANAGER"]);
+    const user = await requireFeature("transfers", "approve");
     const { id } = await params;
     const body = await req.json();
     const { action, rejectionNote } = body; // "approve" or "reject"

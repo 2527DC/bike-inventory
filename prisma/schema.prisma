@@ -8,18 +8,86 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-enum Role {
-  CEO
-  ADMIN
-  SUPERVISOR
-  PURCHASE_MANAGER
-  ACCOUNTS_MANAGER
-  INWARDS_EXECUTIVE
-  OUTWARDS_EXECUTIVE
-  STORE_MANAGER
-  SALES_MANAGER
-  SERVICE_MANAGER
-  CUSTOM
+// ─── RBAC ────────────────────────────────────────────────────
+// Roles, modules and permissions are DATA, not code. The former `enum Role` and the
+// hardcoded permission maps in src/lib/permissions-server.ts have been replaced by the
+// Module / Permission / Role / RolePermission tables below, so access can be changed at
+// runtime without a redeploy.
+//
+//   Module  1──*  Permission  *──*  Role  1──*  User
+//                        └── RolePermission ──┘
+//
+// A module is a functional area ("stock"). A permission is one action on one module
+// ("stock.edit"). A role holds any number of permissions. A user has exactly one role.
+
+model Module {
+  id          String   @id @default(cuid())
+  key         String   @unique // stable identifier used in code: "stock", "inbound"
+  label       String // human label shown in the sidebar and the admin editor
+  description String?
+  icon        String? // lucide icon name, resolved client-side
+  route       String? // primary route, used to build the sidebar
+  group       String? // sidebar grouping: "Accounts", "Purchase", "Operations", "Admin"
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  permissions Permission[]
+
+  @@index([isActive, sortOrder])
+  @@map("modules")
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  key         String   @unique // "stock.edit" — module.key + "." + action
+  moduleId    String
+  action      String // view | create | edit | delete | approve | fetch
+  label       String
+  description String?
+  createdAt   DateTime @default(now())
+
+  module Module           @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  roles  RolePermission[]
+
+  @@unique([moduleId, action]) // one row per module+action
+  @@index([moduleId])
+  @@map("permissions")
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  key         String   @unique // "ADMIN" — stable identifier
+  name        String // "Administrator" — editable display name
+  description String?
+  isSystem    Boolean  @default(false) // system roles cannot be deleted or renamed
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       User[]
+  permissions RolePermission[]
+
+  @@index([isActive])
+  @@map("roles")
+}
+
+// Join table carrying the grants. A row's existence IS the grant — there is no
+// boolean column, so revoking is a delete and the table never holds "false" noise.
+model RolePermission {
+  id           String   @id @default(cuid())
+  roleId       String
+  permissionId String
+  createdAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+  @@map("role_permissions")
 }
 
 enum TransactionType {
@@ -154,9 +222,8 @@ model User {
   name          String
   email         String    @unique
   password      String
-  role          Role
-  customRoleName String?
-  permissions   Json?
+  roleId        String
+  role          Role      @relation(fields: [roleId], references: [id])
   accessCode    String    @unique
   isActive      Boolean   @default(true)
   createdAt     DateTime  @default(now())
@@ -208,6 +275,8 @@ model User {
   opsActivityLogs    OpsActivityLog[] @relation("OpsActivityLoggedBy")
   brandStockUploads  BrandStockUpload[] @relation("BrandStockUploadedBy")
   reportedProblems   AppProblem[]       @relation("ProblemReportedBy")
+
+  @@index([roleId])
 }
 
 model Category {
@@ -997,7 +1066,6 @@ model AlertConfig {
   redFlagPhones   String?
   googleReviewLink String?
   whatsappTemplates Json?    // { scheduled, dispatched, delivered } message templates
-  rolePermissions Json?      // { ROLE: { feature: { view, edit, delete, approve } } }
   updatedAt       DateTime @updatedAt
 }
 

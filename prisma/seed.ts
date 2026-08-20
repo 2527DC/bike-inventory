@@ -1,33 +1,16 @@
 import { PrismaClient } from "@prisma/client";
-import bcrypt from "bcryptjs";
+import { seedRbac } from "./seed-rbac";
 
 const prisma = new PrismaClient();
 
 async function main() {
   console.log("Seeding database...");
 
-  // Create users — password is the hashed access code (auth.ts compares accessCode against password)
-  const userData = [
-    { name: "Syed Ibrahim", email: "syed@bikeinventory.local", role: "ADMIN" as const, accessCode: "SYED123" },
-    { name: "Srinu", email: "srinu@bikeinventory.local", role: "SUPERVISOR" as const, accessCode: "SRINU123" },
-    { name: "Sravan", email: "sravan@bikeinventory.local", role: "ACCOUNTS_MANAGER" as const, accessCode: "SRAVAN123" },
-    { name: "Nithin", email: "nithin@bikeinventory.local", role: "INWARDS_EXECUTIVE" as const, accessCode: "NITHIN123" },
-    { name: "Ranjitha", email: "ranjitha@bikeinventory.local", role: "OUTWARDS_EXECUTIVE" as const, accessCode: "RANJITHA123" },
-    { name: "Abhi Gowda", email: "abhi@bikeinventory.local", role: "PURCHASE_MANAGER" as const, accessCode: "ABHI123" },
-  ];
-
-  const users = [];
-  for (const u of userData) {
-    const hashedPassword = await bcrypt.hash(u.accessCode, 10);
-    const user = await prisma.user.upsert({
-      where: { email: u.email },
-      update: { password: hashedPassword },
-      create: { ...u, password: hashedPassword },
-    });
-    users.push(user);
-  }
-
-  console.log(`Created ${users.length} users`);
+  // RBAC first — modules, permissions, the ADMIN role and the single admin user.
+  // Everything below needs the admin to exist, since it owns the sample records.
+  console.log("\nRBAC:");
+  const { admin } = await seedRbac(prisma);
+  console.log("");
 
   // Create categories
   const categories = await Promise.all([
@@ -158,16 +141,13 @@ async function main() {
 
   console.log(`Created ${serialCount} serial items`);
 
-  // Create sample transactions
-  const nithin = users[3]; // INWARDS_EXECUTIVE
-  const ranjitha = users[4]; // OUTWARDS_EXECUTIVE
-
+  // Create sample transactions. The admin is the only seeded user, so it owns them.
   const txns = [
-    { type: "INWARD" as const, productId: products[3].id, quantity: 20, previousStock: 25, newStock: 45, referenceNo: "INV-2024-0312", userId: nithin.id },
-    { type: "INWARD" as const, productId: products[8].id, quantity: 10, previousStock: 12, newStock: 22, referenceNo: "INV-2024-0313", userId: nithin.id },
-    { type: "OUTWARD" as const, productId: products[0].id, quantity: 1, previousStock: 9, newStock: 8, referenceNo: "SALE-0456", userId: ranjitha.id },
-    { type: "OUTWARD" as const, productId: products[3].id, quantity: 3, previousStock: 48, newStock: 45, referenceNo: "SALE-0457", userId: ranjitha.id },
-    { type: "OUTWARD" as const, productId: products[6].id, quantity: 2, previousStock: 14, newStock: 12, referenceNo: "SALE-0458", userId: ranjitha.id },
+    { type: "INWARD" as const, productId: products[3].id, quantity: 20, previousStock: 25, newStock: 45, referenceNo: "INV-2024-0312", userId: admin.id },
+    { type: "INWARD" as const, productId: products[8].id, quantity: 10, previousStock: 12, newStock: 22, referenceNo: "INV-2024-0313", userId: admin.id },
+    { type: "OUTWARD" as const, productId: products[0].id, quantity: 1, previousStock: 9, newStock: 8, referenceNo: "SALE-0456", userId: admin.id },
+    { type: "OUTWARD" as const, productId: products[3].id, quantity: 3, previousStock: 48, newStock: 45, referenceNo: "SALE-0457", userId: admin.id },
+    { type: "OUTWARD" as const, productId: products[6].id, quantity: 2, previousStock: 14, newStock: 12, referenceNo: "SALE-0458", userId: admin.id },
   ];
 
   for (const txn of txns) {

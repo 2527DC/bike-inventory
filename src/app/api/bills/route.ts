@@ -4,12 +4,12 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, paginatedResponse, parseSearchParams } from "@/lib/api-utils";
 import { vendorBillSchema } from "@/lib/validations";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import type { BillStatus } from "@prisma/client";
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR", "PURCHASE_MANAGER", "ACCOUNTS_MANAGER"]);
+    await requireFeature("bills", "view");
     const { page, limit, skip, search, searchParams } = parseSearchParams(req.url);
     const status = searchParams.get("status") || undefined;
     const vendorId = searchParams.get("vendorId") || undefined;
@@ -85,7 +85,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "ACCOUNTS_MANAGER", "SUPERVISOR"]);
+    await requireFeature("bills", "create");
     const body = await req.json();
     const data = vendorBillSchema.parse(body);
 

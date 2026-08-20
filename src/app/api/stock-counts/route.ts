@@ -4,18 +4,19 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, paginatedResponse, parseSearchParams } from "@/lib/api-utils";
 import { stockCountSchema } from "@/lib/validations";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { userCan } from "@/lib/rbac";
 import { BIN_TRACKING_ENABLED, isStockLocation, type StockLocation } from "@/lib/inventory-config";
 import { getLocationQtyMap } from "@/lib/stock-location";
 
 export async function GET(req: NextRequest) {
   try {
-    const user = await requireAuth(["ADMIN", "SUPERVISOR", "PURCHASE_MANAGER", "ACCOUNTS_MANAGER", "INWARDS_EXECUTIVE", "OUTWARDS_EXECUTIVE", "STORE_MANAGER"]);
+    const user = await requireFeature("stock_audit", "view");
     const { page, limit, skip, searchParams } = parseSearchParams(req.url);
     const status = searchParams.get("status") || undefined;
 
     // Non-admins only see their own assigned stock counts
-    const isAdmin = ["ADMIN", "SUPERVISOR", "ACCOUNTS_MANAGER"].includes(user.role);
+    const isAdmin = await userCan(user.id, "stock_audit", "approve");
 
     const where = {
       ...(status && { status }),
@@ -63,7 +64,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireAuth(["ADMIN", "SUPERVISOR", "ACCOUNTS_MANAGER", "INWARDS_EXECUTIVE", "STORE_MANAGER"]);
+    const user = await requireFeature("stock_audit", "create");
     const body = await req.json();
     const data = stockCountSchema.parse(body);
 

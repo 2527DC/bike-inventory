@@ -7,7 +7,7 @@ import { ZohoClient } from "@/lib/zoho";
 import { ZakyaClient } from "@/lib/zakya";
 import { ZohoInventoryClient } from "@/lib/zoho-inventory";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 /*
  * 3-SOURCE MANUAL PULL (step-by-step):
@@ -20,7 +20,7 @@ import { requireAuth, AuthError } from "@/lib/auth-helpers";
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR", "INWARDS_EXECUTIVE", "OUTWARDS_EXECUTIVE", "ACCOUNTS_MANAGER", "PURCHASE_MANAGER"]);
+    await requireFeature("zoho", "fetch");
     const body = await req.json();
     const { step, pullId: existingPullId, fullImport, fromDate, searchText } = body as { step: string; pullId?: string; fullImport?: boolean; fromDate?: string; searchText?: string };
 

@@ -3,14 +3,14 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { ZakyaClient } from "@/lib/zakya";
 import { ZohoClient } from "@/lib/zoho";
 
 // GET — List POS sessions (from DB)
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR", "ACCOUNTS_MANAGER"]);
+    await requireFeature("pos", "view");
     const { searchParams } = new URL(req.url);
     const dateFrom = searchParams.get("dateFrom");
     const dateTo = searchParams.get("dateTo");
@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
 // POST — Fetch POS sessions from Zakya and save to DB
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR", "ACCOUNTS_MANAGER"]);
+    await requireFeature("pos", "create");
     const body = await req.json();
     const { dateFrom, dateTo, force } = body as { dateFrom: string; dateTo: string; force?: boolean };
 

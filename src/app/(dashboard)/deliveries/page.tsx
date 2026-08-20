@@ -23,7 +23,7 @@ import { BottomSheetModal } from "./_components/bottom-sheet-modal";
 export default function DeliveriesPage() {
   const { data: session } = useSession();
   const role = (session?.user as { role?: string })?.role || "";
-  const { canFetch } = usePermissions(role);
+  const { canFetch } = usePermissions();
   const canFetchInvoices = canFetch("deliveries");
   const isAdmin = role === "ADMIN" || role === "CEO";
 
