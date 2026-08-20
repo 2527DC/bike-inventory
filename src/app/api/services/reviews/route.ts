@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { serviceGuard } from "@/lib/services/guard";
 
-// GET — fetch job details for review page (public, no auth)
+// PUBLIC — no session required.
+//
+// The customer reaches this from a WhatsApp link after their bike is delivered; they have no
+// account and never will. The job's token (BCH-0042) is the credential, which is why this
+// route must NOT carry a permission check — adding one silently breaks every review link.
+//
+// Known weakness, inherited from the standalone app and left as-is rather than changed
+// blind: tokens are sequential, so they can be enumerated to read a job's customer name,
+// bike and mechanic. Fixing it properly means issuing an unguessable per-job review token
+// (as /fill/[token] already does for deliveries) and is a deliberate follow-up, not a
+// drive-by change to a customer-facing flow.
 export async function GET(req: NextRequest) {
-  const { error: authError } = await serviceGuard("service_reviews", "view");
-  if (authError) return authError;
-
   const token = req.nextUrl.searchParams.get("token");
   if (!token) {
     return NextResponse.json({ error: "Token required" }, { status: 400 });
@@ -34,11 +40,10 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ job });
 }
 
-// POST — submit review (public, no auth needed)
+// PUBLIC — the customer submits their own review, so there is no session to check.
+// Abuse is bounded by the checks below: the job must exist, must have a mechanic, and must
+// not already carry a review (one review per job, enforced by Review.jobId being @unique).
 export async function POST(req: NextRequest) {
-  const { error: authError } = await serviceGuard("service_reviews", "create");
-  if (authError) return authError;
-
   const { tokenNumber, rating, comment, googleReview } = await req.json();
 
   if (!tokenNumber || !rating || rating < 1 || rating > 5) {
