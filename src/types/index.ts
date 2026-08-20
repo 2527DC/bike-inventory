@@ -1,15 +1,12 @@
-export type Role =
-  | "CEO"
-  | "ADMIN"
-  | "SUPERVISOR"
-  | "PURCHASE_MANAGER"
-  | "ACCOUNTS_MANAGER"
-  | "INWARDS_EXECUTIVE"
-  | "OUTWARDS_EXECUTIVE"
-  | "STORE_MANAGER"
-  | "SALES_MANAGER"
-  | "SERVICE_MANAGER"
-  | "CUSTOM";
+// Roles are rows in the `roles` table, not a fixed union — an admin can create new ones at
+// runtime, so no closed list of names can be correct. `roleKey` is a plain string used for
+// display and logging only; authorisation always resolves grants from the database
+// (src/lib/rbac.ts), never by comparing a role name.
+export interface UserRole {
+  id: string;
+  key: string;
+  name: string;
+}
 
 export type TransactionType = "INWARD" | "OUTWARD" | "TRANSFER" | "ADJUSTMENT";
 
@@ -44,7 +41,8 @@ export interface User {
   id: string;
   name: string;
   email: string;
-  role: Role;
+  roleId: string;
+  role?: UserRole;
   accessCode: string;
   isActive: boolean;
 }

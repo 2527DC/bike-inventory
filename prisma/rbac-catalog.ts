@@ -34,7 +34,15 @@ export interface ModuleSeed {
 }
 
 // Groups render in this order in the sidebar.
-export const MODULE_GROUPS = ["Overview", "Operations", "Purchase", "Accounts", "Insights", "Admin"] as const;
+export const MODULE_GROUPS = [
+  "Overview",
+  "Operations",
+  "Purchase",
+  "Accounts",
+  "Insights",
+  "Service",
+  "Admin",
+] as const;
 
 const CRUD: ActionKey[] = ["view", "create", "edit", "delete"];
 
@@ -253,6 +261,86 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     actions: ["view"],
   },
 
+  // ── Service (merged from bch-service) ─────────────────────────────────────
+  // These modules exist so the SERVICE_* roles below have real permissions to hold, and so
+  // the ported API routes have a module to guard against.
+  //
+  // `route` is deliberately null on every one of them: the pages have NOT been ported yet.
+  // The sidebar skips modules without a route, so seeding these now grants permissions
+  // without filling the nav with links that 404. When a screen lands under /services/*, set
+  // its route here and re-seed — that one line is all it takes for it to appear for everyone
+  // who holds its view grant.
+  {
+    key: "service_jobs",
+    label: "Service Jobs",
+    description: "Workshop job cards, queue, assignment and status flow",
+    icon: "Wrench",
+    route: null, // -> "/services/counter" once ported
+    group: "Service",
+    sortOrder: 600,
+    actions: ["view", "create", "edit", "delete", "approve"],
+  },
+  {
+    key: "service_assembly",
+    label: "Assembly Log",
+    description: "Assembly work records and photos",
+    icon: "ClipboardCheck",
+    route: null, // -> "/services/assembly"
+    group: "Service",
+    sortOrder: 610,
+    actions: CRUD,
+  },
+  {
+    key: "service_billing",
+    label: "Service Billing",
+    description: "Job billing, payment status and invoice linkage",
+    icon: "CreditCard",
+    route: null, // -> "/services/billing"
+    group: "Service",
+    sortOrder: 620,
+    actions: ["view", "create", "edit", "approve"],
+  },
+  {
+    key: "service_prices",
+    label: "Service Pricing",
+    description: "Labour and parts price list by wheel size",
+    icon: "IndianRupee",
+    route: null, // -> "/services/prices"
+    group: "Service",
+    sortOrder: 630,
+    actions: CRUD,
+  },
+  {
+    key: "service_reviews",
+    label: "Customer Reviews",
+    description: "Post-service ratings and Google review tracking",
+    icon: "MessageSquare",
+    route: null, // -> "/services/reviews"
+    group: "Service",
+    sortOrder: 640,
+    actions: ["view", "delete"],
+  },
+  {
+    key: "service_incentives",
+    label: "Mechanic Incentives",
+    description: "Mechanic performance and incentive calculation",
+    icon: "BarChart3",
+    route: null, // -> "/services/incentives"
+    group: "Service",
+    sortOrder: 650,
+    actions: ["view", "edit"],
+  },
+  {
+    key: "service_reports",
+    label: "Service Reports",
+    description: "Workshop throughput, TAT and history",
+    icon: "BarChart3",
+    route: null, // -> "/services/manager"
+    group: "Service",
+    sortOrder: 660,
+    actions: ["view"],
+  },
+
   // ── Admin ─────────────────────────────────────────────────────────────────
   {
     key: "team",
@@ -315,6 +403,107 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     actions: ["view", "create", "edit", "delete"],
   },
 ];
+
+// ─── Role catalog ────────────────────────────────────────────────────────────
+// Default roles shipped with their grants, so an admin can create a user and attach a
+// working role without ticking a permission grid by hand.
+//
+// These six replace the service app's former `UserRole` enum. They are namespaced
+// SERVICE_* because the old enum's SUPERVISOR and MANAGER collide with inventory-side
+// job titles that mean something different, and roles.key is unique.
+//
+// Scope: service modules only. A workshop mechanic gets no inventory access — if someone
+// needs both, give them a role that grants both, or move them to one that does.
+//
+// `customers` is included where the service app itself manages customers (the counter takes
+// a phone number when a bike is dropped off), since after the merge there is ONE customer
+// table shared by both sides.
+
+export interface RoleSeed {
+  key: string;
+  name: string;
+  description: string;
+  /** module key -> actions granted on that module */
+  grants: Record<string, ActionKey[]>;
+}
+
+const ALL_JOB_ACTIONS: ActionKey[] = ["view", "create", "edit", "delete", "approve"];
+
+export const ROLE_CATALOG: RoleSeed[] = [
+  {
+    key: "SERVICE_MECHANIC",
+    name: "Service Mechanic",
+    description: "Works assigned job cards and logs assembly work.",
+    grants: {
+      service_jobs: ["view", "edit"], // works jobs; cannot create or delete them
+      service_assembly: ["view", "create", "edit"],
+    },
+  },
+  {
+    key: "SERVICE_SUPERVISOR",
+    name: "Service Supervisor",
+    description: "Assigns work, approves job completion, oversees the floor.",
+    grants: {
+      service_jobs: ALL_JOB_ACTIONS,
+      service_assembly: CRUD,
+      service_prices: ["view"],
+      service_reports: ["view"],
+      service_incentives: ["view"],
+    },
+  },
+  {
+    key: "SERVICE_STAFF",
+    name: "Service Counter Staff",
+    description: "Receives bikes at the counter, creates job cards, handles customers.",
+    grants: {
+      service_jobs: ["view", "create", "edit"],
+      service_prices: ["view"],
+      customers: ["view", "create", "edit"],
+    },
+  },
+  {
+    key: "SERVICE_BILLING",
+    name: "Service Billing",
+    description: "Bills completed jobs and records payment.",
+    grants: {
+      service_billing: ["view", "create", "edit", "approve"],
+      service_jobs: ["view"],
+      service_prices: ["view"],
+      customers: ["view"],
+    },
+  },
+  {
+    key: "SERVICE_MANAGER",
+    name: "Service Manager",
+    description: "Full workshop control including pricing, reviews and incentives.",
+    grants: {
+      service_jobs: ALL_JOB_ACTIONS,
+      service_assembly: CRUD,
+      service_billing: ["view", "create", "edit", "approve"],
+      service_prices: CRUD,
+      service_reviews: ["view", "delete"],
+      service_incentives: ["view", "edit"],
+      service_reports: ["view"],
+      customers: ["view", "create", "edit"],
+    },
+  },
+  {
+    key: "SERVICE_VIEWER",
+    name: "Service Viewer",
+    description: "Read-only view of the workshop board. Cannot change anything.",
+    grants: {
+      service_jobs: ["view"],
+      service_reports: ["view"],
+    },
+  },
+];
+
+/** Flattened (role, permission-key) pairs for seeding. */
+export function roleGrantKeys(role: RoleSeed): string[] {
+  return Object.entries(role.grants).flatMap(([moduleKey, actions]) =>
+    actions.map((a) => `${moduleKey}.${a}`)
+  );
+}
 
 /** Flattened (module, action) pairs — one Permission row each. */
 export function allPermissionSeeds() {

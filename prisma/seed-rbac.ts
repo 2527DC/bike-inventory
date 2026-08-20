@@ -17,7 +17,13 @@
 
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
-import { MODULE_CATALOG, allPermissionSeeds, ACTION_LABELS } from "./rbac-catalog";
+import {
+  MODULE_CATALOG,
+  ROLE_CATALOG,
+  allPermissionSeeds,
+  roleGrantKeys,
+  ACTION_LABELS,
+} from "./rbac-catalog";
 
 const ADMIN_ROLE_KEY = "ADMIN";
 
@@ -109,7 +115,57 @@ export async function seedRbac(prisma: PrismaClient) {
   }
   console.log(`  ADMIN role   : ${allPerms.length} permissions granted (${missing.length} new)`);
 
-  // ── 5. The single admin user ───────────────────────────────────────────────
+  // ── 5. Default roles, seeded WITH their grants ─────────────────────────────
+  // Deliberately create-only. If the role already exists, its grants are left exactly as
+  // they are — an admin who tightened or widened a role in the UI must not have that
+  // silently reverted the next time someone runs the seed. ADMIN above is the sole
+  // exception, because it must never be able to lock itself out.
+  const permIdByKey = new Map(
+    (await prisma.permission.findMany({ select: { id: true, key: true } })).map((p) => [
+      p.key,
+      p.id,
+    ])
+  );
+
+  let rolesCreated = 0;
+  let rolesSkipped = 0;
+
+  for (const seed of ROLE_CATALOG) {
+    const existing = await prisma.role.findUnique({
+      where: { key: seed.key },
+      select: { id: true },
+    });
+
+    if (existing) {
+      rolesSkipped++;
+      continue;
+    }
+
+    const wanted = roleGrantKeys(seed);
+    const ids = wanted.map((k) => permIdByKey.get(k)).filter((id): id is string => !!id);
+
+    const missing = wanted.filter((k) => !permIdByKey.has(k));
+    if (missing.length) {
+      console.warn(`  ! ${seed.key}: no such permission(s): ${missing.join(", ")}`);
+    }
+
+    await prisma.role.create({
+      data: {
+        key: seed.key,
+        name: seed.name,
+        description: seed.description,
+        isSystem: false, // editable and deletable, unlike ADMIN
+        permissions: { create: ids.map((permissionId) => ({ permissionId })) },
+      },
+    });
+    rolesCreated++;
+    console.log(`  role         : ${seed.key} created with ${ids.length} permissions`);
+  }
+  console.log(
+    `  roles        : ${rolesCreated} created, ${rolesSkipped} left untouched (already existed)`
+  );
+
+  // ── 6. The single admin user ───────────────────────────────────────────────
   const name = process.env.ADMIN_NAME || "Administrator";
   const email = (process.env.ADMIN_EMAIL || "admin@bch.local").toLowerCase();
   const accessCode = (process.env.ADMIN_ACCESS_CODE || "ADMIN123").toUpperCase();
