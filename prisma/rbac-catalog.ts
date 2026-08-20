@@ -275,7 +275,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     label: "Service Jobs",
     description: "Workshop job cards, queue, assignment and status flow",
     icon: "Wrench",
-    route: null, // -> "/services/counter" once ported
+    route: "/services/counter",
     group: "Service",
     sortOrder: 600,
     actions: ["view", "create", "edit", "delete", "approve"],
@@ -285,7 +285,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     label: "Assembly Log",
     description: "Assembly work records and photos",
     icon: "ClipboardCheck",
-    route: null, // -> "/services/assembly"
+    route: "/services/assembly",
     group: "Service",
     sortOrder: 610,
     actions: CRUD,
@@ -295,7 +295,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     label: "Service Billing",
     description: "Job billing, payment status and invoice linkage",
     icon: "CreditCard",
-    route: null, // -> "/services/billing"
+    route: "/services/billing",
     group: "Service",
     sortOrder: 620,
     actions: ["view", "create", "edit", "approve"],
@@ -305,7 +305,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     label: "Service Pricing",
     description: "Labour and parts price list by wheel size",
     icon: "IndianRupee",
-    route: null, // -> "/services/prices"
+    route: "/services/prices",
     group: "Service",
     sortOrder: 630,
     actions: CRUD,
@@ -315,7 +315,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     label: "Customer Reviews",
     description: "Post-service ratings and Google review tracking",
     icon: "MessageSquare",
-    route: null, // -> "/services/reviews"
+    route: null, // no standalone page; reviews surface inside the manager screen
     group: "Service",
     sortOrder: 640,
     actions: ["view", "delete"],
@@ -325,7 +325,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     label: "Mechanic Incentives",
     description: "Mechanic performance and incentive calculation",
     icon: "BarChart3",
-    route: null, // -> "/services/incentives"
+    route: null, // no standalone page; incentives surface inside the manager screen
     group: "Service",
     sortOrder: 650,
     actions: ["view", "edit"],
@@ -335,7 +335,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     label: "Service Reports",
     description: "Workshop throughput, TAT and history",
     icon: "BarChart3",
-    route: null, // -> "/services/manager"
+    route: "/services/manager",
     group: "Service",
     sortOrder: 660,
     actions: ["view"],

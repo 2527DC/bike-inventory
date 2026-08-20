@@ -48,10 +48,10 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const data = customerSchema.parse(body);
 
-    // Find existing customer by name (case-insensitive) or create new
-    const existing = await prisma.customer.findFirst({
-      where: { name: { equals: data.name, mode: "insensitive" } },
-    });
+    // Phone is the identity, not the name — two different walk-ins are frequently called
+    // the same thing, and matching on name merged their records. Matching on phone also
+    // means the counter and the workshop resolve to the same customer row.
+    const existing = await prisma.customer.findUnique({ where: { phone: data.phone } });
 
     if (existing) {
       return successResponse(existing);
@@ -61,6 +61,7 @@ export async function POST(req: NextRequest) {
       data: {
         name: data.name,
         phone: data.phone,
+        whatsapp: data.whatsapp || null,
         email: data.email || null,
         address: data.address,
         type: data.type || "WALK_IN",

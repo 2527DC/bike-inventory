@@ -226,6 +226,11 @@ model User {
   role          Role      @relation(fields: [roleId], references: [id])
   accessCode    String    @unique
   isActive      Boolean   @default(true)
+  // Avatar shown beside a mechanic's name across the workshop screens. Display only —
+  // carried over from the service app's User because its UI leans on it heavily. The
+  // service app's `pin` column was NOT carried over: there is one login, and it is the
+  // inventory access code.
+  emoji         String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -244,11 +249,12 @@ model User {
   verifiedDeliveries  Delivery[]   @relation("DeliveryVerifiedBy")
   uploadedStatements  BankStatement[] @relation("StatementUploader")
 
-  // Service tickets
-
-
-  // Service jobs
-
+  // Service / workshop (merged from bch-service)
+  assignedJobs        ServiceJob[] @relation("ServiceJobMechanic")
+  createdServiceJobs  ServiceJob[] @relation("ServiceJobCreatedBy")
+  serviceReviews      Review[]     @relation("ServiceReviewMechanic")
+  taskAssignments     TaskAssignment[] @relation("TaskAssignmentMechanic")
+  assemblyLogs        AssemblyLog[] @relation("AssemblyMechanic")
 
   // Transfer orders
   createdTransfers  TransferOrder[]     @relation("TransferCreatedBy")
@@ -864,10 +870,16 @@ model SyncLog {
 
 // ---- Customers & Receivables ----
 
+// The single customer record, shared by the inventory and service sides of the app.
+//
+// `phone` is required AND unique: one customer, one number. Required matters as much as
+// unique here — a nullable unique column still permits unlimited NULL rows in Postgres, so
+// the constraint alone would not actually prevent duplicate walk-in records.
 model Customer {
   id            String         @id @default(cuid())
   name          String
-  phone         String?
+  phone         String         @unique
+  whatsapp      String?        // merged in from the service app's Customer
   email         String?
   address       String?
   type          CustomerType   @default(WALK_IN)
@@ -878,8 +890,11 @@ model Customer {
   invoices      CustomerInvoice[]
   payments      CustomerPayment[]
 
+  // Service side
+  serviceJobs   ServiceJob[]
+  serviceReviews Review[]
+
   @@index([name])
-  @@index([phone])
 }
 
 model CustomerInvoice {
@@ -1570,3 +1585,208 @@ model BrandSkuMapping {
   @@index([productId])
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SERVICE / WORKSHOP
+// Merged in from the standalone bch-service app.
+//
+// What did NOT come across:
+//   * its `User` model      — the inventory User is the single account table. Service staff
+//                             are ordinary users holding a SERVICE_* role.
+//   * its `UserRole` enum   — replaced by the `roles` table (see the RBAC block at the top).
+//   * its `Customer` model  — folded into the shared Customer above.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+enum JobStatus {
+  RECEIVED     // bike dropped off
+  PARTS_NEEDED // waiting for parts, kept aside
+  READY        // work done, ready for pickup
+  DELIVERED    // collected and paid
+}
+
+enum JobType {
+  QFX   // quick fix
+  PSVC  // paid service
+  RSVC  // repair & service
+  FSVC  // free service
+  A50   // 50% assembly
+  A85   // 85% assembly
+  FULL  // full fitting
+  SND   // second-hand repair
+  WSH   // wash
+  ECYC  // e-cycle service
+}
+
+enum PaymentStatus {
+  UNPAID
+  CREDIT
+  PAID
+}
+
+model ServiceJob {
+  id            String        @id @default(cuid())
+  tokenNumber   String        @unique // BCH-0001, minted from TokenCounter
+  status        JobStatus     @default(RECEIVED)
+  jobType       JobType
+  estimatedHrs  Float         @default(1.0)
+
+  // Bike
+  bikeType      String
+  bikeColor     String?
+  isEcycle      Boolean       @default(false)
+  complaint     String?
+
+  // Work
+  diagnosis     String?
+  partsNeeded   String?
+  workDone      String?
+
+  // Timestamps drive TAT reporting
+  receivedAt    DateTime      @default(now())
+  promisedAt    DateTime?
+  partsAt       DateTime?
+  readyAt       DateTime?
+  deliveredAt   DateTime?
+
+  holdReason    String?
+  notes         String?
+
+  // Payment
+  paymentStatus PaymentStatus @default(UNPAID)
+  amount        Float?
+  zohoInvoiceId String?
+
+  // Nightly Zoho auto-deliver proposal, cleared on staff approval
+  deliveryMatchedInvoice String?
+  deliveryProposedAt     DateTime?
+  deliveryReviewedAt     DateTime?
+
+  photos        String[]      @default([])
+  afterPhotos   String[]      @default([])
+
+  priority      Int           @default(0) // 0 normal, 1 urgent
+
+  customerId    String
+  customer      Customer      @relation(fields: [customerId], references: [id])
+  mechanicId    String?
+  mechanic      User?         @relation("ServiceJobMechanic", fields: [mechanicId], references: [id])
+  createdById   String
+  createdBy     User          @relation("ServiceJobCreatedBy", fields: [createdById], references: [id])
+  review        Review?
+
+  @@index([status])
+  @@index([mechanicId])
+  @@index([receivedAt])
+  @@index([customerId])
+  @@map("service_jobs")
+}
+
+model Review {
+  id           String   @id @default(cuid())
+  rating       Int      // 1-5
+  comment      String?
+  googleReview Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  jobId      String     @unique
+  job        ServiceJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  customerId String
+  customer   Customer   @relation(fields: [customerId], references: [id])
+  mechanicId String
+  mechanic   User       @relation("ServiceReviewMechanic", fields: [mechanicId], references: [id])
+
+  @@index([mechanicId])
+  @@map("reviews")
+}
+
+model TaskAssignment {
+  id          String    @id @default(cuid())
+  date        DateTime
+  mechanicId  String
+  // The standalone app left this as a bare string with no FK, so a deleted mechanic left
+  // orphan rows behind. Made a real relation during the merge.
+  mechanic    User      @relation("TaskAssignmentMechanic", fields: [mechanicId], references: [id])
+  description String
+  jobType     JobType
+  completed   Boolean   @default(false)
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([date, mechanicId])
+  @@map("task_assignments")
+}
+
+model PriceItem {
+  id        String   @id @default(cuid())
+  name      String
+  category  String   // SERVICE | PARTS
+  wheelSize String?  // null = all sizes; "14","20","24","26","27.5","29","ECYCLE"
+  price     Float
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+  @@index([wheelSize])
+  @@map("price_items")
+}
+
+model AssemblyLog {
+  id           String   @id @default(cuid())
+  mechanicId   String
+  mechanic     User     @relation("AssemblyMechanic", fields: [mechanicId], references: [id])
+  assemblyType String   // A50 | A85 | FULL
+  bikeModel    String?
+  notes        String?
+  photos       String[] @default([])
+  createdAt    DateTime @default(now())
+
+  @@index([mechanicId])
+  @@index([createdAt])
+  @@map("assembly_logs")
+}
+
+// Single-row counter minting sequential job tokens. Increments MUST run inside a transaction
+// with a row lock — tokenNumber is unique, so a concurrent read-then-write hands two jobs the
+// same token and the second insert fails in front of a customer at the counter.
+model TokenCounter {
+  id      String @id @default("default")
+  current Int    @default(0)
+
+  @@map("token_counter")
+}
+
+// Service-side audit trail. Kept as its own table rather than folded into OpsActivityLog,
+// per the merge decision to keep logs separate for now.
+model ServiceAuditLog {
+  id         String   @id @default(cuid())
+  jobId      String
+  action     String   // STATUS_CHANGE, PHOTO_DELETE, JOB_DELETE, ...
+  fromStatus String?
+  toStatus   String?
+  details    String?
+  userId     String
+  userName   String
+  userRole   String   // role name captured at the time of the action
+  createdAt  DateTime @default(now())
+
+  @@index([jobId])
+  @@index([createdAt])
+  @@map("service_audit_logs")
+}
+
+model NotificationLog {
+  id            String   @id @default(cuid())
+  jobId         String
+  tokenNumber   String
+  customerPhone String
+  customerName  String
+  messageType   String   // INWARD | PARTS_NEEDED | READY | DELIVERED
+  sentById      String
+  sentByName    String
+  createdAt     DateTime @default(now())
+
+  @@index([jobId])
+  @@index([createdAt])
+  @@map("notification_logs")
+}

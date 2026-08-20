@@ -246,9 +246,16 @@ export const billFollowUpSchema = z.object({
 
 // ---- Customers & Receivables ----
 
+// `phone` is the customer's identity: it is required and unique on the table, because the
+// service side looks a customer up by phone when a bike is dropped off. Ten digits, since
+// that is what the counter actually captures.
 export const customerSchema = z.object({
   name: z.string().min(1, "Name is required").max(200),
-  phone: z.string().optional(),
+  phone: z
+    .string()
+    .transform((v) => v.replace(/\D/g, "").slice(-10))
+    .refine((v) => v.length === 10, "Phone must be 10 digits"),
+  whatsapp: z.string().optional(),
   email: z.string().email().optional().or(z.literal("")),
   address: z.string().optional(),
   type: z.enum(["WALK_IN", "REGULAR", "DEALER"]).optional(),
