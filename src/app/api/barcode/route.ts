@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateBarcodePng } from "@/lib/barcode";
 import type { BarcodeType } from "@/lib/barcode";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth();
+    await requireFeature("barcode", "create");
     const body = await req.json();
     const { text, type = "code128" } = body as {
       text: string;

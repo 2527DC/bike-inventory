@@ -4,11 +4,11 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { storeUpdateSchema } from "@/lib/validations";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function GET() {
   try {
-    await requireAuth();
+    await requireFeature("settings", "view");
 
     const updates = await prisma.storeUpdate.findMany({
       orderBy: { createdAt: "desc" },
@@ -25,7 +25,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireAuth(["ADMIN", "SUPERVISOR"]);
+    const user = await requireFeature("settings", "create");
     const body = await req.json();
     const data = storeUpdateSchema.parse(body);
 
@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR"]);
+    await requireFeature("settings", "delete");
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
 

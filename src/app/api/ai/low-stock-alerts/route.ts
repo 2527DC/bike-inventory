@@ -2,12 +2,12 @@ export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { calcSalesVelocity, calcPriorityScore, classifyPriority, calcDaysUntilStockout } from "@/lib/ai-calculations";
 
 export async function GET() {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR", "PURCHASE_MANAGER", "ACCOUNTS_MANAGER"]);
+    await requireFeature("reorder", "view");
 
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
 

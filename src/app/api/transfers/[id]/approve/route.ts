@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // POST: Approve or reject a pending transfer
 export async function POST(
@@ -11,7 +11,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR", "ACCOUNTS_MANAGER"]);
+    await requireFeature("transfers", "approve");
     const { id } = await params;
     const body = await req.json();
     const { action } = body; // "approve" or "reject"

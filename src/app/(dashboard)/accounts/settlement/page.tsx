@@ -44,7 +44,7 @@ type FetchStep = "idle" | "connecting" | "fetching" | "creating" | "done" | "err
 export default function SettlementListPage() {
   const { data: session, status: sessionStatus } = useSession();
   const role = (session?.user as { role?: string })?.role || "";
-  const { canView, canDelete: canDeleteCheck } = usePermissions(role);
+  const { canView, canDelete: canDeleteCheck } = usePermissions();
   const canAccess = canView("bills");
   const isAdmin = role === "ADMIN" || role === "CEO" || canDeleteCheck("bills");
 

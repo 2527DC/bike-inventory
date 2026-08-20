@@ -3,12 +3,12 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // GET: List all brand lead times (with brand name)
 export async function GET() {
   try {
-    await requireAuth();
+    await requireFeature("brands", "view");
 
     const brands = await prisma.brand.findMany({
       select: {
@@ -35,7 +35,7 @@ export async function GET() {
 // POST/PUT: Upsert brand lead time
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR"]);
+    await requireFeature("brands", "create");
     const body = await req.json();
     const { brandId, leadDays } = body;
 

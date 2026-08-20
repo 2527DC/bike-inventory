@@ -3,16 +3,18 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { userCan } from "@/lib/rbac";
 
 // GET: Fetch activity log for a user (or all users for ADMIN)
 export async function GET(req: NextRequest) {
   try {
-    const user = await requireAuth(["ADMIN", "CEO", "SUPERVISOR", "OUTWARDS_EXECUTIVE", "INWARDS_EXECUTIVE", "PURCHASE_MANAGER", "ACCOUNTS_MANAGER", "STORE_MANAGER", "SALES_MANAGER", "SERVICE_MANAGER", "CUSTOM"]);
+    const user = await requireFeature("activity", "view");
     const { searchParams } = new URL(req.url);
     const targetUserId = searchParams.get("userId");
     const dateStr = searchParams.get("date"); // YYYY-MM-DD
-    const isAdmin = user.role === "ADMIN" || user.role === "CEO" || user.role === "SUPERVISOR";
+    // Seeing other people's activity is a team-oversight capability.
+    const isAdmin = await userCan(user.id, "team", "view");
 
     // Non-admins can only see their own activity
     const userId = isAdmin && targetUserId ? targetUserId : user.id;

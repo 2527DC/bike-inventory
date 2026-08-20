@@ -1,101 +1,61 @@
-import { useState, useEffect, useCallback } from "react";
+"use client";
 
-interface FeaturePermission {
-  view: boolean;
-  create: boolean;
-  edit: boolean;
-  delete: boolean;
-  approve: boolean;
-  fetch: boolean;
-}
+// Thin hook over the Zustand permission store (src/stores/permissions.ts).
+//
+// Kept as a hook with the same canView/canCreate/... surface the existing pages already call,
+// so the migration off the old file-based system did not require touching every page. New code
+// can subscribe to the store directly with a selector for narrower re-renders:
+//
+//   const canEdit = usePermissionStore((s) => s.canEdit);
 
-type Permissions = Record<string, FeaturePermission>;
+import { useEffect } from "react";
+import { useSession } from "next-auth/react";
+import { usePermissionStore, type PermAction } from "@/stores/permissions";
 
-// Cache with TTL (5 minutes)
-const CACHE_TTL = 5 * 60 * 1000;
-let cachedPermissions: { role: string; perms: Permissions; navTabs: string[]; fetchedAt: number } | null = null;
+export type { PermAction };
 
-function isCacheValid(role: string): boolean {
-  if (!cachedPermissions) return false;
-  if (cachedPermissions.role !== role) return false;
-  return Date.now() - cachedPermissions.fetchedAt < CACHE_TTL;
-}
+export function usePermissions() {
+  const { status: sessionStatus } = useSession();
 
-/** Force clear the permission cache (e.g. after admin saves new permissions) */
-export function clearPermissionCache() {
-  cachedPermissions = null;
-}
+  const status = usePermissionStore((s) => s.status);
+  const permissions = usePermissionStore((s) => s.permissions);
+  const modules = usePermissionStore((s) => s.modules);
+  const role = usePermissionStore((s) => s.role);
+  const error = usePermissionStore((s) => s.error);
+  const load = usePermissionStore((s) => s.load);
+  const refresh = usePermissionStore((s) => s.refresh);
 
-export function usePermissions(role: string) {
-  const [permissions, setPermissions] = useState<Permissions | null>(
-    isCacheValid(role) ? cachedPermissions!.perms : null
-  );
-  const [navTabs, setNavTabs] = useState<string[]>(
-    isCacheValid(role) ? cachedPermissions!.navTabs : []
-  );
-  const [loading, setLoading] = useState(!isCacheValid(role));
-
-  const refetch = useCallback(() => {
-    if (!role || role === "ADMIN" || role === "CEO") return;
-    setLoading(true);
-    fetch("/api/my-permissions")
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success && res.data?.permissions) {
-          const perms = res.data.permissions as Permissions;
-          const tabs = (res.data.navTabs as string[]) || [];
-          cachedPermissions = { role, perms, navTabs: tabs, fetchedAt: Date.now() };
-          setPermissions(perms);
-          setNavTabs(tabs);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [role]);
-
+  // Load once the session exists. The store dedupes, so several components mounting
+  // together still produce a single request.
   useEffect(() => {
-    if (!role || role === "ADMIN" || role === "CEO") {
-      setLoading(false);
-      return;
-    }
-    if (isCacheValid(role)) {
-      setPermissions(cachedPermissions!.perms);
-      setNavTabs(cachedPermissions!.navTabs);
-      setLoading(false);
-      return;
-    }
-    refetch();
-  }, [role, refetch]);
+    if (sessionStatus === "authenticated") void load();
+  }, [sessionStatus, load]);
 
-  const canView = (feature: string) => {
-    if (role === "ADMIN" || role === "CEO") return true;
-    return permissions?.[feature]?.view ?? true;
+  const can = usePermissionStore((s) => s.can);
+
+  return {
+    permissions,
+    modules,
+    role,
+    error,
+    // `loading` stays true until the grants are actually known, so callers never render
+    // an action against an empty permission set and conclude it is denied.
+    loading: sessionStatus === "loading" || status === "idle" || status === "loading",
+    ready: status === "ready",
+
+    can,
+    canView: (m: string) => can(m, "view"),
+    canCreate: (m: string) => can(m, "create"),
+    canEdit: (m: string) => can(m, "edit"),
+    canDelete: (m: string) => can(m, "delete"),
+    canApprove: (m: string) => can(m, "approve"),
+    canFetch: (m: string) => can(m, "fetch"),
+
+    refetch: refresh,
   };
+}
 
-  const canCreate = (feature: string) => {
-    if (role === "ADMIN" || role === "CEO") return true;
-    return permissions?.[feature]?.create ?? false;
-  };
-
-  const canEdit = (feature: string) => {
-    if (role === "ADMIN" || role === "CEO") return true;
-    return permissions?.[feature]?.edit ?? false;
-  };
-
-  const canDelete = (feature: string) => {
-    if (role === "ADMIN" || role === "CEO") return true;
-    return permissions?.[feature]?.delete ?? false;
-  };
-
-  const canApprove = (feature: string) => {
-    if (role === "ADMIN" || role === "CEO") return true;
-    return permissions?.[feature]?.approve ?? false;
-  };
-
-  const canFetch = (feature: string) => {
-    if (role === "ADMIN" || role === "CEO") return true;
-    return permissions?.[feature]?.fetch ?? false;
-  };
-
-  return { permissions, navTabs, loading, canView, canCreate, canEdit, canDelete, canApprove, canFetch, refetch };
+/** Clear cached grants — call after sign-out. */
+export function clearPermissionCache() {
+  usePermissionStore.getState().reset();
 }

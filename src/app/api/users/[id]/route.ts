@@ -4,23 +4,28 @@ import { NextRequest } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
-import { getEffectivePermissions } from "@/lib/permissions-server";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { getAccess } from "@/lib/rbac";
 
-// Bottom-nav hrefs an admin may assign (mirrors FEATURE_NAV_ITEMS in nav-config; kept inline so
-// this server route doesn't pull the client nav module / icons into its bundle).
-const VALID_NAV_HREFS = [
-  "/inbound", "/deliveries", "/stock", "/transfers", "/vendors",
-  "/purchase-orders", "/vendor-issues", "/expenses", "/accounts", "/reports", "/team", "/barcode",
-];
 const MAX_NAV_TABS = 4;
+
+// Bottom-nav hrefs an admin may pin. Validated against the real module table rather than a
+// hardcoded list, so seeding a new module immediately makes it pinnable and a removed module
+// stops being accepted — no second list to keep in sync.
+async function validNavRoutes(): Promise<Set<string>> {
+  const mods = await prisma.module.findMany({
+    where: { isActive: true, route: { not: null } },
+    select: { route: true },
+  });
+  return new Set(mods.map((m) => m.route as string).filter((r) => r !== "/"));
+}
 
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR"]);
+    await requireFeature("team", "view");
     const { id } = await params;
 
     const user = await prisma.user.findUnique({
@@ -29,9 +34,8 @@ export async function GET(
         id: true,
         name: true,
         email: true,
-        role: true,
-        customRoleName: true,
-        permissions: true,
+        roleId: true,
+        role: { select: { id: true, key: true, name: true } },
         navTabs: true,
         accessCode: true,
         isActive: true,
@@ -43,10 +47,10 @@ export async function GET(
 
     if (!user) return errorResponse("User not found", 404);
 
-    // Include the user's effective view-permissions so the admin UI can offer only the bottom-nav
-    // tabs this person is actually allowed to open.
-    const effectivePermissions = await getEffectivePermissions({ id: user.id, role: user.role });
-    return successResponse({ ...user, effectivePermissions });
+    // The modules this person can actually open, so the admin UI offers only bottom-nav tabs
+    // they are permitted to reach. Resolved from their role's grants, not from the user row.
+    const access = await getAccess(user.id);
+    return successResponse({ ...user, grantedModules: access.modules });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
     return errorResponse(error instanceof Error ? error.message : "Failed to fetch user", 500);
@@ -58,25 +62,40 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("team", "edit");
     const { id } = await params;
     const body = await req.json();
 
     const existing = await prisma.user.findUnique({ where: { id } });
     if (!existing) return errorResponse("User not found", 404);
 
-    const VALID_ROLES = ["CEO", "ADMIN", "SUPERVISOR", "PURCHASE_MANAGER", "ACCOUNTS_MANAGER", "INWARDS_EXECUTIVE", "OUTWARDS_EXECUTIVE", "STORE_MANAGER", "SALES_MANAGER", "SERVICE_MANAGER", "CUSTOM"];
-
     const updateData: Record<string, unknown> = {};
     if (body.name && typeof body.name === "string") updateData.name = body.name.trim();
     if (body.email && typeof body.email === "string") updateData.email = body.email.trim().toLowerCase();
-    if (body.role && VALID_ROLES.includes(body.role)) updateData.role = body.role;
-    if (body.customRoleName !== undefined) updateData.customRoleName = body.customRoleName || null;
-    if (body.permissions !== undefined) updateData.permissions = body.permissions || null;
+
+    // Roles are rows now: accept a roleId and verify it exists and is usable, rather than
+    // validating against a hardcoded list of role names.
+    if (body.roleId !== undefined) {
+      const role = await prisma.role.findUnique({
+        where: { id: String(body.roleId) },
+        select: { id: true, isActive: true },
+      });
+      if (!role) return errorResponse("Role not found", 400);
+      if (!role.isActive) return errorResponse("That role is deactivated", 400);
+      updateData.roleId = role.id;
+    }
+
     if (body.navTabs !== undefined) {
-      // Sanitize: only valid nav hrefs, de-duplicated, preserving order, capped to MAX_NAV_TABS.
+      // Sanitize: only real module routes, de-duplicated, order preserved, capped.
+      const allowed = await validNavRoutes();
       const cleaned = Array.isArray(body.navTabs)
-        ? [...new Set(body.navTabs.filter((h: unknown): h is string => typeof h === "string" && VALID_NAV_HREFS.includes(h)))].slice(0, MAX_NAV_TABS)
+        ? [
+            ...new Set(
+              body.navTabs.filter(
+                (h: unknown): h is string => typeof h === "string" && allowed.has(h)
+              )
+            ),
+          ].slice(0, MAX_NAV_TABS)
         : [];
       updateData.navTabs = cleaned;
     }
@@ -104,7 +123,7 @@ export async function PUT(
         id: true,
         name: true,
         email: true,
-        role: true,
+        role: { select: { id: true, key: true, name: true } },
         isActive: true,
         updatedAt: true,
       },
@@ -122,7 +141,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const currentUser = await requireAuth(["ADMIN"]);
+    const currentUser = await requireFeature("team", "delete");
     const { id } = await params;
 
     if (currentUser.id === id) {

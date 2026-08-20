@@ -29,7 +29,7 @@ export default function MorePage() {
   const { data: session } = useSession();
   const user = session?.user as { name?: string; role?: string; userId?: string } | undefined;
   const role = (user?.role || "INWARDS_EXECUTIVE") as Role;
-  const { canView } = usePermissions(role);
+  const { canView } = usePermissions();
   const [syncClearing, setSyncClearing] = useState(false);
   const [syncResult, setSyncResult] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());

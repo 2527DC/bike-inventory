@@ -4,11 +4,11 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, paginatedResponse, parseSearchParams } from "@/lib/api-utils";
 import { deliveryCreateSchema } from "@/lib/validations";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "CEO", "SUPERVISOR", "OUTWARDS_EXECUTIVE", "STORE_MANAGER", "SALES_MANAGER", "INWARDS_EXECUTIVE", "ACCOUNTS_MANAGER"]);
+    await requireFeature("deliveries", "view");
     const { page, limit, skip, searchParams } = parseSearchParams(req.url);
     const status = searchParams.get("status") || undefined;
     const area = searchParams.get("area") || undefined;
@@ -103,7 +103,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireAuth(["ADMIN", "OUTWARDS_EXECUTIVE", "INWARDS_EXECUTIVE"]);
+    const user = await requireFeature("deliveries", "create");
     const body = await req.json();
     const data = deliveryCreateSchema.parse(body);
 

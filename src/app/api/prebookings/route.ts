@@ -3,13 +3,13 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, parseSearchParams } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { preBookingSchema } from "@/lib/validations";
 
 // GET: List pre-bookings
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth();
+    await requireFeature("deliveries", "view");
     const { limit, skip, searchParams } = parseSearchParams(req.url);
     const status = searchParams.get("status") || undefined;
 
@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
 // POST: Create pre-booking (from Zoho invoice or manual)
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireAuth(["ADMIN", "SUPERVISOR", "OUTWARDS_EXECUTIVE", "INWARDS_EXECUTIVE", "ACCOUNTS_MANAGER"]);
+    const user = await requireFeature("deliveries", "create");
     const body = await req.json();
     const data = preBookingSchema.parse(body);
 

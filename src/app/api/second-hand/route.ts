@@ -3,7 +3,8 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, paginatedResponse, parseSearchParams } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { userCan } from "@/lib/rbac";
 import { ZohoInventoryClient } from "@/lib/zoho-inventory";
 import { z } from "zod";
 
@@ -23,8 +24,8 @@ const createSchema = z.object({
 // GET: List second-hand cycles
 export async function GET(req: NextRequest) {
   try {
-    const user = await requireAuth();
-    const isAdmin = user.role === "ADMIN" || user.role === "CEO";
+    const user = await requireFeature("second_hand", "view");
+    const isAdmin = await userCan(user.id, "cost_price", "view");
     const { page, limit, skip, searchParams } = parseSearchParams(req.url);
     const status = searchParams.get("status");
     const search = searchParams.get("search");
@@ -77,7 +78,7 @@ export async function GET(req: NextRequest) {
 // POST: Create second-hand cycle
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireAuth(["ADMIN", "OUTWARDS_EXECUTIVE"]);
+    const user = await requireFeature("second_hand", "create");
     const body = await req.json();
     const data = createSchema.parse(body);
 

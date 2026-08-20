@@ -2,11 +2,11 @@ export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function POST() {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("zoho", "create");
 
     // Revoke token on Zoho's side before clearing locally
     const config = await prisma.zohoConfig.findUnique({ where: { id: "singleton" } });

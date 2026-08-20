@@ -3,11 +3,11 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function GET() {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR"]);
+    await requireFeature("activity", "view");
 
     const logs = await prisma.opsActivityLog.findMany({
       orderBy: { createdAt: "desc" },
@@ -24,7 +24,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireAuth();
+    const user = await requireFeature("activity", "create");
     const body = await req.json();
 
     if (!body.action || typeof body.action !== "string") {

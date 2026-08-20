@@ -4,16 +4,17 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { productUpdateSchema } from "@/lib/validations";
-import { requireAuth, AuthError, getCurrentUser } from "@/lib/auth-helpers";
+import { requireFeature, AuthError, getCurrentUser } from "@/lib/auth-helpers";
+import { userCan } from "@/lib/rbac";
 
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await requireAuth();
+    const user = await requireFeature("stock", "view");
     const { id } = await params;
-    const isAdmin = user.role === "ADMIN" || user.role === "CEO";
+    const isAdmin = await userCan(user.id, "cost_price", "view");
 
     const product = await prisma.product.findUnique({
       where: { id },
@@ -56,7 +57,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireAuth(["ADMIN", "PURCHASE_MANAGER"]);
+    await requireFeature("stock", "edit");
     const { id } = await params;
     const body = await req.json();
     const data = productUpdateSchema.parse(body);
@@ -84,7 +85,7 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireAuth(); // any authenticated user
+    await requireFeature("stock", "edit"); // any authenticated user
     const { id } = await params;
     const body = await req.json();
 
@@ -113,7 +114,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("stock", "delete");
     const { id } = await params;
 
     await prisma.product.update({

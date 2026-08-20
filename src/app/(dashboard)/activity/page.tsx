@@ -71,7 +71,6 @@ export default function ActivityPage() {
   // Fetch users list for admin
   useEffect(() => {
     if (isAdmin) {
-      fetch("/api/users/seed").catch(() => {}); // ensure users exist
       fetch("/api/team")
         .then((r) => r.json())
         .then((res) => { if (res.success) setUsers(res.data); })

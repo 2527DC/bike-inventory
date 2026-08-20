@@ -3,12 +3,12 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // GET — download pull preview as CSV (simple, works everywhere)
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR"]);
+    await requireFeature("zoho", "view");
 
     const pullId = new URL(req.url).searchParams.get("pullId");
     if (!pullId) return errorResponse("pullId required", 400);

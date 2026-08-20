@@ -2,12 +2,12 @@ export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // GET: List unmatched in-transit line items available for manual pre-booking match
 export async function GET() {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR"]);
+    await requireFeature("deliveries", "view");
 
     const items = await prisma.inboundLineItem.findMany({
       where: {

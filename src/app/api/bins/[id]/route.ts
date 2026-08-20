@@ -3,11 +3,11 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    await requireAuth(["ADMIN", "CEO", "PURCHASE_MANAGER"]);
+    await requireFeature("settings", "edit");
     const { id } = await params;
     const body = await req.json();
 
@@ -29,7 +29,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    await requireAuth(["ADMIN", "CEO", "PURCHASE_MANAGER"]);
+    await requireFeature("settings", "delete");
     const { id } = await params;
 
     const bin = await prisma.bin.findUnique({

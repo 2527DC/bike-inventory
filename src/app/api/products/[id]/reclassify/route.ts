@@ -4,7 +4,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 const reclassifySchema = z
   .object({
@@ -25,14 +25,7 @@ export async function PUT(
     // Must match who can run a brand stock count (create on stock_audit):
     // CEO, ADMIN, SUPERVISOR, STORE_MANAGER, INWARDS_EXECUTIVE.
     // PURCHASE_MANAGER included since they own the product catalog.
-    await requireAuth([
-      "CEO",
-      "ADMIN",
-      "SUPERVISOR",
-      "STORE_MANAGER",
-      "INWARDS_EXECUTIVE",
-      "PURCHASE_MANAGER",
-    ]);
+    await requireFeature("stock", "edit");
     const { id } = await params;
     const body = await req.json();
     const data = reclassifySchema.parse(body);

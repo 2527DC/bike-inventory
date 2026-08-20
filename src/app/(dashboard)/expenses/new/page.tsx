@@ -19,7 +19,7 @@ const PAYMENT_MODES = ["CASH", "CHEQUE", "NEFT", "RTGS", "UPI"];
 export default function NewExpensePage() {
   const { data: session, status: sessionStatus } = useSession();
   const role = (session?.user as { role?: string })?.role || "";
-  const { canCreate: canCreateCheck } = usePermissions(role);
+  const { canCreate: canCreateCheck } = usePermissions();
   const canAccess = canCreateCheck("expenses");
 
   const router = useRouter();

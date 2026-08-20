@@ -26,7 +26,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   const { id } = use(params);
   const { data: session } = useSession();
   const role = (session?.user as { role?: string })?.role || "";
-  const { canEdit: canEditCheck } = usePermissions(role);
+  const { canEdit: canEditCheck } = usePermissions();
   const canEditBalance = canEditCheck("vendors");
   const [vendor, setVendor] = useState<VendorDetail | null>(null);
   const [loading, setLoading] = useState(true);

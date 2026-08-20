@@ -2,13 +2,13 @@ export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // Daily snapshot of vendor/client issues for the WhatsApp progress report.
 // "Today" is measured in IST (the business runs in India).
 export async function GET() {
   try {
-    await requireAuth();
+    await requireFeature("vendor_issues", "view");
 
     const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
     const now = new Date();

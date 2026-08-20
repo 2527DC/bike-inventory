@@ -13,9 +13,7 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 // or financials): just the two label fields used when sharing issues to WhatsApp.
 export async function PATCH(req: NextRequest) {
   try {
-    await requireFeature("vendor_issues", "view", [
-      "ADMIN", "CEO", "SUPERVISOR", "PURCHASE_MANAGER", "ACCOUNTS_MANAGER", "STORE_MANAGER", "SERVICE_MANAGER",
-    ]);
+    await requireFeature("vendor_issues", "view");
 
     const body = await req.json();
     const { vendorId, waGroupName, waGroupCode } = body as {

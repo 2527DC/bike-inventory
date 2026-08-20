@@ -3,12 +3,12 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError, getServerSession } from "@/lib/auth-helpers";
+import { requireFeature, AuthError, getServerSession } from "@/lib/auth-helpers";
 
 // GET — Fetch statement transactions for review
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR", "ACCOUNTS_MANAGER"]);
+    await requireFeature("bills", "view");
     const { id } = await params;
 
     const statement = await prisma.bankStatement.findUnique({
@@ -37,7 +37,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await getServerSession();
-    await requireAuth(["ADMIN", "SUPERVISOR", "ACCOUNTS_MANAGER"]);
+    await requireFeature("bills", "create");
     const userId = (session?.user as { userId?: string })?.userId || "";
     const { id } = await params;
 

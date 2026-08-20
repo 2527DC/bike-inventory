@@ -2,11 +2,11 @@ export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function GET() {
   try {
-    await requireAuth(["ADMIN", "CEO", "SUPERVISOR", "OUTWARDS_EXECUTIVE", "STORE_MANAGER", "SALES_MANAGER", "INWARDS_EXECUTIVE", "ACCOUNTS_MANAGER"]);
+    await requireFeature("deliveries", "view");
 
     const baseWhere = { OR: [{ invoiceType: null as string | null }, { invoiceType: { not: "SERVICE" } }] };
 

@@ -3,11 +3,11 @@ export const dynamic = "force-dynamic";
 import { prisma } from "@/lib/db";
 import { ZohoClient } from "@/lib/zoho";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError, getCurrentUser } from "@/lib/auth-helpers";
+import { requireFeature, AuthError, getCurrentUser } from "@/lib/auth-helpers";
 
 export async function POST() {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("zoho", "fetch");
     const currentUser = await getCurrentUser();
 
     const zoho = new ZohoClient();

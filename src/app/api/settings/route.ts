@@ -3,14 +3,14 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // Default SOP departments (used as seed if none saved)
 const DEFAULT_SOP_DEPARTMENTS = ["Sales", "Service", "Ops", "Finance", "Billing", "BDC", "Content"];
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth();
+    await requireFeature("settings", "view");
     const key = new URL(req.url).searchParams.get("key");
 
     if (key) {
@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("settings", "edit");
     const { key, value } = await req.json();
 
     if (!key || value === undefined) {

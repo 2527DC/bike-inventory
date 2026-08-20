@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // Patterns to classify products by name
 const BICYCLE_PATTERNS = [
@@ -42,7 +42,7 @@ function classifyByName(name: string): "Bicycles" | "Spares" | "Accessories" {
 // GET — Preview auto-classification (dry run)
 export async function GET() {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("stock", "view");
 
     const products = await prisma.product.findMany({
       where: { status: "ACTIVE" },
@@ -80,7 +80,7 @@ export async function GET() {
 // POST — Apply auto-classification
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("stock", "create");
     const body = await req.json();
     const { dryRun } = body as { dryRun?: boolean };
 

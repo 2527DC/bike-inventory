@@ -2,12 +2,12 @@ export const revalidate = 60; // cache 1 minute
 
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { BIN_TRACKING_ENABLED, STOCK_LOCATIONS } from "@/lib/inventory-config";
 
 export async function GET() {
   try {
-    await requireAuth();
+    await requireFeature("stock", "view");
 
     // ── Location mode (bins dormant): per-location summary across the 4 locations ──
     if (!BIN_TRACKING_ENABLED) {

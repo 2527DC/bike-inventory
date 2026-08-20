@@ -35,7 +35,7 @@ const STATUS_STYLE: Record<string, string> = {
 export default function StockAuditPage() {
   const { data: session } = useSession();
   const role = (session?.user as { role?: string })?.role || "";
-  const { canCreate: canCreateCheck } = usePermissions(role);
+  const { canCreate: canCreateCheck } = usePermissions();
   const canCreate = canCreateCheck("stock_audit");
   const [counts, setCounts] = useState<StockCountItem[]>([]);
   const [loading, setLoading] = useState(true);

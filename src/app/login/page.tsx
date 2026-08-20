@@ -23,10 +23,12 @@ export default function LoginPage() {
     setLoading(true);
     setError("");
 
-    const result = await signIn("credentials", {
+    // Cast the result: next-auth v4's signIn overloads resolve to `never` under this
+    // project's "bundler" module resolution, so the returned shape has to be stated here.
+    const result = (await signIn("credentials", {
       accessCode: accessCode.trim(),
       redirect: false,
-    });
+    })) as { error?: string; ok?: boolean } | undefined;
 
     if (result?.error) {
       setError("Invalid access code. Please try again.");

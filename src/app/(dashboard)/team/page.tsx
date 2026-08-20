@@ -1,45 +1,29 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { Users, Plus, Shield, ShieldCheck, UserCog, PackagePlus, PackageMinus, Search } from "lucide-react";
+import { Users, Plus, Shield, ShieldCheck, UserCog, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { useDebounce } from "@/lib/utils";
+import { usePermissions } from "@/lib/use-permissions";
 
 interface TeamUser {
   id: string;
   name: string;
   email: string;
-  role: string;
-  customRoleName: string | null;
+  roleId: string;
+  role: { id: string; key: string; name: string } | null;
   isActive: boolean;
   createdAt: string;
   _count: { transactions: number };
 }
 
-const ROLE_CONFIG: Record<string, { label: string; icon: typeof Shield; color: "danger" | "warning" | "info" | "success" | "default" }> = {
-  CEO: { label: "CEO", icon: ShieldCheck, color: "danger" },
-  ADMIN: { label: "Admin", icon: ShieldCheck, color: "danger" },
-  SUPERVISOR: { label: "Supervisor", icon: Shield, color: "warning" },
-  PURCHASE_MANAGER: { label: "Purchase Manager", icon: UserCog, color: "info" },
-  ACCOUNTS_MANAGER: { label: "Accounts Manager", icon: UserCog, color: "info" },
-  INWARDS_EXECUTIVE: { label: "Inwards Executive", icon: PackagePlus, color: "success" },
-  OUTWARDS_EXECUTIVE: { label: "Outwards Executive", icon: PackageMinus, color: "default" },
-  STORE_MANAGER: { label: "Store Manager", icon: Shield, color: "warning" },
-  SALES_MANAGER: { label: "Sales Manager", icon: UserCog, color: "info" },
-  SERVICE_MANAGER: { label: "Service Manager", icon: UserCog, color: "success" },
-  CUSTOM: { label: "Custom", icon: UserCog, color: "info" },
-};
-
 export default function TeamPage() {
-  const { data: session } = useSession();
-  const user = session?.user as { role?: string } | undefined;
-  const isAdmin = user?.role === "ADMIN" || user?.role === "CEO";
+  const { canCreate, canView } = usePermissions();
   const [members, setMembers] = useState<TeamUser[]>([]);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search);
@@ -63,20 +47,22 @@ export default function TeamPage() {
           <h1 className="text-lg font-bold text-slate-900">Team</h1>
           <p className="text-xs text-slate-500">{members.length} members</p>
         </div>
-        {isAdmin && (
-          <div className="flex gap-2">
+        <div className="flex gap-2">
+          {canView("roles") && (
             <Link href="/team/permissions">
               <Button size="sm" variant="outline" className="text-xs">
                 <Shield className="h-3.5 w-3.5 mr-1" />Roles
               </Button>
             </Link>
+          )}
+          {canCreate("team") && (
             <Link href="/team/new">
               <Button size="sm" className="bg-blue-600 hover:bg-blue-700">
                 <Plus className="h-3.5 w-3.5 mr-1" />Add
               </Button>
             </Link>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       <div className="relative mb-3">
@@ -92,29 +78,32 @@ export default function TeamPage() {
           <p className="text-sm text-slate-500">No team members found</p>
         </div>
       ) : ((() => {
-        // Group members by role for segregated view
-        const ROLE_ORDER = ["CEO", "ADMIN", "SUPERVISOR", "STORE_MANAGER", "PURCHASE_MANAGER", "ACCOUNTS_MANAGER", "SALES_MANAGER", "SERVICE_MANAGER", "INWARDS_EXECUTIVE", "OUTWARDS_EXECUTIVE", "CUSTOM"];
-        const grouped: Record<string, TeamUser[]> = {};
+        // Group members by their role. Roles are rows now, so the grouping and its labels come
+        // from the data rather than a hardcoded order — a new role appears here automatically.
+        const grouped: Record<string, { name: string; members: TeamUser[] }> = {};
         for (const m of members) {
-          if (!grouped[m.role]) grouped[m.role] = [];
-          grouped[m.role].push(m);
+          const key = m.role?.id || "none";
+          if (!grouped[key]) grouped[key] = { name: m.role?.name || "No role", members: [] };
+          grouped[key].members.push(m);
         }
-        const orderedRoles = [...ROLE_ORDER.filter(r => grouped[r]), ...Object.keys(grouped).filter(r => !ROLE_ORDER.includes(r))];
+        const orderedRoles = Object.keys(grouped).sort((a, b) =>
+          grouped[a].name.localeCompare(grouped[b].name)
+        );
 
         return (
           <div className="space-y-4">
-            {orderedRoles.map(role => {
-              const rc = ROLE_CONFIG[role] || ROLE_CONFIG.INWARDS_EXECUTIVE;
-              const Icon = rc.icon;
+            {orderedRoles.map(roleId => {
+              const group = grouped[roleId];
+              const Icon = roleId === "none" ? UserCog : ShieldCheck;
               return (
-                <div key={role}>
+                <div key={roleId}>
                   <div className="flex items-center gap-2 mb-1.5">
                     <Icon className="h-3.5 w-3.5 text-slate-400" />
-                    <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">{rc.label}</p>
-                    <Badge variant={rc.color} className="text-[11px] tabular-nums">{grouped[role].length}</Badge>
+                    <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">{group.name}</p>
+                    <Badge variant="info" className="text-[11px] tabular-nums">{group.members.length}</Badge>
                   </div>
                   <div className="space-y-1.5">
-                    {grouped[role].map(m => (
+                    {group.members.map(m => (
                       <Link key={m.id} href={`/team/${m.id}`} className="block rounded-xl focus-ring">
                         <Card className={`border-l-4 ${m.isActive ? "border-l-green-500" : "border-l-slate-300 opacity-60"}`}>
                           <CardContent className="p-3 flex items-center gap-3 min-h-[44px]">
@@ -127,9 +116,6 @@ export default function TeamPage() {
                                 {!m.isActive && <Badge variant="danger" className="text-[11px]">Inactive</Badge>}
                               </div>
                               <div className="flex items-center gap-2 mt-0.5">
-                                {m.role === "CUSTOM" && m.customRoleName && (
-                                  <Badge variant={rc.color} className="text-[11px]">{m.customRoleName}</Badge>
-                                )}
                                 <span className="text-[11px] text-slate-500 tabular-nums">{m._count.transactions} transactions</span>
                               </div>
                             </div>

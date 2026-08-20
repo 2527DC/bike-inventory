@@ -4,11 +4,11 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { binSchema } from "@/lib/validations";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function GET() {
   try {
-    await requireAuth();
+    await requireFeature("settings", "view");
     const bins = await prisma.bin.findMany({
       where: { isActive: true },
       include: { _count: { select: { products: true } } },
@@ -23,7 +23,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "PURCHASE_MANAGER", "CEO"]);
+    await requireFeature("settings", "create");
     const body = await req.json();
     const data = binSchema.parse(body);
 

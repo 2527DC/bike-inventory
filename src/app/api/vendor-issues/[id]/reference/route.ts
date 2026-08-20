@@ -13,9 +13,7 @@ const SERVICE_LABEL: Record<string, string> = { IN_STORE: "In-Store Service", CU
 // to the issue's timeline (VendorIssueNote) so each ticket has a full record of actions taken.
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireFeature("vendor_issues", "view", [
-      "ADMIN", "CEO", "SUPERVISOR", "PURCHASE_MANAGER", "ACCOUNTS_MANAGER", "STORE_MANAGER", "SERVICE_MANAGER",
-    ]);
+    const user = await requireFeature("vendor_issues", "view");
     const { id } = await params;
     const body = await req.json();
 

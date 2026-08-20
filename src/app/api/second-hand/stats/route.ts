@@ -2,11 +2,11 @@ export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function GET() {
   try {
-    await requireAuth();
+    await requireFeature("second_hand", "view");
 
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);

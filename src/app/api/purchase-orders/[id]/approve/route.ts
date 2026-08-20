@@ -3,11 +3,11 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireAuth(["ADMIN", "SUPERVISOR"]);
+    const user = await requireFeature("purchase_orders", "approve");
     const { id } = await params;
 
     const po = await prisma.purchaseOrder.findUnique({ where: { id } });

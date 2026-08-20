@@ -3,11 +3,11 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN", "PURCHASE_MANAGER", "SUPERVISOR"]);
+    await requireFeature("purchase_orders", "view");
     const brandId = req.nextUrl.searchParams.get("brandId") || undefined;
 
     const uploads = await prisma.brandStockUpload.findMany({

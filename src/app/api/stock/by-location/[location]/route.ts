@@ -3,14 +3,14 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { isStockLocation, stockLocationLabel, type StockLocation } from "@/lib/inventory-config";
 
 // GET — every active product that has stock in one location, with its qty + value there.
 // The client derives the brand list + per-brand totals for the dropdown filter.
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ location: string }> }) {
   try {
-    await requireAuth();
+    await requireFeature("stock", "view");
     const { location } = await params;
     if (!isStockLocation(location)) return errorResponse("Unknown location", 404);
 

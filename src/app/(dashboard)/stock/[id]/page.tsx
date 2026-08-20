@@ -83,7 +83,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
   const { id } = use(params);
   const { data: session } = useSession();
   const role = (session?.user as { role?: string })?.role || "";
-  const { canEdit: canEditCheck } = usePermissions(role);
+  const { canEdit: canEditCheck } = usePermissions();
   const isAdmin = role === "ADMIN" || role === "CEO";
   const canEdit = canEditCheck("stock");
   const canEditType = true; // all authenticated users can reclassify product type

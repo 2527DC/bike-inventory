@@ -3,14 +3,14 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireAuth(["ADMIN", "PURCHASE_MANAGER", "SUPERVISOR"]);
+    await requireFeature("purchase_orders", "edit");
     const { id } = await params;
     const body = await req.json();
     const { items } = body as { items: Array<{ id: string; productId?: string; orderQty?: number; selected?: boolean }> };

@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // GET: Pre-booking detail
 export async function GET(
@@ -11,7 +11,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireAuth();
+    await requireFeature("deliveries", "view");
     const { id } = await params;
 
     const preBooking = await prisma.preBooking.findUnique({
@@ -42,7 +42,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireAuth(["ADMIN", "SUPERVISOR", "OUTWARDS_EXECUTIVE"]);
+    await requireFeature("deliveries", "edit");
     const { id } = await params;
     const body = await req.json();
 

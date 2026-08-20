@@ -4,13 +4,13 @@ export const maxDuration = 60;
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // POST — backfill salesPerson + lineItems for existing deliveries (paginated)
 // Body: { page?: number, batchSize?: number, dryRun?: boolean }
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("deliveries", "create");
     const body = await req.json().catch(() => ({}));
     const batchSize = Math.min(Number(body.batchSize) || 10, 20); // max 20 per call
     const skip = (Math.max(Number(body.page) || 1, 1) - 1) * batchSize;

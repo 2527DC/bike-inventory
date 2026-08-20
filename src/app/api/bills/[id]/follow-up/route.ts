@@ -4,11 +4,11 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { billFollowUpSchema } from "@/lib/validations";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    await requireAuth(["ADMIN", "PURCHASE_MANAGER", "ACCOUNTS_MANAGER", "SUPERVISOR"]);
+    await requireFeature("bills", "edit");
     const { id } = await params;
     const body = await req.json();
     const data = billFollowUpSchema.parse(body);

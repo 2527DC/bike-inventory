@@ -4,12 +4,12 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { exchangeGrantTokenZakya } from "@/lib/zakya";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // POST: Connect to Zakya POS using grant token (self-client flow)
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(["ADMIN"]);
+    await requireFeature("zoho", "fetch");
     const body = await req.json();
     const { clientId, clientSecret, grantToken, organizationId, organizationName } = body;
 

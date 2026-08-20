@@ -3,7 +3,8 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { userCan } from "@/lib/rbac";
 import { BIN_TRACKING_ENABLED, DEFAULT_STOCK_LOCATION, isStockLocation, stockLocationLabel, type StockLocation } from "@/lib/inventory-config";
 import { adjustLocationQty } from "@/lib/stock-location";
 
@@ -13,7 +14,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await requireAuth(["ADMIN", "SUPERVISOR", "INWARDS_EXECUTIVE"]);
+    const user = await requireFeature("inbound", "edit");
     const { id } = await params;
     const body = await req.json();
     const { status } = body;
@@ -40,7 +41,7 @@ export async function PUT(
     if (existing.status === "DELIVERED") return errorResponse("Already delivered", 400);
 
     // Approval gate: non-admin users need supervisor/accounts manager approval before delivery
-    if (status !== "IN_TRANSIT" && !existing.approvedAt && user.role !== "ADMIN") {
+    if (status !== "IN_TRANSIT" && !existing.approvedAt && !(await userCan(user.id, "inbound", "approve"))) {
       return errorResponse("Shipment must be approved by Supervisor or Accounts Manager before delivery", 403);
     }
 
