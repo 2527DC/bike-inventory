@@ -249,6 +249,32 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     actions: ["view", "create", "edit", "delete", "fetch"],
   },
 
+  // ── Brand Ledger (supplier reconciliation) ────────────────────────────────
+  // Split into two modules on purpose. The ledger is a record; the claim register is a set of
+  // live disputes and negotiating positions — "they owe us ₹1.3L and we have no written
+  // agreement" is not something everyone who can read a statement should see.
+  {
+    key: "brand_ledger",
+    label: "Brand Ledgers",
+    description: "Supplier statements, reconciliation against our books, agreed discount terms",
+    icon: "FileText",
+    route: "/ledger",
+    group: "Accounts",
+    sortOrder: 340,
+    actions: ["view", "create", "edit", "delete", "fetch"],
+  },
+  {
+    key: "brand_ledger_gaps",
+    label: "Ledger Claims",
+    description: "Promised discounts and credits not yet received — the chase register",
+    icon: "AlertCircle",
+    route: null, // lives inside a vendor's ledger, not as a standalone page
+    group: "Accounts",
+    sortOrder: 350,
+    // `approve` = authority to mark a claim resolved or dropped, which is a financial call.
+    actions: ["view", "create", "edit", "delete", "approve"],
+  },
+
   // ── Insights ──────────────────────────────────────────────────────────────
   {
     key: "reports",

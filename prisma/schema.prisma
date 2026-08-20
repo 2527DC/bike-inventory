@@ -282,6 +282,13 @@ model User {
   brandStockUploads  BrandStockUpload[] @relation("BrandStockUploadedBy")
   reportedProblems   AppProblem[]       @relation("ProblemReportedBy")
 
+  // Brand ledger reconciliation
+  importedStatements   BrandStatement[]     @relation("StatementImportedBy")
+  createdLedgerGaps    LedgerGap[]          @relation("LedgerGapCreatedBy")
+  ledgerGapNotes       LedgerGapNote[]      @relation("LedgerGapNoteAuthor")
+  uploadedGapEvidence  LedgerGapEvidence[]  @relation("GapEvidenceUploadedBy")
+  createdDiscountTerms VendorDiscountTerm[] @relation("DiscountTermCreatedBy")
+
   @@index([roleId])
 }
 
@@ -317,6 +324,14 @@ model Brand {
   preBookings     PreBooking[]
   stockUploads    BrandStockUpload[] @relation("BrandStockUploads")
   skuMappings     BrandSkuMapping[]  @relation("BrandSkuMappings")
+
+  // Brand ledger reconciliation. cdTermsDays/cdPercentage above are DEAD — every one of the
+  // 50 cash-discount usages in src/ reads Vendor, not Brand. Agreed terms live in
+  // VendorDiscountTerm; drop the two columns in a later cleanup.
+  ledgerEntries   BrandLedgerEntry[]   @relation("BrandLedgerEntries")
+  ledgerGaps      LedgerGap[]          @relation("BrandLedgerGaps")
+  discountTerms   VendorDiscountTerm[] @relation("BrandDiscountTerms")
+  vendors         BrandVendor[]        @relation("BrandVendors")
 }
 
 model Product {
@@ -578,6 +593,13 @@ model Vendor {
   confirmedBankTxns   BankTransaction[] @relation("ConfirmedVendorTxn")
   reorderProducts     Product[]         @relation("ReorderVendor")
 
+  // Brand ledger reconciliation
+  ledgerEntries    BrandLedgerEntry[]
+  statements       BrandStatement[]
+  ledgerGaps       LedgerGap[]
+  discountTerms    VendorDiscountTerm[]
+  brands           BrandVendor[]        @relation("VendorBrands")
+
   @@index([name])
 }
 
@@ -667,6 +689,7 @@ model VendorBill {
   issues             VendorIssue[]
   suggestedBankTxns  BankTransaction[] @relation("SuggestedBillTxn")
   inboundShipment    InboundShipment?
+  ledgerEntries      BrandLedgerEntry[] // brand statement rows matched to this bill
 
   @@unique([vendorId, billNo])
   @@index([vendorId])
@@ -692,6 +715,8 @@ model VendorPayment {
   recordedBy        User          @relation("PaymentRecordedBy", fields: [recordedById], references: [id])
   createdAt         DateTime      @default(now())
 
+  ledgerEntries     BrandLedgerEntry[] // brand statement rows matched to this payment
+
   @@index([vendorId])
   @@index([billId])
   @@index([paymentDate])
@@ -711,6 +736,7 @@ model VendorCredit {
   updatedAt     DateTime        @updatedAt
 
   payments      VendorPayment[]
+  ledgerEntries BrandLedgerEntry[] // brand statement rows matched to this credit note
 
   @@unique([vendorId, creditNoteNo])
   @@index([vendorId])
@@ -1790,3 +1816,346 @@ model NotificationLog {
   @@index([createdAt])
   @@map("notification_logs")
 }
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// BRAND LEDGER RECONCILIATION
+// Merged in from the standalone `ledgers` workspace.
+//
+// The job: every brand promised discounts and credit notes. Did they actually credit them,
+// and what do we really owe?
+//
+//     Net payable = ledger due âˆ’ unrecorded payments âˆ’ promised discounts not yet credited
+//
+// THE ONE RULE THAT MAKES THIS WORK â€” two sides, stored separately:
+//
+//   BrandLedgerEntry            what the BRAND says, transcribed from their statement
+//   VendorBill/Payment/Credit   what BCH's own books say
+//   LedgerGap                   the difference worth chasing
+//
+// An import NEVER edits the brand's numbers and NEVER writes into BCH's books. If their
+// statement is wrong, that wrongness IS the finding â€” "correcting" it on import destroys the
+// evidence needed to prove it. And letting an import create a VendorBill would turn their
+// mistake into our accounting record â€” exactly the EMotorad two-folio problem, where invoices
+// were posted to Hub and payments to Centre, so neither folio alone was ever right.
+//
+// Attached to Vendor, not Brand: we pay the billing entity, and brand != entity. Raleigh is
+// billed via Naren International; EMotorad via Inkodop Technologies.
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+enum LedgerEntryType {
+  OPENING
+  INVOICE
+  PAYMENT
+  CREDIT_NOTE
+  DEBIT_NOTE
+  DISCOUNT
+  ADJUSTMENT
+}
+
+// Which party the entry originates from â€” separates "their invoice" from "our payment".
+enum LedgerSide {
+  VENDOR
+  BCH
+}
+
+// How a statement row relates to BCH's own books.
+//
+// NEEDS_REVIEW deliberately does NOT mean "discrepancy": an unmatched row is ambiguous between
+// "they never posted our payment" and "we never recorded it". Only a human can tell which, so
+// the system surfaces and never concludes.
+enum LedgerMatchStatus {
+  UNMATCHED
+  MATCHED
+  NEEDS_REVIEW
+  THEY_MISSING // we paid or were credited; absent from their statement
+  WE_MISSING // on their statement; absent from our books
+  DISPUTED
+  IGNORED
+}
+
+enum LedgerEntrySource {
+  STATEMENT_PDF
+  STATEMENT_XLSX
+  STATEMENT_CSV
+  BCH_BOOKS // mirrored from VendorBill / VendorPayment / VendorCredit
+  MANUAL // escape hatch: real, but not yet recorded in Accounts
+}
+
+enum GapType {
+  DISCOUNT_PENDING
+  CREDIT_NOTE_PENDING
+  SHORT_CREDIT
+  DISPUTE
+  RECONCILIATION_DIFFERENCE
+  DOCUMENTATION_GAP
+  BALANCE_UNCONFIRMED
+  SCHEME_ENTITLEMENT
+  COMMITMENT_PENDING
+  OPERATIONAL_WARRANTY
+  INVOICE_DISCREPANCY
+  REIMBURSEMENT_PENDING
+}
+
+// How hard a claim can be pressed.
+//   FIRM        provable in writing
+//   LEVERAGE    use in negotiation, not provable
+//   VERIFY      needs a document before claiming
+//   CONDITIONAL only worth raising if contested
+enum GapTier {
+  FIRM
+  LEVERAGE
+  VERIFY
+  CONDITIONAL
+}
+
+enum GapStatus {
+  OPEN // not acknowledged by the brand
+  PROMISED // they agreed; credit note not yet issued
+  VERIFY // needs checking against a document or bank statement
+  RESOLVED
+  REJECTED
+}
+
+enum EvidenceKind {
+  SCREENSHOT
+  PDF
+  EMAIL
+  DOCUMENT
+}
+
+enum DiscountKind {
+  CASH // early payment: "2% within 15 days"
+  TRADE // off list price: "18% on alloy frames"
+  VOLUME
+  TRANSPORT_SUPPORT // "Rs 150 per cycle"
+  MARKETING
+  INCENTIVE // "Rs 1,200 per bike billed"
+  OTHER
+}
+
+// A brand's own statement rows, exactly as received. Never edited to match our books.
+model BrandLedgerEntry {
+  id       String @id @default(cuid())
+  vendorId String
+  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  brandId  String? // which brand the row concerns, when a vendor supplies several
+  brand    Brand?  @relation("BrandLedgerEntries", fields: [brandId], references: [id])
+
+  entryDate DateTime
+  type      LedgerEntryType
+  ref       String? // their voucher / invoice number
+  amount    Float
+
+  // +1 increases what BCH owes (invoice, debit note); -1 decreases (payment, CN, discount).
+  // Stored rather than derived from `type` because brands occasionally post a credit on a
+  // sales voucher, and the running balance depends on the sign rather than the label.
+  direction Int
+
+  side   LedgerSide
+  note   String?
+  source LedgerEntrySource @default(STATEMENT_CSV)
+
+  // Per-invoice discount audit â€” the "18% via DIS-90, group short 539" annotations.
+  auditStatus String? // ok | short | missing | era20 | info
+  auditNote   String?
+
+  // Reconciliation against BCH's books. All null and UNMATCHED until matched.
+  matchStatus LedgerMatchStatus @default(UNMATCHED)
+  billId      String?
+  bill        VendorBill?       @relation(fields: [billId], references: [id])
+  paymentId   String?
+  payment     VendorPayment?    @relation(fields: [paymentId], references: [id])
+  creditId    String?
+  credit      VendorCredit?     @relation(fields: [creditId], references: [id])
+  reviewedAt  DateTime?
+  reviewNote  String?
+
+  gapId String? // an annotated row can evidence a claim
+  gap   LedgerGap? @relation("GapEntries", fields: [gapId], references: [id])
+
+  statementId String?
+  statement   BrandStatement? @relation(fields: [statementId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([vendorId, entryDate])
+  @@index([vendorId, matchStatus])
+  @@index([statementId])
+  @@index([gapId])
+  @@map("brand_ledger_entries")
+}
+
+// Provenance for an import: which statement produced which rows, so a re-import is auditable
+// and a revised statement can supersede an older one.
+model BrandStatement {
+  id            String    @id @default(cuid())
+  vendorId      String
+  vendor        Vendor    @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  statementDate DateTime
+  periodFrom    DateTime?
+  periodTo      DateTime?
+
+  // What THEY claim the closing balance is, against what summing their own rows produces.
+  // A mismatch means the statement does not add up â€” that is a finding, and it blocks the
+  // import until someone looks at it.
+  claimedClosing  Float?
+  computedClosing Float?
+  tiesOut         Boolean @default(false)
+
+  fileUrl    String? // the original PDF / XLSX in R2
+  fileName   String?
+  sourceKind LedgerEntrySource @default(STATEMENT_CSV)
+
+  // Recorded so an AI extraction can be re-checked against what was actually returned.
+  extractionModel String?
+  extractionNote  String?
+
+  importedById String
+  importedBy   User     @relation("StatementImportedBy", fields: [importedById], references: [id])
+  createdAt    DateTime @default(now())
+
+  entries BrandLedgerEntry[]
+
+  @@index([vendorId, statementDate])
+  @@map("brand_statements")
+}
+
+// The claim register â€” the heart of the tool. One row per unresolved money claim.
+model LedgerGap {
+  id       String  @id @default(cuid())
+  vendorId String
+  vendor   Vendor  @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  brandId  String?
+  brand    Brand?  @relation("BrandLedgerGaps", fields: [brandId], references: [id])
+
+  number Int // per-brand #1, #2 â€¦ preserved from the existing register
+  title  String
+
+  gapType GapType
+  tier    GapTier?
+  status  GapStatus @default(OPEN)
+
+  amount Float?
+
+  // Free text for amounts that are not a single number â€” "10,300 claimed / 9,900 itemised".
+  // The imprecision is the point; forcing it into a Float would invent certainty.
+  amountNote String?
+
+  promisedBy   String? // who at the brand
+  promisedOn   DateTime?
+  evidenceText String? // curated citation: chat dates, line refs, quotes
+  action       String? // next step
+  result       String? // what happened
+  resolvedAt   DateTime?
+
+  createdById String
+  createdBy   User     @relation("LedgerGapCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  evidence LedgerGapEvidence[]
+  entries  BrandLedgerEntry[] @relation("GapEntries")
+  notes    LedgerGapNote[]
+
+  @@unique([vendorId, number])
+  @@index([vendorId, status])
+  @@index([status, gapType])
+  @@map("ledger_gaps")
+}
+
+model LedgerGapEvidence {
+  id           String       @id @default(cuid())
+  gapId        String
+  gap          LedgerGap    @relation(fields: [gapId], references: [id], onDelete: Cascade)
+  url          String // R2
+  kind         EvidenceKind
+  capturedOn   DateTime? // when the evidence event happened, not when it was uploaded
+  source       String? // "Mani WhatsApp chat (L1600)"
+  note         String? // what it proves
+  uploadedById String?
+  uploadedBy   User?        @relation("GapEvidenceUploadedBy", fields: [uploadedById], references: [id])
+  createdAt    DateTime     @default(now())
+
+  @@index([gapId])
+  @@map("ledger_gap_evidence")
+}
+
+// Progress log on a claim â€” chases, replies, changes of position.
+model LedgerGapNote {
+  id        String    @id @default(cuid())
+  gapId     String
+  gap       LedgerGap @relation(fields: [gapId], references: [id], onDelete: Cascade)
+  body      String
+  authorId  String
+  author    User      @relation("LedgerGapNoteAuthor", fields: [authorId], references: [id])
+  createdAt DateTime  @default(now())
+
+  @@index([gapId])
+  @@map("ledger_gap_notes")
+}
+
+// What was actually agreed with a supplier â€” the missing half of the discount audit.
+//
+// Vendor.cdPercentage / cdTermsDays models only a CASH discount ("2% within 15 days"). It
+// cannot express "18% on alloy, 20% on steel, from July 2025, plus Rs 150/cycle transport" â€”
+// and that is what the Hornback and Lucifer disputes are actually about. With these rows the
+// app COMPUTES the expected discount per invoice instead of the shortfall being hand-typed.
+//
+// An empty agreedBy / evidenceUrl is itself the signal: the term is unproven. That is what
+// "Need: written 20% agreement to claim Dispute #1" is warning about, surfaced before the
+// negotiation rather than during it.
+model VendorDiscountTerm {
+  id       String  @id @default(cuid())
+  vendorId String
+  vendor   Vendor  @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  brandId  String?
+  brand    Brand?  @relation("BrandDiscountTerms", fields: [brandId], references: [id])
+
+  kind          DiscountKind
+  percentage    Float?
+  perUnitAmount Float? // "Rs 150 per cycle"
+  appliesTo     String? // "alloy frames", "steel frames", "kids bills"
+
+  // Terms change. Hornback's discount applies "only from July-2025"; Lucifer moved 20% -> 18%.
+  effectiveFrom DateTime?
+  effectiveTo   DateTime?
+
+  // Cash discounts need a payment window; trade discounts do not.
+  withinDays Int?
+
+  agreedBy    String? // who promised it
+  agreedOn    DateTime?
+  isProven    Boolean @default(false) // is there anything in writing?
+  evidenceUrl String?
+  notes       String?
+
+  createdById String
+  createdBy   User     @relation("DiscountTermCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([vendorId, kind])
+  @@index([vendorId, effectiveFrom])
+  @@map("vendor_discount_terms")
+}
+
+// Brand <-> Vendor, many-to-many. One distributor supplies several brands (Naren -> Raleigh
+// and Suncross), and a brand can arrive through more than one vendor. An explicit join rather
+// than an implicit m-n so the pairing can carry its own context.
+model BrandVendor {
+  id       String @id @default(cuid())
+  brandId  String
+  brand    Brand  @relation("BrandVendors", fields: [brandId], references: [id], onDelete: Cascade)
+  vendorId String
+  vendor   Vendor @relation("VendorBrands", fields: [vendorId], references: [id], onDelete: Cascade)
+
+  isPrimary Boolean  @default(false) // the usual billing route for this brand
+  note      String? // "distributor", "direct", "via Ludhiana"
+  createdAt DateTime @default(now())
+
+  @@unique([brandId, vendorId])
+  @@index([vendorId])
+  @@map("brand_vendors")
+}
+

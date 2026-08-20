@@ -124,6 +124,73 @@ export const userUpdateSchema = userSchema.partial().extend({
   accessCode: z.string().min(1).optional(),
 });
 
+// ─── Brand ledger ────────────────────────────────────────────────────────────
+
+export const ledgerEntrySchema = z.object({
+  entryDate: z.string().min(1, "Date is required"),
+  type: z.enum([
+    "OPENING", "INVOICE", "PAYMENT", "CREDIT_NOTE", "DEBIT_NOTE", "DISCOUNT", "ADJUSTMENT",
+  ]),
+  ref: z.string().max(80).optional(),
+  amount: z.number().positive("Amount must be greater than zero"),
+  // Omitted means "derive from the type". Sent explicitly for the rare case of a credit
+  // posted on a sales voucher, where the label and the sign disagree.
+  direction: z.union([z.literal(1), z.literal(-1)]).optional(),
+  note: z.string().max(500).optional(),
+  brandId: z.string().optional(),
+  // MANUAL is the escape hatch for a real payment not yet recorded in Accounts.
+  source: z.enum(["STATEMENT_PDF", "STATEMENT_XLSX", "STATEMENT_CSV", "BCH_BOOKS", "MANUAL"]).optional(),
+});
+
+export const ledgerEntryReviewSchema = z.object({
+  matchStatus: z.enum([
+    "UNMATCHED", "MATCHED", "NEEDS_REVIEW", "THEY_MISSING", "WE_MISSING", "DISPUTED", "IGNORED",
+  ]),
+  reviewNote: z.string().max(500).optional(),
+  billId: z.string().nullable().optional(),
+  paymentId: z.string().nullable().optional(),
+  creditId: z.string().nullable().optional(),
+  gapId: z.string().nullable().optional(),
+});
+
+export const ledgerGapSchema = z.object({
+  title: z.string().min(1, "Title is required").max(300),
+  gapType: z.enum([
+    "DISCOUNT_PENDING", "CREDIT_NOTE_PENDING", "SHORT_CREDIT", "DISPUTE",
+    "RECONCILIATION_DIFFERENCE", "DOCUMENTATION_GAP", "BALANCE_UNCONFIRMED",
+    "SCHEME_ENTITLEMENT", "COMMITMENT_PENDING", "OPERATIONAL_WARRANTY",
+    "INVOICE_DISCREPANCY", "REIMBURSEMENT_PENDING",
+  ]),
+  tier: z.enum(["FIRM", "LEVERAGE", "VERIFY", "CONDITIONAL"]).nullable().optional(),
+  status: z.enum(["OPEN", "PROMISED", "VERIFY", "RESOLVED", "REJECTED"]).optional(),
+  amount: z.number().nullable().optional(),
+  amountNote: z.string().max(200).optional(),
+  promisedBy: z.string().max(120).optional(),
+  promisedOn: z.string().optional(),
+  evidenceText: z.string().max(2000).optional(),
+  action: z.string().max(1000).optional(),
+  result: z.string().max(2000).optional(),
+  brandId: z.string().optional(),
+});
+
+export const ledgerGapUpdateSchema = ledgerGapSchema.partial();
+
+export const discountTermSchema = z.object({
+  kind: z.enum(["CASH", "TRADE", "VOLUME", "TRANSPORT_SUPPORT", "MARKETING", "INCENTIVE", "OTHER"]),
+  percentage: z.number().min(0).max(100).nullable().optional(),
+  perUnitAmount: z.number().min(0).nullable().optional(),
+  appliesTo: z.string().max(200).optional(),
+  effectiveFrom: z.string().optional(),
+  effectiveTo: z.string().optional(),
+  withinDays: z.number().int().min(0).nullable().optional(),
+  agreedBy: z.string().max(120).optional(),
+  agreedOn: z.string().optional(),
+  isProven: z.boolean().optional(),
+  evidenceUrl: z.string().url().optional().or(z.literal("")),
+  notes: z.string().max(1000).optional(),
+  brandId: z.string().optional(),
+});
+
 // ─── RBAC ────────────────────────────────────────────────────────────────────
 
 export const roleCreateSchema = z.object({
