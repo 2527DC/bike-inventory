@@ -286,6 +286,26 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     sortOrder: 400,
     actions: ["view"],
   },
+  // Store analytics — entrance footfall from the door camera, joined to POS bills.
+  // See docs/analytics-merge-plan.md.
+  //
+  // `route` is the footfall dashboard. The device-key screen lives at /analytics/devices and
+  // is reached from a link on that page rather than its own sidebar entry — it is
+  // administration of the feature, not the feature.
+  //
+  // `edit` is deliberately narrower than `view`: it governs issuing and revoking camera
+  // API keys (AnalyticsDevice). Seeing footfall must not imply being able to mint a
+  // credential that can write footfall.
+  {
+    key: "analytics",
+    label: "Store Analytics",
+    description: "Entrance footfall, counter health and the bills join",
+    icon: "Activity",
+    route: "/analytics",
+    group: "Insights",
+    sortOrder: 410,
+    actions: ["view", "edit"],
+  },
 
   // ── Service (merged from bch-service) ─────────────────────────────────────
   // These modules exist so the SERVICE_* roles below have real permissions to hold, and so

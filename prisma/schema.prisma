@@ -218,51 +218,51 @@ enum StockLocation {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  name          String
-  email         String    @unique
-  password      String
-  roleId        String
-  role          Role      @relation(fields: [roleId], references: [id])
-  accessCode    String    @unique
-  isActive      Boolean   @default(true)
+  id         String   @id @default(cuid())
+  name       String
+  email      String   @unique
+  password   String
+  roleId     String
+  role       Role     @relation(fields: [roleId], references: [id])
+  accessCode String   @unique
+  isActive   Boolean  @default(true)
   // Avatar shown beside a mechanic's name across the workshop screens. Display only —
   // carried over from the service app's User because its UI leans on it heavily. The
   // service app's `pin` column was NOT carried over: there is one login, and it is the
   // inventory access code.
-  emoji         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  emoji      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-  transactions  InventoryTransaction[]
-  stockCounts   StockCount[]
+  transactions InventoryTransaction[]
+  stockCounts  StockCount[]
 
-  createdPOs       PurchaseOrder[]  @relation("POCreatedBy")
-  approvedPOs      PurchaseOrder[]  @relation("POApprovedBy")
-  recordedPayments VendorPayment[]  @relation("PaymentRecordedBy")
-  recordedExpenses Expense[]        @relation("ExpenseRecordedBy")
+  createdPOs               PurchaseOrder[]   @relation("POCreatedBy")
+  approvedPOs              PurchaseOrder[]   @relation("POApprovedBy")
+  recordedPayments         VendorPayment[]   @relation("PaymentRecordedBy")
+  recordedExpenses         Expense[]         @relation("ExpenseRecordedBy")
   recordedCustomerPayments CustomerPayment[] @relation("CustomerPaymentRecordedBy")
-  createdIssues    VendorIssue[]    @relation("IssueCreatedBy")
-  issueNotes       VendorIssueNote[] @relation("IssueNoteAuthor")
-  navTabs          String[]         @default([]) // admin-chosen bottom-nav hrefs (empty = role default)
-  approvedStockCounts StockCount[] @relation("StockCountApprovedBy")
-  verifiedDeliveries  Delivery[]   @relation("DeliveryVerifiedBy")
-  uploadedStatements  BankStatement[] @relation("StatementUploader")
+  createdIssues            VendorIssue[]     @relation("IssueCreatedBy")
+  issueNotes               VendorIssueNote[] @relation("IssueNoteAuthor")
+  navTabs                  String[]          @default([]) // admin-chosen bottom-nav hrefs (empty = role default)
+  approvedStockCounts      StockCount[]      @relation("StockCountApprovedBy")
+  verifiedDeliveries       Delivery[]        @relation("DeliveryVerifiedBy")
+  uploadedStatements       BankStatement[]   @relation("StatementUploader")
 
   // Service / workshop (merged from bch-service)
-  assignedJobs        ServiceJob[] @relation("ServiceJobMechanic")
-  createdServiceJobs  ServiceJob[] @relation("ServiceJobCreatedBy")
-  serviceReviews      Review[]     @relation("ServiceReviewMechanic")
-  taskAssignments     TaskAssignment[] @relation("TaskAssignmentMechanic")
-  assemblyLogs        AssemblyLog[] @relation("AssemblyMechanic")
+  assignedJobs       ServiceJob[]     @relation("ServiceJobMechanic")
+  createdServiceJobs ServiceJob[]     @relation("ServiceJobCreatedBy")
+  serviceReviews     Review[]         @relation("ServiceReviewMechanic")
+  taskAssignments    TaskAssignment[] @relation("TaskAssignmentMechanic")
+  assemblyLogs       AssemblyLog[]    @relation("AssemblyMechanic")
 
   // Transfer orders
-  createdTransfers  TransferOrder[]     @relation("TransferCreatedBy")
-  reviewedTransfers TransferOrder[]     @relation("TransferReviewedBy")
+  createdTransfers  TransferOrder[] @relation("TransferCreatedBy")
+  reviewedTransfers TransferOrder[] @relation("TransferReviewedBy")
 
   // Second-hand cycles
-  createdSecondHand  SecondHandCycle[]   @relation("SecondHandCreatedBy")
-  verifiedSecondHand SecondHandCycle[]   @relation("SecondHandVerifiedBy")
+  createdSecondHand  SecondHandCycle[] @relation("SecondHandCreatedBy")
+  verifiedSecondHand SecondHandCycle[] @relation("SecondHandVerifiedBy")
 
   // Inbound shipments
   createdInboundShipments   InboundShipment[] @relation("InboundCreatedBy")
@@ -277,10 +277,10 @@ model User {
   verifiedSettlements DailySettlement[] @relation("SettlementCashVerifier")
 
   // Operations Hub (Tasks, SOPs, Updates)
-  postedUpdates      StoreUpdate[]   @relation("UpdatePostedBy")
-  opsActivityLogs    OpsActivityLog[] @relation("OpsActivityLoggedBy")
-  brandStockUploads  BrandStockUpload[] @relation("BrandStockUploadedBy")
-  reportedProblems   AppProblem[]       @relation("ProblemReportedBy")
+  postedUpdates     StoreUpdate[]      @relation("UpdatePostedBy")
+  opsActivityLogs   OpsActivityLog[]   @relation("OpsActivityLoggedBy")
+  brandStockUploads BrandStockUpload[] @relation("BrandStockUploadedBy")
+  reportedProblems  AppProblem[]       @relation("ProblemReportedBy")
 
   // Brand ledger reconciliation
   importedStatements   BrandStatement[]     @relation("StatementImportedBy")
@@ -293,100 +293,100 @@ model User {
 }
 
 model Category {
-  id            String    @id @default(cuid())
-  name          String    @unique
-  description   String?
-  parentId      String?
-  parent        Category? @relation("CategoryTree", fields: [parentId], references: [id])
-  children      Category[] @relation("CategoryTree")
-  movingLevel   String    @default("NORMAL") // FAST, NORMAL, SLOW
-  reorderLevel  Int       @default(0)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id           String     @id @default(cuid())
+  name         String     @unique
+  description  String?
+  parentId     String?
+  parent       Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children     Category[] @relation("CategoryTree")
+  movingLevel  String     @default("NORMAL") // FAST, NORMAL, SLOW
+  reorderLevel Int        @default(0)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
-  products      Product[]
+  products Product[]
 }
 
 model Brand {
-  id            String    @id @default(cuid())
-  name          String    @unique
-  contactName   String?
-  contactPhone  String?
+  id             String   @id @default(cuid())
+  name           String   @unique
+  contactName    String?
+  contactPhone   String?
   whatsappNumber String?
-  cdTermsDays   Int?      // Cash Discount terms in days
-  cdPercentage  Float?    // Cash Discount percentage
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  cdTermsDays    Int? // Cash Discount terms in days
+  cdPercentage   Float? // Cash Discount percentage
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  products      Product[]
-  leadTime      BrandLeadTime?
+  products         Product[]
+  leadTime         BrandLeadTime?
   inboundShipments InboundShipment[]
-  preBookings     PreBooking[]
-  stockUploads    BrandStockUpload[] @relation("BrandStockUploads")
-  skuMappings     BrandSkuMapping[]  @relation("BrandSkuMappings")
+  preBookings      PreBooking[]
+  stockUploads     BrandStockUpload[] @relation("BrandStockUploads")
+  skuMappings      BrandSkuMapping[]  @relation("BrandSkuMappings")
 
   // Brand ledger reconciliation. cdTermsDays/cdPercentage above are DEAD — every one of the
   // 50 cash-discount usages in src/ reads Vendor, not Brand. Agreed terms live in
   // VendorDiscountTerm; drop the two columns in a later cleanup.
-  ledgerEntries   BrandLedgerEntry[]   @relation("BrandLedgerEntries")
-  ledgerGaps      LedgerGap[]          @relation("BrandLedgerGaps")
-  discountTerms   VendorDiscountTerm[] @relation("BrandDiscountTerms")
-  vendors         BrandVendor[]        @relation("BrandVendors")
+  ledgerEntries BrandLedgerEntry[]   @relation("BrandLedgerEntries")
+  ledgerGaps    LedgerGap[]          @relation("BrandLedgerGaps")
+  discountTerms VendorDiscountTerm[] @relation("BrandDiscountTerms")
+  vendors       BrandVendor[]        @relation("BrandVendors")
 }
 
 model Product {
-  id            String         @id @default(cuid())
-  sku           String         @unique
-  name          String
-  description   String?
-  zohoItemId    String?        @unique // Zoho Books item_id for sync
-  categoryId    String
-  category      Category       @relation(fields: [categoryId], references: [id])
-  brandId       String
-  brand         Brand          @relation(fields: [brandId], references: [id])
-  type          ProductType    @default(SPARE_PART)
-  status        ProductStatus  @default(ACTIVE)
-  condition     ProductCondition @default(NEW)
+  id          String           @id @default(cuid())
+  sku         String           @unique
+  name        String
+  description String?
+  zohoItemId  String?          @unique // Zoho Books item_id for sync
+  categoryId  String
+  category    Category         @relation(fields: [categoryId], references: [id])
+  brandId     String
+  brand       Brand            @relation(fields: [brandId], references: [id])
+  type        ProductType      @default(SPARE_PART)
+  status      ProductStatus    @default(ACTIVE)
+  condition   ProductCondition @default(NEW)
 
   // Pricing
-  costPrice     Float          @default(0)
-  sellingPrice  Float          @default(0)
-  mrp           Float          @default(0)
-  gstRate       Float          @default(18)
-  hsnCode       String?
+  costPrice    Float   @default(0)
+  sellingPrice Float   @default(0)
+  mrp          Float   @default(0)
+  gstRate      Float   @default(18)
+  hsnCode      String?
 
   // Stock
-  currentStock  Int            @default(0)
-  reservedStock Int            @default(0)
-  minStock      Int            @default(0)
-  maxStock      Int            @default(0)
-  reorderLevel  Int            @default(0)
-  reorderQty    Int            @default(0)
+  currentStock  Int @default(0)
+  reservedStock Int @default(0)
+  minStock      Int @default(0)
+  maxStock      Int @default(0)
+  reorderLevel  Int @default(0)
+  reorderQty    Int @default(0)
 
   // Bicycle specific
-  size          String?        // For bicycles: 16", 20", 24", 26", etc.
-  color         String?
-  imageUrls     String[]       // Array of image URLs
-  tags          String[]       // Condition tags, custom tags
+  size      String? // For bicycles: 16", 20", 24", 26", etc.
+  color     String?
+  imageUrls String[] // Array of image URLs
+  tags      String[] // Condition tags, custom tags
 
-  binId         String?
-  bin           Bin?           @relation(fields: [binId], references: [id])
+  binId String?
+  bin   Bin?    @relation(fields: [binId], references: [id])
 
   reorderVendorId String?
-  reorderVendor   Vendor?      @relation("ReorderVendor", fields: [reorderVendorId], references: [id])
+  reorderVendor   Vendor? @relation("ReorderVendor", fields: [reorderVendorId], references: [id])
 
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  transactions  InventoryTransaction[]
-  stockCounts   StockCountItem[]
-  serialItems   SerialItem[]
-  stockLevels   StockLevel[]
+  transactions       InventoryTransaction[]
+  stockCounts        StockCountItem[]
+  serialItems        SerialItem[]
+  stockLevels        StockLevel[]
   purchaseOrderItems PurchaseOrderItem[]
   transferOrderItems TransferOrderItem[]
-  inboundLineItems InboundLineItem[]
-  brandStockMatches  BrandStockItem[]  @relation("BrandStockMatches")
-  brandSkuMappings   BrandSkuMapping[] @relation("BrandSkuMappingProducts")
+  inboundLineItems   InboundLineItem[]
+  brandStockMatches  BrandStockItem[]       @relation("BrandStockMatches")
+  brandSkuMappings   BrandSkuMapping[]      @relation("BrandSkuMappingProducts")
 
   @@index([status])
   @@index([categoryId])
@@ -419,32 +419,32 @@ model StockLevel {
 }
 
 model SerialItem {
-  id            String        @id @default(cuid())
-  serialCode    String        @unique  // Format: {SKU}-{sequence} e.g. "HRO-MTB26-0001"
-  productId     String
-  product       Product       @relation(fields: [productId], references: [id])
-  status        SerialStatus  @default(IN_STOCK)
-  condition     ProductCondition @default(NEW)
+  id         String           @id @default(cuid())
+  serialCode String           @unique // Format: {SKU}-{sequence} e.g. "HRO-MTB26-0001"
+  productId  String
+  product    Product          @relation(fields: [productId], references: [id])
+  status     SerialStatus     @default(IN_STOCK)
+  condition  ProductCondition @default(NEW)
 
   // Location
-  binId         String?
-  bin           Bin?          @relation(fields: [binId], references: [id])
+  binId String?
+  bin   Bin?    @relation(fields: [binId], references: [id])
 
   // Tracking
-  batchNo       String?       // Inward batch reference
-  invoiceNo     String?       // Purchase invoice
-  receivedAt    DateTime      @default(now())
+  batchNo       String? // Inward batch reference
+  invoiceNo     String? // Purchase invoice
+  receivedAt    DateTime  @default(now())
   soldAt        DateTime?
   customerName  String?
   saleInvoiceNo String?
 
   // Barcode
-  barcodeData   String?       // Encoded barcode string (= serialCode by default)
-  barcodeFormat String        @default("CODE128") // CODE128, QR, EAN13
+  barcodeData   String? // Encoded barcode string (= serialCode by default)
+  barcodeFormat String  @default("CODE128") // CODE128, QR, EAN13
 
-  notes         String?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   transactionItems SerialTransactionItem[]
 
@@ -454,62 +454,62 @@ model SerialItem {
 }
 
 model SerialTransactionItem {
-  id              String              @id @default(cuid())
-  serialItemId    String
-  serialItem      SerialItem          @relation(fields: [serialItemId], references: [id])
-  transactionId   String
-  transaction     InventoryTransaction @relation(fields: [transactionId], references: [id])
-  createdAt       DateTime            @default(now())
+  id            String               @id @default(cuid())
+  serialItemId  String
+  serialItem    SerialItem           @relation(fields: [serialItemId], references: [id])
+  transactionId String
+  transaction   InventoryTransaction @relation(fields: [transactionId], references: [id])
+  createdAt     DateTime             @default(now())
 
   @@index([serialItemId])
   @@index([transactionId])
 }
 
 model Bin {
-  id            String    @id @default(cuid())
-  code          String    @unique  // e.g., "A-01-03" (Aisle-Rack-Shelf)
-  name          String
-  location      String    // "Store" or "Warehouse"
-  zone          String?   // Zone within location
-  capacity      Int?
-  isActive      Boolean   @default(true)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id        String   @id @default(cuid())
+  code      String   @unique // e.g., "A-01-03" (Aisle-Rack-Shelf)
+  name      String
+  location  String // "Store" or "Warehouse"
+  zone      String? // Zone within location
+  capacity  Int?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  products      Product[]
-  serialItems   SerialItem[]
-  stockCounts   StockCount[]
-  transfersFrom TransferOrderItem[] @relation("TransferFromBin")
-  transfersTo   TransferOrderItem[] @relation("TransferToBin")
-  secondHandCycles SecondHandCycle[] @relation("SecondHandBin")
+  products         Product[]
+  serialItems      SerialItem[]
+  stockCounts      StockCount[]
+  transfersFrom    TransferOrderItem[] @relation("TransferFromBin")
+  transfersTo      TransferOrderItem[] @relation("TransferToBin")
+  secondHandCycles SecondHandCycle[]   @relation("SecondHandBin")
   inboundLineItems InboundLineItem[]
 }
 
 model InventoryTransaction {
-  id            String           @id @default(cuid())
+  id            String          @id @default(cuid())
   type          TransactionType
   productId     String
-  product       Product          @relation(fields: [productId], references: [id])
+  product       Product         @relation(fields: [productId], references: [id])
   quantity      Int
   previousStock Int
   newStock      Int
 
   // Reference
-  referenceNo   String?          // PO number, Invoice number, etc.
-  notes         String?
+  referenceNo String? // PO number, Invoice number, etc.
+  notes       String?
 
   // Who
-  userId        String
-  user          User             @relation(fields: [userId], references: [id])
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
   // RGP (Returnable Gate Pass)
-  isRgp         Boolean          @default(false)
+  isRgp         Boolean   @default(false)
   rgpReturnDate DateTime?
-  rgpReturned   Boolean          @default(false)
+  rgpReturned   Boolean   @default(false)
 
-  createdAt     DateTime         @default(now())
+  createdAt DateTime @default(now())
 
-  serialItems   SerialTransactionItem[]
+  serialItems SerialTransactionItem[]
 
   @@index([productId])
   @@index([userId])
@@ -520,47 +520,47 @@ model InventoryTransaction {
 }
 
 model StockCount {
-  id              String           @id @default(cuid())
-  countNo         String?          @unique // Auto: SC-YYYYMM-NNNN
-  title           String           // "Weekly Audit - Week 15"
+  id              String    @id @default(cuid())
+  countNo         String?   @unique // Auto: SC-YYYYMM-NNNN
+  title           String // "Weekly Audit - Week 15"
   assignedToId    String
-  assignedTo      User             @relation(fields: [assignedToId], references: [id])
+  assignedTo      User      @relation(fields: [assignedToId], references: [id])
   binId           String?
-  bin             Bin?             @relation(fields: [binId], references: [id])
-  status          String           @default("PENDING") // PENDING, IN_PROGRESS, COMPLETED, APPROVED, REJECTED
+  bin             Bin?      @relation(fields: [binId], references: [id])
+  status          String    @default("PENDING") // PENDING, IN_PROGRESS, COMPLETED, APPROVED, REJECTED
   dueDate         DateTime
   completedAt     DateTime?
   approvedById    String?
-  approvedBy      User?            @relation("StockCountApprovedBy", fields: [approvedById], references: [id])
+  approvedBy      User?     @relation("StockCountApprovedBy", fields: [approvedById], references: [id])
   approvedAt      DateTime?
   rejectionReason String?
   notes           String?
-  productType     String?          // Filter: BICYCLE, SPARE_PART, ACCESSORY, or null=all
-  location        String?          // Location-level scope: "BCH-GF", "BCH-FF", etc. Null = single bin or all
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  productType     String? // Filter: BICYCLE, SPARE_PART, ACCESSORY, or null=all
+  location        String? // Location-level scope: "BCH-GF", "BCH-FF", etc. Null = single bin or all
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  items           StockCountItem[]
+  items StockCountItem[]
 }
 
 model StockCountItem {
-  id              String     @id @default(cuid())
-  stockCountId    String
-  stockCount      StockCount @relation(fields: [stockCountId], references: [id])
-  productId       String
-  product         Product    @relation(fields: [productId], references: [id])
-  systemQty       Int
-  countedQty      Int?
-  variance        Int?
-  suggestedBrand  String?    // Staff suggests brand for "Imported" items
-  notes           String?
-  countedAt       DateTime?
+  id             String     @id @default(cuid())
+  stockCountId   String
+  stockCount     StockCount @relation(fields: [stockCountId], references: [id])
+  productId      String
+  product        Product    @relation(fields: [productId], references: [id])
+  systemQty      Int
+  countedQty     Int?
+  variance       Int?
+  suggestedBrand String? // Staff suggests brand for "Imported" items
+  notes          String?
+  countedAt      DateTime?
 }
 
 model Vendor {
-  id              String          @id @default(cuid())
-  name            String          @unique
-  code            String          @unique
+  id              String   @id @default(cuid())
+  name            String   @unique
+  code            String   @unique
   gstin           String?
   pan             String?
   addressLine1    String?
@@ -571,34 +571,34 @@ model Vendor {
   phone           String?
   email           String?
   whatsappNumber  String?
-  waGroupName     String?         // Ops Issues: WhatsApp group this brand's issues are shared to
-  waGroupCode     String?         // Ops Issues: human routing label for the group (e.g. "#1234")
-  paymentTermDays Int             @default(30)
-  creditLimit     Float           @default(0)
+  waGroupName     String? // Ops Issues: WhatsApp group this brand's issues are shared to
+  waGroupCode     String? // Ops Issues: human routing label for the group (e.g. "#1234")
+  paymentTermDays Int      @default(30)
+  creditLimit     Float    @default(0)
   cdTermsDays     Int?
   cdPercentage    Float?
-  openingBalance  Float           @default(0) // As of 2026-04-01
-  isActive        Boolean         @default(true)
+  openingBalance  Float    @default(0) // As of 2026-04-01
+  isActive        Boolean  @default(true)
   notes           String?
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  contacts            VendorContact[]
-  purchaseOrders      PurchaseOrder[]
-  bills               VendorBill[]
-  payments            VendorPayment[]
-  credits             VendorCredit[]
-  issues              VendorIssue[]
-  suggestedBankTxns   BankTransaction[] @relation("SuggestedVendorTxn")
-  confirmedBankTxns   BankTransaction[] @relation("ConfirmedVendorTxn")
-  reorderProducts     Product[]         @relation("ReorderVendor")
+  contacts          VendorContact[]
+  purchaseOrders    PurchaseOrder[]
+  bills             VendorBill[]
+  payments          VendorPayment[]
+  credits           VendorCredit[]
+  issues            VendorIssue[]
+  suggestedBankTxns BankTransaction[] @relation("SuggestedVendorTxn")
+  confirmedBankTxns BankTransaction[] @relation("ConfirmedVendorTxn")
+  reorderProducts   Product[]         @relation("ReorderVendor")
 
   // Brand ledger reconciliation
-  ledgerEntries    BrandLedgerEntry[]
-  statements       BrandStatement[]
-  ledgerGaps       LedgerGap[]
-  discountTerms    VendorDiscountTerm[]
-  brands           BrandVendor[]        @relation("VendorBrands")
+  ledgerEntries BrandLedgerEntry[]
+  statements    BrandStatement[]
+  ledgerGaps    LedgerGap[]
+  discountTerms VendorDiscountTerm[]
+  brands        BrandVendor[]        @relation("VendorBrands")
 
   @@index([name])
 }
@@ -620,28 +620,28 @@ model VendorContact {
 }
 
 model PurchaseOrder {
-  id              String              @id @default(cuid())
-  poNumber        String              @unique
+  id              String    @id @default(cuid())
+  poNumber        String    @unique
   vendorId        String
-  vendor          Vendor              @relation(fields: [vendorId], references: [id])
-  status          POStatus            @default(DRAFT)
-  subtotal        Float               @default(0)
-  gstTotal        Float               @default(0)
-  grandTotal      Float               @default(0)
-  orderDate       DateTime            @default(now())
+  vendor          Vendor    @relation(fields: [vendorId], references: [id])
+  status          POStatus  @default(DRAFT)
+  subtotal        Float     @default(0)
+  gstTotal        Float     @default(0)
+  grandTotal      Float     @default(0)
+  orderDate       DateTime  @default(now())
   expectedDate    DateTime?
   approvedById    String?
-  approvedBy      User?               @relation("POApprovedBy", fields: [approvedById], references: [id])
+  approvedBy      User?     @relation("POApprovedBy", fields: [approvedById], references: [id])
   approvedAt      DateTime?
   createdById     String
-  createdBy       User                @relation("POCreatedBy", fields: [createdById], references: [id])
+  createdBy       User      @relation("POCreatedBy", fields: [createdById], references: [id])
   notes           String?
   deliveryAddress String?
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  items           PurchaseOrderItem[]
-  bills           VendorBill[]
+  items PurchaseOrderItem[]
+  bills VendorBill[]
 
   @@index([vendorId])
   @@index([status])
@@ -681,15 +681,15 @@ model VendorBill {
   nextFollowUpDate DateTime?
   followUpNotes    String?
   notes            String?
-  billedTo         String?        // "HUB" or "CENTRE"
+  billedTo         String? // "HUB" or "CENTRE"
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
 
-  payments           VendorPayment[]
-  issues             VendorIssue[]
-  suggestedBankTxns  BankTransaction[] @relation("SuggestedBillTxn")
-  inboundShipment    InboundShipment?
-  ledgerEntries      BrandLedgerEntry[] // brand statement rows matched to this bill
+  payments          VendorPayment[]
+  issues            VendorIssue[]
+  suggestedBankTxns BankTransaction[]  @relation("SuggestedBillTxn")
+  inboundShipment   InboundShipment?
+  ledgerEntries     BrandLedgerEntry[] // brand statement rows matched to this bill
 
   @@unique([vendorId, billNo])
   @@index([vendorId])
@@ -698,24 +698,24 @@ model VendorBill {
 }
 
 model VendorPayment {
-  id                String        @id @default(cuid())
-  vendorId          String
-  vendor            Vendor        @relation(fields: [vendorId], references: [id])
-  billId            String?
-  bill              VendorBill?   @relation(fields: [billId], references: [id])
-  amount            Float
-  cdDiscountAmount  Float         @default(0) // Cash discount applied
-  paymentMode       PaymentMode
-  paymentDate       DateTime
-  referenceNo       String?
-  notes             String?
-  creditId          String?
-  credit            VendorCredit? @relation(fields: [creditId], references: [id])
-  recordedById      String
-  recordedBy        User          @relation("PaymentRecordedBy", fields: [recordedById], references: [id])
-  createdAt         DateTime      @default(now())
+  id               String        @id @default(cuid())
+  vendorId         String
+  vendor           Vendor        @relation(fields: [vendorId], references: [id])
+  billId           String?
+  bill             VendorBill?   @relation(fields: [billId], references: [id])
+  amount           Float
+  cdDiscountAmount Float         @default(0) // Cash discount applied
+  paymentMode      PaymentMode
+  paymentDate      DateTime
+  referenceNo      String?
+  notes            String?
+  creditId         String?
+  credit           VendorCredit? @relation(fields: [creditId], references: [id])
+  recordedById     String
+  recordedBy       User          @relation("PaymentRecordedBy", fields: [recordedById], references: [id])
+  createdAt        DateTime      @default(now())
 
-  ledgerEntries     BrandLedgerEntry[] // brand statement rows matched to this payment
+  ledgerEntries BrandLedgerEntry[] // brand statement rows matched to this payment
 
   @@index([vendorId])
   @@index([billId])
@@ -723,17 +723,17 @@ model VendorPayment {
 }
 
 model VendorCredit {
-  id            String          @id @default(cuid())
-  vendorId      String
-  vendor        Vendor          @relation(fields: [vendorId], references: [id])
-  creditNoteNo  String
-  amount        Float
-  usedAmount    Float           @default(0)
-  reason        String?
-  creditDate    DateTime
-  notes         String?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  id           String   @id @default(cuid())
+  vendorId     String
+  vendor       Vendor   @relation(fields: [vendorId], references: [id])
+  creditNoteNo String
+  amount       Float
+  usedAmount   Float    @default(0)
+  reason       String?
+  creditDate   DateTime
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   payments      VendorPayment[]
   ledgerEntries BrandLedgerEntry[] // brand statement rows matched to this credit note
@@ -743,20 +743,20 @@ model VendorCredit {
 }
 
 model Expense {
-  id            String          @id @default(cuid())
-  date          DateTime
-  amount        Float
-  category      ExpenseCategory
-  description   String
-  paidBy        String
-  paymentMode   PaymentMode
-  referenceNo   String?
-  receiptUrl    String?
-  notes         String?
-  recordedById  String
-  recordedBy    User            @relation("ExpenseRecordedBy", fields: [recordedById], references: [id])
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  id           String          @id @default(cuid())
+  date         DateTime
+  amount       Float
+  category     ExpenseCategory
+  description  String
+  paidBy       String
+  paymentMode  PaymentMode
+  referenceNo  String?
+  receiptUrl   String?
+  notes        String?
+  recordedById String
+  recordedBy   User            @relation("ExpenseRecordedBy", fields: [recordedById], references: [id])
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
 
   @@index([date])
   @@index([category])
@@ -779,54 +779,54 @@ enum BankTxnMatchStatus {
 }
 
 model BankStatement {
-  id              String            @id @default(cuid())
-  bank            String            // HDFC, ICICI
-  accountNumber   String?
-  fileName        String
-  fromDate        DateTime?
-  toDate          DateTime?
-  totalCredits    Float             @default(0)
-  totalDebits     Float             @default(0)
-  txnCount        Int               @default(0)
-  matchedCount    Int               @default(0)
-  flaggedCount    Int               @default(0)
-  uploadedById    String
-  uploadedBy      User              @relation("StatementUploader", fields: [uploadedById], references: [id])
-  createdAt       DateTime          @default(now())
+  id            String    @id @default(cuid())
+  bank          String // HDFC, ICICI
+  accountNumber String?
+  fileName      String
+  fromDate      DateTime?
+  toDate        DateTime?
+  totalCredits  Float     @default(0)
+  totalDebits   Float     @default(0)
+  txnCount      Int       @default(0)
+  matchedCount  Int       @default(0)
+  flaggedCount  Int       @default(0)
+  uploadedById  String
+  uploadedBy    User      @relation("StatementUploader", fields: [uploadedById], references: [id])
+  createdAt     DateTime  @default(now())
 
-  transactions    BankTransaction[]
+  transactions BankTransaction[]
 
   @@index([createdAt])
 }
 
 model BankTransaction {
-  id              String              @id @default(cuid())
-  statementId     String
-  statement       BankStatement       @relation(fields: [statementId], references: [id], onDelete: Cascade)
-  date            DateTime
-  description     String
-  reference       String?
-  amount          Float
-  type            BankTxnType         // CREDIT or DEBIT
-  balance         Float?
-  matchStatus     BankTxnMatchStatus  @default(UNMATCHED)
-  flagReason      String?
+  id                 String             @id @default(cuid())
+  statementId        String
+  statement          BankStatement      @relation(fields: [statementId], references: [id], onDelete: Cascade)
+  date               DateTime
+  description        String
+  reference          String?
+  amount             Float
+  type               BankTxnType // CREDIT or DEBIT
+  balance            Float?
+  matchStatus        BankTxnMatchStatus @default(UNMATCHED)
+  flagReason         String?
   // AI-suggested matches
-  suggestedVendorId   String?
-  suggestedVendor     Vendor?         @relation("SuggestedVendorTxn", fields: [suggestedVendorId], references: [id])
-  suggestedBillId     String?
-  suggestedBill       VendorBill?     @relation("SuggestedBillTxn", fields: [suggestedBillId], references: [id])
-  suggestedCategory   String?         // For expenses
-  confidence          Float?          // AI match confidence 0-1
+  suggestedVendorId  String?
+  suggestedVendor    Vendor?            @relation("SuggestedVendorTxn", fields: [suggestedVendorId], references: [id])
+  suggestedBillId    String?
+  suggestedBill      VendorBill?        @relation("SuggestedBillTxn", fields: [suggestedBillId], references: [id])
+  suggestedCategory  String? // For expenses
+  confidence         Float? // AI match confidence 0-1
   // Confirmed matches
-  confirmedVendorId   String?
-  confirmedVendor     Vendor?         @relation("ConfirmedVendorTxn", fields: [confirmedVendorId], references: [id])
-  confirmedPaymentId  String?
-  confirmedExpenseId  String?
-  processedAt         DateTime?
-  createdAt           DateTime        @default(now())
+  confirmedVendorId  String?
+  confirmedVendor    Vendor?            @relation("ConfirmedVendorTxn", fields: [confirmedVendorId], references: [id])
+  confirmedPaymentId String?
+  confirmedExpenseId String?
+  processedAt        DateTime?
+  createdAt          DateTime           @default(now())
 
-  settlementMatches   SettlementMatch[]
+  settlementMatches SettlementMatch[]
 
   @@index([statementId])
   @@index([matchStatus])
@@ -879,16 +879,16 @@ model ZohoInventoryConfig {
 }
 
 model SyncLog {
-  id          String   @id @default(cuid())
-  syncType    String   // items, contacts, invoices, bills, all
-  status      String   // running, success, partial, failed
-  totalItems  Int      @default(0)
-  synced      Int      @default(0)
-  failed      Int      @default(0)
-  errors      String?  // JSON array of error messages
-  startedAt   DateTime @default(now())
+  id          String    @id @default(cuid())
+  syncType    String // items, contacts, invoices, bills, all
+  status      String // running, success, partial, failed
+  totalItems  Int       @default(0)
+  synced      Int       @default(0)
+  failed      Int       @default(0)
+  errors      String? // JSON array of error messages
+  startedAt   DateTime  @default(now())
   completedAt DateTime?
-  triggeredBy String?  // userId
+  triggeredBy String? // userId
 
   @@index([syncType])
   @@index([startedAt])
@@ -902,42 +902,42 @@ model SyncLog {
 // unique here — a nullable unique column still permits unlimited NULL rows in Postgres, so
 // the constraint alone would not actually prevent duplicate walk-in records.
 model Customer {
-  id            String         @id @default(cuid())
-  name          String
-  phone         String         @unique
-  whatsapp      String?        // merged in from the service app's Customer
-  email         String?
-  address       String?
-  type          CustomerType   @default(WALK_IN)
-  isActive      Boolean        @default(true)
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  id        String       @id @default(cuid())
+  name      String
+  phone     String       @unique
+  whatsapp  String? // merged in from the service app's Customer
+  email     String?
+  address   String?
+  type      CustomerType @default(WALK_IN)
+  isActive  Boolean      @default(true)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
 
-  invoices      CustomerInvoice[]
-  payments      CustomerPayment[]
+  invoices CustomerInvoice[]
+  payments CustomerPayment[]
 
   // Service side
-  serviceJobs   ServiceJob[]
+  serviceJobs    ServiceJob[]
   serviceReviews Review[]
 
   @@index([name])
 }
 
 model CustomerInvoice {
-  id            String         @id @default(cuid())
-  customerId    String
-  customer      Customer       @relation(fields: [customerId], references: [id])
-  invoiceNo     String         @unique
-  invoiceDate   DateTime
-  dueDate       DateTime
-  amount        Float
-  paidAmount    Float          @default(0)
-  status        InvoiceStatus  @default(PENDING)
-  notes         String?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  id          String        @id @default(cuid())
+  customerId  String
+  customer    Customer      @relation(fields: [customerId], references: [id])
+  invoiceNo   String        @unique
+  invoiceDate DateTime
+  dueDate     DateTime
+  amount      Float
+  paidAmount  Float         @default(0)
+  status      InvoiceStatus @default(PENDING)
+  notes       String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
 
-  payments      CustomerPayment[]
+  payments CustomerPayment[]
 
   @@index([customerId])
   @@index([status])
@@ -945,19 +945,19 @@ model CustomerInvoice {
 }
 
 model CustomerPayment {
-  id            String           @id @default(cuid())
-  customerId    String
-  customer      Customer         @relation(fields: [customerId], references: [id])
-  invoiceId     String?
-  invoice       CustomerInvoice? @relation(fields: [invoiceId], references: [id])
-  amount        Float
-  paymentMode   PaymentMode
-  paymentDate   DateTime
-  referenceNo   String?
-  notes         String?
-  recordedById  String
-  recordedBy    User             @relation("CustomerPaymentRecordedBy", fields: [recordedById], references: [id])
-  createdAt     DateTime         @default(now())
+  id           String           @id @default(cuid())
+  customerId   String
+  customer     Customer         @relation(fields: [customerId], references: [id])
+  invoiceId    String?
+  invoice      CustomerInvoice? @relation(fields: [invoiceId], references: [id])
+  amount       Float
+  paymentMode  PaymentMode
+  paymentDate  DateTime
+  referenceNo  String?
+  notes        String?
+  recordedById String
+  recordedBy   User             @relation("CustomerPaymentRecordedBy", fields: [recordedById], references: [id])
+  createdAt    DateTime         @default(now())
 
   @@index([customerId])
   @@index([invoiceId])
@@ -967,31 +967,31 @@ model CustomerPayment {
 // ---- Vendor Issues ----
 
 model VendorIssue {
-  id            String         @id @default(cuid())
-  issueSource   IssueSource    @default(VENDOR)
-  vendorId      String?
-  vendor        Vendor?        @relation(fields: [vendorId], references: [id])
-  clientName    String?
-  clientPhone   String?
-  issueNo       String         @unique // ISS-YYYYMM-NNNN
-  ticketNo      String?        // Brand's own ticket/reference number (e.g. eMotorad) — shown in the WhatsApp message
-  serviceLocation String?      // IN_STORE (cycle at store) | CUSTOMER (cycle with customer) — shown in the WhatsApp message
-  issueType     IssueType
-  description   String
-  status        IssueStatus    @default(OPEN)
-  priority      IssuePriority  @default(MEDIUM)
-  billId        String?
-  bill          VendorBill?    @relation(fields: [billId], references: [id])
+  id                  String            @id @default(cuid())
+  issueSource         IssueSource       @default(VENDOR)
+  vendorId            String?
+  vendor              Vendor?           @relation(fields: [vendorId], references: [id])
+  clientName          String?
+  clientPhone         String?
+  issueNo             String            @unique // ISS-YYYYMM-NNNN
+  ticketNo            String? // Brand's own ticket/reference number (e.g. eMotorad) — shown in the WhatsApp message
+  serviceLocation     String? // IN_STORE (cycle at store) | CUSTOMER (cycle with customer) — shown in the WhatsApp message
+  issueType           IssueType
+  description         String
+  status              IssueStatus       @default(OPEN)
+  priority            IssuePriority     @default(MEDIUM)
+  billId              String?
+  bill                VendorBill?       @relation(fields: [billId], references: [id])
   photoUrls           String[]
-  docLink             String?           // optional supporting document/spreadsheet link for the brand to verify
+  docLink             String? // optional supporting document/spreadsheet link for the brand to verify
   suggestedResolution String?
-  resolution    String?
-  resolvedAt    DateTime?
-  createdById   String
-  createdBy     User           @relation("IssueCreatedBy", fields: [createdById], references: [id])
-  notes         VendorIssueNote[]
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  resolution          String?
+  resolvedAt          DateTime?
+  createdById         String
+  createdBy           User              @relation("IssueCreatedBy", fields: [createdById], references: [id])
+  notes               VendorIssueNote[]
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
 
   @@index([vendorId])
   @@index([status])
@@ -1034,11 +1034,11 @@ enum DeliveryStatus {
 }
 
 model Delivery {
-  id              String          @id @default(cuid())
-  invoiceNo       String          @unique
-  zohoInvoiceId   String?
-  invoiceDate     DateTime
-  invoiceAmount   Float
+  id            String   @id @default(cuid())
+  invoiceNo     String   @unique
+  zohoInvoiceId String?
+  invoiceDate   DateTime
+  invoiceAmount Float
 
   customerName    String
   customerPhone   String?
@@ -1047,10 +1047,10 @@ model Delivery {
   customerArea    String?
   customerPincode String?
 
-  status          DeliveryStatus  @default(PENDING)
-  verifiedAt      DateTime?
-  verifiedById    String?
-  verifiedBy      User?           @relation("DeliveryVerifiedBy", fields: [verifiedById], references: [id])
+  status       DeliveryStatus @default(PENDING)
+  verifiedAt   DateTime?
+  verifiedById String?
+  verifiedBy   User?          @relation("DeliveryVerifiedBy", fields: [verifiedById], references: [id])
 
   scheduledDate   DateTime?
   dispatchedAt    DateTime?
@@ -1058,43 +1058,43 @@ model Delivery {
   stockReservedAt DateTime?
 
   expectedReadyDate DateTime?
-  prebookNotes    String?
+  prebookNotes      String?
 
-  flagReason      String?
-  flaggedAt       DateTime?
-  flagResolvedAt  DateTime?
-  flagResolvedBy  String?
+  flagReason     String?
+  flaggedAt      DateTime?
+  flagResolvedAt DateTime?
+  flagResolvedBy String?
 
-  invoiceType     String?           // "SALES" | "SERVICE" — null = not yet tagged
-  salesPerson     String?
-  lineItems       Json?
-  notes           String?
-  deliveryNotes   String?
+  invoiceType   String? // "SALES" | "SERVICE" — null = not yet tagged
+  salesPerson   String?
+  lineItems     Json?
+  notes         String?
+  deliveryNotes String?
 
   // WhatsApp tracking
-  whatsAppScheduledSent   Boolean  @default(false)
-  whatsAppDispatchedSent  Boolean  @default(false)
-  whatsAppDeliveredSent   Boolean  @default(false)
-  freeAccessories         String?
+  whatsAppScheduledSent  Boolean @default(false)
+  whatsAppDispatchedSent Boolean @default(false)
+  whatsAppDeliveredSent  Boolean @default(false)
+  freeAccessories        String?
 
-  reversePickup           Boolean  @default(false)
+  reversePickup Boolean @default(false)
 
   // Outstation delivery
-  isOutstation            Boolean  @default(false)
-  courierName             String?
-  courierTrackingNo       String?
-  courierTrackingLink     String?
-  courierCost             Float?
-  vehicleNo               String?
+  isOutstation        Boolean @default(false)
+  courierName         String?
+  courierTrackingNo   String?
+  courierTrackingLink String?
+  courierCost         Float?
+  vehicleNo           String?
 
   // Customer self-fill
   selfFillToken       String?   @unique
   selfFillTokenExpiry DateTime?
   selfFillCompletedAt DateTime?
-  mapsLink            String?   // Google Maps location link shared by customer
+  mapsLink            String? // Google Maps location link shared by customer
 
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([status])
   @@index([invoiceDate])
@@ -1103,27 +1103,27 @@ model Delivery {
 }
 
 model AlertConfig {
-  id              String   @id @default("singleton")
-  redFlagPhones   String?
-  googleReviewLink String?
-  whatsappTemplates Json?    // { scheduled, dispatched, delivered } message templates
-  updatedAt       DateTime @updatedAt
+  id                String   @id @default("singleton")
+  redFlagPhones     String?
+  googleReviewLink  String?
+  whatsappTemplates Json? // { scheduled, dispatched, delivered } message templates
+  updatedAt         DateTime @updatedAt
 }
 
 // ─── Zoho Pull Preview (approval gate) ───────────────────────
 
 model ZohoPullPreview {
-  id            String    @id @default(cuid())
-  pullId        String
-  entityType    String    // "contact", "item", "bill", "invoice"
-  action        String    @default("new")
-  zohoId        String
-  data          Json
-  localMatch    Json?
-  status        String    @default("PENDING") // PENDING, APPROVED, REJECTED
-  reviewedAt    DateTime?
-  reviewedById  String?
-  createdAt     DateTime  @default(now())
+  id           String    @id @default(cuid())
+  pullId       String
+  entityType   String // "contact", "item", "bill", "invoice"
+  action       String    @default("new")
+  zohoId       String
+  data         Json
+  localMatch   Json?
+  status       String    @default("PENDING") // PENDING, APPROVED, REJECTED
+  reviewedAt   DateTime?
+  reviewedById String?
+  createdAt    DateTime  @default(now())
 
   @@index([pullId])
   @@index([entityType])
@@ -1131,17 +1131,17 @@ model ZohoPullPreview {
 }
 
 model ZohoPullLog {
-  id              String    @id @default(cuid())
-  pullId          String    @unique
-  status          String    @default("PENDING_REVIEW") // PENDING_REVIEW, APPROVED, REJECTED, PARTIAL
-  contactsNew     Int       @default(0)
-  itemsNew        Int       @default(0)
-  billsNew        Int       @default(0)
-  invoicesNew     Int       @default(0)
-  errors          String?
-  apiCallsUsed    Int       @default(0)
-  createdAt       DateTime  @default(now())
-  approvedAt      DateTime?
+  id           String    @id @default(cuid())
+  pullId       String    @unique
+  status       String    @default("PENDING_REVIEW") // PENDING_REVIEW, APPROVED, REJECTED, PARTIAL
+  contactsNew  Int       @default(0)
+  itemsNew     Int       @default(0)
+  billsNew     Int       @default(0)
+  invoicesNew  Int       @default(0)
+  errors       String?
+  apiCallsUsed Int       @default(0)
+  createdAt    DateTime  @default(now())
+  approvedAt   DateTime?
 
   @@index([status])
   @@index([createdAt])
@@ -1150,46 +1150,46 @@ model ZohoPullLog {
 // ─── Second-Hand Cycles (Exchange inventory) ───────────────────────
 
 model SecondHandCycle {
-  id              String    @id @default(cuid())
-  sku             String    @unique  // Auto: SH-0001
-  name            String               // e.g., "Hero Sprint 26"
-  size            String?              // e.g., "26", "24", "20" (wheel size in inches)
-  condition       String               // EXCELLENT, GOOD, FAIR, SCRAP
-  status          String    @default("IN_STOCK") // IN_STOCK, SOLD
-  costPrice       Float               // Exchange price
-  sellingPrice    Float?              // Set by admin after service
-  photoUrl        String              // Primary image URL (thumbnail)
-  photoUrls       String[]            // All image URLs including primary
+  id           String   @id @default(cuid())
+  sku          String   @unique // Auto: SH-0001
+  name         String // e.g., "Hero Sprint 26"
+  size         String? // e.g., "26", "24", "20" (wheel size in inches)
+  condition    String // EXCELLENT, GOOD, FAIR, SCRAP
+  status       String   @default("IN_STOCK") // IN_STOCK, SOLD
+  costPrice    Float // Exchange price
+  sellingPrice Float? // Set by admin after service
+  photoUrl     String // Primary image URL (thumbnail)
+  photoUrls    String[] // All image URLs including primary
 
   // Source (who traded in)
-  customerName    String
-  customerPhone   String?
-  zohoInvoiceNo   String?             // New cycle sale invoice
-  zohoItemId      String?             // Zoho Inventory item_id after push
+  customerName  String
+  customerPhone String?
+  zohoInvoiceNo String? // New cycle sale invoice
+  zohoItemId    String? // Zoho Inventory item_id after push
 
   // Location
-  binId           String?
-  bin             Bin?      @relation("SecondHandBin", fields: [binId], references: [id])
+  binId String?
+  bin   Bin?    @relation("SecondHandBin", fields: [binId], references: [id])
 
   // Sale details
-  soldAt          DateTime?
-  soldToName      String?
-  soldToPhone     String?
-  soldInvoiceNo   String?
+  soldAt        DateTime?
+  soldToName    String?
+  soldToPhone   String?
+  soldInvoiceNo String?
 
-  notes           String?
-  isArchived      Boolean   @default(false)
+  notes      String?
+  isArchived Boolean @default(false)
 
   // Verification
-  isVerified      Boolean   @default(false)
-  verifiedById    String?
-  verifiedBy      User?     @relation("SecondHandVerifiedBy", fields: [verifiedById], references: [id])
-  verifiedAt      DateTime?
+  isVerified   Boolean   @default(false)
+  verifiedById String?
+  verifiedBy   User?     @relation("SecondHandVerifiedBy", fields: [verifiedById], references: [id])
+  verifiedAt   DateTime?
 
-  createdById     String
-  createdBy       User      @relation("SecondHandCreatedBy", fields: [createdById], references: [id])
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdById String
+  createdBy   User     @relation("SecondHandCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([status])
   @@index([sku])
@@ -1207,22 +1207,22 @@ enum TransferOrderStatus {
 }
 
 model TransferOrder {
-  id            String              @id @default(cuid())
-  orderNo       String              @unique // Auto: TRF-YYYYMM-NNNN
-  status        TransferOrderStatus @default(PENDING)
-  notes         String?
+  id      String              @id @default(cuid())
+  orderNo String              @unique // Auto: TRF-YYYYMM-NNNN
+  status  TransferOrderStatus @default(PENDING)
+  notes   String?
 
   createdById   String
-  createdBy     User                @relation("TransferCreatedBy", fields: [createdById], references: [id])
+  createdBy     User      @relation("TransferCreatedBy", fields: [createdById], references: [id])
   reviewedById  String?
-  reviewedBy    User?               @relation("TransferReviewedBy", fields: [reviewedById], references: [id])
+  reviewedBy    User?     @relation("TransferReviewedBy", fields: [reviewedById], references: [id])
   reviewedAt    DateTime?
   rejectionNote String?
 
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  items         TransferOrderItem[]
+  items TransferOrderItem[]
 
   @@index([status])
   @@index([createdById])
@@ -1230,20 +1230,20 @@ model TransferOrder {
 }
 
 model TransferOrderItem {
-  id              String        @id @default(cuid())
+  id              String         @id @default(cuid())
   transferOrderId String
-  transferOrder   TransferOrder @relation(fields: [transferOrderId], references: [id], onDelete: Cascade)
+  transferOrder   TransferOrder  @relation(fields: [transferOrderId], references: [id], onDelete: Cascade)
   productId       String
-  product         Product       @relation(fields: [productId], references: [id])
+  product         Product        @relation(fields: [productId], references: [id])
   quantity        Int
   // Bin mode (dormant): source/destination bins. Location mode (active): fromLocation/toLocation.
   fromBinId       String?
-  fromBin         Bin?          @relation("TransferFromBin", fields: [fromBinId], references: [id])
+  fromBin         Bin?           @relation("TransferFromBin", fields: [fromBinId], references: [id])
   toBinId         String?
-  toBin           Bin?          @relation("TransferToBin", fields: [toBinId], references: [id])
+  toBin           Bin?           @relation("TransferToBin", fields: [toBinId], references: [id])
   fromLocation    StockLocation?
   toLocation      StockLocation?
-  createdAt       DateTime      @default(now())
+  createdAt       DateTime       @default(now())
 
   @@index([transferOrderId])
   @@index([productId])
@@ -1266,39 +1266,39 @@ enum InboundShipmentStatus {
 }
 
 model InboundShipment {
-  id                    String                @id @default(cuid())
-  shipmentNo            String                @unique // Auto: IB-YYYYMM-0001
-  brandId               String
-  brand                 Brand                 @relation(fields: [brandId], references: [id])
-  billNo                String                // Brand's invoice number (from image)
-  billImageUrl          String?               @db.Text // Base64 photo of paper bill (optional for Zoho bills)
-  billPdfUrl            String?               // Supabase Storage URL for uploaded PDF
-  billDate              DateTime
-  expectedDeliveryDate  DateTime
-  status                InboundShipmentStatus @default(IN_TRANSIT)
-  totalAmount           Float
-  totalItems            Int
-  approvedAt            DateTime?
-  approvedById          String?
-  approvedBy            User?                 @relation("InboundApprovedBy", fields: [approvedById], references: [id])
-  deliveredAt           DateTime?
-  deliveredById         String?
-  deliveredBy           User?                 @relation("InboundDeliveredBy", fields: [deliveredById], references: [id])
-  putawayAt             DateTime?
-  putawayById           String?
-  putawayBy             User?                 @relation("InboundPutawayBy", fields: [putawayById], references: [id])
-  notes                 String?
-  createdById           String
-  createdBy             User                  @relation("InboundCreatedBy", fields: [createdById], references: [id])
-  createdAt             DateTime              @default(now())
-  updatedAt             DateTime              @updatedAt
+  id                   String                @id @default(cuid())
+  shipmentNo           String                @unique // Auto: IB-YYYYMM-0001
+  brandId              String
+  brand                Brand                 @relation(fields: [brandId], references: [id])
+  billNo               String // Brand's invoice number (from image)
+  billImageUrl         String?               @db.Text // Base64 photo of paper bill (optional for Zoho bills)
+  billPdfUrl           String? // Supabase Storage URL for uploaded PDF
+  billDate             DateTime
+  expectedDeliveryDate DateTime
+  status               InboundShipmentStatus @default(IN_TRANSIT)
+  totalAmount          Float
+  totalItems           Int
+  approvedAt           DateTime?
+  approvedById         String?
+  approvedBy           User?                 @relation("InboundApprovedBy", fields: [approvedById], references: [id])
+  deliveredAt          DateTime?
+  deliveredById        String?
+  deliveredBy          User?                 @relation("InboundDeliveredBy", fields: [deliveredById], references: [id])
+  putawayAt            DateTime?
+  putawayById          String?
+  putawayBy            User?                 @relation("InboundPutawayBy", fields: [putawayById], references: [id])
+  notes                String?
+  createdById          String
+  createdBy            User                  @relation("InboundCreatedBy", fields: [createdById], references: [id])
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
 
-  vendorBillId          String?               @unique
-  vendorBill            VendorBill?           @relation(fields: [vendorBillId], references: [id])
-  zohoBillId            String?               // Zoho Books bill_id
+  vendorBillId String?     @unique
+  vendorBill   VendorBill? @relation(fields: [vendorBillId], references: [id])
+  zohoBillId   String? // Zoho Books bill_id
 
-  lineItems             InboundLineItem[]
-  preBookings           PreBooking[]
+  lineItems   InboundLineItem[]
+  preBookings PreBooking[]
 
   @@index([status])
   @@index([brandId])
@@ -1308,31 +1308,31 @@ model InboundShipment {
 }
 
 model InboundLineItem {
-  id                     String            @id @default(cuid())
+  id                     String          @id @default(cuid())
   shipmentId             String
-  shipment               InboundShipment   @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
-  productName            String            // As read from bill image
-  productId              String?           // Matched to existing product
-  product                Product?          @relation(fields: [productId], references: [id])
+  shipment               InboundShipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  productName            String // As read from bill image
+  productId              String? // Matched to existing product
+  product                Product?        @relation(fields: [productId], references: [id])
   sku                    String?
   quantity               Int
   rate                   Float
-  gstPercent             Float             @default(0)
-  gstAmount              Float             @default(0)
+  gstPercent             Float           @default(0)
+  gstAmount              Float           @default(0)
   amount                 Float
   hsn                    String?
-  isDelivered            Boolean           @default(false)
+  isDelivered            Boolean         @default(false)
   deliveredQty           Int?
   preBookedCustomerName  String?
   preBookedCustomerPhone String?
   preBookedInvoiceNo     String?
-  whatsAppSent           Boolean           @default(false)
+  whatsAppSent           Boolean         @default(false)
   notes                  String?
 
-  binId                  String?
-  bin                    Bin?              @relation(fields: [binId], references: [id])
+  binId String?
+  bin   Bin?    @relation(fields: [binId], references: [id])
 
-  preBooking             PreBooking?       @relation("PreBookingLineItem")
+  preBooking PreBooking? @relation("PreBookingLineItem")
 
   @@index([shipmentId])
   @@index([productId])
@@ -1349,100 +1349,100 @@ enum SettlementStatus {
 }
 
 model PosSession {
-  id                String    @id @default(cuid())
-  zakyaSessionId    String    @unique
-  sessionDate       DateTime
-  openedAt          DateTime
-  closedAt          DateTime?
-  registerName      String?
-  cashierName       String?
+  id             String    @id @default(cuid())
+  zakyaSessionId String    @unique
+  sessionDate    DateTime
+  openedAt       DateTime
+  closedAt       DateTime?
+  registerName   String?
+  cashierName    String?
 
   // Payment mode totals from POS
-  cashSales         Float     @default(0)
-  cardSales         Float     @default(0)
-  upiSales          Float     @default(0)
-  financeSales      Float     @default(0)  // Bajaj EMI etc.
-  totalSales        Float     @default(0)
+  cashSales    Float @default(0)
+  cardSales    Float @default(0)
+  upiSales     Float @default(0)
+  financeSales Float @default(0) // Bajaj EMI etc.
+  totalSales   Float @default(0)
 
   // Cash drawer
-  cashIn            Float     @default(0)  // Cash received (non-sales)
-  cashOut           Float     @default(0)  // Cash withdrawn from drawer
-  cashRefunds       Float     @default(0)
-  expectedCash      Float     @default(0)  // Expected cash at session end
-  countedCash       Float?                 // Actual cash counted at close
-  cashDiscrepancy   Float     @default(0)  // countedCash - expectedCash
+  cashIn          Float  @default(0) // Cash received (non-sales)
+  cashOut         Float  @default(0) // Cash withdrawn from drawer
+  cashRefunds     Float  @default(0)
+  expectedCash    Float  @default(0) // Expected cash at session end
+  countedCash     Float? // Actual cash counted at close
+  cashDiscrepancy Float  @default(0) // countedCash - expectedCash
 
   // Credit & other
-  creditSales       Float     @default(0)  // Credit sale / unpaid invoices
-  cashInHand        Float     @default(0)  // Opening + cash sales - cash out
-  cashDeposited     Float     @default(0)  // Amount deposited to bank
+  creditSales   Float @default(0) // Credit sale / unpaid invoices
+  cashInHand    Float @default(0) // Opening + cash sales - cash out
+  cashDeposited Float @default(0) // Amount deposited to bank
 
-  invoiceCount      Int       @default(0)
-  rawData           Json?     // Full Zakya session response
+  invoiceCount Int   @default(0)
+  rawData      Json? // Full Zakya session response
 
-  settlementId      String?
-  settlement        DailySettlement? @relation(fields: [settlementId], references: [id])
+  settlementId String?
+  settlement   DailySettlement? @relation(fields: [settlementId], references: [id])
 
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([sessionDate])
   @@index([settlementId])
 }
 
 model DailySettlement {
-  id                String            @id @default(cuid())
-  date              DateTime          @unique  // One settlement per day
-  status            SettlementStatus  @default(PENDING)
+  id     String           @id @default(cuid())
+  date   DateTime         @unique // One settlement per day
+  status SettlementStatus @default(PENDING)
 
   // Totals from POS sessions
-  totalCash         Float             @default(0)
-  totalCard         Float             @default(0)
-  totalUpi          Float             @default(0)
-  totalFinance      Float             @default(0)
-  totalCredit       Float             @default(0)  // Credit sales
-  grandTotal        Float             @default(0)
+  totalCash    Float @default(0)
+  totalCard    Float @default(0)
+  totalUpi     Float @default(0)
+  totalFinance Float @default(0)
+  totalCredit  Float @default(0) // Credit sales
+  grandTotal   Float @default(0)
 
   // Cash verification
-  cashCounted       Float?            // Physical cash count by staff
-  cashVariance      Float?            // cashCounted - totalCash
-  cashVerifiedAt    DateTime?
-  cashVerifiedById  String?
-  cashVerifiedBy    User?             @relation("SettlementCashVerifier", fields: [cashVerifiedById], references: [id])
+  cashCounted      Float? // Physical cash count by staff
+  cashVariance     Float? // cashCounted - totalCash
+  cashVerifiedAt   DateTime?
+  cashVerifiedById String?
+  cashVerifiedBy   User?     @relation("SettlementCashVerifier", fields: [cashVerifiedById], references: [id])
 
   // Cash drawer — manual daily entry
-  cashIn            Float             @default(0)  // Cash received into drawer
-  cashOut           Float             @default(0)  // Cash taken out (must be linked to expense)
-  cashOutReason     String?           // Reason for cash out
+  cashIn        Float   @default(0) // Cash received into drawer
+  cashOut       Float   @default(0) // Cash taken out (must be linked to expense)
+  cashOutReason String? // Reason for cash out
 
   // Bank matching
-  matchedAmount     Float             @default(0)
-  unmatchedAmount   Float             @default(0)
-  notes             String?
+  matchedAmount   Float   @default(0)
+  unmatchedAmount Float   @default(0)
+  notes           String?
 
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  sessions          PosSession[]
-  matches           SettlementMatch[]
+  sessions PosSession[]
+  matches  SettlementMatch[]
 
   @@index([status])
   @@index([date])
 }
 
 model SettlementMatch {
-  id                String          @id @default(cuid())
-  settlementId      String
-  settlement        DailySettlement @relation(fields: [settlementId], references: [id])
-  paymentMode       String          // CARD, UPI, FINANCE, CASH_DEPOSIT
-  expectedAmount    Float           // From POS
-  bankTxnId         String?
-  bankTxn           BankTransaction? @relation(fields: [bankTxnId], references: [id])
-  matchedAmount     Float           @default(0)
-  variance          Float           @default(0)
-  isMatched         Boolean         @default(false)
-  notes             String?
-  createdAt         DateTime        @default(now())
+  id             String           @id @default(cuid())
+  settlementId   String
+  settlement     DailySettlement  @relation(fields: [settlementId], references: [id])
+  paymentMode    String // CARD, UPI, FINANCE, CASH_DEPOSIT
+  expectedAmount Float // From POS
+  bankTxnId      String?
+  bankTxn        BankTransaction? @relation(fields: [bankTxnId], references: [id])
+  matchedAmount  Float            @default(0)
+  variance       Float            @default(0)
+  isMatched      Boolean          @default(false)
+  notes          String?
+  createdAt      DateTime         @default(now())
 
   @@index([settlementId])
   @@index([bankTxnId])
@@ -1456,25 +1456,25 @@ enum PreBookingStatus {
 }
 
 model PreBooking {
-  id                    String            @id @default(cuid())
-  customerName          String
-  customerPhone         String?
-  zohoInvoiceNo         String
-  productName           String            // What cycle they booked
-  brandId               String?
-  brand                 Brand?            @relation(fields: [brandId], references: [id])
-  status                PreBookingStatus  @default(WAITING)
-  matchedShipmentId     String?
-  matchedShipment       InboundShipment?  @relation(fields: [matchedShipmentId], references: [id])
-  matchedLineItemId     String?           @unique
-  matchedLineItem       InboundLineItem?  @relation("PreBookingLineItem", fields: [matchedLineItemId], references: [id])
-  salesPerson           String?
-  expectedDate          DateTime?
-  fulfilledAt           DateTime?
-  createdById           String
-  createdBy             User              @relation("PreBookingCreatedBy", fields: [createdById], references: [id])
-  createdAt             DateTime          @default(now())
-  updatedAt             DateTime          @updatedAt
+  id                String           @id @default(cuid())
+  customerName      String
+  customerPhone     String?
+  zohoInvoiceNo     String
+  productName       String // What cycle they booked
+  brandId           String?
+  brand             Brand?           @relation(fields: [brandId], references: [id])
+  status            PreBookingStatus @default(WAITING)
+  matchedShipmentId String?
+  matchedShipment   InboundShipment? @relation(fields: [matchedShipmentId], references: [id])
+  matchedLineItemId String?          @unique
+  matchedLineItem   InboundLineItem? @relation("PreBookingLineItem", fields: [matchedLineItemId], references: [id])
+  salesPerson       String?
+  expectedDate      DateTime?
+  fulfilledAt       DateTime?
+  createdById       String
+  createdBy         User             @relation("PreBookingCreatedBy", fields: [createdById], references: [id])
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
 
   @@index([status])
   @@index([brandId])
@@ -1519,13 +1519,13 @@ model DailySnapshot {
 }
 
 model AppProblem {
-  id          String   @id @default(cuid())
-  text        String   @db.Text
-  category    String   @default("general")
-  status      String   @default("open")
-  userId      String
-  user        User     @relation("ProblemReportedBy", fields: [userId], references: [id])
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  text      String   @db.Text
+  category  String   @default("general")
+  status    String   @default("open")
+  userId    String
+  user      User     @relation("ProblemReportedBy", fields: [userId], references: [id])
+  createdAt DateTime @default(now())
 
   @@index([status])
   @@index([createdAt])
@@ -1548,21 +1548,21 @@ enum BrandStockMatchStatus {
 }
 
 model BrandStockUpload {
-  id             String                  @id @default(cuid())
+  id             String                 @id @default(cuid())
   brandId        String
-  brand          Brand                   @relation("BrandStockUploads", fields: [brandId], references: [id])
+  brand          Brand                  @relation("BrandStockUploads", fields: [brandId], references: [id])
   fileName       String
   fileType       String
-  status         BrandStockUploadStatus  @default(PROCESSING)
-  totalItems     Int                     @default(0)
-  matchedItems   Int                     @default(0)
-  unmatchedItems Int                     @default(0)
+  status         BrandStockUploadStatus @default(PROCESSING)
+  totalItems     Int                    @default(0)
+  matchedItems   Int                    @default(0)
+  unmatchedItems Int                    @default(0)
   notes          String?
   uploadedById   String
-  uploadedBy     User                    @relation("BrandStockUploadedBy", fields: [uploadedById], references: [id])
+  uploadedBy     User                   @relation("BrandStockUploadedBy", fields: [uploadedById], references: [id])
   items          BrandStockItem[]
-  createdAt      DateTime                @default(now())
-  updatedAt      DateTime                @updatedAt
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
 
   @@index([brandId])
   @@index([status])
@@ -1597,20 +1597,19 @@ model BrandStockItem {
 }
 
 model BrandSkuMapping {
-  id         String   @id @default(cuid())
-  brandId    String
-  brand      Brand    @relation("BrandSkuMappings", fields: [brandId], references: [id])
-  brandSku   String?
-  brandName  String
-  productId  String
-  product    Product  @relation("BrandSkuMappingProducts", fields: [productId], references: [id])
-  createdAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  brandId   String
+  brand     Brand    @relation("BrandSkuMappings", fields: [brandId], references: [id])
+  brandSku  String?
+  brandName String
+  productId String
+  product   Product  @relation("BrandSkuMappingProducts", fields: [productId], references: [id])
+  createdAt DateTime @default(now())
 
   @@unique([brandId, brandName])
   @@index([brandId])
   @@index([productId])
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SERVICE / WORKSHOP
@@ -1624,23 +1623,23 @@ model BrandSkuMapping {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 enum JobStatus {
-  RECEIVED     // bike dropped off
+  RECEIVED // bike dropped off
   PARTS_NEEDED // waiting for parts, kept aside
-  READY        // work done, ready for pickup
-  DELIVERED    // collected and paid
+  READY // work done, ready for pickup
+  DELIVERED // collected and paid
 }
 
 enum JobType {
-  QFX   // quick fix
-  PSVC  // paid service
-  RSVC  // repair & service
-  FSVC  // free service
-  A50   // 50% assembly
-  A85   // 85% assembly
-  FULL  // full fitting
-  SND   // second-hand repair
-  WSH   // wash
-  ECYC  // e-cycle service
+  QFX // quick fix
+  PSVC // paid service
+  RSVC // repair & service
+  FSVC // free service
+  A50 // 50% assembly
+  A85 // 85% assembly
+  FULL // full fitting
+  SND // second-hand repair
+  WSH // wash
+  ECYC // e-cycle service
 }
 
 enum PaymentStatus {
@@ -1650,32 +1649,32 @@ enum PaymentStatus {
 }
 
 model ServiceJob {
-  id            String        @id @default(cuid())
-  tokenNumber   String        @unique // BCH-0001, minted from TokenCounter
-  status        JobStatus     @default(RECEIVED)
-  jobType       JobType
-  estimatedHrs  Float         @default(1.0)
+  id           String    @id @default(cuid())
+  tokenNumber  String    @unique // BCH-0001, minted from TokenCounter
+  status       JobStatus @default(RECEIVED)
+  jobType      JobType
+  estimatedHrs Float     @default(1.0)
 
   // Bike
-  bikeType      String
-  bikeColor     String?
-  isEcycle      Boolean       @default(false)
-  complaint     String?
+  bikeType  String
+  bikeColor String?
+  isEcycle  Boolean @default(false)
+  complaint String?
 
   // Work
-  diagnosis     String?
-  partsNeeded   String?
-  workDone      String?
+  diagnosis   String?
+  partsNeeded String?
+  workDone    String?
 
   // Timestamps drive TAT reporting
-  receivedAt    DateTime      @default(now())
-  promisedAt    DateTime?
-  partsAt       DateTime?
-  readyAt       DateTime?
-  deliveredAt   DateTime?
+  receivedAt  DateTime  @default(now())
+  promisedAt  DateTime?
+  partsAt     DateTime?
+  readyAt     DateTime?
+  deliveredAt DateTime?
 
-  holdReason    String?
-  notes         String?
+  holdReason String?
+  notes      String?
 
   // Payment
   paymentStatus PaymentStatus @default(UNPAID)
@@ -1687,18 +1686,18 @@ model ServiceJob {
   deliveryProposedAt     DateTime?
   deliveryReviewedAt     DateTime?
 
-  photos        String[]      @default([])
-  afterPhotos   String[]      @default([])
+  photos      String[] @default([])
+  afterPhotos String[] @default([])
 
-  priority      Int           @default(0) // 0 normal, 1 urgent
+  priority Int @default(0) // 0 normal, 1 urgent
 
-  customerId    String
-  customer      Customer      @relation(fields: [customerId], references: [id])
-  mechanicId    String?
-  mechanic      User?         @relation("ServiceJobMechanic", fields: [mechanicId], references: [id])
-  createdById   String
-  createdBy     User          @relation("ServiceJobCreatedBy", fields: [createdById], references: [id])
-  review        Review?
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id])
+  mechanicId  String?
+  mechanic    User?    @relation("ServiceJobMechanic", fields: [mechanicId], references: [id])
+  createdById String
+  createdBy   User     @relation("ServiceJobCreatedBy", fields: [createdById], references: [id])
+  review      Review?
 
   @@index([status])
   @@index([mechanicId])
@@ -1709,7 +1708,7 @@ model ServiceJob {
 
 model Review {
   id           String   @id @default(cuid())
-  rating       Int      // 1-5
+  rating       Int // 1-5
   comment      String?
   googleReview Boolean  @default(false)
   createdAt    DateTime @default(now())
@@ -1745,8 +1744,8 @@ model TaskAssignment {
 model PriceItem {
   id        String   @id @default(cuid())
   name      String
-  category  String   // SERVICE | PARTS
-  wheelSize String?  // null = all sizes; "14","20","24","26","27.5","29","ECYCLE"
+  category  String // SERVICE | PARTS
+  wheelSize String? // null = all sizes; "14","20","24","26","27.5","29","ECYCLE"
   price     Float
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
@@ -1761,7 +1760,7 @@ model AssemblyLog {
   id           String   @id @default(cuid())
   mechanicId   String
   mechanic     User     @relation("AssemblyMechanic", fields: [mechanicId], references: [id])
-  assemblyType String   // A50 | A85 | FULL
+  assemblyType String // A50 | A85 | FULL
   bikeModel    String?
   notes        String?
   photos       String[] @default([])
@@ -1787,13 +1786,13 @@ model TokenCounter {
 model ServiceAuditLog {
   id         String   @id @default(cuid())
   jobId      String
-  action     String   // STATUS_CHANGE, PHOTO_DELETE, JOB_DELETE, ...
+  action     String // STATUS_CHANGE, PHOTO_DELETE, JOB_DELETE, ...
   fromStatus String?
   toStatus   String?
   details    String?
   userId     String
   userName   String
-  userRole   String   // role name captured at the time of the action
+  userRole   String // role name captured at the time of the action
   createdAt  DateTime @default(now())
 
   @@index([jobId])
@@ -1807,7 +1806,7 @@ model NotificationLog {
   tokenNumber   String
   customerPhone String
   customerName  String
-  messageType   String   // INWARD | PARTS_NEEDED | READY | DELIVERED
+  messageType   String // INWARD | PARTS_NEEDED | READY | DELIVERED
   sentById      String
   sentByName    String
   createdAt     DateTime @default(now())
@@ -1935,9 +1934,9 @@ enum DiscountKind {
 
 // A brand's own statement rows, exactly as received. Never edited to match our books.
 model BrandLedgerEntry {
-  id       String @id @default(cuid())
+  id       String  @id @default(cuid())
   vendorId String
-  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  vendor   Vendor  @relation(fields: [vendorId], references: [id], onDelete: Cascade)
   brandId  String? // which brand the row concerns, when a vendor supplies several
   brand    Brand?  @relation("BrandLedgerEntries", fields: [brandId], references: [id])
 
@@ -2055,7 +2054,7 @@ model LedgerGap {
   updatedAt   DateTime @updatedAt
 
   evidence LedgerGapEvidence[]
-  entries  BrandLedgerEntry[] @relation("GapEntries")
+  entries  BrandLedgerEntry[]  @relation("GapEntries")
   notes    LedgerGapNote[]
 
   @@unique([vendorId, number])
@@ -2126,7 +2125,7 @@ model VendorDiscountTerm {
 
   agreedBy    String? // who promised it
   agreedOn    DateTime?
-  isProven    Boolean @default(false) // is there anything in writing?
+  isProven    Boolean   @default(false) // is there anything in writing?
   evidenceUrl String?
   notes       String?
 
@@ -2159,3 +2158,139 @@ model BrandVendor {
   @@map("brand_vendors")
 }
 
+// ─── Store Analytics (merged from bch-store-analytics) ───────────────────────
+// Entrance footfall. A Python agent on the store laptop watches the door camera, counts line
+// crossings, and pushes anonymous events here over outbound HTTPS. The agent is NOT part of
+// this app and is not merged — inference stays on-premises. See docs/analytics-merge-plan.md
+// §8 for why: the camera is deliberately unreachable from the internet, raw video would be
+// ~43 GB/store/day upstream, and counting must survive a broadband outage.
+//
+// No image, frame or video ever reaches this database. Only counts.
+//
+// Spec IDs cited below (DAT-001, DAT-004, DAT-005) refer to docs/analytics/pilot/PRD-v1.md,
+// carried across with the code so the citations still resolve.
+
+enum CountDirection {
+  IN
+  OUT
+}
+
+// One confirmed crossing of the counting line at a store entrance.
+model CountEvent {
+  // NOT @default(cuid()). The agent supplies this UUID and it IS the idempotency key
+  // (DAT-001): the agent retries a batch until the server acks, so the same event arrives
+  // more than once by design, and the primary key is what collapses the retries into one row.
+  // Generating it here would turn every retry into another person walking through the door.
+  id String @id
+
+  storeId    StockLocation
+  entranceId String         @default("main") // a store may grow a second door
+  direction  CountDirection
+
+  eventTs    DateTime // when the crossing happened, by the agent's clock
+  receivedTs DateTime @default(now()) // when the server accepted it — these diverge after an outage
+
+  // Store-local (Asia/Kolkata) calendar day, computed on ingest — DAT-004. Deliberately a
+  // DATE and not a DateTime: Vercel runs UTC, so deriving the day from a timestamp at read
+  // time puts every event after 18:30 UTC on the wrong business day.
+  businessDate DateTime @db.Date
+
+  count Int @default(1) // always 1 today; a group-counting adapter could emit more
+
+  // Provenance, so a suspicious count can be reviewed rather than argued about.
+  deviceId      String?
+  device        AnalyticsDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  adapter       String           @default("RTSP_CV") // RTSP_CV today; a dedicated door counter later
+  trackId       String?
+  confidence    Float?
+  agentVersion  String?
+  configVersion String?
+
+  // Free text rather than an enum: the pilot has only ever written "ok" and the taxonomy of
+  // quality flags is still open. Promote to an enum once the real values are known.
+  quality String @default("ok")
+
+  @@index([storeId, businessDate])
+  @@index([deviceId])
+  @@map("count_events")
+}
+
+// Agent liveness, kept as a SERIES and not one current value. Two reasons: the gap between
+// heartbeats is what raises the "counter offline" alert, and the count of distinct
+// heartbeat-minutes in a day is the denominator of data coverage (DAT-005).
+model AgentHeartbeat {
+  id String @id @default(cuid())
+
+  storeId StockLocation
+  agentId String        @default("edge-1")
+
+  deviceId String?
+  device   AnalyticsDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  ts           DateTime @default(now())
+  businessDate DateTime @db.Date
+
+  queueDepth   Int? // events still waiting in the agent's local SQLite buffer
+  cameraOk     Boolean? // is the RTSP stream still producing frames
+  lastFrameTs  DateTime?
+  agentVersion String?
+
+  @@index([storeId, ts(sort: Desc)])
+  @@index([storeId, businessDate])
+  @@index([deviceId])
+  @@map("heartbeats")
+}
+
+// A counting device authorised to write events. Replaces the STORE_KEYS environment JSON the
+// pilot used, so a camera key can be rotated from an admin screen instead of a redeploy —
+// "access control is DATA, not code" (CLAUDE.md).
+model AnalyticsDevice {
+  id      String        @id @default(cuid())
+  storeId StockLocation
+  agentId String        @default("edge-1")
+  label   String // "BCH front door laptop"
+
+  // sha-256 of the API key. The key itself is shown once at creation and never stored, so a
+  // database leak does not hand anyone the ability to forge footfall.
+  keyHash String @unique
+
+  isActive   Boolean   @default(true)
+  lastSeenAt DateTime? // updated on each heartbeat; drives the device list
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  countEvents CountEvent[]
+  heartbeats  AgentHeartbeat[]
+
+  @@unique([storeId, agentId]) // one agent per door per store
+  @@index([isActive])
+  @@map("analytics_devices")
+}
+
+// Per-store daily rollup. count_events grows by one row per person per direction forever and
+// the dashboard polls every 15s, so past days must not re-aggregate the raw table.
+model FootfallDaily {
+  id      String        @id @default(cuid())
+  storeId StockLocation
+
+  businessDate DateTime @db.Date
+
+  inCount  Int @default(0)
+  outCount Int @default(0)
+
+  // Distinct minutes that carried a heartbeat. Coverage % = observed ÷ expected open minutes
+  // (DAT-005). Missing data is not zero traffic: a gap renders as unknown, never as 0.
+  observedMinutes Int @default(0)
+
+  // Snapshotted from POS at rollup time. TWO counts, never summed — counterBills is the one
+  // that pairs with footfall; totalInvoices includes credit sales and business that never
+  // walked through the door.
+  counterBills  Int?
+  totalInvoices Int?
+
+  computedAt DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([storeId, businessDate])
+  @@map("footfall_daily")
+}

@@ -459,3 +459,43 @@ export const storeUpdateSchema = z.object({
   text: z.string().min(1, "Text is required").max(2000),
   category: z.enum(["Sales", "Staff", "Ops", "Issue", "Win", "Other"]),
 });
+
+// ─── Store analytics ingest ──────────────────────────────────────────────────
+// These validate the ENVELOPE only. Per-event field validation deliberately stays in
+// src/lib/analytics/store.ts, because DAT-002 requires every bad event to be reported
+// individually with a reason — a zod schema over the item shape would reject the whole batch,
+// throwing away 199 good crossings because the 200th carried a bad timestamp. The agent
+// cannot repair a rejected event, so a batch-level 400 would just loop forever.
+
+export const countEventBatchSchema = z
+  .array(z.unknown())
+  .max(1000, "batch too large (max 1000)");
+
+// Unknown keys are stripped rather than rejected: the agent adds fields as it gains features
+// (`confidence` was added mid-pilot) and an older server must not start 400-ing a newer agent.
+export const heartbeatSchema = z.object({
+  agent_id: z.string().max(64).optional(),
+  queue_depth: z.number().int().min(0).nullable().optional(),
+  camera_ok: z.boolean().nullable().optional(),
+  last_frame_ts: z.number().nullable().optional(),
+  agent_version: z.string().max(32).nullable().optional(),
+});
+
+// Device registration. `storeId` is narrowed to the two values that have a doorway to count —
+// the warehouse locations have no entrance and the STORE/WAREHOUSE pair is dead legacy. The
+// Prisma column is the full StockLocation enum, so this is the only place that restriction is
+// enforced; it is deliberately server-side and not just a filtered <select>.
+export const analyticsDeviceCreateSchema = z.object({
+  label: z.string().min(1, "Label is required").max(80),
+  storeId: z.enum(["BCH_STORE", "BCC_STORE"]),
+  agentId: z.string().min(1).max(64).default("edge-1"),
+});
+
+export const analyticsDeviceUpdateSchema = z
+  .object({
+    label: z.string().min(1).max(80).optional(),
+    isActive: z.boolean().optional(),
+  })
+  .refine((v) => v.label !== undefined || v.isActive !== undefined, {
+    message: "nothing to update",
+  });

@@ -1,5 +1,7 @@
 {
-  "regions": ["bom1"],
+  "regions": [
+    "bom1"
+  ],
   "crons": [
     {
       "path": "/api/cron/zoho-pull",
@@ -12,6 +14,14 @@
     {
       "path": "/api/cron/invoice-pull",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/counter-watchdog",
+      "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron/footfall-rollup",
+      "schedule": "30 19 * * *"
     }
   ]
 }

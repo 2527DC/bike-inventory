@@ -34,6 +34,7 @@ import {
   ClipboardList,
   IndianRupee,
   Wrench,
+  Activity,
   type LucideIcon,
 } from "lucide-react";
 
@@ -64,6 +65,7 @@ const ICONS: Record<string, LucideIcon> = {
   ClipboardList,
   IndianRupee,
   Wrench,
+  Activity,
 };
 
 export function moduleIcon(name: string | null | undefined): LucideIcon {
