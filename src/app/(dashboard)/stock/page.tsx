@@ -12,6 +12,7 @@ import { useDebounce, fuzzySearchFields } from "@/lib/utils";
 import { ExportButtons } from "@/components/export-buttons";
 import { exportToExcel, exportToPDF, type ExportColumn } from "@/lib/export";
 import { usePermissions } from "@/lib/use-permissions";
+import { apiFetch } from "@/lib/api-client";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
@@ -249,35 +250,50 @@ export default function StockPage() {
         fromDate = fromDateObj.toISOString().slice(0, 10);
       }
 
-      const initRes = await fetch("/api/zoho/trigger-pull", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ step: "init" }),
-      }).then(r => r.json());
-      if (!initRes.success) throw new Error(initRes.error || "Init failed");
-      const pullId = initRes.data.pullId;
+      // All four steps go through apiFetch: it logs request + response at LOG_LEVEL=0 and,
+      // crucially, refuses to parse an HTML body as JSON. The old `.then(r => r.json())`
+      // turned an expired session (307 -> /login -> 200 text/html) and a Zoho gateway
+      // timeout into the same useless `Unexpected token '<'`.
+      const initData = await apiFetch<{ pullId: string }>("/api/zoho/trigger-pull", {
+        method: "POST",
+        json: { step: "init" },
+      });
+      const pullId = initData.pullId;
       setFetchPullId(pullId);
 
       const label = fetchDays === -1 ? "custom range" : `last ${fetchDays} days`;
       setFetchProgress(`Pulling items from ${label}...`);
-      const itemRaw = await fetch("/api/zoho/trigger-pull", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ step: "items", pullId, fromDate }),
-      });
-      if (!itemRaw.ok) throw new Error(`Zoho fetch failed (${itemRaw.status}). Try again.`);
-      const itemRes = await itemRaw.json();
-      if (!itemRes.success) throw new Error(itemRes.error || "Items fetch failed");
+      const itemData = await apiFetch<{ itemsNew: number; apiCalls: number; errors?: string[] }>(
+        "/api/zoho/trigger-pull",
+        { method: "POST", json: { step: "items", pullId, fromDate } }
+      );
 
-      const found = itemRes.data.itemsNew || 0;
+      const found = itemData.itemsNew || 0;
       setFetchProgress(`Found ${found} new item${found !== 1 ? "s" : ""}. Finalizing...`);
-      await fetch("/api/zoho/trigger-pull", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ step: "finalize", pullId, itemsNew: itemRes.data.itemsNew, apiCalls: itemRes.data.apiCalls, allErrors: itemRes.data.errors || [] }),
-      }).then(r => r.json()).catch(() => {});
+      // Finalize is best-effort — the items are already staged, so a failure here must not
+      // lose them. It is caught, but no longer silently: apiFetch logs why it failed.
+      await apiFetch("/api/zoho/trigger-pull", {
+        method: "POST",
+        json: {
+          step: "finalize",
+          pullId,
+          itemsNew: itemData.itemsNew,
+          apiCalls: itemData.apiCalls,
+          allErrors: itemData.errors || [],
+        },
+      }).catch(() => {});
 
       setFetchProgress("Loading preview...");
-      const previewRes = await fetch(`/api/zoho/pull-review?pullId=${pullId}`).then(r => r.json());
-      if (!previewRes.success) throw new Error(previewRes.error || "Preview failed");
-      const items = (previewRes.data.previews || []).filter((p: { entityType: string; status: string }) => p.entityType === "item" && p.status === "PENDING");
+      const previewData = await apiFetch<{
+        previews?: {
+          id: string;
+          zohoId: string;
+          entityType: string;
+          status: string;
+          data: { name: string; sku: string; costPrice: number; sellingPrice: number };
+        }[];
+      }>(`/api/zoho/pull-review?pullId=${pullId}`);
+      const items = (previewData.previews || []).filter((p: { entityType: string; status: string }) => p.entityType === "item" && p.status === "PENDING");
       setItemPreviews(items);
       setSelectedItems(new Set(items.map((i: { id: string }) => i.id)));
       setFetchStep(items.length > 0 ? "selecting" : "idle");

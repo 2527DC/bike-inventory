@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LogOut, LayoutDashboard } from "lucide-react";
@@ -8,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { usePermissions } from "@/lib/use-permissions";
 import { clearPermissionCache } from "@/lib/use-permissions";
 import { moduleIcon } from "@/lib/module-icons";
+import { useScrollShadows } from "@/lib/use-scroll-shadows";
 import type { GrantedModule } from "@/stores/permissions";
 
 interface AppSidebarProps {
@@ -45,6 +47,24 @@ export function AppSidebar({ className }: AppSidebarProps) {
     return pathname === href || pathname.startsWith(href + "/");
   }
 
+  // Fade edges telling the user the list is cut off. Keyed on the module count so the
+  // measurement re-runs once the permission fetch replaces the skeleton.
+  const { ref: navRef, atTop, atBottom, onScroll } = useScrollShadows<HTMLElement>([
+    modules.length,
+  ]);
+
+  // Bring the current page's entry into view on load. Without this, landing directly on a
+  // deep route (/analytics, /services/*) leaves the sidebar scrolled to the top with the
+  // active item off-screen, so the nav gives no clue where you are.
+  const activeRef = useRef<HTMLAnchorElement | null>(null);
+  // A ref, not state: this is a one-shot latch on a DOM side effect and must not re-render.
+  const didScrollToActive = useRef(false);
+  useEffect(() => {
+    if (didScrollToActive.current || !activeRef.current) return;
+    activeRef.current.scrollIntoView({ block: "nearest" });
+    didScrollToActive.current = true;
+  }, [modules.length]);
+
   const linkClass = (active: boolean) =>
     cn(
       "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
@@ -64,7 +84,18 @@ export function AppSidebar({ className }: AppSidebarProps) {
         <span className="text-base font-bold text-slate-900">BCH OPS</span>
       </div>
 
-      <nav className="flex-1 overflow-y-auto py-3 px-3">
+      {/* `min-h-0` is what lets the nav shrink below its content height instead of pushing the
+          footer past the bottom of the h-screen aside; `relative` anchors the fade edges. */}
+      <div className="relative flex-1 min-h-0">
+        {!atTop && (
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-5 bg-gradient-to-b from-white to-transparent" />
+        )}
+
+        <nav
+          ref={navRef}
+          onScroll={onScroll}
+          className="h-full overflow-y-auto overscroll-contain scrollbar-thin py-3 px-3"
+        >
         {loading && (
           <div className="space-y-2 px-1 py-2">
             {Array.from({ length: 6 }).map((_, i) => (
@@ -87,11 +118,13 @@ export function AppSidebar({ className }: AppSidebarProps) {
             <div className="space-y-0.5">
               {group.items.map((item) => {
                 const Icon = moduleIcon(item.icon) ?? LayoutDashboard;
+                const active = isActive(item.route!);
                 return (
                   <Link
                     key={item.key}
+                    ref={active ? activeRef : undefined}
                     href={item.route!}
-                    className={linkClass(isActive(item.route!))}
+                    className={linkClass(active)}
                   >
                     <Icon className="h-4.5 w-4.5 shrink-0" />
                     {item.label}
@@ -101,7 +134,12 @@ export function AppSidebar({ className }: AppSidebarProps) {
             </div>
           </div>
         ))}
-      </nav>
+        </nav>
+
+        {!atBottom && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-5 bg-gradient-to-t from-white to-transparent" />
+        )}
+      </div>
 
       <div className="border-t border-slate-200 px-4 py-3 shrink-0">
         <div className="flex items-center gap-3">

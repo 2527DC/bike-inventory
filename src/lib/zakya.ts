@@ -1,4 +1,8 @@
 import { prisma } from "@/lib/db";
+import { readJson } from "@/lib/http-json";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("zakya");
 
 const ZOHO_ACCOUNTS_URL = "https://accounts.zoho.in/oauth/v2/token";
 const ZAKYA_API_BASE = "https://api.zakya.in/inventory/v1";
@@ -47,8 +51,15 @@ export class ZakyaClient {
       body: params.toString(),
     });
 
-    const data: ZakyaTokenResponse = await res.json();
-    if (data.error || !data.access_token) return false;
+    const data = await readJson<ZakyaTokenResponse>(res, {
+      service: "Zakya (token refresh)",
+      endpoint: "/oauth/v2/token",
+    });
+    if (data.error || !data.access_token) {
+      log.error(`token refresh rejected by Zakya`, { error: data.error });
+      return false;
+    }
+    log.info(`Zakya access token refreshed`);
 
     const expiresAt = new Date(Date.now() + data.expires_in * 1000);
     this.accessToken = data.access_token;
@@ -87,10 +98,15 @@ export class ZakyaClient {
       return opts;
     };
 
-    let res = await fetch(url, buildOptions());
+    const started = Date.now();
+    log.debug(`-> Zakya ${method} ${endpoint}`, body ? { body } : undefined);
+    const res = await fetch(url, buildOptions());
 
     // Token expired mid-request — refresh and retry once
     if (res.status === 401 && _attempt === 0) {
+      log.warn(`<- Zakya ${endpoint} 401 — access token expired, refreshing`, {
+        ms: Date.now() - started,
+      });
       const config = await prisma.zakyaConfig.findUnique({ where: { id: "singleton" } });
       if (config?.clientId && config?.clientSecret && config?.refreshToken) {
         const refreshed = await this.refreshAccessToken(config.clientId, config.clientSecret, config.refreshToken);
@@ -98,6 +114,7 @@ export class ZakyaClient {
           return this.apiCall<T>(method, endpoint, body, _attempt + 1);
         }
       }
+      log.error(`<- Zakya ${endpoint} — token refresh failed, reconnect required`);
       throw new Error("Zakya authentication failed. Please reconnect.");
     }
 
@@ -106,14 +123,26 @@ export class ZakyaClient {
       if (_attempt < 3) {
         const retryAfter = parseInt(res.headers.get("Retry-After") || "0", 10);
         const delay = retryAfter > 0 ? retryAfter * 1000 : Math.min(5000 * Math.pow(2, _attempt), 60000);
+        log.warn(
+          `<- Zakya ${endpoint} 429 rate limited — retry ${_attempt + 1}/3 in ${delay}ms`
+        );
         await new Promise((r) => setTimeout(r, delay));
         return this.apiCall<T>(method, endpoint, body, _attempt + 1);
       }
+      log.error(`<- Zakya ${endpoint} — rate limit not cleared after 3 retries`);
       throw new Error("Zakya API rate limit exceeded after 3 retries. Wait 2 minutes and try again.");
     }
 
-    const data = await res.json();
+    const ms = Date.now() - started;
+    // readJson checks content-type first: an HTML gateway/timeout page from Zoho used to
+    // surface as `Unexpected token '<'` with no clue which call or status produced it.
+    const data = await readJson<{ code?: number; message?: string }>(res, {
+      service: "Zakya",
+      endpoint,
+      ms,
+    });
     if (data.code !== 0 && data.code !== undefined) {
+      log.warn(`${method} ${endpoint} -> code ${data.code}`, { message: data.message, ms });
       throw new Error(data.message || `Zakya API error: ${data.code}`);
     }
 
@@ -326,8 +355,11 @@ export async function exchangeGrantTokenZakya(clientId: string, clientSecret: st
     body: params.toString(),
   });
 
-  const data = await res.json();
-  if (data.error) throw new Error(data.error);
+  const data = await readJson<Record<string, unknown>>(res, {
+    service: "Zakya (OAuth)",
+    endpoint: "/oauth/v2/token",
+  });
+  if (data.error) throw new Error(String(data.error));
 
   return {
     accessToken: data.access_token as string,

@@ -12,6 +12,43 @@
 - Check every file that uses the code you changed.
 - If something breaks, REVERT and re-plan. Never stack fixes.
 - If you discover something unexpected, STOP and ask.
+- **Every code path must be observable — see "Logging is mandatory" below.**
+
+## Logging is mandatory
+No new code ships without logs. `console.log` is banned; it cannot be turned off in
+production and it leaks credentials.
+
+**Use `src/lib/logger.ts`.** Scope it once per module:
+
+```ts
+import { createLogger } from "@/lib/logger";
+const log = createLogger("stock:reorder");
+```
+
+**Level rules — pick by what the reader must DO, not by how you feel about the line:**
+
+| Level | Use for | Example |
+|---|---|---|
+| `log.debug` | Every outbound request/response, payload sizes, timings | `log.debug("-> POST /items", { count })` |
+| `log.info` | A business event completed | `log.info("pull finished", { itemsNew: 42 })` |
+| `log.warn` | Recovered, but someone should know | `log.warn("retry 2/3 after 429")` |
+| `log.error` | The operation failed | `log.error("pull failed", { status, endpoint })` |
+
+Threshold comes from the environment (`LOG_LEVEL` server, `NEXT_PUBLIC_LOG_LEVEL` browser):
+`0`=debug `1`=info `2`=warn `3`=error `4`=silent. Default: `1` in dev, `2` in production.
+
+**Non-negotiables**
+- **Never call `fetch().then(r => r.json())` from the browser.** Use `apiFetch` /
+  `apiTry` from `src/lib/api-client.ts`. Raw `.json()` on an HTML response produces
+  `Unexpected token '<'`, which hides the real fault (expired session -> 307 -> /login
+  returns HTML with status 200, so `res.ok` does NOT catch it).
+- **Never call `res.json()` on a third-party response.** Use `readJson()` from
+  `src/lib/http-json.ts`. It checks content-type first and names the service and status.
+- **Every `catch` logs before it rethrows or swallows.** A bare `catch {}` is a bug.
+- **Never log a secret.** No tokens, access codes, passwords, refresh tokens, cookies.
+  `redact()` covers the obvious keys, but pass deliberate context objects, not whole bodies.
+- Log the *identifiers* needed to find the record again (pullId, jobId, vendorId), never
+  the whole payload.
 
 ## After implementation
 - Run `npm run build` — it MUST pass.

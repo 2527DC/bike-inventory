@@ -1,5 +1,10 @@
 // Zoho Books API helper — token refresh + invoice queries
 
+import { readJson } from "@/lib/http-json";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("services:zoho");
+
 let cachedToken: { token: string; expiresAt: number } | null = null;
 
 async function getAccessToken(): Promise<string> {
@@ -19,8 +24,12 @@ async function getAccessToken(): Promise<string> {
     }),
   });
 
-  const data = await res.json();
+  const data = await readJson<{ access_token?: string; expires_in: number; error?: string }>(res, {
+    service: "Zoho Books (token refresh)",
+    endpoint: "/oauth/v2/token",
+  });
   if (!data.access_token) {
+    log.error("token refresh rejected", { error: data.error });
     throw new Error("Failed to refresh Zoho token");
   }
 

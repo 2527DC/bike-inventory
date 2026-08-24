@@ -33,16 +33,15 @@ export interface ModuleSeed {
   actions: ActionKey[];
 }
 
-// Groups render in this order in the sidebar.
-export const MODULE_GROUPS = [
-  "Overview",
-  "Operations",
-  "Purchase",
-  "Accounts",
-  "Insights",
-  "Service",
-  "Admin",
-] as const;
+// Sidebar group order is NOT declared anywhere — it falls out of `sortOrder` below.
+// The sidebar walks modules in sortOrder and opens each new `group` as it first appears, so
+// the bands assigned here (Overview 0-99, Operations 100s, Purchase 200s, Accounts 300s,
+// Insights 400s, Admin 500s, Service 600s) ARE the group order. Keep a group's modules
+// inside one band or that group will render split in two.
+//
+// A `MODULE_GROUPS` array used to sit here claiming to control this. Nothing imported it,
+// and it disagreed with reality (it listed Service before Admin; sortOrder renders Admin
+// first). Removed rather than wired, so there is one source of truth instead of two.
 
 const CRUD: ActionKey[] = ["view", "create", "edit", "delete"];
 

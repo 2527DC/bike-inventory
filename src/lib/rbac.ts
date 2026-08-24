@@ -19,8 +19,10 @@ import { prisma } from "@/lib/db";
 
 export type PermAction = "view" | "create" | "edit" | "delete" | "approve" | "fetch";
 
-/** The action that governs whether a module appears in the navigation. */
-export const READ_ACTION: PermAction = "view";
+// The action that governs whether a module appears in the navigation. Module-private:
+// callers use userCan()/getAccess() rather than reimplementing the filter, and
+// prisma/rbac-catalog.ts keeps its own copy for seed-time use.
+const READ_ACTION: PermAction = "view";
 
 export interface GrantedModule {
   key: string;
@@ -152,9 +154,4 @@ export async function userCan(
 ): Promise<boolean> {
   const access = await getAccess(userId);
   return access.permissions[moduleKey]?.[action] === true;
-}
-
-/** Modules the user can see, for building navigation. */
-export async function getGrantedModules(userId: string): Promise<GrantedModule[]> {
-  return (await getAccess(userId)).modules;
 }

@@ -253,7 +253,6 @@ model User {
   assignedJobs       ServiceJob[]     @relation("ServiceJobMechanic")
   createdServiceJobs ServiceJob[]     @relation("ServiceJobCreatedBy")
   serviceReviews     Review[]         @relation("ServiceReviewMechanic")
-  taskAssignments    TaskAssignment[] @relation("TaskAssignmentMechanic")
   assemblyLogs       AssemblyLog[]    @relation("AssemblyMechanic")
 
   // Transfer orders
@@ -1512,12 +1511,6 @@ model AppSetting {
   updatedAt DateTime @updatedAt
 }
 
-model DailySnapshot {
-  id          String   @id @default("latest")
-  markdown    String   @db.Text
-  generatedAt DateTime @default(now())
-}
-
 model AppProblem {
   id        String   @id @default(cuid())
   text      String   @db.Text
@@ -1722,23 +1715,6 @@ model Review {
 
   @@index([mechanicId])
   @@map("reviews")
-}
-
-model TaskAssignment {
-  id          String    @id @default(cuid())
-  date        DateTime
-  mechanicId  String
-  // The standalone app left this as a bare string with no FK, so a deleted mechanic left
-  // orphan rows behind. Made a real relation during the merge.
-  mechanic    User      @relation("TaskAssignmentMechanic", fields: [mechanicId], references: [id])
-  description String
-  jobType     JobType
-  completed   Boolean   @default(false)
-  completedAt DateTime?
-  createdAt   DateTime  @default(now())
-
-  @@index([date, mechanicId])
-  @@map("task_assignments")
 }
 
 model PriceItem {
