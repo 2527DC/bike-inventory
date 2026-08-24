@@ -14,21 +14,8 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SkeletonDashboard } from "@/components/ui/skeleton";
 import { formatINR, formatTime } from "@/lib/utils";
-import type { Role } from "@/types";
+import { usePermissions } from "@/lib/use-permissions";
 
-const ROLE_LABELS: Record<string, string> = {
-  CEO: "Owner",
-  ADMIN: "Administrator",
-  SUPERVISOR: "Supervisor",
-  PURCHASE_MANAGER: "Purchase Manager",
-  ACCOUNTS_MANAGER: "Accounts Manager",
-  INWARDS_EXECUTIVE: "Inwards Executive",
-  OUTWARDS_EXECUTIVE: "Outwards Executive",
-  STORE_MANAGER: "Store Manager",
-  SALES_MANAGER: "Sales Manager",
-  SERVICE_MANAGER: "Service Manager",
-  CUSTOM: "Team Member",
-};
 
 interface CEOData {
   // Revenue & Finance
@@ -1005,8 +992,20 @@ function AccountsManagerDashboard() {
 
 export default function DashboardPage() {
   const { data: session } = useSession();
-  const role = ((session?.user as { role?: string })?.role || "INWARDS_EXECUTIVE") as Role;
+  const { role, can, loading } = usePermissions();
   const userName = session?.user?.name || "User";
+
+  // Which dashboard to show is decided by what the user can actually DO, not by their role's
+  // name. A role created in the UI tomorrow gets a sensible dashboard automatically; the old
+  // name-matching switch would have rendered a blank page for it.
+  function pickDashboard() {
+    if (can("team", "view") && can("reports", "view")) return <AdminDashboard />;
+    if (can("stock_audit", "approve") || can("transfers", "approve")) return <SupervisorDashboard />;
+    if (can("purchase_orders", "view")) return <PurchaseManagerDashboard />;
+    if (can("bills", "view") || can("expenses", "view")) return <AccountsManagerDashboard />;
+    if (can("deliveries", "view")) return <OutwardsClerkDashboard />;
+    return <ClerkDashboard type="inward" />;
+  }
 
   return (
     <div>
@@ -1015,21 +1014,10 @@ export default function DashboardPage() {
         <p className="text-sm text-slate-500 tabular-nums">
           {new Date().toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
         </p>
-        <p className="text-xs font-medium text-slate-400 mt-0.5">{ROLE_LABELS[role] || "Team Member"}</p>
+        <p className="text-xs font-medium text-slate-400 mt-0.5">{role?.name || "Team Member"}</p>
       </div>
 
-      {/* Morning SOP Nudge — shows for all roles */}
-      {role === "CEO" && <AdminDashboard />}
-      {role === "ADMIN" && <AdminDashboard />}
-      {role === "SUPERVISOR" && <SupervisorDashboard />}
-      {role === "PURCHASE_MANAGER" && <PurchaseManagerDashboard />}
-      {role === "ACCOUNTS_MANAGER" && <AccountsManagerDashboard />}
-      {role === "INWARDS_EXECUTIVE" && <ClerkDashboard type="inward" />}
-      {role === "OUTWARDS_EXECUTIVE" && <OutwardsClerkDashboard />}
-      {role === "STORE_MANAGER" && <SupervisorDashboard />}
-      {role === "SALES_MANAGER" && <OutwardsClerkDashboard />}
-      {role === "SERVICE_MANAGER" && <ClerkDashboard type="inward" />}
-      {role === "CUSTOM" && <ClerkDashboard type="inward" />}
+      {!loading && pickDashboard()}
     </div>
   );
 }

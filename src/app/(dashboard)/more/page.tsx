@@ -7,29 +7,13 @@ import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { usePermissions } from "@/lib/use-permissions";
-import { MENU_GROUPS } from "@/lib/menu-config";
-import type { Role } from "@/types";
-
-const ROLE_LABELS: Record<Role, string> = {
-  CEO: "CEO",
-  ADMIN: "Owner / Director",
-  SUPERVISOR: "Ops Manager",
-  PURCHASE_MANAGER: "Purchase Manager",
-  ACCOUNTS_MANAGER: "Finance Head",
-  INWARDS_EXECUTIVE: "Inwards Executive",
-  OUTWARDS_EXECUTIVE: "Outwards Executive",
-  STORE_MANAGER: "Store Manager",
-  SALES_MANAGER: "Sales Manager",
-  SERVICE_MANAGER: "Service Manager",
-  CUSTOM: "Custom Role",
-};
-
+import { moduleIcon } from "@/lib/module-icons";
 
 export default function MorePage() {
   const { data: session } = useSession();
-  const user = session?.user as { name?: string; role?: string; userId?: string } | undefined;
-  const role = (user?.role || "INWARDS_EXECUTIVE") as Role;
-  const { canView } = usePermissions();
+  const user = session?.user as { name?: string; userId?: string } | undefined;
+  // Menu contents come from the granted module list, not a hardcoded per-role catalog.
+  const { modules, role, canView } = usePermissions();
   const [syncClearing, setSyncClearing] = useState(false);
   const [syncResult, setSyncResult] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -71,21 +55,25 @@ export default function MorePage() {
             <p className="text-base font-semibold text-slate-900">
               {user?.name || "User"}
             </p>
-            <Badge variant="info">{ROLE_LABELS[role]}</Badge>
+            <Badge variant="info">{role?.name || "No role"}</Badge>
           </div>
         </CardContent>
       </Card>
 
-      {/* Grouped Menu */}
+      {/* Grouped Menu — built from the modules this user can view */}
       <div className="space-y-2">
-        {MENU_GROUPS.map((group) => {
-          const visibleItems = group.items.filter((item) => {
-            // CEO inherits all ADMIN menu access
-            const effectiveRole = role === "CEO" ? "ADMIN" : role;
-            if (!item.roles.includes(effectiveRole)) return false;
-            if (effectiveRole !== "ADMIN" && item.featureKey && !canView(item.featureKey)) return false;
-            return true;
-          });
+        {(() => {
+          const groups: { title: string; items: typeof modules }[] = [];
+          for (const m of modules) {
+            if (!m.route) continue; // permission-only modules have no page to link to
+            const title = m.group || "Other";
+            let g = groups.find((x) => x.title === title);
+            if (!g) groups.push((g = { title, items: [] }));
+            g.items.push(m);
+          }
+          return groups;
+        })().map((group) => {
+          const visibleItems = group.items;
           if (visibleItems.length === 0) return null;
           const isExpanded = expandedGroups.has(group.title);
 
@@ -108,18 +96,9 @@ export default function MorePage() {
               {isExpanded && (
                 <div className="border-t border-slate-100">
                   {visibleItems.map((item) => {
-                    const Icon = item.icon;
-                    if (item.comingSoon) {
-                      return (
-                        <div key={item.label} className="flex items-center gap-3 px-4 py-2.5 min-h-[44px] opacity-50 cursor-not-allowed">
-                          <Icon className="h-4 w-4 text-slate-400 shrink-0" />
-                          <span className="flex-1 text-sm text-slate-500">{item.label}</span>
-                          <Badge variant="default">Soon</Badge>
-                        </div>
-                      );
-                    }
+                    const Icon = moduleIcon(item.icon);
                     return (
-                      <Link key={item.href} href={item.href} className="block focus-ring rounded-lg">
+                      <Link key={item.key} href={item.route!} className="block focus-ring rounded-lg">
                         <div className="flex items-center gap-3 px-4 py-2.5 min-h-[44px] hover:bg-slate-50 transition-colors">
                           <Icon className="h-4 w-4 text-slate-500 shrink-0" />
                           <span className="flex-1 text-sm text-slate-700">{item.label}</span>
@@ -135,8 +114,8 @@ export default function MorePage() {
         })}
       </div>
 
-      {/* Admin: Clear Stuck Syncs — admin-only, hidden for non-admins */}
-      {(role === "ADMIN" || role === "CEO") && (
+      {/* Clear Stuck Syncs — shown only to those who may run a Zoho sync */}
+      {canView("zoho") && (
         <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
           <p className="text-[11px] font-bold uppercase tracking-wide text-amber-700 mb-2">Admin</p>
           <div className="flex items-center justify-between gap-3">

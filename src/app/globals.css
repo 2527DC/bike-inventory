@@ -113,3 +113,35 @@ input[type="number"] {
   outline-offset: 2px;
   border-radius: 0.5rem;
 }
+
+/* Slim but ALWAYS-VISIBLE scrollbar, for the sidebar nav.
+ *
+ * The sidebar lists every granted module — 32 of them for an admin, ~1450px of content in
+ * an ~810px slot on a 1080p screen and ~500px on a 1366x768 laptop. The lower groups
+ * (Insights, Admin, Service) are therefore always below the fold.
+ *
+ * With the platform default that is invisible: macOS and Windows 11 both use overlay
+ * scrollbars that only appear mid-scroll, so the nav looked like a complete list that simply
+ * did not contain "Store Analytics". Reserving the gutter and painting the thumb is what
+ * makes "there is more below" true at a glance instead of only after a wheel event. */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-gutter: stable;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 8px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: #94a3b8;
+  background-clip: content-box;
+}

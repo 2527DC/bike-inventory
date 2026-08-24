@@ -4,7 +4,6 @@ import { useSession } from "next-auth/react";
 import { redirect } from "next/navigation";
 import { Sidebar } from "@/components/desktop/sidebar";
 import { DesktopHeader } from "@/components/desktop/desktop-header";
-import type { Role } from "@/types";
 
 export default function DesktopLayout({ children }: { children: React.ReactNode }) {
   const { data: session, status } = useSession();

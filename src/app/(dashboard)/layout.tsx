@@ -5,7 +5,6 @@ import { redirect } from "next/navigation";
 import { Header } from "@/components/header";
 import { BottomNav } from "@/components/bottom-nav";
 import { AppSidebar } from "@/components/app-sidebar";
-import type { Role } from "@/types";
 
 export default function DashboardLayout({
   children,

@@ -124,6 +124,73 @@ export const userUpdateSchema = userSchema.partial().extend({
   accessCode: z.string().min(1).optional(),
 });
 
+// ─── Brand ledger ────────────────────────────────────────────────────────────
+
+export const ledgerEntrySchema = z.object({
+  entryDate: z.string().min(1, "Date is required"),
+  type: z.enum([
+    "OPENING", "INVOICE", "PAYMENT", "CREDIT_NOTE", "DEBIT_NOTE", "DISCOUNT", "ADJUSTMENT",
+  ]),
+  ref: z.string().max(80).optional(),
+  amount: z.number().positive("Amount must be greater than zero"),
+  // Omitted means "derive from the type". Sent explicitly for the rare case of a credit
+  // posted on a sales voucher, where the label and the sign disagree.
+  direction: z.union([z.literal(1), z.literal(-1)]).optional(),
+  note: z.string().max(500).optional(),
+  brandId: z.string().optional(),
+  // MANUAL is the escape hatch for a real payment not yet recorded in Accounts.
+  source: z.enum(["STATEMENT_PDF", "STATEMENT_XLSX", "STATEMENT_CSV", "BCH_BOOKS", "MANUAL"]).optional(),
+});
+
+export const ledgerEntryReviewSchema = z.object({
+  matchStatus: z.enum([
+    "UNMATCHED", "MATCHED", "NEEDS_REVIEW", "THEY_MISSING", "WE_MISSING", "DISPUTED", "IGNORED",
+  ]),
+  reviewNote: z.string().max(500).optional(),
+  billId: z.string().nullable().optional(),
+  paymentId: z.string().nullable().optional(),
+  creditId: z.string().nullable().optional(),
+  gapId: z.string().nullable().optional(),
+});
+
+export const ledgerGapSchema = z.object({
+  title: z.string().min(1, "Title is required").max(300),
+  gapType: z.enum([
+    "DISCOUNT_PENDING", "CREDIT_NOTE_PENDING", "SHORT_CREDIT", "DISPUTE",
+    "RECONCILIATION_DIFFERENCE", "DOCUMENTATION_GAP", "BALANCE_UNCONFIRMED",
+    "SCHEME_ENTITLEMENT", "COMMITMENT_PENDING", "OPERATIONAL_WARRANTY",
+    "INVOICE_DISCREPANCY", "REIMBURSEMENT_PENDING",
+  ]),
+  tier: z.enum(["FIRM", "LEVERAGE", "VERIFY", "CONDITIONAL"]).nullable().optional(),
+  status: z.enum(["OPEN", "PROMISED", "VERIFY", "RESOLVED", "REJECTED"]).optional(),
+  amount: z.number().nullable().optional(),
+  amountNote: z.string().max(200).optional(),
+  promisedBy: z.string().max(120).optional(),
+  promisedOn: z.string().optional(),
+  evidenceText: z.string().max(2000).optional(),
+  action: z.string().max(1000).optional(),
+  result: z.string().max(2000).optional(),
+  brandId: z.string().optional(),
+});
+
+export const ledgerGapUpdateSchema = ledgerGapSchema.partial();
+
+export const discountTermSchema = z.object({
+  kind: z.enum(["CASH", "TRADE", "VOLUME", "TRANSPORT_SUPPORT", "MARKETING", "INCENTIVE", "OTHER"]),
+  percentage: z.number().min(0).max(100).nullable().optional(),
+  perUnitAmount: z.number().min(0).nullable().optional(),
+  appliesTo: z.string().max(200).optional(),
+  effectiveFrom: z.string().optional(),
+  effectiveTo: z.string().optional(),
+  withinDays: z.number().int().min(0).nullable().optional(),
+  agreedBy: z.string().max(120).optional(),
+  agreedOn: z.string().optional(),
+  isProven: z.boolean().optional(),
+  evidenceUrl: z.string().url().optional().or(z.literal("")),
+  notes: z.string().max(1000).optional(),
+  brandId: z.string().optional(),
+});
+
 // ─── RBAC ────────────────────────────────────────────────────────────────────
 
 export const roleCreateSchema = z.object({
@@ -246,9 +313,16 @@ export const billFollowUpSchema = z.object({
 
 // ---- Customers & Receivables ----
 
+// `phone` is the customer's identity: it is required and unique on the table, because the
+// service side looks a customer up by phone when a bike is dropped off. Ten digits, since
+// that is what the counter actually captures.
 export const customerSchema = z.object({
   name: z.string().min(1, "Name is required").max(200),
-  phone: z.string().optional(),
+  phone: z
+    .string()
+    .transform((v) => v.replace(/\D/g, "").slice(-10))
+    .refine((v) => v.length === 10, "Phone must be 10 digits"),
+  whatsapp: z.string().optional(),
   email: z.string().email().optional().or(z.literal("")),
   address: z.string().optional(),
   type: z.enum(["WALK_IN", "REGULAR", "DEALER"]).optional(),
@@ -385,3 +459,43 @@ export const storeUpdateSchema = z.object({
   text: z.string().min(1, "Text is required").max(2000),
   category: z.enum(["Sales", "Staff", "Ops", "Issue", "Win", "Other"]),
 });
+
+// ─── Store analytics ingest ──────────────────────────────────────────────────
+// These validate the ENVELOPE only. Per-event field validation deliberately stays in
+// src/lib/analytics/store.ts, because DAT-002 requires every bad event to be reported
+// individually with a reason — a zod schema over the item shape would reject the whole batch,
+// throwing away 199 good crossings because the 200th carried a bad timestamp. The agent
+// cannot repair a rejected event, so a batch-level 400 would just loop forever.
+
+export const countEventBatchSchema = z
+  .array(z.unknown())
+  .max(1000, "batch too large (max 1000)");
+
+// Unknown keys are stripped rather than rejected: the agent adds fields as it gains features
+// (`confidence` was added mid-pilot) and an older server must not start 400-ing a newer agent.
+export const heartbeatSchema = z.object({
+  agent_id: z.string().max(64).optional(),
+  queue_depth: z.number().int().min(0).nullable().optional(),
+  camera_ok: z.boolean().nullable().optional(),
+  last_frame_ts: z.number().nullable().optional(),
+  agent_version: z.string().max(32).nullable().optional(),
+});
+
+// Device registration. `storeId` is narrowed to the two values that have a doorway to count —
+// the warehouse locations have no entrance and the STORE/WAREHOUSE pair is dead legacy. The
+// Prisma column is the full StockLocation enum, so this is the only place that restriction is
+// enforced; it is deliberately server-side and not just a filtered <select>.
+export const analyticsDeviceCreateSchema = z.object({
+  label: z.string().min(1, "Label is required").max(80),
+  storeId: z.enum(["BCH_STORE", "BCC_STORE"]),
+  agentId: z.string().min(1).max(64).default("edge-1"),
+});
+
+export const analyticsDeviceUpdateSchema = z
+  .object({
+    label: z.string().min(1).max(80).optional(),
+    isActive: z.boolean().optional(),
+  })
+  .refine((v) => v.label !== undefined || v.isActive !== undefined, {
+    message: "nothing to update",
+  });

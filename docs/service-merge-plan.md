@@ -1,7 +1,35 @@
 # Merging `bch-service` into `bch_management`
 
-**Status:** plan only — no merge code written.
+**Status:** plan, plus the RBAC groundwork already seeded (§4 is **done**).
 **Prerequisite:** the RBAC migration must be complete and `npm run build` green before phase 1 starts.
+
+---
+
+## 0. Decisions taken
+
+All open questions are now answered. These override anything below that contradicts them.
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Login system | **One login — the inventory app's.** The service login is deleted entirely. **No PIN login**, no second credentials provider, no `pin`/`emoji` columns. Workshop staff sign in with an access code like everyone else. |
+| 2 | Live service data | **None.** Built locally, so there is **no data migration phase**. |
+| 3 | Customer table | **One shared `Customer` table**, and `phone` must be **unique — no duplicates**. |
+| 4 | File storage | **One provider**, chosen **after** the merge completes. Not decided now. |
+| 5 | Audit logs | **Keep separate tables** for now. `AuditLog` is *not* folded into `OpsActivityLog`. |
+| 6 | Deploy `bch-service` separately | **No.** It is being merged, not kept running. |
+| 7 | Service modules + permissions in the seed | **Yes — done.** See §4. |
+| 8 | Should service roles reach inventory modules | **No.** Service roles hold service permissions only (plus `customers`, which the service app itself manages). |
+
+### Consequences
+
+- **Phase 6 (data migration) is removed** from the phase list.
+- **`phone` becomes `String @unique`** on `Customer` — note this reverses the earlier
+  recommendation in §3, which advised against the constraint on the assumption that live
+  inventory rows might already hold duplicates or nulls. With no live data, the constraint is
+  free to add and is what you want.
+- **Risk 7.2 (two apps, one database) disappears**, since the service app is not deployed.
+- The forgeable-cookie finding in §2.1 stops being an exposure the moment the merge lands,
+  because the app it belongs to is retired rather than kept running.
 
 ---
 
@@ -79,8 +107,8 @@ collide at SQL level. The duplication is conceptual, which is the harder kind.
 | Service model | Table | Action | Notes |
 |---|---|---|---|
 | `User` | `users` | **drop** | Duplicate. Inventory `User` survives. Service users become inventory users with a `SERVICE_*` role. |
-| `Customer` | `customers` | **merge** | Shape conflict — service has `phone` unique + required and a `whatsapp` field; inventory has `phone` optional/non-unique plus `email`/`address`/`type`. Add `whatsapp` to inventory `Customer`; do **not** add the unique constraint. |
-| `AuditLog` | `audit_logs` | **merge** | Overlaps inventory `OpsActivityLog`. Fold in with a `scope` discriminator rather than keeping two audit trails. |
+| `Customer` | `customers` | **merge** | One shared table. Per decision 3: add `whatsapp`, and make `phone` **`String @unique`** (currently optional and non-unique on the inventory side). Requires making it required too — a nullable unique column still permits many NULLs, which would not enforce "one number per customer". |
+| `AuditLog` | `audit_logs` | **port as-is** | Per decision 5, logs stay in separate tables for now. Not folded into `OpsActivityLog`. Revisit later if the duplication becomes annoying. |
 | `ServiceJob` | `service_jobs` | port | Core entity. Repoint `mechanicId` / `createdById` at inventory `User`. |
 | `Review` | `reviews` | port | Repoint `mechanicId`, `customerId`. |
 | `AssemblyLog` | `assembly_logs` | port | Repoint `mechanicId`. Photos move to R2. |
@@ -92,22 +120,50 @@ collide at SQL level. The duplication is conceptual, which is the harder kind.
 **Enums:** `JobStatus`, `JobType`, `PaymentStatus` port unchanged — they encode real workshop
 vocabulary. `UserRole` is deleted; its six values become `roles` rows.
 
-**User model additions** (only if PIN login is kept — see open question 1):
+**No `User` model additions.** Per decision 1 there is no PIN login, so `pin` and `emoji` are
+not carried over. Service staff become ordinary users with an access code and a `SERVICE_*` role.
+
+**`Customer` change required** (decision 3):
 
 ```prisma
-pin   String?  // bcrypt-hashed 4-digit PIN, workshop staff only
-emoji String?  // avatar shown on the shop-floor picker
+phone    String  @unique   // was: String?  — now required and unique
+whatsapp String?           // carried over from the service Customer
 ```
+
+Making `phone` required is not cosmetic: a *nullable* unique column still allows unlimited
+NULL rows in Postgres, so "one customer, one number" would not actually be enforced.
 
 ---
 
-## 4. RBAC: modules, permissions, roles
+## 4. RBAC: modules, permissions, roles — ✅ DONE
+
+This section is **implemented and seeded**, ahead of the rest of the merge. Verified output:
+
+```
+modules      : 33 synced
+permissions  : 124 synced
+ADMIN role   : 124 permissions granted
+role         : SERVICE_MECHANIC   created with  5 permissions
+role         : SERVICE_SUPERVISOR created with 12 permissions
+role         : SERVICE_STAFF      created with  7 permissions
+role         : SERVICE_BILLING    created with  7 permissions
+role         : SERVICE_MANAGER    created with 25 permissions
+role         : SERVICE_VIEWER     created with  2 permissions
+```
+
+Re-running is safe: the second run reports `0 created, 6 left untouched`.
 
 ### 4.1 New modules
 
 Seven modules in a new **Service** sidebar group, following the same `module × action` shape as
 the existing 26. Added to `prisma/rbac-catalog.ts`, which is idempotent, so this is purely
 additive.
+
+**Each is seeded with `route: null` on purpose.** The pages have not been ported yet, and the
+sidebar skips modules that have no route — so the permissions exist and are grantable now,
+without filling the navigation with links that 404. When a screen lands under `/services/*`,
+set its route in the catalog and re-seed; that single line makes it appear for everyone holding
+its `view` grant. The intended routes are recorded as comments beside each `route: null`.
 
 | key | Label | Actions |
 |---|---|---|
@@ -123,40 +179,35 @@ Takes the system to **33 modules / ~128 permissions**.
 
 ### 4.2 Default roles seeded with their permissions
 
-This is the change you asked for: the seed currently creates only ADMIN. It should also create
-**ready-made roles that already carry sensible grants**, so an admin can create a user and attach
-a role without hand-ticking a permission grid.
+`ROLE_CATALOG` in `prisma/rbac-catalog.ts` now ships six roles that already carry their grants,
+so an admin can create a user and attach a working role without ticking a permission grid.
 
-Proposed default grants — each row is what that role holds, everything else denied:
+Actual seeded grants — everything not listed is denied:
 
-| Role | Modules granted |
-|---|---|
-| `SERVICE_MECHANIC` | `service_jobs` (view, edit) · `service_assembly` (view, create, edit) |
-| `SERVICE_SUPERVISOR` | `service_jobs` (all) · `service_assembly` (all) · `service_prices` (view) · `service_reports` (view) |
-| `SERVICE_STAFF` | `service_jobs` (view, create, edit) · `service_prices` (view) · `customers` (view, create) |
-| `SERVICE_BILLING` | `service_billing` (all) · `service_jobs` (view) · `service_prices` (view) · `customers` (view) |
-| `SERVICE_MANAGER` | every service module · `service_reports` · `cost_price` (view) |
-| `SERVICE_VIEWER` | `service_jobs` (view) · `service_reports` (view) |
+| Role | Perms | Modules granted |
+|---|---:|---|
+| `SERVICE_MECHANIC` | 5 | `service_jobs` (view, edit) · `service_assembly` (view, create, edit) |
+| `SERVICE_SUPERVISOR` | 12 | `service_jobs` (all) · `service_assembly` (CRUD) · `service_prices` (view) · `service_reports` (view) · `service_incentives` (view) |
+| `SERVICE_STAFF` | 7 | `service_jobs` (view, create, edit) · `service_prices` (view) · `customers` (view, create, edit) |
+| `SERVICE_BILLING` | 7 | `service_billing` (view, create, edit, approve) · `service_jobs` (view) · `service_prices` (view) · `customers` (view) |
+| `SERVICE_MANAGER` | 25 | every service module · `customers` (view, create, edit) |
+| `SERVICE_VIEWER` | 2 | `service_jobs` (view) · `service_reports` (view) |
 
-Implementation shape — extend the catalog with a role catalog and seed it the same idempotent
-way as modules:
+Notes on the shape of these:
 
-```ts
-// prisma/rbac-catalog.ts
-export interface RoleSeed {
-  key: string;
-  name: string;
-  description: string;
-  /** module key -> actions granted on it */
-  grants: Record<string, ActionKey[]>;
-}
-export const ROLE_CATALOG: RoleSeed[] = [ /* the six above */ ];
-```
+- **A mechanic cannot create or delete job cards** — only view and edit the ones assigned. Job
+  creation belongs at the counter.
+- **`customers` is the one non-service module granted**, because after the merge there is one
+  shared customer table and the counter takes a phone number when a bike is dropped off.
+- **`SERVICE_MANAGER` does not get `cost_price`** (an earlier draft gave it that). Purchase
+  margin on inventory goods is unrelated to workshop labour, and decision 8 says service roles
+  stay out of inventory modules.
+- None are `isSystem`, so all six are editable and deletable in the UI. Only `ADMIN` is locked.
 
-**Important seeding rule:** default roles are seeded **only on first creation**. Re-running the
-seed must not reset grants an admin has since edited — otherwise every deploy silently reverts
-their customisations. Only `ADMIN` is force-synced to all permissions, because it must never be
-able to lock itself out.
+**Seeding rule — create-only.** A role is seeded with its grants the first time it appears and
+is then left alone forever. If an admin tightens or widens it in the UI, re-running the seed
+must not silently revert that. `ADMIN` is the sole exception: it is force-synced to hold every
+permission, because it must never be able to lock itself out of the permission editor.
 
 ### 4.3 One user ↔ one role
 

@@ -44,6 +44,27 @@ export async function r2PresignPut(key: string, expiresSeconds = 600): Promise<s
   return signed.url;
 }
 
+// Recover the object key from a public URL, so callers holding only the stored URL can
+// delete the object. Returns null for anything that isn't one of our R2 URLs — a caller
+// must not be able to talk us into deleting an arbitrary key.
+export function r2KeyFromUrl(url: string): string | null {
+  const base = env("R2_PUBLIC_BASE_URL");
+  if (!base || !url) return null;
+  const prefix = base.replace(/\/+$/, "") + "/";
+  if (!url.startsWith(prefix)) return null;
+  const key = url.slice(prefix.length).split("?")[0];
+  return key ? key.split("/").map(decodeURIComponent).join("/") : null;
+}
+
+// Delete one object. Missing objects are not an error: R2 returns 204 either way, and a
+// caller retrying a delete should not see a failure.
+export async function r2Delete(key: string): Promise<void> {
+  const res = await client().fetch(objectUrl(key), { method: "DELETE" });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`R2 delete failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+  }
+}
+
 // Server-side upload (small files that pass through our API, and the migration script).
 export async function r2Put(key: string, body: ArrayBuffer | Buffer | Blob, contentType: string): Promise<string> {
   const res = await client().fetch(objectUrl(key), {

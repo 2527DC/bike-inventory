@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db";
 import { ZohoClient } from "@/lib/zoho";
 import { ZakyaClient } from "@/lib/zakya";
 import { ZohoInventoryClient } from "@/lib/zoho-inventory";
-import { successResponse, errorResponse } from "@/lib/api-utils";
+import { successResponse, errorResponse, failure } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 /*
@@ -19,10 +19,17 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
  */
 
 export async function POST(req: NextRequest) {
+  // Captured for the catch. A 500 has to name WHICH step failed — init, items, bills and
+  // finalize are indistinguishable otherwise. Kept as a separate object rather than hoisting
+  // the destructured consts, so their type narrowing below is preserved.
+  const ctx: { step?: string; pullId?: string } = {};
+
   try {
     await requireFeature("zoho", "fetch");
     const body = await req.json();
     const { step, pullId: existingPullId, fullImport, fromDate, searchText } = body as { step: string; pullId?: string; fullImport?: boolean; fromDate?: string; searchText?: string };
+    ctx.step = step;
+    ctx.pullId = existingPullId;
 
     // ─── INIT ───
     if (step === "init") {
@@ -487,6 +494,8 @@ export async function POST(req: NextRequest) {
     return errorResponse("Invalid step", 400);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Pull failed", 500);
+    // failure() writes the message AND the stack to the server log before answering the
+    // client. Without it a 500 here left nothing behind to identify which call failed.
+    return failure(error, { scope: "zoho:trigger-pull", ...ctx });
   }
 }
