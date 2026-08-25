@@ -42,6 +42,6 @@ export const config = {
     // The contract that makes it safe: **every route beneath these prefixes MUST check
     // CRON_SECRET (or its own shared key) in the handler.** All five do today. A new route
     // added without that check is public to the internet.
-    "/((?!login|fill|api/auth|api/public|api/cron|api/services/cron|api/earn-sync|api/analytics/counts|api/analytics/heartbeat|api/v1/counts|api/v1/heartbeat|_next/static|_next/image|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|json|txt|xml|html|webmanifest)).*)",
+    "/((?!login|fill|api/auth|api/public|api/cron|api/services/cron|api/earn-sync|api/analytics/counts|api/analytics/heartbeat|api/v1/counts|api/v1/heartbeat|_next/static|_next/image|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|json|txt|xml|html|webmanifest|js|mjs|css|map|woff|woff2|ttf)).*)",
   ],
 };
