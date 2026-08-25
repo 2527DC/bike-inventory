@@ -21,6 +21,9 @@ import { sendOwnerAlert } from "@/lib/analytics/alerts";
 import { HEARTBEAT_STALE_MS } from "@/lib/analytics/store";
 import { stockLocationLabel } from "@/lib/inventory-config";
 import { storeClock, STORE_TZ } from "@/lib/analytics/time";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("cron:counter-watchdog");
 
 function minutesAgo(from: Date | null, now: number): number | null {
   if (!from) return null;
@@ -88,7 +91,9 @@ export async function GET(req: NextRequest) {
       alert,
     });
   } catch (error) {
-    console.error("counter watchdog failed", error);
+    log.error("watchdog failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse(
       error instanceof Error ? error.message : "Watchdog failed",
       500

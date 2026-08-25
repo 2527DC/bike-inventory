@@ -4,6 +4,9 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { buildAccountabilityScorecard, formatScorecardMessage } from "@/lib/accountability";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("cron:overdue-alerts");
 
 // Vercel Cron: daily 8 AM — "0 8 * * *" (see vercel.json).
 // Pushes the Daily Accountability scorecard every morning (the REVIEW step of
@@ -77,7 +80,9 @@ export async function GET(req: NextRequest) {
       }
     } else if (phones.length > 0) {
       // No WhatsApp token — data still returned in response for manual review
-      console.log("[daily-accountability] WhatsApp token not configured. Scorecard returned in response.");
+      log.warn("WhatsApp token not configured — scorecard returned in the response only", {
+        recipients: phones.length,
+      });
     }
 
     return successResponse({

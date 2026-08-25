@@ -15,6 +15,9 @@ import { type DateRangeKey } from "@/components/date-filter";
 import { FilterSheet } from "@/components/filter-sheet";
 import { usePermissions } from "@/lib/use-permissions";
 import { SkeletonList } from "@/components/ui/skeleton";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("bills");
 
 const BILL_COLUMNS: ExportColumn[] = [
   { header: "Bill No", key: "billNo" },
@@ -182,7 +185,7 @@ export default function BillsPage() {
         }),
       }).then(r => r.json());
       if (!finalizeRes.success) {
-        console.warn("Finalize failed:", finalizeRes.error);
+        log.warn("finalize failed", { error: finalizeRes.error });
       }
 
       setFetchProgress("Loading preview...");

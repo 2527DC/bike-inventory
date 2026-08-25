@@ -13,6 +13,9 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { analyticsDeviceUpdateSchema } from "@/lib/validations";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("analytics:devices");
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -45,7 +48,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
       return errorResponse("Device not found", 404);
     }
-    console.error("analytics device update failed", error);
+    log.error("device update failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse("Failed to update device", 500);
   }
 }

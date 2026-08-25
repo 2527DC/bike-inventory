@@ -23,6 +23,9 @@ import {
   isBusinessDate,
   toDateColumn,
 } from "@/lib/analytics/time";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("cron:footfall-rollup");
 
 /**
  * Raw events older than this are deleted once their day is rolled up.
@@ -168,7 +171,9 @@ export async function GET(req: NextRequest) {
       pruned_before: prunedBefore,
     });
   } catch (error) {
-    console.error("footfall rollup failed", error);
+    log.error("rollup failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse(error instanceof Error ? error.message : "Rollup failed", 500);
   }
 }

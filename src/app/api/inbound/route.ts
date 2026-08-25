@@ -5,6 +5,9 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, parseSearchParams } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { inboundShipmentSchema } from "@/lib/validations";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("inbound");
 
 // GET: List shipments
 export async function GET(req: NextRequest) {
@@ -271,7 +274,9 @@ export async function POST(req: NextRequest) {
         product_type: "goods",
       });
     } catch (zohoErr) {
-      console.warn("Zoho draft push failed (non-critical):", zohoErr);
+      log.warn("Zoho draft push failed (non-critical)", {
+        error: zohoErr instanceof Error ? zohoErr.message : String(zohoErr),
+      });
     }
 
     return successResponse(shipment, 201);

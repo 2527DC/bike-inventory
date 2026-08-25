@@ -16,6 +16,9 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { generateDeviceKey, hashDeviceKey } from "@/lib/analytics/device-auth";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("analytics:devices:rotate");
 
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -37,7 +40,9 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
       return errorResponse("Device not found", 404);
     }
-    console.error("analytics device rotate failed", error);
+    log.error("key rotation failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse("Failed to rotate key", 500);
   }
 }

@@ -7,6 +7,9 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { BIN_TRACKING_ENABLED, DEFAULT_STOCK_LOCATION, isStockLocation, stockLocationLabel, type StockLocation } from "@/lib/inventory-config";
 import { adjustLocationQty } from "@/lib/stock-location";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("inbound:status");
 
 // PUT: Update shipment status (IN_TRANSIT ↔ PARTIALLY_DELIVERED → DELIVERED)
 export async function PUT(
@@ -238,7 +241,9 @@ export async function PUT(
           })),
         });
       } catch (zohoErr) {
-        console.warn("Zoho bill push failed (non-critical):", zohoErr);
+        log.warn("Zoho bill push failed (non-critical)", {
+          error: zohoErr instanceof Error ? zohoErr.message : String(zohoErr),
+        });
       }
     }
 
