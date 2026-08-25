@@ -41,3 +41,10 @@ yarn-error.log*
 next-env.d.ts
 
 /src/generated/prisma
+
+# AI agent tooling — machine-local state, not project source
+/.claude-flow/
+/.ruflo/
+/.swarm/
+/.claude/projects/
+/.claude/settings.local.json

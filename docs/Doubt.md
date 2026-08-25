@@ -24,24 +24,3 @@ storing in db depends on the importance how do u need  the application and featu
 
    Check Working
    - action : on pull action from the zoho what happens what data we get and to  which all table is the data gets feeded  after  re
-
-
-
-   # Service implementation 
-
-   -> Issue management 
-      -  who create the issue  for the issues that ur getting from services   do u need status like issue is in pending resolved or other status  if so let  me know  if the issue feature are like tickest  who opens it and who close it do  u need the log of  thing  that maintains who has made the status change operation of which issue ticke
-
-      - Should the issue be created for specific job or should it be option like selecting the job and creating the issue related to it 
-    
-
-- need to know what is this Build vendor escalation report: phase 1 service issues
-
-
-# Staff attendance
-  -> how do u wnat to track the staff attendency do u wnant that to be strict like  they perform action of attencdence  like able to perform only when they are near the office  ( using the lata nd long and enable them to attendenc e action button when they are near the store  where the check will run in the baground  heavy implemenation and testing must be done in many senarios )
-  -> or u just want to sync the data from  the existing provider ( needs to check weather the provider provides the )
-
- 
-
-# Inventory 
