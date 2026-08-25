@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { JOB_STATUS, JOB_TYPE, STATUS_FLOW } from "@/lib/services/constants";
 import { getWhatsAppUrl, getPickupReminderUrl } from "@/lib/services/whatsapp";
+import { errorMessage } from "@/lib/utils";
 
 type Job = {
   id: string;
@@ -549,8 +550,8 @@ function ReviewAndDeliver({
       // If Zoho check fails, fall back to manual
       setError(`Zoho check failed (${res.status}) — enter manually`);
       setStep("zoho");
-    } catch (e: any) {
-      setError(`Zoho connection error: ${e.message}`);
+    } catch (e) {
+      setError(`Zoho connection error: ${errorMessage(e)}`);
       setStep("zoho");
     }
   };
@@ -600,8 +601,8 @@ function ReviewAndDeliver({
         setSubmitting(false);
         return;
       }
-    } catch (e: any) {
-      setError(`Network error: ${e.message}`);
+    } catch (e) {
+      setError(`Network error: ${errorMessage(e)}`);
       setSubmitting(false);
       return;
     }

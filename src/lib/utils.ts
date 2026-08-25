@@ -120,3 +120,21 @@ export function useDebounce<T>(value: T, delay = 300): T {
 
   return debouncedValue;
 }
+
+/**
+ * Message from an unknown caught value.
+ *
+ * Under `strict`, TypeScript types a catch binding as `unknown`, so `e.message` does not
+ * compile — which is why the pattern here had been `catch (e: any)`. That annotation
+ * silenced the compiler rather than answering the question, and a thrown string or object
+ * would have produced `undefined` in the UI.
+ *
+ *     } catch (e) {
+ *       setError(`Network error: ${errorMessage(e)}`);
+ *     }
+ */
+export function errorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  return String(e);
+}

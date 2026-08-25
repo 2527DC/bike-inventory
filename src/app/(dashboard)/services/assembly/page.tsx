@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { errorMessage } from "@/lib/utils";
 
 const ASSEMBLY_TYPES = [
   { key: "A50", label: "50%", color: "bg-blue-500" },
@@ -68,8 +69,8 @@ export default function AssemblyPage() {
         const err = await res.json().catch(() => ({ error: "Failed to load logs" }));
         setError(err.error || `Failed to load logs (${res.status})`);
       }
-    } catch (e: any) {
-      setError(`Network error: ${e.message}`);
+    } catch (e) {
+      setError(`Network error: ${errorMessage(e)}`);
     }
     setLoading(false);
   }, [today, mechId]);
@@ -115,8 +116,8 @@ export default function AssemblyPage() {
         const err = await res.json().catch(() => ({ error: "Assembly log failed" }));
         setError(err.error || `Assembly log failed (${res.status})`);
       }
-    } catch (e: any) {
-      setError(`Upload error: ${e.message}`);
+    } catch (e) {
+      setError(`Upload error: ${errorMessage(e)}`);
     }
 
     setSaving(false);

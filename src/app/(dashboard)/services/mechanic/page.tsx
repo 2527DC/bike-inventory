@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import JobCard from "@/components/services/JobCard";
 import StatusFilter from "@/components/services/StatusFilter";
 import PartsSelector from "@/components/services/PartsSelector";
+import { errorMessage } from "@/lib/utils";
 
 
 type Job = {
@@ -48,7 +49,7 @@ export default function MechanicPage() {
         const err = await res.json().catch(() => ({ error: "Failed to load user" }));
         setError(err.error || `Failed to load user (${res.status})`);
       }
-    }).catch((e) => setError(`Network error: ${e.message}`));
+    }).catch((e) => setError(`Network error: ${errorMessage(e)}`));
   }, []);
 
   const fetchJobs = useCallback(async () => {
@@ -61,8 +62,8 @@ export default function MechanicPage() {
         const err = await res.json().catch(() => ({ error: "Failed to load jobs" }));
         setError(err.error || `Failed to load jobs (${res.status})`);
       }
-    } catch (e: any) {
-      setError(`Network error: ${e.message}`);
+    } catch (e) {
+      setError(`Network error: ${errorMessage(e)}`);
     } finally {
       setLoading(false);
     }
@@ -105,8 +106,8 @@ export default function MechanicPage() {
         setError(err.error || `Status update failed (${res.status})`);
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
-    } catch (e: any) {
-      setError(`Network error: ${e.message}`);
+    } catch (e) {
+      setError(`Network error: ${errorMessage(e)}`);
     }
     fetchJobs();
   };
@@ -127,8 +128,8 @@ export default function MechanicPage() {
         const err = await res.json().catch(() => ({ error: "Parts update failed" }));
         setError(err.error || `Parts update failed (${res.status})`);
       }
-    } catch (e: any) {
-      setError(`Network error: ${e.message}`);
+    } catch (e) {
+      setError(`Network error: ${errorMessage(e)}`);
     }
     setPartsJobId(null);
     fetchJobs();

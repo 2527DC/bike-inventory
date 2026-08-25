@@ -6,6 +6,7 @@ import StatusFilter from "@/components/services/StatusFilter";
 import PartsSelector from "@/components/services/PartsSelector";
 import { getWhatsAppUrl, getInwardWhatsAppUrl } from "@/lib/services/whatsapp";
 import { JOB_TYPE } from "@/lib/services/constants";
+import { errorMessage } from "@/lib/utils";
 
 const PAID_TYPES = ["RSVC", "SND", "ECYC"];
 
@@ -93,8 +94,8 @@ export default function QueuePage() {
         const notifs = (await notifRes.json()).notifications as { jobId: string; messageType: string }[];
         setSentJobIds(new Set(notifs.filter((n) => n.messageType === "INWARD").map((n) => n.jobId)));
       }
-    } catch (e: any) {
-      setError(`Network error: ${e.message}`);
+    } catch (e) {
+      setError(`Network error: ${errorMessage(e)}`);
     }
     setLoading(false);
   }, [getDateParams]);
@@ -140,8 +141,8 @@ export default function QueuePage() {
         setError(err.error || `Status update failed (${res.status})`);
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
-    } catch (e: any) {
-      setError(`Network error: ${e.message}`);
+    } catch (e) {
+      setError(`Network error: ${errorMessage(e)}`);
     }
     fetchJobs();
   };
@@ -169,8 +170,8 @@ export default function QueuePage() {
         const err = await res.json().catch(() => ({ error: "Parts update failed" }));
         setError(err.error || `Parts update failed (${res.status})`);
       }
-    } catch (e: any) {
-      setError(`Network error: ${e.message}`);
+    } catch (e) {
+      setError(`Network error: ${errorMessage(e)}`);
     }
     setPartsJobId(null);
     fetchJobs();
@@ -187,8 +188,8 @@ export default function QueuePage() {
         const err = await res.json().catch(() => ({ error: "Assign failed" }));
         setError(err.error || `Assign failed (${res.status})`);
       }
-    } catch (e: any) {
-      setError(`Network error: ${e.message}`);
+    } catch (e) {
+      setError(`Network error: ${errorMessage(e)}`);
     }
     setAssigningJob(null);
     fetchJobs();
