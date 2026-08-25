@@ -1,0 +1,111 @@
+name: CI
+
+# Pre-merge gate. Runs when a pull request targeting main is opened, and again on every
+# push to that pull request, so a failure is visible before the code lands.
+#
+# ┌─────────────┐      needs      ┌─────────┐
+# │  typecheck  │ ──────────────▶ │  build  │
+# └─────────────┘                 └─────────┘
+#   tsc --noEmit                    npm run build
+#   (+ lint, non-blocking)          skipped entirely if typecheck fails
+#
+# IMPORTANT: this file makes the checks RUN; it cannot make them REQUIRED. GitHub only
+# refuses a merge when a branch protection rule says a check is required. Until that rule
+# exists, a red pipeline shows a ✗ on the PR but the merge button still works. See
+# "Enforcing the block" in the repo README, or run:
+#
+#   gh api -X PUT repos/:owner/:repo/branches/main/protection \
+#     -f 'required_status_checks[strict]=true' \
+#     -f 'required_status_checks[contexts][]=Type check' \
+#     -f 'required_status_checks[contexts][]=Build'
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+# A new push to the same pull request cancels the run still in flight.
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck:
+    name: Type check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci`, not `npm install`: it installs exactly what package-lock.json pins and
+      # fails loudly on a mismatch. CLAUDE.md records that a truncated install leaves
+      # packages which look present but aren't — a lockfile-exact install prevents that.
+      - name: Install dependencies
+        run: npm ci
+
+      # Prisma Client is generated into node_modules and is gitignored, so it does not
+      # exist on a fresh checkout — every `@prisma/client` import would fail to resolve.
+      # `generate` reads the schema only and opens no connection, so no DATABASE_URL here.
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      # tsconfig.json includes `.next/types/**/*.ts` and `next-env.d.ts`. Both are
+      # gitignored and absent on a fresh checkout. `next typegen` writes them without
+      # paying for a full production build.
+      - name: Generate Next.js route types
+        run: npx next typegen
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      # Non-blocking on purpose: `npm run lint` currently reports 78 errors, so enforcing
+      # it today would leave every pull request red. This surfaces the output in the log.
+      # Delete the `continue-on-error` line to make lint enforcing once that is cleared.
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true
+
+  build:
+    name: Build
+    # Gate: the build only starts once the type check has passed. A type error therefore
+    # costs ~2 minutes rather than a full production build.
+    needs: typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm run build` is `prisma generate && next build`, so no separate generate step.
+      #
+      # The placeholders below are never connected to. Next evaluates modules while
+      # collecting pages, and src/lib/db.ts constructs a PrismaClient at module scope,
+      # which wants the datasource variables to exist. Every page in this app is a client
+      # component that fetches at runtime, so nothing queries a database during the build.
+      # If that ever stops being true, this job needs a real service container rather than
+      # a longer placeholder.
+      - name: Build
+        run: npm run build
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+          DIRECT_URL: postgresql://ci:ci@localhost:5432/ci
+          NEXTAUTH_SECRET: ci-placeholder-not-a-real-secret
+          NEXTAUTH_URL: http://localhost:3000

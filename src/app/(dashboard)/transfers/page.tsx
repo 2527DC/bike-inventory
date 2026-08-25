@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { Plus, ArrowRightLeft, ArrowRight, CheckCircle2, XCircle, Clock, Loader2, Package } from "lucide-react";
 import { stockLocationLabel } from "@/lib/inventory-config";
@@ -50,8 +49,6 @@ interface TransferOrder {
 type StatusFilter = "all" | "PENDING" | "APPROVED" | "REJECTED";
 
 export default function TransfersPage() {
-  const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
   const { canApprove: canApproveCheck } = usePermissions();
   const canApprove = canApproveCheck("transfers");
   const [orders, setOrders] = useState<TransferOrder[]>([]);

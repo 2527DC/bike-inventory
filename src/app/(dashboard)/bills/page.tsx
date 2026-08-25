@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { FileText, AlertTriangle, Search, Cloud, Loader2, Download, Clock, Zap } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -15,6 +14,9 @@ import { type DateRangeKey } from "@/components/date-filter";
 import { FilterSheet } from "@/components/filter-sheet";
 import { usePermissions } from "@/lib/use-permissions";
 import { SkeletonList } from "@/components/ui/skeleton";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("bills");
 
 const BILL_COLUMNS: ExportColumn[] = [
   { header: "Bill No", key: "billNo" },
@@ -61,8 +63,6 @@ function formatCurrency(amount: number) {
 }
 
 export default function BillsPage() {
-  const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
   const { canFetch: canFetchCheck } = usePermissions();
   const canFetchBills = canFetchCheck("bills");
 
@@ -182,7 +182,7 @@ export default function BillsPage() {
         }),
       }).then(r => r.json());
       if (!finalizeRes.success) {
-        console.warn("Finalize failed:", finalizeRes.error);
+        log.warn("finalize failed", { error: finalizeRes.error });
       }
 
       setFetchProgress("Loading preview...");

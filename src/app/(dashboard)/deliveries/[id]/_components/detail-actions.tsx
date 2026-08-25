@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, Truck, Package, Wrench } from "lucide-react";
+import { CheckCircle2, Truck, Package } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { DeliveryData } from "./types";
 import { ScheduleForm } from "./schedule-form";

@@ -4,7 +4,7 @@ import { serviceGuard } from "@/lib/services/guard";
 
 // GET — fetch notification history for a job or recent notifications
 export async function GET(req: NextRequest) {
-  const { user: user, error: authError } = await serviceGuard("service_jobs", "view");
+  const { error: authError } = await serviceGuard("service_jobs", "view");
   if (authError) return authError;
 
   const { searchParams } = new URL(req.url);

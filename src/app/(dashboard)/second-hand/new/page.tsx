@@ -1,13 +1,10 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { useRouter } from "next/navigation";
-import { useSession } from "next-auth/react";
 import { ArrowLeft, Camera, CheckCircle2, Loader2, Search, X, Plus } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
 import { uploadImage } from "@/lib/media-upload";
 import { compressImageFull } from "@/lib/media-compress";
 
@@ -23,9 +20,6 @@ const CONDITIONS: { value: Condition; label: string; color: string }[] = [
 ];
 
 export default function NewSecondHandPage() {
-  const router = useRouter();
-  const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Form fields

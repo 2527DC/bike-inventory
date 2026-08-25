@@ -12,7 +12,7 @@ interface FlagSectionProps {
   onResolved: () => void;
 }
 
-export function FlagSection({ data, deliveryId, onFlagged, onResolved }: FlagSectionProps) {
+export function FlagSection({ data, deliveryId, onFlagged, onResolved: _onResolved }: FlagSectionProps) {
   const [flagModalOpen, setFlagModalOpen] = useState(false);
   const [flagReasonInput, setFlagReasonInput] = useState("");
 

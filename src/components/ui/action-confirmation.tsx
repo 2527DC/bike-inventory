@@ -64,26 +64,45 @@ function ActionConfirmation({
   details,
   children,
 }: ActionConfirmationProps) {
-  const [visible, setVisible] = useState(false);
+  // `mounted` keeps the sheet in the DOM for the 300ms exit tween after `open` goes
+  // false; `animating` drives the enter tween one frame after mount.
+  const [mounted, setMounted] = useState(open);
   const [animating, setAnimating] = useState(false);
+  const [prevOpen, setPrevOpen] = useState(open);
+
+  // Derive the open/close transition during render instead of in an effect. Calling
+  // setState synchronously inside useEffect commits a render the user never sees and
+  // then immediately re-renders — the cascading render react-hooks/set-state-in-effect
+  // flags. Adjusting state during render is React's documented alternative.
+  if (open !== prevOpen) {
+    setPrevOpen(open);
+    if (open) {
+      setMounted(true);
+      setAnimating(false); // start from the closed position so the enter tween runs
+    }
+  }
 
   useEffect(() => {
     if (open) {
-      setVisible(true);
-      // Trigger animation on next frame
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          setAnimating(true);
-        });
+      // Two frames: the first commits the closed position, the second starts the tween.
+      let inner = 0;
+      const outer = requestAnimationFrame(() => {
+        inner = requestAnimationFrame(() => setAnimating(true));
       });
-    } else {
-      setAnimating(false);
-      const timer = setTimeout(() => setVisible(false), 300);
-      return () => clearTimeout(timer);
+      return () => {
+        cancelAnimationFrame(outer);
+        cancelAnimationFrame(inner);
+      };
     }
+    const timer = setTimeout(() => setMounted(false), 300);
+    return () => clearTimeout(timer);
   }, [open]);
 
-  if (!visible) return null;
+  if (!mounted) return null;
+
+  // Closing flips this false immediately, so the exit tween starts on the same commit
+  // that `open` changed — no second state update needed.
+  const shown = open && animating;
 
   const config = TYPE_CONFIG[type];
   const ts = timestamp ?? new Date();
@@ -94,7 +113,7 @@ function ActionConfirmation({
       <div
         className={cn(
           "absolute inset-0 bg-black/40 transition-opacity duration-200",
-          animating ? "opacity-100" : "opacity-0"
+          shown ? "opacity-100" : "opacity-0"
         )}
       />
 
@@ -102,7 +121,7 @@ function ActionConfirmation({
       <div
         className={cn(
           "absolute bottom-0 left-0 right-0 flex justify-center transition-transform duration-300 ease-out",
-          animating ? "translate-y-0" : "translate-y-full"
+          shown ? "translate-y-0" : "translate-y-full"
         )}
       >
         <div className="w-full max-w-md rounded-t-2xl bg-white px-5 pb-6 pt-5 shadow-xl">

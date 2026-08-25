@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
 
 const SYNC_KEY = process.env.EARN_SYNC_KEY || "";
 
@@ -14,23 +13,6 @@ export async function GET(req: NextRequest) {
   const dayStart = new Date(date);
   dayStart.setHours(0, 0, 0, 0);
   const todayStr = dayStart.toISOString().slice(0, 10);
-
-  const users = await prisma.user.findMany({
-    where: { isActive: true },
-    select: { id: true, name: true, email: true, role: true },
-  });
-
-  const events = users.map((u) => ({
-    externalUserId: u.id,
-    name: u.name,
-    email: u.email,
-    role: u.role,
-    tasksCompleted: 0,
-    sopFullCompliance: false,
-    sopComplianceRate: 0,
-    sopViolations: 0,
-    checklistItemsDone: 0,
-  }));
 
   return NextResponse.json({
     source: "bike-inventory",

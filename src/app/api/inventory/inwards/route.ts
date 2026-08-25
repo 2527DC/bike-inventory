@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { successResponse, errorResponse, paginatedResponse, parseSearchParams } from "@/lib/api-utils";
+import { errorResponse, paginatedResponse, parseSearchParams } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function GET(req: NextRequest) {

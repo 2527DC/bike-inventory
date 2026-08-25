@@ -18,6 +18,9 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { generateDeviceKey, hashDeviceKey } from "@/lib/analytics/device-auth";
 import { HEARTBEAT_STALE_MS } from "@/lib/analytics/store";
 import { analyticsDeviceCreateSchema } from "@/lib/validations";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("analytics:devices");
 
 // keyHash is never selected. It cannot leak through a response that does not fetch it.
 const DEVICE_FIELDS = {
@@ -51,7 +54,9 @@ export async function GET() {
     );
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    console.error("analytics devices list failed", error);
+    log.error("device list failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse("Failed to load devices", 500);
   }
 }
@@ -90,7 +95,9 @@ export async function POST(req: NextRequest) {
         409
       );
     }
-    console.error("analytics device create failed", error);
+    log.error("device create failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse("Failed to register device", 500);
   }
 }

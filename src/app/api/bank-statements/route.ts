@@ -4,6 +4,9 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError, getServerSession } from "@/lib/auth-helpers";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("bank-statements");
 
 // GET — List uploaded statements
 export async function GET() {
@@ -58,7 +61,12 @@ export async function POST(req: NextRequest) {
 
     // Log first few lines for debugging
     const firstLines = text.split("\n").slice(0, 5).join(" | ");
-    console.log(`[BankStatement] File: ${file.name}, Size: ${file.size}, Bank: ${bank}, First lines: ${firstLines.slice(0, 200)}`);
+    log.debug("statement received", {
+      file: file.name,
+      bytes: file.size,
+      bank,
+      sample: firstLines.slice(0, 200),
+    });
 
     // Get Claude API key from settings
     const apiKey = process.env.ANTHROPIC_API_KEY;

@@ -4,7 +4,7 @@ import { serviceGuard } from "@/lib/services/guard";
 
 // GET — list jobs proposed for delivery (paid in Zoho, awaiting STAFF confirmation)
 export async function GET() {
-  const { user: user, error: authError } = await serviceGuard("service_jobs", "edit");
+  const { error: authError } = await serviceGuard("service_jobs", "edit");
   if (authError) return authError;
 
   const pending = await prisma.serviceJob.findMany({

@@ -5,6 +5,7 @@ import JobCard from "@/components/services/JobCard";
 import StatusFilter from "@/components/services/StatusFilter";
 import PartsSelector from "@/components/services/PartsSelector";
 import { getWhatsAppUrl } from "@/lib/services/whatsapp";
+import { errorMessage } from "@/lib/utils";
 
 type Job = {
   id: string;
@@ -91,8 +92,8 @@ export default function SupervisorPage() {
         const err = await mechRes.json().catch(() => ({ error: "Failed to load mechanics" }));
         setError(err.error || `Failed to load mechanics (${mechRes.status})`);
       }
-    } catch (e: any) {
-      setError(`Network error: ${e.message}`);
+    } catch (e) {
+      setError(`Network error: ${errorMessage(e)}`);
     }
     setLoading(false);
   }, [getDateParams]);
@@ -126,8 +127,8 @@ export default function SupervisorPage() {
         const err = await res.json().catch(() => ({ error: "Assign failed" }));
         setError(err.error || `Assign failed (${res.status})`);
       }
-    } catch (e: any) {
-      setError(`Network error: ${e.message}`);
+    } catch (e) {
+      setError(`Network error: ${errorMessage(e)}`);
     }
     setAssigningJob(null);
     fetchData();
@@ -175,8 +176,8 @@ export default function SupervisorPage() {
         setError(err.error || `Status update failed (${res.status})`);
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
-    } catch (e: any) {
-      setError(`Network error: ${e.message}`);
+    } catch (e) {
+      setError(`Network error: ${errorMessage(e)}`);
     }
     fetchData();
   };
@@ -207,8 +208,8 @@ export default function SupervisorPage() {
         const err = await res.json().catch(() => ({ error: "Parts update failed" }));
         setError(err.error || `Parts update failed (${res.status})`);
       }
-    } catch (e: any) {
-      setError(`Network error: ${e.message}`);
+    } catch (e) {
+      setError(`Network error: ${errorMessage(e)}`);
     }
     setPartsJobId(null);
     fetchData();
@@ -232,8 +233,8 @@ export default function SupervisorPage() {
         const err = await res.json().catch(() => ({ error: "Bulk update failed" }));
         setError(err.error || `Bulk update failed (${res.status})`);
       }
-    } catch (e: any) {
-      setError(`Network error: ${e.message}`);
+    } catch (e) {
+      setError(`Network error: ${errorMessage(e)}`);
     }
     setSelected(new Set());
     setBulkMode(false);
@@ -265,7 +266,7 @@ export default function SupervisorPage() {
   counts["OVERDUE"] = overdueJobs.length;
 
   // When searching, use server-side results (includes delivered)
-  let filtered = search.trim().length >= 2 && searchResults
+  const filtered = search.trim().length >= 2 && searchResults
     ? searchResults
     : filter === "OVERDUE" ? overdueJobs
     : filter ? jobs.filter((j) => j.status === filter) : jobs;

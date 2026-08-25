@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, Clock, Plus } from "lucide-react";
+import { Upload, FileSpreadsheet, Plus } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 

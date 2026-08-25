@@ -6,11 +6,11 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeft, ChevronDown, ChevronRight, Search,
   LayoutDashboard, Truck, Package, Store, FileText, Users,
-  ClipboardCheck, ShoppingCart, CreditCard, BarChart3,
+  ClipboardCheck, ShoppingCart, BarChart3,
   AlertCircle, Cloud, Receipt, ArrowRightLeft, QrCode,
-  Bike, Brain, Wrench, Settings, Bell, Zap,
+  Bike, Settings, Bell, Zap,
 } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 

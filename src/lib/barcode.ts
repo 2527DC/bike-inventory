@@ -18,7 +18,7 @@ export async function generateBarcodePng(
     type = "code128",
     scale = 3,
     height = 12,
-    includetext = true,
+    includetext = false,
   } = options;
 
   try {
@@ -27,7 +27,7 @@ export async function generateBarcodePng(
       text,
       scale,
       height,
-      includetext: false,
+      includetext,
       paddingwidth: 5,
       paddingheight: 5,
     });

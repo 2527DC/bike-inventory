@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { JOB_TYPE, BIKE_CATEGORIES, getBikeCategory } from "@/lib/services/constants";
 import { getInwardWhatsAppUrl } from "@/lib/services/whatsapp";
+import { errorMessage } from "@/lib/utils";
 
 // Job types that skip KYC — go straight to mechanic assign
 const SKIP_KYC_TYPES = ["QFX", "FSVC", "SND", "WSH"];
@@ -119,7 +120,7 @@ export default function CounterPage() {
   const [mechanicId, setMechanicId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [jobId, setJobId] = useState("");
-  const [photos, setPhotos] = useState<string[]>([]);
+  const [, setPhotos] = useState<string[]>([]);
   const [localFiles, setLocalFiles] = useState<File[]>([]);
   const [localPreviews, setLocalPreviews] = useState<string[]>([]);
   const [isReturning, setIsReturning] = useState(false);
@@ -142,17 +143,17 @@ export default function CounterPage() {
     fetch("/api/services/mechanics").then(async (res) => {
       if (res.ok) setMechanics((await res.json()).mechanics);
       else setError(`Failed to load mechanics (${res.status})`);
-    }).catch((e) => setError(`Network error: ${e.message}`));
+    }).catch((e) => setError(`Network error: ${errorMessage(e)}`));
     fetch("/api/auth/me").then(async (res) => {
       if (res.ok) {
         const data = await res.json();
         if (data.user) setCurrentUser({ id: data.user.id, role: data.user.role });
       } else setError(`Failed to load user (${res.status})`);
-    }).catch((e) => setError(`Network error: ${e.message}`));
+    }).catch((e) => setError(`Network error: ${errorMessage(e)}`));
     fetch("/api/services/prices").then(async (res) => {
       if (res.ok) setPrices((await res.json()).prices);
       else setError(`Failed to load prices (${res.status})`);
-    }).catch((e) => setError(`Network error: ${e.message}`));
+    }).catch((e) => setError(`Network error: ${errorMessage(e)}`));
   }, []);
 
   const skipKyc = SKIP_KYC_TYPES.includes(jobType);
@@ -216,8 +217,8 @@ export default function CounterPage() {
           } else {
             setError(`Photo upload failed (${last.status})`);
           }
-        } catch (e: any) {
-          setError(`Photo upload error: ${e.message}`);
+        } catch (e) {
+          setError(`Photo upload error: ${errorMessage(e)}`);
         }
       }
 
@@ -521,7 +522,6 @@ export default function CounterPage() {
     const serviceItems = prices.filter((p) => p.category === "SERVICE");
     const allPartsItems = prices.filter((p) => p.category === "PARTS");
     // Get unique wheel size categories for parts
-    const partsCats = Array.from(new Set(allPartsItems.map((p) => p.wheelSize || "Universal")));
     // Filter parts by selected category, then by search
     const catFiltered = (() => {
       if (!partsCategory || partsCategory === "ALL") return allPartsItems;

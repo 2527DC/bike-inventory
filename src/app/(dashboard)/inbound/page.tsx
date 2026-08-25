@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { Search, Truck, Loader2, Calendar, Cloud, Download } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -96,8 +95,6 @@ const STATUS_OPTIONS: { key: StatusFilter; label: string }[] = [
 
 
 export default function InboundPage() {
-  const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
   const { canFetch } = usePermissions();
   const canFetchBills = canFetch("inbound");
 

@@ -12,6 +12,9 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { dashboard, resolveDefaultStore } from "@/lib/analytics/store";
 import { businessDate, isBusinessDate } from "@/lib/analytics/time";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("analytics:dashboard");
 
 const STORE_VALUES = Object.values(StockLocation);
 
@@ -53,7 +56,9 @@ export async function GET(req: NextRequest) {
     return successResponse(await dashboard({ storeId, date: dateParam }));
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    console.error("analytics dashboard query failed", error);
+    log.error("dashboard query failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse(
       error instanceof Error ? error.message : "dashboard unavailable",
       500

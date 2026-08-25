@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { JOB_TYPE } from "@/lib/services/constants";
+import { errorMessage } from "@/lib/utils";
 
 type Job = {
   id: string;
@@ -39,8 +40,8 @@ export default function BillingPage() {
         const err = await res.json().catch(() => ({ error: "Failed to load jobs" }));
         setError(err.error || `Failed to load jobs (${res.status})`);
       }
-    } catch (e: any) {
-      setError(`Network error: ${e.message}`);
+    } catch (e) {
+      setError(`Network error: ${errorMessage(e)}`);
     }
     setLoading(false);
   }, []);
@@ -64,8 +65,8 @@ export default function BillingPage() {
         const err = await res.json().catch(() => ({ error: "Billing failed" }));
         setError(err.error || `Billing failed (${res.status})`);
       }
-    } catch (e: any) {
-      setError(`Network error: ${e.message}`);
+    } catch (e) {
+      setError(`Network error: ${errorMessage(e)}`);
     }
     setSaving(false);
     setBillingJobId(null);

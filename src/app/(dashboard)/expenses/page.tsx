@@ -9,7 +9,6 @@ import { FilterSheet } from "@/components/filter-sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { DesktopTable } from "@/components/desktop-table";
 import { usePermissions } from "@/lib/use-permissions";
 import { SkeletonList } from "@/components/ui/skeleton";
@@ -43,8 +42,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 export default function ExpensesPage() {
-  const { data: session, status: sessionStatus } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
+  const { status: sessionStatus } = useSession();
   const { canView } = usePermissions();
   const canAccess = canView("expenses");
 

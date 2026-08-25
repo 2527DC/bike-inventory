@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { BIKE_CATEGORIES, getBikeCategory } from "@/lib/services/constants";
+import { BIKE_CATEGORIES } from "@/lib/services/constants";
 
 type PriceItem = {
   id: string;

@@ -7,7 +7,7 @@ import {
 import { DataTable, type Column } from "@/components/desktop/data-table";
 import { Badge } from "@/components/ui/badge";
 import {
-  type LabelTemplate, loadTemplate, formatFieldValue,
+  type LabelTemplate, loadTemplate,
 } from "@/lib/label-template";
 
 interface Product {
@@ -142,7 +142,6 @@ export default function DesktopBarcodePage() {
 
     const w = template.width;
     const h = template.height;
-    const pad = template.padding;
 
     doc.open();
     doc.write(`<!DOCTYPE html><html><head><title>Print Labels</title>

@@ -1,9 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { FileText, AlertTriangle, Search, Plus, IndianRupee, Cloud, Loader2, Download, Clock } from "lucide-react";
+import { FileText, AlertTriangle, Search, Plus, Cloud, Loader2, Download, Clock } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -46,8 +45,6 @@ function formatCurrency(amount: number) {
 }
 
 export default function ReceivablesPage() {
-  const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
   const { canFetch: canFetchCheck } = usePermissions();
   const canFetch = canFetchCheck("customers");
 
@@ -84,9 +81,6 @@ export default function ReceivablesPage() {
 
   // Summary stats
   const totalOutstanding = aging?.totalOutstanding ?? invoices.reduce((sum, inv) => sum + Math.max(0, inv.amount - inv.paidAmount), 0);
-  const overdueCount = invoices.filter(
-    (inv) => new Date(inv.dueDate) < new Date() && inv.amount - inv.paidAmount > 0
-  ).length;
 
   const fetchData = useCallback(() => {
     setLoading(true);

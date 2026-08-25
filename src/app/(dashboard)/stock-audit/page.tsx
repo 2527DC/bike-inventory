@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { Plus, ClipboardCheck, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -33,8 +32,6 @@ const STATUS_STYLE: Record<string, string> = {
 };
 
 export default function StockAuditPage() {
-  const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
   const { canCreate: canCreateCheck } = usePermissions();
   const canCreate = canCreateCheck("stock_audit");
   const [counts, setCounts] = useState<StockCountItem[]>([]);

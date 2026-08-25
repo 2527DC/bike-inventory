@@ -58,8 +58,7 @@ function formatCurrency(amount: number) {
 }
 
 export default function AccountsPage() {
-  const { data: session, status: sessionStatus } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
+  const { status: sessionStatus } = useSession();
   const { canView } = usePermissions();
   const canAccess = canView("bills");
 

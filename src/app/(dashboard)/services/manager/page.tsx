@@ -182,7 +182,7 @@ export default function ManagerPage() {
     );
   }
 
-  let filteredJobs = search.trim().length >= 2 && searchResults ? searchResults : jobs;
+  const filteredJobs = search.trim().length >= 2 && searchResults ? searchResults : jobs;
 
   // Mechanic productivity for the SELECTED period (driven by the date / month filter).
   const mechStats: Record<string, { name: string; emoji: string; total: number; delivered: number }> = {};

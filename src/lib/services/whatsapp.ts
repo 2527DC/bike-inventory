@@ -11,7 +11,7 @@ const TEMPLATES: Record<string, (name: string, token: string, extra?: { amount?:
     msg += `\n\nWe'll update you once parts are ready. — Bharath Cycle Hub`;
     return msg;
   },
-  READY: (name, token, extra) =>
+  READY: (name, token) =>
     `Hi ${name}! ✅ Your bike (${token}) is ready for pickup!\n\nPlease collect it within *3 working days*.\n\n⚠️ _After 3 days, your bike will be moved to our warehouse for space management. Retrieval from warehouse will incur additional charges._\n\n— Bharath Cycle Hub`,
   DELIVERED: (name, token) =>
     `Hi ${name}! 🏁 Thank you for choosing Bharath Cycle Hub! Your bike (${token}) has been delivered. Ride safe! 🚲`,

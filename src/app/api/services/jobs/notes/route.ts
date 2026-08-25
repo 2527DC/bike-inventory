@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { serviceGuard } from "@/lib/services/guard";
 
 export async function POST(req: NextRequest) {
-  const { user: user, error: authError } = await serviceGuard("service_jobs", "edit");
+  const { error: authError } = await serviceGuard("service_jobs", "edit");
   if (authError) return authError;
 
   const { jobId, notes } = await req.json();

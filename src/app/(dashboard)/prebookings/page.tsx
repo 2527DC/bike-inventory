@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { Loader2, UserCheck, Phone, Plus, Search, Zap, Link2, X, Truck, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -66,8 +65,6 @@ function agingColor(dateStr: string) {
 }
 
 export default function PreBookingsPage() {
-  const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
   const { canCreate: canCreateCheck, canApprove: canApproveCheck } = usePermissions();
   const canCreate = canCreateCheck("deliveries");
   const canMatch = canApproveCheck("deliveries");

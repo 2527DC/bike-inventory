@@ -18,6 +18,9 @@ import { errorResponse, successResponse } from "@/lib/api-utils";
 import { countEventBatchSchema, heartbeatSchema } from "@/lib/validations";
 import { authDevice } from "./device-auth";
 import { addCounts, beat, type RawCountEvent } from "./store";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("analytics:ingest");
 
 /**
  * POST — a batch of counted line crossings.
@@ -60,7 +63,9 @@ export async function handleCounts(req: Request) {
       rejected_reasons: result.rejected.slice(0, 20).map((r) => r.why),
     });
   } catch (err) {
-    console.error("analytics counts ingest failed", err);
+    log.error("counts ingest failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     // 503, deliberately: the agent treats a non-2xx as retryable and keeps the batch in its
     // local SQLite queue (CAM-007). Returning 200 here would make it delete unsaved events.
     return errorResponse("ingest failed", 503);
@@ -97,7 +102,9 @@ export async function handleHeartbeat(req: Request) {
 
     return successResponse({ store_id: auth.storeId });
   } catch (err) {
-    console.error("analytics heartbeat failed", err);
+    log.error("heartbeat failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return errorResponse("heartbeat failed", 503);
   }
 }

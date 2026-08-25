@@ -4,7 +4,7 @@ import { use, useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
 import Link from "next/link";
-import { ArrowLeft, QrCode, MapPin, Tag, Package, IndianRupee, Pencil, Save, X, Power } from "lucide-react";
+import { ArrowLeft, QrCode, MapPin, Tag, IndianRupee, Pencil, Save, X, Power } from "lucide-react";
 import { LabelPrintButton } from "@/components/label-print";
 import { Badge } from "@/components/ui/badge";
 import { SkeletonList } from "@/components/ui/skeleton";

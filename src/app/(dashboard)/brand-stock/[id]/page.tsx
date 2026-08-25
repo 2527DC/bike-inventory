@@ -2,7 +2,7 @@
 
 import { useState, useEffect, use } from "react";
 import Link from "next/link";
-import { ArrowLeft, CheckCircle2, AlertTriangle, Search, Package, ShoppingCart, Loader2, Share2 } from "lucide-react";
+import { ArrowLeft, AlertTriangle, Search, Package, ShoppingCart, Loader2, Share2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -61,7 +61,7 @@ export default function BrandStockReviewPage({ params }: { params: Promise<{ id:
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"ALL" | "MATCHED" | "UNMATCHED" | "SELECTED">("ALL");
-  const [saving, setSaving] = useState(false);
+  const [, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [actionError, setActionError] = useState("");
 
