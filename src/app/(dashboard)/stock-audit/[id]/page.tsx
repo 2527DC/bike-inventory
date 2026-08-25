@@ -127,7 +127,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
       .then((r) => r.json())
       .then((res) => {
         if (res.success) {
-          let fetchedItems: StockCountItemData[] = res.data.items || res.data;
+          const fetchedItems: StockCountItemData[] = res.data.items || res.data;
           // Client-side fuzzy fallback if API returns 0 results and we have a search term
           if (debouncedSearch && fetchedItems.length === 0) {
             // Re-fetch all items and filter client-side

@@ -68,7 +68,6 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
   const router = useRouter();
   const { data: session } = useSession();
   const userRole = (session?.user as { role?: string } | undefined)?.role;
-  const userId = (session?.user as { userId?: string })?.userId;
   const canApprove = userRole === "ADMIN" || userRole === "CEO" || userRole === "SUPERVISOR" || userRole === "ACCOUNTS_MANAGER";
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState("");

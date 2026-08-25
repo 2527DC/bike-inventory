@@ -354,7 +354,6 @@ export async function POST(req: NextRequest) {
     if (step === "invoices") {
       let invoicesNew = 0;
       let apiCalls = 0;
-      let detailCalls = 0;
       const errors: string[] = [];
       let source = "none";
 

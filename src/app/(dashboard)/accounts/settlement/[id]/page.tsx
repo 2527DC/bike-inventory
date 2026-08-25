@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, use } from "react";
-import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { ArrowLeft, CheckCircle, Banknote, CreditCard, Smartphone, Building2, Search, X, FileText, ArrowDownLeft, ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -113,8 +112,6 @@ const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }>
 
 export default function SettlementDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
   const { canView } = usePermissions();
   const canAccess = canView("bills");
 

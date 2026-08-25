@@ -66,7 +66,7 @@ export async function GET(req: NextRequest) {
     ]);
 
     // Hide cost/price from non-admin
-    const data = isAdmin ? cycles : cycles.map(({ costPrice, sellingPrice, ...rest }) => rest);
+    const data = isAdmin ? cycles : cycles.map(({ costPrice: _costPrice, sellingPrice: _sellingPrice, ...rest }) => rest);
 
     return paginatedResponse(data, total, page, limit);
   } catch (error) {

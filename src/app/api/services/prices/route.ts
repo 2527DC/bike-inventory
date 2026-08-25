@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
 
 // DELETE — soft-delete a price item (MANAGER only)
 export async function DELETE(req: NextRequest) {
-  const { user: user, error: authError } = await serviceGuard("service_prices", "delete");
+  const { error: authError } = await serviceGuard("service_prices", "delete");
   if (authError) return authError;
 
   const { id } = await req.json();

@@ -7,7 +7,7 @@ import {
 
 // GET — search Zoho invoices by phone or invoice number
 export async function GET(req: NextRequest) {
-  const { user: user, error: authError } = await serviceGuard("zoho", "fetch");
+  const { error: authError } = await serviceGuard("zoho", "fetch");
   if (authError) return authError;
 
   const phone = req.nextUrl.searchParams.get("phone");

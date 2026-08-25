@@ -134,8 +134,6 @@ export default function JobCard({
 
         // READY + overdue = client hasn't picked up
         if (job.status === "READY" && isOverdue) {
-          const readyDate = job.receivedAt; // use readyAt if available
-          const daysSinceReady = job.promisedAt ? absDays : 0;
           return (
             <div className="bg-purple-600 text-white rounded-xl px-3 py-2 mb-2">
               <div className="flex items-center justify-between">

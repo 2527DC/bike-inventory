@@ -3,7 +3,7 @@
 import { useState, useEffect, use, useCallback, useMemo } from "react";
 import Link from "next/link";
 import {
-  ArrowLeft, CheckCircle2, AlertTriangle, XCircle, Building2,
+  ArrowLeft, CheckCircle2, XCircle, Building2,
   Loader2, CreditCard, Receipt, ChevronDown, ChevronUp, CheckSquare, Square, Layers,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";

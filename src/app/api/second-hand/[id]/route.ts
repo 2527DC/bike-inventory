@@ -38,7 +38,7 @@ export async function GET(
 
     // Hide cost/price from non-admin
     if (!(await userCan(user.id, "second_hand", "approve"))) {
-      const { costPrice, sellingPrice, ...rest } = cycle;
+      const { costPrice: _costPrice, sellingPrice: _sellingPrice, ...rest } = cycle;
       return successResponse(rest);
     }
     return successResponse(cycle);

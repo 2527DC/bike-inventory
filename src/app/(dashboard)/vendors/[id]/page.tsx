@@ -1,9 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, use } from "react";
-import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { ArrowLeft, Phone, MessageSquare, FileText, CreditCard, Building2, AlertCircle, Check, Loader2, Power, Trash2 } from "lucide-react";
+import { ArrowLeft, Phone, MessageSquare, AlertCircle, Check, Loader2, Power, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,8 +23,6 @@ type VendorDetail = Vendor & {
 
 export default function VendorDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
   const { canEdit: canEditCheck } = usePermissions();
   const canEditBalance = canEditCheck("vendors");
   const [vendor, setVendor] = useState<VendorDetail | null>(null);

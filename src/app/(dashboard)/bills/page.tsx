@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { FileText, AlertTriangle, Search, Cloud, Loader2, Download, Clock, Zap } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -64,8 +63,6 @@ function formatCurrency(amount: number) {
 }
 
 export default function BillsPage() {
-  const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
   const { canFetch: canFetchCheck } = usePermissions();
   const canFetchBills = canFetchCheck("bills");
 

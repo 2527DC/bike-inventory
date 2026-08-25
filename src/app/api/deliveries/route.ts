@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
 
     const dateRange = searchParams.get("dateRange") || undefined;
     const includeService = searchParams.get("includeService") === "true";
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     const where: Record<string, unknown> = {};
     // By default, exclude service invoices from delivery pages
     // NOTE: Must use OR with null check — Prisma's NOT filter excludes NULL rows in PostgreSQL

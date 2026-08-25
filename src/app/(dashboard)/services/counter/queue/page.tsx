@@ -216,7 +216,7 @@ export default function QueuePage() {
   );
 
   // When searching, use server-side results (includes delivered)
-  let filtered = search.trim().length >= 2 && searchResults
+  const filtered = search.trim().length >= 2 && searchResults
     ? searchResults
     : filter === "OVERDUE" ? overdueJobs
     : filter === "WA_PENDING" ? pendingWA

@@ -120,7 +120,7 @@ export default function CounterPage() {
   const [mechanicId, setMechanicId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [jobId, setJobId] = useState("");
-  const [photos, setPhotos] = useState<string[]>([]);
+  const [, setPhotos] = useState<string[]>([]);
   const [localFiles, setLocalFiles] = useState<File[]>([]);
   const [localPreviews, setLocalPreviews] = useState<string[]>([]);
   const [isReturning, setIsReturning] = useState(false);
@@ -522,7 +522,6 @@ export default function CounterPage() {
     const serviceItems = prices.filter((p) => p.category === "SERVICE");
     const allPartsItems = prices.filter((p) => p.category === "PARTS");
     // Get unique wheel size categories for parts
-    const partsCats = Array.from(new Set(allPartsItems.map((p) => p.wheelSize || "Universal")));
     // Filter parts by selected category, then by search
     const catFiltered = (() => {
       if (!partsCategory || partsCategory === "ALL") return allPartsItems;

@@ -266,7 +266,7 @@ export default function SupervisorPage() {
   counts["OVERDUE"] = overdueJobs.length;
 
   // When searching, use server-side results (includes delivered)
-  let filtered = search.trim().length >= 2 && searchResults
+  const filtered = search.trim().length >= 2 && searchResults
     ? searchResults
     : filter === "OVERDUE" ? overdueJobs
     : filter ? jobs.filter((j) => j.status === filter) : jobs;

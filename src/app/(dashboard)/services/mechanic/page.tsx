@@ -141,7 +141,7 @@ export default function MechanicPage() {
   });
 
   // When searching, use server-side results (includes delivered)
-  let filtered = search.trim().length >= 2 && searchResults
+  const filtered = search.trim().length >= 2 && searchResults
     ? searchResults
     : filter ? jobs.filter((j) => j.status === filter) : jobs;
 

@@ -6,7 +6,7 @@ import Link from "next/link";
 import {
   Package, ArrowDownCircle, ArrowUpCircle, AlertTriangle,
   IndianRupee, Brain, Truck, Clock, CheckCircle2, Flag,
-  Users, ShieldAlert, ChevronRight, Circle, Share2, Loader2,
+  Users, ShieldAlert, ChevronRight, Share2, Loader2,
 } from "lucide-react";
 import { DashboardCard } from "@/components/dashboard-card";
 import { TransactionItem } from "@/components/transaction-item";

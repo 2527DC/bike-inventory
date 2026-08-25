@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { serviceGuard } from "@/lib/services/guard";
 
 export async function POST(req: NextRequest) {
-  const { user: user, error: authError } = await serviceGuard("service_jobs", "approve");
+  const { error: authError } = await serviceGuard("service_jobs", "approve");
   if (authError) return authError;
 
   const { jobId, zohoInvoiceId } = await req.json();

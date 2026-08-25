@@ -195,7 +195,7 @@ export async function POST(req: NextRequest) {
           }
 
           // Reuse existing VendorBill if it exists (e.g. from accounting import), or create new
-          let existingVB = await prisma.vendorBill.findFirst({ where: { billNo: String(d.billNumber) } });
+          const existingVB = await prisma.vendorBill.findFirst({ where: { billNo: String(d.billNumber) } });
 
           const total = Number(d.total || 0);
           const balance = Number(d.balance || 0);
