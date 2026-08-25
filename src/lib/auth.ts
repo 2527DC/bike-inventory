@@ -19,9 +19,14 @@ type AppToken = {
 
 type AppAuthUser = { id: string; roleKey?: string; roleName?: string };
 
+// Mirrors next-auth's DefaultSession field-for-field. It must be compatible in BOTH
+// directions: next-auth passes its `Session` *in* (so this may not demand anything Session
+// lacks -- an index signature here failed the build, because `Session` is an interface and
+// interfaces never get an implicit one), and we hand the object *back* (so it may not drop
+// the required `expires` or widen `user` to null).
 type AppSession = {
-  user?: { name?: string | null; email?: string | null; [k: string]: unknown } | null;
-  [k: string]: unknown;
+  user?: { name?: string | null; email?: string | null; image?: string | null; [k: string]: unknown };
+  expires: string;
 };
 
 export const authOptions: NextAuthOptions = {
