@@ -1,0 +1,497 @@
+{
+  "info": {
+    "_postman_id": "bch-ops-service-module",
+    "name": "BCH OPS — Service / Workshop module",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Every endpoint under `/api/services/*`, generated from the route handlers in `src/app/api/services/`.\n\n## Authentication\n\nAuth is **NextAuth with a CredentialsProvider taking a single `accessCode`**, JWT session strategy. There is no bearer token — the session lives in a cookie, so:\n\n1. Enable Postman's cookie jar for your host (on by default).\n2. Set the `accessCode` collection variable to a real user's code.\n3. Run **00 Auth → 1. Get CSRF token** (its test script stores `csrfToken`).\n4. Run **00 Auth → 2. Sign in**. The response sets `next-auth.session-token`.\n5. Every other request now works; Postman attaches the cookie automatically.\n\nVerify with **3. Session** and **4. My permissions** before debugging anything else. A 401 means the cookie was not stored; a 403 means the role lacks the grant.\n\n## Permissions\n\nAccess control is data, not code — grants live in the `roles`/`permissions` tables and change at runtime with no redeploy. Each request documents the exact permission its handler demands. A 403 is not a bug; it means the signed-in user's role lacks that grant.\n\n## Public endpoints\n\nThe requests in **06 Public** deliberately take no session. Reviews back the customer WhatsApp link, `earn-sync` is shared-key guarded, and the cron route is scheduler-invoked. Do not add auth to these."
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000", "type": "string" },
+    { "key": "accessCode", "value": "", "type": "string" },
+    { "key": "csrfToken", "value": "", "type": "string" },
+    { "key": "jobId", "value": "", "type": "string" },
+    { "key": "tokenNumber", "value": "BCH-0001", "type": "string" },
+    { "key": "mechanicId", "value": "", "type": "string" },
+    { "key": "logId", "value": "", "type": "string" },
+    { "key": "priceItemId", "value": "", "type": "string" },
+    { "key": "reviewToken", "value": "", "type": "string" },
+    { "key": "earnSyncKey", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "00 Auth",
+      "description": "Run 1 then 2 before anything else in this collection.",
+      "item": [
+        {
+          "name": "1. Get CSRF token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "pm.collectionVariables.set(\"csrfToken\", j.csrfToken);",
+                  "pm.test(\"csrfToken captured\", () => pm.expect(j.csrfToken).to.be.a(\"string\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "NextAuth requires a CSRF token on the credentials callback. The test script stores it in the `csrfToken` collection variable."
+          }
+        },
+        {
+          "name": "2. Sign in (accessCode)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "csrfToken", "value": "{{csrfToken}}", "type": "text" },
+                { "key": "accessCode", "value": "{{accessCode}}", "type": "text" },
+                { "key": "json", "value": "true", "type": "text" }
+              ]
+            },
+            "url": "{{baseUrl}}/api/auth/callback/credentials",
+            "description": "Sets the `next-auth.session-token` cookie. Set the `accessCode` variable first. A 401 means the code matched no user."
+          }
+        },
+        {
+          "name": "3. Session",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/auth/session",
+            "description": "Confirms the cookie was stored. An empty `{}` means you are not signed in."
+          }
+        },
+        {
+          "name": "4. My permissions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/my-permissions",
+            "description": "Authentication only, never permission-gated — gating it would deadlock the permission bootstrap. Shows exactly which grants this role holds, so you can predict which requests below will 403."
+          }
+        }
+      ]
+    },
+    {
+      "name": "01 Jobs",
+      "item": [
+        {
+          "name": "List jobs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/jobs?status=&mechanicId=&search=&from=&to=&includeDelivered=false",
+            "description": "Requires **service_jobs.view**, checked by `serviceGuard(\"service_jobs\", \"view\")`.\n\nAll query params are optional — clear the ones you do not need in the Params tab."
+          }
+        },
+        {
+          "name": "Create job",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"customerName\": \"Test Customer\",\n  \"customerPhone\": \"9000000001\",\n  \"bikeType\": \"Hercules Roadeo\",\n  \"bikeColor\": \"Black\",\n  \"complaint\": \"Brakes squeaking\",\n  \"jobType\": \"GENERAL_SERVICE\",\n  \"mechanicId\": \"{{mechanicId}}\",\n  \"priority\": \"NORMAL\",\n  \"isEcycle\": false,\n  \"amount\": 450,\n  \"partsNeeded\": null,\n  \"promisedDate\": null\n}"
+            },
+            "url": "{{baseUrl}}/api/services/jobs/create",
+            "description": "Requires **service_jobs.create**.\n\nMints a `BCH-0001` style token from `TokenCounter` inside a transaction — `tokenNumber` is unique, so a read-then-write would hand two jobs the same token.\n\n`customerPhone` is the customer identity: required and unique, resolving to the same `Customer` row the inventory side uses."
+          }
+        },
+        {
+          "name": "Assign mechanic",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"jobId\": \"{{jobId}}\",\n  \"mechanicId\": \"{{mechanicId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/services/jobs/assign",
+            "description": "Requires **service_jobs.edit**."
+          }
+        },
+        {
+          "name": "Update status",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"jobId\": \"{{jobId}}\",\n  \"newStatus\": \"IN_PROGRESS\",\n  \"partsNeeded\": null,\n  \"workDone\": null,\n  \"zohoInvoiceId\": null,\n  \"amount\": null,\n  \"holdReason\": null,\n  \"billUpdateOnly\": false\n}"
+            },
+            "url": "{{baseUrl}}/api/services/jobs/update-status",
+            "description": "Requires **service_jobs.edit**.\n\nDrives the WhatsApp templates — `PARTS_NEEDED`, `READY` and `DELIVERED` each send a different customer message."
+          }
+        },
+        {
+          "name": "Bulk status",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"jobIds\": [\"{{jobId}}\"],\n  \"newStatus\": \"READY\"\n}"
+            },
+            "url": "{{baseUrl}}/api/services/jobs/bulk-status",
+            "description": "Requires **service_jobs.edit**."
+          }
+        },
+        {
+          "name": "Add notes",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"jobId\": \"{{jobId}}\",\n  \"notes\": \"Replaced brake pads.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/services/jobs/notes",
+            "description": "Requires **service_jobs.edit**."
+          }
+        },
+        {
+          "name": "Attach Zoho bill",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"jobId\": \"{{jobId}}\",\n  \"zohoInvoiceId\": \"\"\n}"
+            },
+            "url": "{{baseUrl}}/api/services/jobs/bill",
+            "description": "Requires **service_jobs.approve** — note this is `approve`, not `edit`. Billing is the supervisor-level grant."
+          }
+        },
+        {
+          "name": "Delete job",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"jobId\": \"{{jobId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/services/jobs/delete",
+            "description": "Requires **service_jobs.delete**."
+          }
+        },
+        {
+          "name": "Audit trail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/audit?jobId={{jobId}}&limit=50",
+            "description": "Requires **service_jobs.view**."
+          }
+        },
+        {
+          "name": "Checkoff (list)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/checkoff",
+            "description": "Requires **service_jobs.edit**."
+          }
+        },
+        {
+          "name": "Checkoff (submit)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"jobId\": \"{{jobId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/services/checkoff",
+            "description": "Requires **service_jobs.edit**.\n\nThe handler parses the body with `.catch(() => ({}))`, so a malformed body is treated as empty rather than throwing."
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 Assembly",
+      "item": [
+        {
+          "name": "List assembly logs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/assembly?date=&mechanicId=",
+            "description": "Requires **service_assembly.view**."
+          }
+        },
+        {
+          "name": "Create assembly log",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "assemblyType", "value": "NEW_BIKE", "type": "text" },
+                { "key": "file", "type": "file", "src": [] }
+              ]
+            },
+            "url": "{{baseUrl}}/api/services/assembly",
+            "description": "Requires **service_assembly.create**.\n\n**multipart/form-data**, not JSON — the handler reads `req.formData()`. Pick a file in the Body tab before sending."
+          }
+        },
+        {
+          "name": "Upload assembly photo",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [{ "key": "file", "type": "file", "src": [] }]
+            },
+            "url": "{{baseUrl}}/api/services/assembly/upload",
+            "description": "Requires **service_assembly.edit**. multipart/form-data."
+          }
+        },
+        {
+          "name": "Get assembly photo",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/assembly/photo?logId={{logId}}&index=0",
+            "description": "Requires **service_assembly.view**."
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Prices",
+      "item": [
+        {
+          "name": "List price items",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/prices",
+            "description": "Reads the workshop price list."
+          }
+        },
+        {
+          "name": "Create / update price item",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"id\": null,\n  \"name\": \"Brake pad replacement\",\n  \"category\": \"BRAKES\",\n  \"price\": 250,\n  \"wheelSize\": null\n}"
+            },
+            "url": "{{baseUrl}}/api/services/prices",
+            "description": "Requires **service_prices.create**.\n\nPass `id: null` to create, or an existing id to update."
+          }
+        },
+        {
+          "name": "Delete price item",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"id\": \"{{priceItemId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/services/prices",
+            "description": "Requires **service_prices.delete**.\n\nNote the id travels in the JSON body, not the URL."
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 Uploads",
+      "item": [
+        {
+          "name": "Upload job photo",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": [] },
+                { "key": "jobId", "value": "{{jobId}}", "type": "text" },
+                { "key": "type", "value": "inward", "type": "text" }
+              ]
+            },
+            "url": "{{baseUrl}}/api/services/upload",
+            "description": "Requires **service_jobs.edit**.\n\n**multipart/form-data**. `type` is `inward` or `after`; it defaults to `inward` when omitted."
+          }
+        },
+        {
+          "name": "List job photos",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/upload?jobId={{jobId}}&type=inward",
+            "description": "Requires **service_jobs.edit**."
+          }
+        },
+        {
+          "name": "Get one photo",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/upload/photo?jobId={{jobId}}&type=inward&index=0",
+            "description": "Requires **service_jobs.view**."
+          }
+        },
+        {
+          "name": "Delete photo",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"jobId\": \"{{jobId}}\",\n  \"index\": 0,\n  \"type\": \"inward\"\n}"
+            },
+            "url": "{{baseUrl}}/api/services/upload/delete",
+            "description": "Requires **service_jobs.edit**."
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 Reference & reports",
+      "item": [
+        {
+          "name": "Mechanics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/mechanics",
+            "description": "Requires **service_jobs.view**.\n\nLists users holding the `SERVICE_MECHANIC` role key. Workshop staff are ordinary users in the shared `User` table — manage them at `/team`, not in the workshop screens."
+          }
+        },
+        {
+          "name": "Customer lookup",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/customers?phone=9000000001",
+            "description": "Requires **customers.view**.\n\nOne shared `Customer` table with inventory; `phone` is the identity and is unique."
+          }
+        },
+        {
+          "name": "Incentives",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/incentives",
+            "description": "Requires **service_incentives.view**."
+          }
+        },
+        {
+          "name": "Export",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/export?from=&to=&status=",
+            "description": "Requires **service_reports.view**."
+          }
+        },
+        {
+          "name": "Notifications (log)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/notifications?jobId={{jobId}}&limit=50",
+            "description": "Requires **service_jobs.view**."
+          }
+        },
+        {
+          "name": "Send notification",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"jobId\": \"{{jobId}}\",\n  \"tokenNumber\": \"{{tokenNumber}}\",\n  \"customerPhone\": \"9000000001\",\n  \"customerName\": \"Test Customer\",\n  \"messageType\": \"READY\"\n}"
+            },
+            "url": "{{baseUrl}}/api/services/notifications",
+            "description": "Requires **service_jobs.create**.\n\n`messageType` is one of `PARTS_NEEDED`, `READY`, `DELIVERED`. Sends a real WhatsApp message when the token is configured — use a phone you control."
+          }
+        },
+        {
+          "name": "Zoho lookup",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/zoho?invoiceNumber=&phone=",
+            "description": "Requires **zoho.fetch**."
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 Public / unauthenticated",
+      "description": "No session. Adding auth here is wrong — these serve people with no account.",
+      "item": [
+        {
+          "name": "Get review by token",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/reviews?token={{reviewToken}}",
+            "description": "**Public — must stay public.** Backs `/review/[token]`, reached from a customer WhatsApp link. CLAUDE.md records that adding a permission check here broke the customer flow once already."
+          }
+        },
+        {
+          "name": "Submit review",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"tokenNumber\": \"{{tokenNumber}}\",\n  \"rating\": 5,\n  \"comment\": \"Great service\",\n  \"googleReview\": false\n}"
+            },
+            "url": "{{baseUrl}}/api/services/reviews",
+            "description": "**Public — must stay public.** The customer has no account."
+          }
+        },
+        {
+          "name": "Earn sync",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/earn-sync?date=&key={{earnSyncKey}}",
+            "description": "Shared-key guarded, for external pollers. No user session exists; the `key` query param is the credential."
+          }
+        },
+        {
+          "name": "Cron — Zoho deliver",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/services/cron/zoho-deliver",
+            "description": "Invoked by a scheduler. No user exists, so it is intentionally not permission-gated."
+          }
+        }
+      ]
+    }
+  ]
+}
