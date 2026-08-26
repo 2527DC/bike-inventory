@@ -6,7 +6,7 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function POST() {
   try {
-    await requireFeature("zoho", "create");
+    await requireFeature("zoho", "edit");
 
     // Revoke token on Zoho's side before clearing locally
     const config = await prisma.zohoConfig.findUnique({ where: { id: "singleton" } });
