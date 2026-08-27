@@ -16,6 +16,16 @@ import { create } from "zustand";
 
 export type PermAction = "view" | "create" | "edit" | "delete" | "approve" | "fetch";
 
+/** A sub-module's parent, for rendering the collapsible sidebar section heading. */
+export interface ModuleParent {
+  key: string;
+  label: string;
+  icon: string | null;
+  route: string | null;
+  group: string | null;
+  sortOrder: number;
+}
+
 export interface GrantedModule {
   key: string;
   label: string;
@@ -24,6 +34,14 @@ export interface GrantedModule {
   group: string | null;
   sortOrder: number;
   actions: PermAction[];
+  /**
+   * `null` means this is a root module — every module outside Staff LMS.
+   *
+   * Populated even when the parent itself is NOT granted: /api/my-permissions returns only
+   * modules the user holds, so a user with `staff_lms_learning.view` and no `staff_lms.view`
+   * would otherwise leave the sidebar with no heading to render above the child.
+   */
+  parent: ModuleParent | null;
 }
 
 type PermissionMap = Record<string, Partial<Record<PermAction, boolean>>>;

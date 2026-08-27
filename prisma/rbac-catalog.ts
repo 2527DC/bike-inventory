@@ -31,6 +31,19 @@ export interface ModuleSeed {
   group: string; // sidebar section
   sortOrder: number;
   actions: ActionKey[];
+  /**
+   * Key of the parent module, for sub-modules rendered inside a collapsible sidebar
+   * parent. Omit for a root module — which is every module except the Staff LMS children.
+   *
+   * The seeder resolves this to `Module.parentId` in a second pass, after every root
+   * exists, and asserts four things the foreign key cannot express:
+   *   1. the named parent exists and is itself a root (depth is exactly two)
+   *   2. no cycles
+   *   3. a child does not declare its own `group` different from its parent's
+   *   4. children sort within their parent
+   * See prisma/schema.prisma -> model Module for why each one fails silently.
+   */
+  parentKey?: string;
 }
 
 // Sidebar group order is NOT declared anywhere — it falls out of `sortOrder` below.
@@ -447,6 +460,78 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     sortOrder: 550,
     actions: ["view", "create", "edit", "delete"],
   },
+
+  // ── Staff LMS ─────────────────────────────────────────────────────────────
+  // The first module tree in this catalog: one parent plus three children, rendered as a
+  // collapsible section in the sidebar. `parentKey` is what makes them children.
+  //
+  // sortOrder 700 opens a new band. Bands ARE the sidebar group order (see the note at the
+  // top of this file), so a new group needs its own band or it renders split. 700 is clear
+  // of Service (600s) and renumbers nothing. Children use 710/720/730 and sort inside the
+  // parent, not globally.
+  //
+  // ACTION SEMANTICS — these are NOT the usual CRUD-on-a-record reading, and every route
+  // guard in src/app/api/staff-lms depends on this exact meaning:
+  //   view    — read the material AND record your own progress. Finishing a lesson writes
+  //             to lms_lesson_progress; that is the learner's own row, gated on `view`,
+  //             with the userId taken from the session and never from the request body.
+  //   create  \
+  //   edit     } change what everyone learns from — courses, lessons, products, playbooks.
+  //   delete  /
+  //   approve — see OTHER people's progress: the team performance section on the Staff LMS
+  //             dashboard. This is how CLAUDE.md says to express "supervisors see all
+  //             records, juniors see only their own" without naming a role.
+  //
+  // There is no AI Customer / roleplay module. That feature is out of scope — no table,
+  // no route, no screen — so a permission for it would grant access to nothing.
+  //
+  // Content management (/staff-lms/manage/*) has no module of its own by design: it is
+  // gated by create/edit/delete on the module that owns the content and reached from a
+  // card on the dashboard. Same pattern as the analytics device-key screen — administration
+  // of a feature, not a feature.
+  {
+    key: "staff_lms",
+    label: "Staff LMS",
+    description: "Learning dashboard, streaks, achievements and team performance",
+    icon: "GraduationCap",
+    route: "/staff-lms",
+    group: "Staff LMS",
+    sortOrder: 700,
+    actions: ["view", "create", "edit", "delete", "approve"],
+  },
+  {
+    key: "staff_lms_learning",
+    label: "Learning",
+    description: "Courses, lessons, quizzes, weekly tests, videos and playbooks",
+    icon: "BookOpen",
+    route: "/staff-lms/learning",
+    group: "Staff LMS",
+    sortOrder: 710,
+    actions: ["view", "create", "edit", "delete", "approve"],
+    parentKey: "staff_lms",
+  },
+  {
+    key: "staff_lms_products",
+    label: "Product Learning",
+    description: "Product playbooks, specs, objections, comparisons and showroom mode",
+    icon: "Bike",
+    route: "/staff-lms/product-learning",
+    group: "Staff LMS",
+    sortOrder: 720,
+    actions: ["view", "create", "edit", "delete", "approve"],
+    parentKey: "staff_lms",
+  },
+  {
+    key: "staff_lms_rank",
+    label: "Rank",
+    description: "XP leaderboard across the team",
+    icon: "Trophy",
+    route: "/staff-lms/rank",
+    group: "Staff LMS",
+    sortOrder: 730,
+    actions: ["view", "create", "edit", "delete", "approve"],
+    parentKey: "staff_lms",
+  },
 ];
 
 // ─── Role catalog ────────────────────────────────────────────────────────────
@@ -473,6 +558,7 @@ export interface RoleSeed {
 }
 
 const ALL_JOB_ACTIONS: ActionKey[] = ["view", "create", "edit", "delete", "approve"];
+const ALL_LMS_ACTIONS: ActionKey[] = ["view", "create", "edit", "delete", "approve"];
 
 export const ROLE_CATALOG: RoleSeed[] = [
   {
@@ -539,6 +625,32 @@ export const ROLE_CATALOG: RoleSeed[] = [
     grants: {
       service_jobs: ["view"],
       service_reports: ["view"],
+    },
+  },
+
+  // ── Staff LMS ─────────────────────────────────────────────────────────────
+  // The ONLY role this merge seeds. Deliberate: modules and permissions are created by the
+  // seed, but who holds them is decided by hand at /team/permissions, with no redeploy.
+  // There is no seeded learner, editor or lead role and no backfill script — so right after
+  // `db:seed:rbac` an ordinary staff member gets no sidebar entry and 403 on every
+  // /api/staff-lms call. That is the module shipping UNASSIGNED, not broken.
+  //
+  // Everything inside Staff LMS, nothing outside it. A person holding this role authors
+  // content and reads the whole team's progress, but has no stock, purchase, accounts or
+  // service access at all — scoped the same way the SERVICE_* roles above are. It is a
+  // module owner, not a system administrator.
+  //
+  // Note the seeder is create-only for roles that already exist: this is created once with
+  // its 20 grants, and any later widening or narrowing you do in the UI survives re-seeding.
+  {
+    key: "STAFF_LMS_ADMIN",
+    name: "Staff LMS Admin",
+    description: "Full control of Staff LMS — content, learners and team progress.",
+    grants: {
+      staff_lms: ALL_LMS_ACTIONS,
+      staff_lms_learning: ALL_LMS_ACTIONS,
+      staff_lms_products: ALL_LMS_ACTIONS,
+      staff_lms_rank: ALL_LMS_ACTIONS,
     },
   },
 ];

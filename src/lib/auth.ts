@@ -116,3 +116,43 @@ export const authOptions: NextAuthOptions = {
   },
   secret: process.env.NEXTAUTH_SECRET,
 };
+
+import { getServerSession } from "next-auth/next";
+
+export type AuthUser = {
+  id: string;
+  userId?: string;
+  name?: string | null;
+  email?: string | null;
+  image?: string | null;
+  roleKey?: string;
+  roleName?: string;
+  role: string;
+};
+
+export async function getCurrentUser(): Promise<AuthUser | null> {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return null;
+  const u = session.user as {
+    userId?: string;
+    id?: string;
+    name?: string | null;
+    email?: string | null;
+    image?: string | null;
+    roleKey?: string;
+    roleName?: string;
+    role?: string;
+  };
+  const roleKey = u.roleKey || "";
+  const role = u.role || (roleKey === "ADMIN" || roleKey === "STAFF_LMS_ADMIN" ? "admin" : "staff");
+  return {
+    id: u.userId || u.id || "",
+    userId: u.userId || u.id || "",
+    name: u.name,
+    email: u.email,
+    image: u.image,
+    roleKey: u.roleKey,
+    roleName: u.roleName,
+    role,
+  };
+}
