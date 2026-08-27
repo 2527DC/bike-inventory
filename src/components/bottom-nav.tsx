@@ -16,8 +16,12 @@ export function BottomNav() {
   const pathname = usePathname();
   const { modules, loading } = usePermissions();
 
+  // Roots only. Sub-modules (Staff LMS > Learning, Product Learning, Rank) are reached
+  // through their parent — without this filter a learner's phone tabs become
+  // "Learning / Product Learning / Rank" with no Staff LMS entry at all: three siblings
+  // and no parent. The module's own in-page tab bar carries its sections on mobile.
   const middle = modules
-    .filter((m) => m.route && m.route !== "/")
+    .filter((m) => !m.parent && m.route && m.route !== "/")
     .slice(0, MAX_MIDDLE_TABS);
 
   const tabs = [

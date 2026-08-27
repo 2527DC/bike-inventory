@@ -23,6 +23,11 @@ export async function GET() {
         route: true,
         group: true,
         sortOrder: true,
+        // So the grant screen can indent sub-modules under their parent, matching the
+        // sidebar. Without it the editor renders four equal Staff LMS cards and gives no
+        // hint that ticking `staff_lms_learning.view` without `staff_lms.view` leaves the
+        // parent as a non-clickable heading.
+        parentId: true,
         permissions: {
           orderBy: { action: "asc" },
           select: { id: true, key: true, action: true, label: true },

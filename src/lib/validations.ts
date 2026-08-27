@@ -1,4 +1,23 @@
 import { z } from "zod";
+import {
+  lmsBuyerPsychologySchema,
+  lmsChecklistDoneSchema,
+  lmsChecklistItemSchema,
+  lmsCompetitorSchema,
+  lmsFaqSchema,
+  lmsObjectionSchema,
+  lmsOptionsSchema,
+  lmsReviewsSchema,
+  lmsSourceSchema,
+  lmsSpecsSchema,
+  lmsAnswersSchema,
+} from "@/lib/staff-lms/content-schemas";
+import {
+  LMS_ACHIEVEMENT_CRITERIA,
+  LMS_DIFFICULTIES,
+  LMS_QUIZ_TYPES,
+  LMS_SCENARIO_TYPES,
+} from "@/lib/staff-lms/constants";
 
 export const productSchema = z.object({
   sku: z.string().min(1, "SKU is required").max(50),
@@ -499,3 +518,250 @@ export const analyticsDeviceUpdateSchema = z
   .refine((v) => v.label !== undefined || v.isActive !== undefined, {
     message: "nothing to update",
   });
+
+// ─── Staff LMS ───────────────────────────────────────────────────────────────
+// Request-body schemas for /api/staff-lms/*. The SHAPES of the Json columns these write
+// into live in src/lib/staff-lms/content-schemas.ts and are imported rather than restated,
+// so a change to a playbook's shape cannot drift between the writer and the reader.
+//
+// Naming: every export is `lms*`. A bare `productSchema` already exists at the top of this
+// file and means an inventory SKU — a different table, a different concept, and one of the
+// collisions the `Lms` prefix exists to prevent.
+
+
+const cuid = z.string().min(1);
+
+// ── Content: products ───────────────────────────────────────────────────────
+
+export const lmsProductSchema = z.object({
+  name: z.string().min(1, "Name is required").max(200),
+  brand: z.string().min(1, "Brand is required").max(100),
+  // Free text, not an enum. LMS_RIDING_STYLES is what the dropdown OFFERS; constraining it
+  // here would mean a redeploy to add a category, which is the wrong cost for a label.
+  category: z.string().min(1, "Category is required").max(60),
+  price: z.number().nonnegative().nullable().optional(),
+  imageUrl: z.string().url().nullable().optional(),
+  usps: z.array(z.string()).default([]),
+  features: z.array(z.string()).default([]),
+  talkingPoints: z.array(z.string()).default([]),
+  targetCustomer: z.string().nullable().optional(),
+  commonObjections: z.array(lmsObjectionSchema).default([]),
+  buyerPsychology: lmsBuyerPsychologySchema.nullable().optional(),
+  uniqueFact: z.string().nullable().optional(),
+  specs: lmsSpecsSchema.default({}),
+  competitors: z.array(lmsCompetitorSchema).default([]),
+  reviews: lmsReviewsSchema.default({ best: [], worst: [] }),
+  sources: z.array(lmsSourceSchema).default([]),
+  faqs: z.array(lmsFaqSchema).default([]),
+  isActive: z.boolean().optional(),
+  /** Optional soft link to an inventory SKU. See LmsProduct.stockProductId. */
+  stockProductId: cuid.nullable().optional(),
+});
+
+export const lmsProductUpdateSchema = lmsProductSchema.partial();
+
+// ── Content: playbooks (scenarios) ──────────────────────────────────────────
+
+export const lmsScenarioSchema = z.object({
+  title: z.string().min(1).max(200),
+  type: z.enum(LMS_SCENARIO_TYPES),
+  description: z.string().nullable().optional(),
+  checklist: z.array(lmsChecklistItemSchema).default([]),
+  tips: z.array(z.string()).default([]),
+  difficulty: z.enum(LMS_DIFFICULTIES).default("beginner"),
+  sortOrder: z.number().int().min(0).default(0),
+  isActive: z.boolean().optional(),
+});
+
+export const lmsScenarioUpdateSchema = lmsScenarioSchema.partial();
+
+// ── Content: videos ─────────────────────────────────────────────────────────
+
+export const lmsVideoCategorySchema = z.object({
+  name: z.string().min(1).max(120),
+  description: z.string().nullable().optional(),
+  sortOrder: z.number().int().min(0).default(0),
+});
+
+export const lmsVideoSchema = z.object({
+  title: z.string().min(1).max(200),
+  description: z.string().nullable().optional(),
+  youtubeUrl: z.string().url("A valid YouTube URL is required"),
+  categoryId: cuid.nullable().optional(),
+  /** The LEARNING product this belongs to (lms_products), never a stock SKU. */
+  lmsProductId: cuid.nullable().optional(),
+  durationMinutes: z.number().int().positive().nullable().optional(),
+  sortOrder: z.number().int().min(0).default(0),
+  isActive: z.boolean().optional(),
+});
+
+export const lmsVideoUpdateSchema = lmsVideoSchema.partial();
+
+// ── Content: course tree ────────────────────────────────────────────────────
+
+export const lmsCourseSchema = z.object({
+  title: z.string().min(1).max(200),
+  description: z.string().nullable().optional(),
+  isActive: z.boolean().optional(),
+});
+
+export const lmsCourseLevelSchema = z.object({
+  courseId: cuid,
+  title: z.string().min(1).max(200),
+  description: z.string().nullable().optional(),
+  sortOrder: z.number().int().min(0).default(0),
+  weekNumber: z.number().int().positive().nullable().optional(),
+  brandFocus: z.string().nullable().optional(),
+});
+
+export const lmsLessonSchema = z.object({
+  levelId: cuid,
+  title: z.string().min(1).max(200),
+  description: z.string().nullable().optional(),
+  sortOrder: z.number().int().min(0).default(0),
+  youtubeUrl: z.string().url().nullable().optional(),
+  keyPointers: z.array(z.string()).default([]),
+  checklist: z.array(lmsChecklistItemSchema).default([]),
+  xpReward: z.number().int().min(0).default(30),
+  isActive: z.boolean().optional(),
+});
+
+export const lmsCourseUpdateSchema = lmsCourseSchema.partial();
+export const lmsCourseLevelUpdateSchema = lmsCourseLevelSchema.partial();
+export const lmsLessonUpdateSchema = lmsLessonSchema.partial();
+
+// ── Content: questions ──────────────────────────────────────────────────────
+
+/**
+ * Shared by lesson, quiz and weekly-test questions — the three tables have identical
+ * question shapes and differ only in their parent FK, which the ROUTE supplies from the
+ * URL rather than the body.
+ *
+ * `correctIndex` is validated against the option count with a refine, because an
+ * out-of-range key is a question nobody can ever answer correctly, and it would only
+ * surface as a learner complaint weeks later.
+ */
+export const lmsQuestionSchema = z
+  .object({
+    question: z.string().min(1).max(1000),
+    options: lmsOptionsSchema.min(2, "A question needs at least two options"),
+    correctIndex: z.number().int().min(0),
+    explanation: z.string().nullable().optional(),
+    sortOrder: z.number().int().min(0).default(0),
+  })
+  .refine((q) => q.correctIndex < q.options.length, {
+    message: "correctIndex points past the last option",
+    path: ["correctIndex"],
+  });
+
+// ── Content: quizzes and weekly tests ───────────────────────────────────────
+
+export const lmsQuizSchema = z.object({
+  title: z.string().min(1).max(200),
+  description: z.string().nullable().optional(),
+  type: z.enum(LMS_QUIZ_TYPES).default("general"),
+  difficulty: z.enum(LMS_DIFFICULTIES).default("beginner"),
+  passingScore: z.number().int().min(0).max(100).default(70),
+  xpReward: z.number().int().min(0).default(50),
+  isActive: z.boolean().optional(),
+});
+
+export const lmsWeeklyTestSchema = z.object({
+  title: z.string().min(1).max(200),
+  weekNumber: z.number().int().positive(),
+  description: z.string().nullable().optional(),
+  passingScore: z.number().int().min(0).max(100).default(70),
+  xpReward: z.number().int().min(0).default(100),
+  scheduledFor: z.coerce.date().nullable().optional(),
+  isActive: z.boolean().optional(),
+});
+
+export const lmsQuizUpdateSchema = lmsQuizSchema.partial();
+export const lmsWeeklyTestUpdateSchema = lmsWeeklyTestSchema.partial();
+
+// ── Content: announcements, tips, achievements ──────────────────────────────
+
+export const lmsAnnouncementSchema = z.object({
+  title: z.string().min(1).max(200),
+  content: z.string().min(1),
+  priority: z.enum(["low", "normal", "high"]).default("normal"),
+  expiresAt: z.coerce.date().nullable().optional(),
+  isActive: z.boolean().optional(),
+});
+
+export const lmsDailyTipSchema = z.object({
+  content: z.string().min(1),
+  category: z.string().max(60).default("general"),
+  scheduledFor: z.coerce.date().nullable().optional(),
+  isActive: z.boolean().optional(),
+});
+
+export const lmsAchievementSchema = z.object({
+  name: z.string().min(1).max(120),
+  description: z.string().min(1),
+  icon: z.string().min(1).max(60),
+  // An enum, not free text: an unrecognised criteria type produces a badge nobody can ever
+  // earn, and checkAchievements can only warn about it after the fact.
+  criteriaType: z.enum(LMS_ACHIEVEMENT_CRITERIA),
+  criteriaValue: z.number().int().positive(),
+  xpReward: z.number().int().min(0).default(100),
+});
+
+export const lmsAnnouncementUpdateSchema = lmsAnnouncementSchema.partial();
+export const lmsDailyTipUpdateSchema = lmsDailyTipSchema.partial();
+export const lmsAchievementUpdateSchema = lmsAchievementSchema.partial();
+
+// ── Learner writes — THE SELF-PROGRESS CONTRACT ─────────────────────────────
+//
+// Read this before adding anything below it.
+//
+// These five schemas back the endpoints where a learner writes their OWN rows. Every one
+// is `.strict()`, and NONE of them declares `userId`.
+//
+// That is the single highest-severity rule in the module. The userId is taken from
+// `requireFeature(...)` — the session — and never from the request body. Zod 4 STRIPS
+// unknown keys silently by default, so a client sending `{"userId": "<someone else>"}`
+// would be quietly ignored: correct behaviour, but invisible. `.strict()` turns that
+// silence into a 400, which is the difference between a client bug you find in a week and
+// one you never find at all.
+//
+// A route that needs a target id — which lesson, which quiz — takes it from the URL, not
+// the body. If you find yourself wanting to add `userId` here, the answer is no.
+
+export const lmsQuizAttemptSchema = z
+  .object({
+    answers: lmsAnswersSchema,
+  })
+  .strict();
+
+export const lmsWeeklyTestAttemptSchema = z
+  .object({
+    answers: lmsAnswersSchema,
+  })
+  .strict();
+
+export const lmsLessonProgressSchema = z
+  .object({
+    videoWatched: z.boolean().optional(),
+    checklistDone: lmsChecklistDoneSchema.optional(),
+    answers: lmsAnswersSchema.optional(),
+  })
+  .strict();
+
+/**
+ * Marks a video watched or a playbook completed. One id at a time, from the body rather
+ * than the URL because this endpoint is not per-resource.
+ */
+export const lmsProgressSchema = z
+  .object({
+    videoId: cuid.optional(),
+    scenarioId: cuid.optional(),
+    productId: cuid.optional(),
+  })
+  .strict()
+  .refine((v) => !!(v.videoId || v.scenarioId || v.productId), {
+    message: "one of videoId, scenarioId or productId is required",
+  });
+
+/** The daily streak ping. Takes no input at all — the session is the whole request. */
+export const lmsHeartbeatSchema = z.object({}).strict();
