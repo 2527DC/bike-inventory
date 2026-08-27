@@ -1,6 +1,5 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { useState, useEffect } from "react";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -110,16 +109,6 @@ export function fuzzySearchFields(query: string, fields: (string | null | undefi
   return words.every((word) => fields.some((f) => fuzzyMatch(word, f)));
 }
 
-export function useDebounce<T>(value: T, delay = 300): T {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedValue(value), delay);
-    return () => clearTimeout(timer);
-  }, [value, delay]);
-
-  return debouncedValue;
-}
 
 /**
  * Message from an unknown caught value.
@@ -137,4 +126,40 @@ export function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
   if (typeof e === "string") return e;
   return String(e);
+}
+
+
+
+export function extractYoutubeId(url: string): string | null {
+  const match = url.match(
+    /(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/
+  );
+  return match ? match[1] : null;
+}
+
+export function formatXp(xp: number): string {
+  if (xp >= 1000) return `${(xp / 1000).toFixed(1)}k`;
+  return xp.toString();
+}
+
+export function getScenarioIcon(type: string): string {
+  const icons: Record<string, string> = {
+    'walk-in': 'door-open',
+    'phone': 'phone',
+    'repeat': 'refresh-cw',
+    'festival': 'party-popper',
+    'parent': 'baby',
+    'comparison': 'scale',
+    'service-upsell': 'wrench',
+  };
+  return icons[type] || 'clipboard';
+}
+
+export function getDifficultyColor(difficulty: string): string {
+  switch (difficulty) {
+    case 'beginner': return 'text-green-600 bg-green-50';
+    case 'intermediate': return 'text-yellow-600 bg-yellow-50';
+    case 'advanced': return 'text-red-600 bg-red-50';
+    default: return 'text-gray-600 bg-gray-50';
+  }
 }
