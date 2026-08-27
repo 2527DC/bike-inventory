@@ -38,6 +38,7 @@ import {
   GraduationCap,
   BookOpen,
   Trophy,
+  Swords,
   type LucideIcon,
 } from "lucide-react";
 
@@ -72,6 +73,7 @@ const ICONS: Record<string, LucideIcon> = {
   GraduationCap,
   BookOpen,
   Trophy,
+  Swords,
 };
 
 export function moduleIcon(name: string | null | undefined): LucideIcon {
