@@ -7,7 +7,16 @@ import { isR2Configured, r2PresignPut, r2PublicUrl } from "@/lib/r2";
 
 // Uploads are namespaced per feature; refuse anything outside these prefixes so a
 // presign can't overwrite arbitrary keys.
-const ALLOWED_PREFIXES = ["vendor-issues/", "second-hand/", "expenses/", "products/"];
+const ALLOWED_PREFIXES = [
+  "vendor-issues/",
+  "second-hand/",
+  "expenses/",
+  "products/",
+  // Staff LMS content images — product playbook covers, lesson thumbnails. Without this
+  // entry every LMS upload fails with "Invalid upload path", and the 400 names the path
+  // rather than the allowlist, so it reads like a client bug rather than a missing prefix.
+  "staff-lms/",
+];
 const MAX_BYTES = 100 * 1024 * 1024; // videos are compressed client-side; this is a hard backstop
 
 export async function POST(req: NextRequest) {
