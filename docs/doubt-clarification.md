@@ -1,0 +1,1 @@
+ implement the ledger inside the inverntory aplication itself where  add the addtional 
