@@ -1,4 +1,5 @@
 "use client";
+import { useDebounce } from "@/hooks/use-debounce";
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
@@ -8,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { useDebounce, fuzzySearchFields } from "@/lib/utils";
+import { fuzzySearchFields } from "@/lib/utils";
 import { ExportButtons } from "@/components/export-buttons";
 import { exportToExcel, exportToPDF, type ExportColumn } from "@/lib/export";
 import { usePermissions } from "@/lib/use-permissions";

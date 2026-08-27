@@ -6,7 +6,7 @@ import { FileText, AlertTriangle, Search, Plus, Cloud, Loader2, Download, Clock 
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { useDebounce } from "@/lib/utils";
+import { useDebounce } from "@/hooks/use-debounce";
 import { type DateRangeKey } from "@/components/date-filter";
 import { FilterSheet } from "@/components/filter-sheet";
 import { usePermissions } from "@/lib/use-permissions";

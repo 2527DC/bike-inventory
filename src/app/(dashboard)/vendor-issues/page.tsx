@@ -8,7 +8,7 @@ import { Search, AlertCircle, Plus, Trash2, Share2, Building2, Users, CalendarCh
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { SkeletonList } from "@/components/ui/skeleton";
-import { useDebounce } from "@/lib/utils";
+import { useDebounce } from "@/hooks/use-debounce";
 import { type DateRangeKey } from "@/components/date-filter";
 import { FilterSheet } from "@/components/filter-sheet";
 import { DesktopTable } from "@/components/desktop-table";

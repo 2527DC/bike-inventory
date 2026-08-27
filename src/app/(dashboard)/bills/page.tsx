@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { ExportButtons } from "@/components/export-buttons";
 import { DesktopTable } from "@/components/desktop-table";
 import { exportToExcel, exportToPDF, type ExportColumn } from "@/lib/export";
-import { useDebounce } from "@/lib/utils";
+import { useDebounce } from "@/hooks/use-debounce";
 import { type DateRangeKey } from "@/components/date-filter";
 import { FilterSheet } from "@/components/filter-sheet";
 import { usePermissions } from "@/lib/use-permissions";
