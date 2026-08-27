@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { seedRbac } from "./seed-rbac";
+import { seedStaffLms } from "./seed-staff-lms";
 
 const prisma = new PrismaClient();
 
@@ -155,6 +156,10 @@ async function main() {
   }
 
   console.log(`Created ${txns.length} transactions`);
+  
+  // Seed Staff LMS Content
+  await seedStaffLms(prisma);
+
   console.log("Seeding complete!");
 }
 
