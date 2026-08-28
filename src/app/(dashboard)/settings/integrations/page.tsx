@@ -670,7 +670,7 @@ export default function ZohoSettingsPage() {
                         Dismiss
                       </button>
                       {pullDone && totalNew > 0 && (
-                        <Link href="/more/zoho/pull-review"
+                        <Link href="/settings/integrations/pull-review"
                           className="flex-1 min-h-[48px] flex items-center justify-center text-sm text-center text-white bg-green-600 rounded-lg font-medium hover:bg-green-700 focus-ring">
                           Review & Approve
                         </Link>
@@ -704,7 +704,7 @@ export default function ZohoSettingsPage() {
                   {pulling ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                   {pulling ? "Pulling..." : fullImport ? "Full Import" : "Pull Now"}
                 </button>
-                <Link href="/more/zoho/pull-review"
+                <Link href="/settings/integrations/pull-review"
                   className="flex-1 min-h-[48px] flex items-center justify-center gap-1.5 border border-slate-200 text-slate-700 px-3 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors focus-ring">
                   <CheckCircle2 className="h-4 w-4" /> Review Pulls
                 </Link>

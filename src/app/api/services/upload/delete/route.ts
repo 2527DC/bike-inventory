@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { r2Delete, r2KeyFromUrl } from "@/lib/r2";
+import { tryGetStorage } from "@/lib/storage";
+import { createLogger } from "@/lib/logger";
 import { prisma } from "@/lib/db";
 import { serviceGuard } from "@/lib/services/guard";
+
+const log = createLogger("services:photo-delete");
 
 export async function POST(req: NextRequest) {
   const { user: user, error: authError } = await serviceGuard("service_jobs", "edit");
@@ -33,12 +36,21 @@ export async function POST(req: NextRequest) {
 
   // Remove the stored object. A failure here must not block the DB update: a row pointing
   // at a file that no longer exists is worse than an orphaned file nobody references.
-  const key = r2KeyFromUrl(source[index]);
-  if (key) {
+  const storage = await tryGetStorage();
+  // keyFromUrl returns null for a URL this provider did not issue — a photo stored before
+  // the provider was switched. The row is still cleaned up; only the old object is left.
+  const key = storage?.keyFromUrl(source[index]) ?? null;
+  if (storage && key) {
     try {
-      await r2Delete(key);
-    } catch {
-      /* already gone, or transient — the row is still removed below */
+      await storage.delete(key);
+    } catch (e) {
+      // Already gone, or transient. Logged rather than swallowed, so an accumulating pile
+      // of orphaned files is visible somewhere instead of being invisible by design.
+      log.warn("stored object could not be deleted; row is still removed", {
+        key,
+        provider: storage.key,
+        error: e instanceof Error ? e.message : String(e),
+      });
     }
   }
 

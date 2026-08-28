@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { r2Put, isR2Configured } from "@/lib/r2";
+import { tryGetStorage } from "@/lib/storage";
 import { prisma } from "@/lib/db";
 import { serviceGuard } from "@/lib/services/guard";
 
@@ -35,13 +35,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Max 3 photos" }, { status: 400 });
   }
 
-  if (!isR2Configured()) {
-    return NextResponse.json({ error: "File storage is not configured" }, { status: 503 });
+  const storage = await tryGetStorage();
+  if (!storage) {
+    return NextResponse.json(
+      { error: "Storage is not configured. Set it up in Settings > Storage." },
+      { status: 503 }
+    );
   }
 
   try {
     const ext = file.type.split("/")[1] || "jpg";
-    const url = await r2Put(
+    const url = await storage.put(
       `service/assembly/${logId}-${Date.now()}.${ext}`,
       await file.arrayBuffer(),
       file.type

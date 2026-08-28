@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { r2Put, isR2Configured } from "@/lib/r2";
+import { tryGetStorage } from "@/lib/storage";
 import { prisma } from "@/lib/db";
 import { serviceGuard } from "@/lib/services/guard";
 
@@ -58,14 +58,18 @@ export async function POST(req: NextRequest) {
   // Photos go to R2, which is what this app already uses for media. The standalone service
   // app used Vercel Blob with access:"private" and streamed every read back through the
   // server; there is no reason to keep a second storage provider after the merge.
-  if (!isR2Configured()) {
-    return NextResponse.json({ error: "File storage is not configured" }, { status: 503 });
+  const storage = await tryGetStorage();
+  if (!storage) {
+    return NextResponse.json(
+      { error: "Storage is not configured. Set it up in Settings > Storage." },
+      { status: 503 }
+    );
   }
 
   try {
     const prefix = isAfter ? "service/after" : "service/bikes";
     const ext = file.type.split("/")[1] || "jpg";
-    const url = await r2Put(
+    const url = await storage.put(
       `${prefix}/${job.tokenNumber}-${Date.now()}.${ext}`,
       await file.arrayBuffer(),
       file.type

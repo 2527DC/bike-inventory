@@ -422,7 +422,7 @@ const LOGIC_SECTIONS: LogicSection[] = [
     entries: [
       { label: "4-Step Pull Flow", type: "rule", detail: "Step 1: POST trigger-pull step='init' → pullId. Step 2: POST trigger-pull step='{entity}' with pullId + fromDate → fetches from Zoho. Step 3: GET pull-review?pullId → preview new items. Step 4: POST pull-review/approve with selected IDs → imports.", important: true },
       { label: "Entity Types", type: "rule", detail: "invoices (→ deliveries), bills (→ bills), items (→ products), contacts (→ vendors/customers). Each entity type has its own import logic." },
-      { label: "OAuth2 Self-Client", type: "rule", detail: "Uses Zoho self-client OAuth2 flow. Tokens stored in database (ZohoToken model). Auto-refresh on expiry. Settings page at /more/zoho shows connection status.", important: true },
+      { label: "OAuth2 Self-Client", type: "rule", detail: "Uses Zoho self-client OAuth2 flow. Tokens stored in database (ZohoToken model). Auto-refresh on expiry. Settings page at /settings/integrations shows connection status.", important: true },
       { label: "API Quota", type: "rule", detail: "Zoho has 1000 API calls/day for inventory. Each pull uses multiple calls. Monitor via Zoho sync page." },
       { label: "Zoho Client Search", type: "fetch", detail: "GET /api/zoho/search-contacts?q={query}. Searches Zoho Contacts by name (type=customer). Returns: id, name, phone, email, city. Used in vendor issues for client lookup.", api: "GET /api/zoho/search-contacts" },
       { label: "Clear Stuck Syncs", type: "action", detail: "POST /api/sync/clear. Resets any stuck sync/pull records that may block new syncs. Shows cleared count.", api: "POST /api/sync/clear", roles: "Admin only" },

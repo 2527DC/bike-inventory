@@ -217,7 +217,7 @@ export default function PullReviewPage() {
   return (
     <div>
       <div className="flex items-center gap-3 mb-4">
-        <Link href="/more/zoho" className="p-1">
+        <Link href="/settings/integrations" className="p-1">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
         <h1 className="text-lg font-bold text-slate-900 flex-1">Zoho Pull Review</h1>

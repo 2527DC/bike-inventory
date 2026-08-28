@@ -918,6 +918,35 @@ model ZohoInventoryConfig {
   updatedAt            DateTime  @updatedAt
 }
 
+// Where uploaded media lives. One row, chosen and configured from Settings -> Storage
+// rather than from environment variables, so switching provider needs no redeploy.
+//
+// `provider` is a plain String, not an enum, on purpose: adding a provider later should be
+// a row, not a migration. The valid values are validated with zod in the route.
+//
+// Secrets are stored in plaintext, matching ZohoConfig.clientSecret above. That is a
+// deliberate, accepted trade-off, not an oversight: anyone with database read access holds
+// the AWS keys. The API never returns secretAccessKey to the browser - it masks it.
+model StorageConfig {
+  id              String    @id @default("singleton")
+  provider        String    @default("LOCAL") // LOCAL | S3
+  bucket          String?
+  region          String? // real AWS region, e.g. ap-south-1
+  accessKeyId     String?
+  secretAccessKey String?
+  publicBaseUrl   String? // CloudFront domain or public bucket URL; base for stored file URLs
+  localDir        String? // filesystem root when provider = LOCAL
+
+  // Set only by a successful round-trip test, never by saving the form. A provider that has
+  // not proven it can put, get and delete an object must not become the live one.
+  isConnected   Boolean   @default(false)
+  lastTestedAt  DateTime?
+  lastTestError String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model SyncLog {
   id          String    @id @default(cuid())
   syncType    String // items, contacts, invoices, bills, all

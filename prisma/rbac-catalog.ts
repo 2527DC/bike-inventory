@@ -420,15 +420,39 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     sortOrder: 510,
     actions: CRUD,
   },
+  // Settings is the second module tree in this catalog (after Staff LMS): a parent with
+  // children rendered as a collapsible sidebar section.
+  //
+  // `route` moved from /more/alerts to a real /settings hub. The old value pointed at one
+  // specific settings page, which made the parent link incoherent once it had children —
+  // clicking "Settings" landed on Alerts rather than on an index of settings.
   {
     key: "settings",
-    label: "App Settings",
-    description: "Alert config, bins, store updates and app logic",
+    label: "Settings",
+    description: "Storage, integrations, alert config, bins and app logic",
     icon: "Settings",
-    route: "/more/alerts",
+    route: "/settings",
     group: "Admin",
     sortOrder: 520,
     actions: ["view", "create", "edit", "delete"],
+  },
+  {
+    // ACTION SEMANTICS — the route guards depend on this exact meaning:
+    //   view    — see which provider is live and its non-secret settings. Never the key.
+    //   edit    — change credentials and run the connection test.
+    //   approve — switch the LIVE provider. Deliberately separate from `edit`: correcting a
+    //             typo in a bucket name and repointing every photo in the company are not
+    //             the same decision, and CLAUDE.md says express that as a permission rather
+    //             than as a role name.
+    key: "settings_storage",
+    label: "Storage",
+    description: "Where uploaded photos and videos are stored — S3 or the server filesystem",
+    icon: "HardDrive",
+    route: "/settings/storage",
+    group: "Admin",
+    sortOrder: 521,
+    actions: ["view", "edit", "approve"],
+    parentKey: "settings",
   },
   {
     key: "whatsapp_templates",
@@ -441,14 +465,22 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     actions: ["view", "edit"],
   },
   {
+    // Re-parented under Settings, NOT recreated. The key stays "zoho", so every existing
+    // role grant (zoho.view, zoho.fetch, ...) keeps working untouched — permissions key off
+    // the module key, not its position in the tree. The seeder upserts route, group,
+    // sortOrder and parentId in both create and update, so a re-seed performs the move.
+    //
+    // `group` must equal the parent's ("Admin"); the seeder asserts this, because a child
+    // with its own group makes the sidebar render the section twice.
     key: "zoho",
-    label: "Zoho / Zakya Sync",
-    description: "External accounting and inventory integrations",
+    label: "Integrations",
+    description: "Zoho Books, Zakya POS and Zoho Inventory connections",
     icon: "Cloud",
-    route: "/more/zoho",
+    route: "/settings/integrations",
     group: "Admin",
-    sortOrder: 540,
+    sortOrder: 522,
     actions: ["view", "edit", "approve", "fetch"],
+    parentKey: "settings",
   },
   {
     key: "problems",
