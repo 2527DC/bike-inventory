@@ -94,13 +94,13 @@ export default function ZohoSettingsPage() {
   useEffect(() => {
     fetchStatus();
     fetchLogs();
-    fetch("/api/zakya/auth/status").then(r => r.json()).then(d => { if (d.success) setPosStatus(d.data); }).catch(() => {});
-    fetch("/api/zoho-inventory/auth/status").then(r => r.json()).then(d => { if (d.success) setInvStatus(d.data); }).catch(() => {});
+    fetch("/api/integrations/ZAKYA_POS/status").then(r => r.json()).then(d => { if (d.success) setPosStatus(d.data); }).catch(() => {});
+    fetch("/api/integrations/ZOHO_INVENTORY/status").then(r => r.json()).then(d => { if (d.success) setInvStatus(d.data); }).catch(() => {});
   }, []);
 
   async function fetchStatus() {
     try {
-      const res = await fetch("/api/zoho/auth/status");
+      const res = await fetch("/api/integrations/ZOHO_BOOKS/status");
       const data = await res.json();
       if (data.success) setStatus(data.data);
     } catch { /* ignore */ }
@@ -120,7 +120,7 @@ export default function ZohoSettingsPage() {
     setConnecting(true);
     setError("");
     try {
-      const res = await fetch("/api/zoho/auth/connect", {
+      const res = await fetch("/api/integrations/ZOHO_BOOKS/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ clientId, clientSecret, grantToken, organizationId: orgId, organizationName: orgName }),
@@ -138,7 +138,7 @@ export default function ZohoSettingsPage() {
 
   async function handleDisconnect() {
     try {
-      await fetch("/api/zoho/auth/disconnect", { method: "POST" });
+      await fetch("/api/integrations/ZOHO_BOOKS/disconnect", { method: "POST" });
       setStatus({ connected: false });
     } catch { /* ignore */ }
   }
@@ -148,7 +148,7 @@ export default function ZohoSettingsPage() {
     setConnectingPos(true);
     setPosError("");
     try {
-      const res = await fetch("/api/zakya/auth/connect", {
+      const res = await fetch("/api/integrations/ZAKYA_POS/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -158,7 +158,7 @@ export default function ZohoSettingsPage() {
       });
       const data = await res.json();
       if (data.success) {
-        const statusRes = await fetch("/api/zakya/auth/status");
+        const statusRes = await fetch("/api/integrations/ZAKYA_POS/status");
         const statusData = await statusRes.json();
         if (statusData.success) setPosStatus(statusData.data);
         setPosForm({ clientId: "", clientSecret: "", grantToken: "", orgId: "", orgName: "" });
@@ -172,7 +172,7 @@ export default function ZohoSettingsPage() {
 
   async function handleDisconnectPos() {
     try {
-      await fetch("/api/zakya/auth/disconnect", { method: "POST" });
+      await fetch("/api/integrations/ZAKYA_POS/disconnect", { method: "POST" });
       setPosStatus({ connected: false });
     } catch { /* ignore */ }
   }
@@ -182,7 +182,7 @@ export default function ZohoSettingsPage() {
     setConnectingInv(true);
     setInvError("");
     try {
-      const res = await fetch("/api/zoho-inventory/auth/connect", {
+      const res = await fetch("/api/integrations/ZOHO_INVENTORY/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -192,7 +192,7 @@ export default function ZohoSettingsPage() {
       });
       const data = await res.json();
       if (data.success) {
-        const statusRes = await fetch("/api/zoho-inventory/auth/status");
+        const statusRes = await fetch("/api/integrations/ZOHO_INVENTORY/status");
         const statusData = await statusRes.json();
         if (statusData.success) setInvStatus(statusData.data);
         setInvForm({ clientId: "", clientSecret: "", grantToken: "", orgId: "", orgName: "" });
@@ -206,7 +206,7 @@ export default function ZohoSettingsPage() {
 
   async function handleDisconnectInv() {
     try {
-      await fetch("/api/zoho-inventory/auth/disconnect", { method: "POST" });
+      await fetch("/api/integrations/ZOHO_INVENTORY/disconnect", { method: "POST" });
       setInvStatus({ connected: false });
     } catch { /* ignore */ }
   }

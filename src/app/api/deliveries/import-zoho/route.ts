@@ -2,10 +2,9 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { ZohoClient } from "@/lib/zoho";
-import { ZakyaClient } from "@/lib/zakya";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { BooksClient, ZakyaClient } from "@/lib/integrations";
 
 /*
  * Direct invoice import — fetches invoice details from Zoho and creates Delivery.
@@ -22,7 +21,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Init clients
-    const zoho = new ZohoClient();
+    const zoho = new BooksClient();
     const booksReady = await zoho.init();
     const zakya = new ZakyaClient();
     const posReady = await zakya.init();

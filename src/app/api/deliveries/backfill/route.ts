@@ -48,8 +48,8 @@ export async function POST(req: NextRequest) {
     // Init Zoho
     let zohoClient;
     try {
-      const { ZohoClient } = await import("@/lib/zoho");
-      zohoClient = new ZohoClient();
+      const { BooksClient } = await import("@/lib/integrations");
+      zohoClient = new BooksClient();
       if (!(await zohoClient.init())) {
         return errorResponse("Zoho not connected", 400);
       }

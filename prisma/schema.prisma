@@ -873,8 +873,20 @@ model BankTransaction {
   @@index([date])
 }
 
-model ZohoConfig {
-  id                   String    @id @default("singleton")
+// One row per external integration. Replaces ZohoConfig, ZakyaConfig and
+// ZohoInventoryConfig, which were three tables with byte-identical columns — same 13
+// fields in the same order, differing in nothing but their name.
+//
+// `provider` is the primary key and a plain String rather than an enum, deliberately:
+// adding a fourth integration should be a row, not a migration. The three valid values
+// are validated with zod in the route.
+//
+// Valid values: ZOHO_BOOKS | ZAKYA_POS | ZOHO_INVENTORY
+//
+// Secrets are plaintext, matching the tables this replaces. Anyone with database read
+// access holds the OAuth credentials; that is an accepted trade-off, not an oversight.
+model IntegrationConfig {
+  provider             String    @id
   clientId             String?
   clientSecret         String?
   refreshToken         String?
@@ -886,36 +898,8 @@ model ZohoConfig {
   lastSyncAt           DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
-}
 
-model ZakyaConfig {
-  id                   String    @id @default("singleton")
-  clientId             String?
-  clientSecret         String?
-  refreshToken         String?
-  accessToken          String?
-  accessTokenExpiresAt DateTime?
-  organizationId       String?
-  organizationName     String?
-  isConnected          Boolean   @default(false)
-  lastSyncAt           DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
-}
-
-model ZohoInventoryConfig {
-  id                   String    @id @default("singleton")
-  clientId             String?
-  clientSecret         String?
-  refreshToken         String?
-  accessToken          String?
-  accessTokenExpiresAt DateTime?
-  organizationId       String?
-  organizationName     String?
-  isConnected          Boolean   @default(false)
-  lastSyncAt           DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  @@map("integration_config")
 }
 
 // Where uploaded media lives. One row, chosen and configured from Settings -> Storage

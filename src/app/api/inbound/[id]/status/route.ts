@@ -220,8 +220,8 @@ export async function PUT(
     // Push purchase bill to Zoho Books on full delivery (best effort)
     if (status === "DELIVERED") {
       try {
-        const { ZohoClient } = await import("@/lib/zoho");
-        const zoho = new ZohoClient();
+        const { BooksClient } = await import("@/lib/integrations");
+        const zoho = new BooksClient();
         const billDate = existing.billDate.toISOString().split("T")[0];
         const dueDate = new Date(existing.billDate);
         dueDate.setDate(dueDate.getDate() + 30);

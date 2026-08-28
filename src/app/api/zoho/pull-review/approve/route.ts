@@ -156,8 +156,8 @@ export async function POST(req: NextRequest) {
           let lineItems = (d.lineItems as Array<{ name: string; sku: string; quantity: number; rate: number; itemTotal: number }>) || [];
           if (lineItems.length === 0 && preview.zohoId) {
             try {
-              const { ZohoClient } = await import("@/lib/zoho");
-              const zoho = new ZohoClient();
+              const { BooksClient } = await import("@/lib/integrations");
+              const zoho = new BooksClient();
               if (await zoho.init()) {
                 const detail = await zoho.getBill(preview.zohoId);
                 lineItems = (detail.bill?.line_items || []).map((li) => ({
@@ -219,7 +219,7 @@ export async function POST(req: NextRequest) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           let zohoForItems: any = null;
           try {
-            const { ZohoClient: ZC } = await import("@/lib/zoho");
+            const { BooksClient: ZC } = await import("@/lib/integrations");
             const z = new ZC();
             if (await z.init()) zohoForItems = z;
           } catch { /* best effort */ }
@@ -427,8 +427,8 @@ export async function POST(req: NextRequest) {
           // Fetch invoice detail from Zoho for line items + salesperson
           if ((lineItems.length === 0 || !salesPerson) && preview.zohoId) {
             try {
-              const { ZohoClient } = await import("@/lib/zoho");
-              const zoho = new ZohoClient();
+              const { BooksClient } = await import("@/lib/integrations");
+              const zoho = new BooksClient();
               if (await zoho.init()) {
                 const detail = await zoho.getInvoice(preview.zohoId);
                 const inv = detail.invoice;

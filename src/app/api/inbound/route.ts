@@ -262,8 +262,8 @@ export async function POST(req: NextRequest) {
 
     // Push draft bill to Zoho (best effort)
     try {
-      const { ZohoInventoryClient } = await import("@/lib/zoho-inventory");
-      const zohoInv = new ZohoInventoryClient();
+      const { InventoryClient } = await import("@/lib/integrations");
+      const zohoInv = new InventoryClient();
 
       const brand = await prisma.brand.findUnique({ where: { id: data.brandId }, select: { name: true } });
       await zohoInv.createItem({

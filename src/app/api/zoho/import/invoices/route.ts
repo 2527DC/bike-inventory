@@ -1,9 +1,9 @@
 export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/db";
-import { ZohoClient } from "@/lib/zoho";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError, getCurrentUser } from "@/lib/auth-helpers";
+import { BooksClient } from "@/lib/integrations";
 
 // Import invoices from Zoho as outward transactions for verification
 export async function POST() {
@@ -11,7 +11,7 @@ export async function POST() {
     await requireFeature("zoho", "fetch");
     const currentUser = await getCurrentUser();
 
-    const zoho = new ZohoClient();
+    const zoho = new BooksClient();
     const ready = await zoho.init();
     if (!ready) return errorResponse("Zoho not connected", 400);
 
@@ -40,7 +40,10 @@ export async function POST() {
 
         // Get invoice details with line items
         const detail = await zoho.getInvoice(inv.invoice_id);
-        const lineItems = detail.invoice.line_items || [];
+        // `invoice` is optional on the shared type: Zoho answers 200 with no invoice body
+        // when the id is unknown. Reading through it unguarded threw a TypeError that read
+        // as a code bug rather than a missing record.
+        const lineItems = detail.invoice?.line_items || [];
 
         for (const line of lineItems) {
           // Find product by SKU

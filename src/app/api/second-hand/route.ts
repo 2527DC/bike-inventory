@@ -5,8 +5,8 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, paginatedResponse, parseSearchParams } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
-import { ZohoInventoryClient } from "@/lib/zoho-inventory";
 import { z } from "zod";
+import { InventoryClient } from "@/lib/integrations";
 
 const createSchema = z.object({
   name: z.string().min(1, "Cycle name is required"),
@@ -118,7 +118,7 @@ export async function POST(req: NextRequest) {
     // Push to Zoho Inventory (best effort — don't fail if Zoho is down)
     let zohoItemId: string | null = null;
     try {
-      const inventory = new ZohoInventoryClient();
+      const inventory = new InventoryClient();
       const ready = await inventory.init();
       if (ready) {
         const condLabel = data.condition.charAt(0) + data.condition.slice(1).toLowerCase();

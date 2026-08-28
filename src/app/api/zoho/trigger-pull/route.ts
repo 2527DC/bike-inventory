@@ -3,11 +3,9 @@ export const maxDuration = 30; // Bill details now fetched in approve step
 
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { ZohoClient } from "@/lib/zoho";
-import { ZakyaClient } from "@/lib/zakya";
-import { ZohoInventoryClient } from "@/lib/zoho-inventory";
 import { successResponse, errorResponse, failure } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { BooksClient, InventoryClient, ZakyaClient } from "@/lib/integrations";
 
 /*
  * 3-SOURCE MANUAL PULL (step-by-step):
@@ -52,11 +50,11 @@ export async function POST(req: NextRequest) {
       });
 
       // Check at least one source is connected
-      const zoho = new ZohoClient();
+      const zoho = new BooksClient();
       const booksReady = await zoho.init();
       const zakya = new ZakyaClient();
       const posReady = await zakya.init();
-      const inventory = new ZohoInventoryClient();
+      const inventory = new InventoryClient();
       const inventoryReady = await inventory.init();
 
       if (!booksReady && !posReady && !inventoryReady) {
@@ -91,12 +89,12 @@ export async function POST(req: NextRequest) {
 
       try {
         // Try Inventory first
-        const inventory = new ZohoInventoryClient();
+        const inventory = new InventoryClient();
         const inventoryReady = await inventory.init();
 
         if (inventoryReady) {
           source = "inventory";
-          const invConfig = await prisma.zohoInventoryConfig.findUnique({ where: { id: "singleton" } });
+          const invConfig = await prisma.integrationConfig.findUnique({ where: { provider: "ZOHO_INVENTORY" } });
           const lastSync = fromDate || invConfig?.lastSyncAt?.toISOString().slice(0, 10) || defaultLastSync;
           const allItems = await inventory.listAllItems("active", fullImport ? undefined : lastSync);
           apiCalls += Math.ceil(allItems.length / 200) || 1;
@@ -141,11 +139,11 @@ export async function POST(req: NextRequest) {
           }
         } else {
           // Fallback to Books
-          const zoho = new ZohoClient();
+          const zoho = new BooksClient();
           const booksReady = await zoho.init();
           if (booksReady) {
             source = "books";
-            const booksConfig = await prisma.zohoConfig.findUnique({ where: { id: "singleton" } });
+            const booksConfig = await prisma.integrationConfig.findUnique({ where: { provider: "ZOHO_BOOKS" } });
             const lastSync = fromDate || booksConfig?.lastSyncAt?.toISOString().slice(0, 10) || defaultLastSync;
             const allItems = await zoho.listAllItems("active", fullImport ? undefined : lastSync);
             apiCalls += Math.ceil(allItems.length / 200) || 1;
@@ -205,13 +203,13 @@ export async function POST(req: NextRequest) {
       const errors: string[] = [];
 
       try {
-        const zoho = new ZohoClient();
+        const zoho = new BooksClient();
         const booksReady = await zoho.init();
         if (!booksReady) {
           return successResponse({ step: "contacts", source: "skipped", contactsNew: 0, apiCalls: 0, errors: ["Books not connected"] });
         }
 
-        const booksConfig = await prisma.zohoConfig.findUnique({ where: { id: "singleton" } });
+        const booksConfig = await prisma.integrationConfig.findUnique({ where: { provider: "ZOHO_BOOKS" } });
         const lastSync = booksConfig?.lastSyncAt?.toISOString().slice(0, 10) || defaultLastSync;
         const contacts = await zoho.listAllContacts(lastSync);
         apiCalls += Math.ceil(contacts.length / 200) || 1;
@@ -262,7 +260,7 @@ export async function POST(req: NextRequest) {
 
         // Use Zoho Books for bills (Inventory token lacks bills scope)
         {
-          const zoho = new ZohoClient();
+          const zoho = new BooksClient();
           const booksReady = await zoho.init();
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           let client: any = null;
@@ -369,7 +367,7 @@ export async function POST(req: NextRequest) {
           client = zakya;
           source = "pos";
         } else {
-          const zoho = new ZohoClient();
+          const zoho = new BooksClient();
           const booksReady = await zoho.init();
           if (booksReady) {
             client = zoho;
@@ -474,9 +472,9 @@ export async function POST(req: NextRequest) {
       }
 
       // Update lastSyncAt for all connected sources
-      await prisma.zohoConfig.update({ where: { id: "singleton" }, data: { lastSyncAt: new Date() } }).catch(() => {});
-      await prisma.zakyaConfig.update({ where: { id: "singleton" }, data: { lastSyncAt: new Date() } }).catch(() => {});
-      await prisma.zohoInventoryConfig.update({ where: { id: "singleton" }, data: { lastSyncAt: new Date() } }).catch(() => {});
+      await prisma.integrationConfig.update({ where: { provider: "ZOHO_BOOKS" }, data: { lastSyncAt: new Date() } }).catch(() => {});
+      await prisma.integrationConfig.update({ where: { provider: "ZAKYA_POS" }, data: { lastSyncAt: new Date() } }).catch(() => {});
+      await prisma.integrationConfig.update({ where: { provider: "ZOHO_INVENTORY" }, data: { lastSyncAt: new Date() } }).catch(() => {});
 
       return successResponse({
         pullId: existingPullId,

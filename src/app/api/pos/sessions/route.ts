@@ -4,8 +4,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { ZakyaClient } from "@/lib/zakya";
-import { ZohoClient } from "@/lib/zoho";
+import { BooksClient, ZakyaClient } from "@/lib/integrations";
 
 // GET — List POS sessions (from DB)
 export async function GET(req: NextRequest) {
@@ -86,7 +85,7 @@ export async function POST(req: NextRequest) {
     let paymentError: string | null = null;
 
     // Try Zoho Books first (separate OAuth, has customer payments)
-    const zoho = new ZohoClient();
+    const zoho = new BooksClient();
     const zohoOk = await zoho.init();
     if (zohoOk) {
       try {
