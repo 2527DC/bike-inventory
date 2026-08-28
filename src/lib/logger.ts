@@ -26,7 +26,7 @@
 //
 // Two variables, because a server-only variable is not readable in the browser:
 //
-//     LOG_LEVEL              server (route handlers, lib code, crons)
+//     LOG_LEVEL              server (route handlers, lib code, scripts)
 //     NEXT_PUBLIC_LOG_LEVEL  browser (pages, components) — MUST carry the NEXT_PUBLIC_
 //                            prefix or Next strips it from the client bundle
 //

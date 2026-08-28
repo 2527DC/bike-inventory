@@ -97,7 +97,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
  * Authentication only — "is a real, active user making this request".
  *
  * Use this ONLY where no module/action pair is meaningful: the permission bootstrap
- * endpoint, self-service profile reads, and public/cron handlers. Everything that touches
+ * endpoint, self-service profile reads, and public handlers. Everything that touches
  * a feature must use requireFeature() instead, so access is decided by data rather than code.
  */
 export async function requireAuth(): Promise<CurrentUser> {

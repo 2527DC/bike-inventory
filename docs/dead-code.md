@@ -12,9 +12,14 @@ narrower question: **what can be deleted.**
 **A table is dead when no backend code path reaches it.** Not when it is empty.
 
 This distinction is the whole point of the audit. An empty table may be a shipped feature
-nobody has used yet — `FootfallDaily` had no rows on audit day and is emphatically alive,
-because `api/cron/footfall-rollup` writes it every evening. Conversely a table can hold
-thousands of legacy rows and still be dead, because nothing reads or writes it any more.
+nobody has used yet — `FootfallDaily` had no rows on audit day and was alive then, because
+`api/cron/footfall-rollup` wrote it every evening. Conversely a table can hold thousands of
+legacy rows and still be dead, because nothing reads or writes it any more.
+
+> **Superseded 28 Aug 2026 — all cron jobs were removed from this application.**
+> `FootfallDaily` is now genuinely dead: nothing writes it and nothing ever read it. Every
+> `api/cron/*` and `api/services/cron/*` entry below refers to a route that no longer
+> exists. See `docs/cron-removal-plan.md`.
 
 **Row counts were never consulted.** Reachability was established from source only:
 
@@ -79,7 +84,7 @@ Recorded so the next audit does not re-flag them:
 |---|---|---|
 | `TransferOrderItem` | no `prisma.transferOrderItem.*` call | written via `items: { create }` — `api/transfer-orders/route.ts:154` |
 | `PurchaseOrderItem` | 1 delegate call | written via nested create on the PO |
-| `FootfallDaily` | table empty | `api/cron/footfall-rollup` writes it nightly |
+| `FootfallDaily` | table empty | ~~`api/cron/footfall-rollup` writes it nightly~~ — **no longer true as of 28 Aug 2026; the cron was deleted and this table is now dead** |
 | `TokenCounter` | 1 call site | single-row sequence; one call site is correct |
 
 **Tally: of 75 models — 2 fully dead, 4 reachable but never written, 69 live.**
@@ -140,10 +145,13 @@ dead code that is also attack surface.
 `api/transfers/[id]/approve`, `api/inventory/inwards/verify`,
 `api/inventory/outwards/verify`, and the four `api/zoho/import/*` siblings.
 
-**Not orphans — invoked externally, keep them:** `api/cron/*` (5, in `vercel.json`),
-`api/v1/counts`, `api/v1/heartbeat`, `api/analytics/counts`, `api/analytics/heartbeat`
-(the store Python agent), `api/earn-sync`, `api/services/cron/zoho-deliver`. All are
-documented in `middleware.ts`.
+**Not orphans — invoked externally, keep them:** `api/v1/counts`, `api/v1/heartbeat`,
+`api/analytics/counts`, `api/analytics/heartbeat` (the store Python agent), `api/earn-sync`.
+All are documented in `middleware.ts`.
+
+> **28 Aug 2026:** this list previously also named `api/cron/*` (5 routes) and
+> `api/services/cron/zoho-deliver`. All six were deleted with the removal of scheduled jobs.
+> `zoho-deliver` was never registered in `vercel.json`, so it had not been running at all.
 
 ---
 

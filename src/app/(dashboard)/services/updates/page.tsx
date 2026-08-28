@@ -33,10 +33,10 @@ export default function UpdatesPage() {
     setLoading(false);
   }, []);
 
+  // Loads once on mount. The auto-refresh interval was removed along with the
+  // scheduled jobs — use the refresh control instead.
   useEffect(() => {
     fetchJobs();
-    const interval = setInterval(fetchJobs, 60000);
-    return () => clearInterval(interval);
   }, [fetchJobs]);
 
   // Filter

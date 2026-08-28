@@ -230,7 +230,7 @@ export default function PullReviewPage() {
         <div className="text-center py-12">
           <Clock className="h-10 w-10 text-slate-300 mx-auto mb-2" />
           <p className="text-sm text-slate-400">No pull data yet</p>
-          <p className="text-xs text-slate-300 mt-1">Daily cron runs at 1 PM IST</p>
+          <p className="text-xs text-slate-300 mt-1">Run a pull from the Zoho settings page</p>
         </div>
       ) : (
         <>

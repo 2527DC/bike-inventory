@@ -117,10 +117,10 @@ export default function ManagerPage() {
     setLoading(false);
   }, [dashDateRange, dashDay, dashFrom, dashTo]);
 
+  // Loads once on mount. The auto-refresh interval was removed along with the
+  // scheduled jobs — use the refresh control instead.
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 60000);
-    return () => clearInterval(interval);
   }, [fetchData]);
 
   // Auto-dismiss the toast

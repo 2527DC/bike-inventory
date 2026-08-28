@@ -426,7 +426,7 @@ const LOGIC_SECTIONS: LogicSection[] = [
       { label: "API Quota", type: "rule", detail: "Zoho has 1000 API calls/day for inventory. Each pull uses multiple calls. Monitor via Zoho sync page." },
       { label: "Zoho Client Search", type: "fetch", detail: "GET /api/zoho/search-contacts?q={query}. Searches Zoho Contacts by name (type=customer). Returns: id, name, phone, email, city. Used in vendor issues for client lookup.", api: "GET /api/zoho/search-contacts" },
       { label: "Clear Stuck Syncs", type: "action", detail: "POST /api/sync/clear. Resets any stuck sync/pull records that may block new syncs. Shows cleared count.", api: "POST /api/sync/clear", roles: "Admin only" },
-      { label: "Cron: Zoho Auto-Pull", type: "rule", detail: "Scheduled cron job that auto-pulls latest data from Zoho. Runs via /api/cron/zoho-pull.", api: "GET /api/cron/zoho-pull" },
+      { label: "Manual Pull Only", type: "rule", detail: "There are no scheduled jobs in this application. Zoho data is pulled when someone presses Pull on the Zoho settings page. Invoices are pulled from the deliveries page.", important: true },
     ],
   },
 

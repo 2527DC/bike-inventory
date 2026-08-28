@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { SkeletonDashboard } from "@/components/ui/skeleton";
 import { formatINR, formatTime } from "@/lib/utils";
 import { usePermissions } from "@/lib/use-permissions";
+import { SendScorecardButton } from "./_components/send-scorecard-button";
 
 
 interface CEOData {
@@ -418,10 +419,14 @@ function AdminDashboard() {
       {data.people.length > 0 && (
         <Card className="mt-4">
           <CardHeader>
-            <CardTitle className="flex items-center gap-1.5">
-              <Users className="h-4 w-4 text-slate-600" />
-              Team Health
-            </CardTitle>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="flex items-center gap-1.5">
+                <Users className="h-4 w-4 text-slate-600" />
+                Team Health
+              </CardTitle>
+              {/* Replaces the 08:00 cron that used to push this scorecard automatically. */}
+              <SendScorecardButton />
+            </div>
           </CardHeader>
           <CardContent className="space-y-3">
             {data.people.map((person) => (

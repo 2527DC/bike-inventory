@@ -28,20 +28,23 @@ export const config = {
     // prefix would work today and would silently make every future route beneath them
     // public — /api/analytics/dashboard is business data and must stay behind the session.
     //
-    // ── Scheduler routes ─────────────────────────────────────────────────────
-    // `api/cron`, `api/services/cron` and `api/earn-sync` are invoked by Vercel Cron and by
-    // external pollers. No user exists, so withAuth redirected them to /login — including
-    // requests carrying the correct Bearer token, because withAuth reads the session cookie
-    // and never looks at the Authorization header.
+    // ── External poller ──────────────────────────────────────────────────────
+    // `api/earn-sync` is called by an external poller. No user exists, so withAuth
+    // redirected it to /login — including requests carrying the correct Bearer token,
+    // because withAuth reads the session cookie and never looks at the Authorization
+    // header. It is listed in CLAUDE.md under "routes that must stay public".
     //
-    // These are listed in CLAUDE.md under "routes that must stay public"; the matcher had
-    // simply never been updated to match. Measured 21 Aug 2026: all three of the crons in
-    // vercel.json (zoho-pull, overdue-alerts, invoice-pull) returned 307 to /login.
+    // A prefix is correct HERE, unlike above, because the whole directory has one purpose.
+    // The contract that makes it safe: **every route beneath this prefix MUST check its own
+    // shared key in the handler.** A new route added without that check is public to the
+    // internet.
     //
-    // Prefixes are correct HERE, unlike above, because the whole directory has one purpose.
-    // The contract that makes it safe: **every route beneath these prefixes MUST check
-    // CRON_SECRET (or its own shared key) in the handler.** All five do today. A new route
-    // added without that check is public to the internet.
-    "/((?!login|fill|api/auth|api/public|api/cron|api/services/cron|api/earn-sync|api/analytics/counts|api/analytics/heartbeat|api/v1/counts|api/v1/heartbeat|_next/static|_next/image|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|json|txt|xml|html|webmanifest|js|mjs|css|map|woff|woff2|ttf)).*)",
+    // `api/cron` and `api/services/cron` used to be listed here too. Both directories were
+    // deleted when scheduled jobs were removed from this application — there are no crons,
+    // and `CRON_SECRET` no longer exists. What replaced them (`api/alerts/scorecard`, and
+    // the existing Zoho pull and import routes) are ordinary authenticated routes behind
+    // `requireFeature`, so they must NOT be excluded here. Do not re-add a cron prefix: it
+    // would make every route beneath it public to the internet.
+    "/((?!login|fill|api/auth|api/public|api/earn-sync|api/analytics/counts|api/analytics/heartbeat|api/v1/counts|api/v1/heartbeat|_next/static|_next/image|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|json|txt|xml|html|webmanifest|js|mjs|css|map|woff|woff2|ttf)).*)",
   ],
 };
