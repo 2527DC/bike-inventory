@@ -103,8 +103,8 @@ control; initial load on mount stays.
 | `docs/cron-jobs.md` | 300 lines describing a system that will not exist — **delete** |
 | `CLAUDE.md:118` | lists `/api/cron/*` and `/api/services/cron/*` under "Routes that must stay public" — remove those two lines |
 | `docs/dead-code.md:16,82,143,145` | cites the crons as live invokers; `FootfallDaily` is reclassified from "written nightly" to permanently empty |
-| `docs/analytics-merge-plan.md` | references the rollup and watchdog |
-| `docs/store-hierarchy-and-team-plan.md`, `docs/water-flow-chart.md` | passing mentions |
+| `docs/implementation/completed/analytics-merge-plan.md` | references the rollup and watchdog |
+| `docs/implementation/pending/store-hierarchy-and-team-plan.md`, `docs/water-flow-chart.md` | passing mentions |
 | `docs/postman/bch-ops-service.postman_collection.json` | drop the cron requests |
 
 ## 4. Manual replacements to build

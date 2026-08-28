@@ -136,7 +136,7 @@ Anything that used to run on a schedule is now a button behind `requireFeature`:
 
 **Do not add a cron, a `setInterval`, or a scheduled route.** If work genuinely has nobody
 to trigger it, raise it rather than reintroducing a scheduler. See
-`docs/cron-removal-plan.md` for what was removed and what was knowingly given up.
+`docs/implementation/completed/cron-removal-plan.md` for what was removed and what was knowingly given up.
 
 ## The service / workshop module
 

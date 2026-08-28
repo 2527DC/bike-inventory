@@ -19,7 +19,7 @@ legacy rows and still be dead, because nothing reads or writes it any more.
 > **Superseded 28 Aug 2026 — all cron jobs were removed from this application.**
 > `FootfallDaily` is now genuinely dead: nothing writes it and nothing ever read it. Every
 > `api/cron/*` and `api/services/cron/*` entry below refers to a route that no longer
-> exists. See `docs/cron-removal-plan.md`.
+> exists. See `docs/implementation/completed/cron-removal-plan.md`.
 
 **Row counts were never consulted.** Reachability was established from source only:
 
