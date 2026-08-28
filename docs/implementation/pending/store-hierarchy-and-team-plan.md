@@ -1,6 +1,6 @@
 # Store Hierarchy & Team Management Plan
 
-Status: **approved, not started**
+Status: pending — approved, not started; no Store model exists
 Scope: replace the hardcoded `StockLocation` enum with a real `Store → Warehouse`
 hierarchy, and rebuild `/team` as a paginated table with row actions.
 

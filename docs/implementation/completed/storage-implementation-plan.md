@@ -1,6 +1,6 @@
 # Storage Implementation Plan
 
-Status: **PLAN ONLY — not implemented.** Do not start until explicitly approved.
+Status: completed — 28 Aug 2026, runtime-switchable storage provider and Settings module
 Prepared 28 Aug 2026.
 
 ---

@@ -23,6 +23,17 @@
             "statusMessage": "Checking git/npm approval rule..."
           }
         ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/plan-placement.cjs\"",
+            "timeout": 10,
+            "statusMessage": "Checking plan placement..."
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -40,6 +51,13 @@
             "prompt": "prisma/schema.prisma was just modified. Act as the schema-reviewer defined in .claude/agents/schema-reviewer.md: read that file first and follow it exactly, including reading docs/agents/database-architect.md and diffing the schema against git. You are read-only — never edit a file, never run prisma or npm. Report findings in the format that file specifies, and list any question that genuinely needs the user to decide. Hook payload: $ARGUMENTS",
             "statusMessage": "Reviewing prisma schema change...",
             "timeout": 180
+          },
+          {
+            "type": "command",
+            "if": "Edit(docs/implementation/**)",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/plan-status.cjs\" --hook",
+            "timeout": 15,
+            "statusMessage": "Syncing implementation plans..."
           }
         ]
       }

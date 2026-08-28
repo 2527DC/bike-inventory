@@ -1,6 +1,6 @@
 # Merging `bch-service` into `bch_management`
 
-**Status:** plan, plus the RBAC groundwork already seeded (§4 is **done**).
+Status: completed — bch-service merged; /services/* and the SERVICE_* roles are live
 **Prerequisite:** the RBAC migration must be complete and `npm run build` green before phase 1 starts.
 
 ---

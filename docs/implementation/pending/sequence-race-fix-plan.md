@@ -1,6 +1,6 @@
 # Sequence Race and Import Atomicity — fix plan
 
-Status: **PLAN ONLY — not implemented.** Awaiting go-ahead.
+Status: pending — five sites allocate unique numbers with a read-then-write race
 Suggested branch: `fix/sequence-race` (its own branch — it touches five unrelated modules).
 Prepared 28 Aug 2026.
 

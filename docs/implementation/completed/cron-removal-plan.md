@@ -1,6 +1,6 @@
 # Cron Removal Plan
 
-Status: **PLAN ONLY — not implemented.** Awaiting go-ahead.
+Status: completed — 28 Aug 2026, all cron jobs and screen polling removed
 Branch: `chore/remove-cron-jobs` (separate from the storage work).
 Prepared 28 Aug 2026.
 

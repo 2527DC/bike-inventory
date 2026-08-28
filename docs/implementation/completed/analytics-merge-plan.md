@@ -1,6 +1,6 @@
 # Merging `bch-store-analytics` into `bch_management`
 
-**Status:** plan. Nothing implemented yet.
+Status: completed — store analytics merged; /analytics, CountEvent and the device endpoints are live
 **Prerequisite:** `npm run build` green before phase 1 starts.
 **Precedent:** this follows the shape of [`service-merge-plan.md`](./service-merge-plan.md) —
 the `bch-service` merge. Roughly one third the size.

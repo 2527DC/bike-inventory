@@ -1,6 +1,6 @@
 # Zoho / Zakya Config Consolidation Plan
 
-Status: **PLAN ONLY — not implemented.** Awaiting go-ahead.
+Status: in-progress — being implemented on refactor/integration-config
 Branch: `refactor/integration-config` (separate from storage and cron work).
 Prepared 28 Aug 2026.
 

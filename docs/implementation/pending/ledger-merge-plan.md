@@ -1,6 +1,6 @@
 # Merging `ledgers` into BCH Management
 
-**Status:** decisions taken (§0). Schema, RBAC seed, backend and frontend implemented — see §12. PDF statement import and the 219-gap migration still pending.
+Status: in-progress — schema, RBAC, backend and frontend shipped; PDF statement import and the 219-gap migration remain
 **Scope:** `F:\bharath  Cycle\ledgers` → this app. `bch-service` is out of scope (already merged).
 
 ---
