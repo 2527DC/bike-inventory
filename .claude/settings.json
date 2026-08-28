@@ -33,6 +33,13 @@
             "type": "command",
             "command": "echo '⚠️ FILE CHANGED — Remember: run npm run build and verify on the page before saying done.'",
             "statusMessage": "Reminding to build and verify..."
+          },
+          {
+            "type": "agent",
+            "if": "Edit(prisma/schema.prisma)",
+            "prompt": "prisma/schema.prisma was just modified. Act as the schema-reviewer defined in .claude/agents/schema-reviewer.md: read that file first and follow it exactly, including reading docs/agents/database-architect.md and diffing the schema against git. You are read-only — never edit a file, never run prisma or npm. Report findings in the format that file specifies, and list any question that genuinely needs the user to decide. Hook payload: $ARGUMENTS",
+            "statusMessage": "Reviewing prisma schema change...",
+            "timeout": 180
           }
         ]
       }
