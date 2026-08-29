@@ -64,6 +64,7 @@ preserved across regeneration — but do not remove the marker comments.
 | `cron-removal-plan.md` | 28 Aug 2026, all cron jobs and screen polling removed |
 | `service-merge-plan.md` | bch-service merged; /services/* and the SERVICE_* roles are live |
 | `storage-implementation-plan.md` | 28 Aug 2026, runtime-switchable storage provider and Settings module |
+| `zoho-config-consolidation-plan.md` | 29 Aug 2026, three Zoho config tables and four clients collapsed into one `IntegrationConfig` row per provider, one `IntegrationClient` base class and three `[provider]` routes |
 <!-- END:completed -->
 
 ### pending/
@@ -79,7 +80,6 @@ preserved across regeneration — but do not remove the marker comments.
 | `sequence-race-fix-plan.md` | five sites allocate unique numbers with a read-then-write race |
 | `service-module-mobile-readiness-plan.md` | what /api/services/* needs before bch-service-app can be pointed at it |
 | `store-hierarchy-and-team-plan.md` | approved, not started; no Store model exists |
-| `zoho-config-consolidation-plan.md` | being implemented on refactor/integration-config |
 <!-- END:pending -->
 
 ---
