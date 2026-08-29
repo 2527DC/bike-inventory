@@ -601,7 +601,7 @@ export function ProductDetail({ product, isAdmin = false, videos = [] }: Props) 
                   {reviews.best.map((r, i) => (
                     <div key={i} className="bg-green-50 rounded-xl p-3">
                       <div className="flex items-center gap-1 mb-1">
-                        {Array.from({ length: r.rating }).map((_, s) => (
+                        {Array.from({ length: r.rating ?? 0 }).map((_, s) => (
                           <Star key={s} size={11} className="text-yellow-400 fill-yellow-400" />
                         ))}
                         {r.source && <span className="text-[10px] text-gray-400 ml-auto">{r.source}</span>}
@@ -621,10 +621,10 @@ export function ProductDetail({ product, isAdmin = false, videos = [] }: Props) 
                     {reviews.worst.map((r, i) => (
                       <div key={i} className="bg-red-50 rounded-xl p-3">
                         <div className="flex items-center gap-1 mb-1">
-                          {Array.from({ length: r.rating }).map((_, s) => (
+                          {Array.from({ length: r.rating ?? 0 }).map((_, s) => (
                             <Star key={s} size={11} className="text-yellow-400 fill-yellow-400" />
                           ))}
-                          {Array.from({ length: 5 - r.rating }).map((_, s) => (
+                          {Array.from({ length: 5 - (r.rating ?? 0) }).map((_, s) => (
                             <Star key={s} size={11} className="text-gray-300" />
                           ))}
                           {r.source && <span className="text-[10px] text-gray-400 ml-auto">{r.source}</span>}

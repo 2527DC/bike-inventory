@@ -29,7 +29,11 @@ export interface ProductSpecs {
 export interface Competitor {
   name: string;
   brand: string;
-  price: number;
+  // Nullable, matching lmsCompetitorSchema — a competitor can be listed without a known
+  // price. This said `number` until the product pages stopped casting their data through
+  // `as any[]`, which was the only reason the lie survived. The UI already renders it as
+  // `c.price?.toLocaleString(...)`, so it always expected null in practice.
+  price: number | null;
   pros: string[];
   cons: string[];
   verdict: string;
@@ -37,7 +41,9 @@ export interface Competitor {
 
 export interface ProductReview {
   summary: string;
-  rating: number;
+  // Nullable for the same reason as Competitor.price above — lmsReviewSchema declares
+  // `z.number().min(0).max(5).nullable()`, because a quoted review often has no star rating.
+  rating: number | null;
   source?: string;
 }
 

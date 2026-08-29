@@ -1,33 +1,58 @@
-import { prisma } from '@/lib/db';
+'use client';
+
+// Client component on purpose. This page used to query Prisma as a server component with no
+// per-request input, so Next prerendered it at BUILD time and `npm run build` needed a live
+// Postgres. It now fetches from the same guarded endpoint the rest of the app uses.
+//
+// NOTE: this file and staff-lms/products/page.tsx are byte-identical, as are their
+// product-list.tsx and [id]/ trees — two routes rendering one screen. Collapsing them is
+// worth doing and is deliberately not part of this build fix.
+
+import { useEffect, useState } from 'react';
+import { AlertCircle } from 'lucide-react';
 import { ProductList } from './product-list';
+import { apiFetch } from '@/lib/api-client';
+import { createLogger } from '@/lib/logger';
+import { SkeletonList } from '@/components/ui/skeleton';
+import { toClientProduct, byPriceThenName, type ApiLmsProduct } from '@/lib/staff-lms/to-client-product';
+import type { LmsProduct } from '@/types/lms';
 
-export default async function ProductsPage() {
-  const products = await prisma.lmsProduct.findMany({
-    where: { isActive: true },
-    orderBy: [{ price: 'asc' }, { name: 'asc' }],
-  });
+const log = createLogger('staff-lms:product-learning');
 
-  const serialized = products.map((p) => ({
-    id: p.id,
-    name: p.name,
-    brand: p.brand,
-    category: p.category,
-    price: p.price ? Number(p.price) : null,
-    image_url: p.imageUrl || null,
-    usps: p.usps,
-    features: p.features,
-    talking_points: p.talkingPoints,
-    target_customer: p.targetCustomer || null,
-    common_objections: p.commonObjections as any[] || [],
-    buyer_psychology: (p.buyerPsychology as any) || null,
-    unique_fact: p.uniqueFact || null,
-    specs: (p.specs as any) || {},
-    competitors: (p.competitors as any[]) || [],
-    reviews: (p.reviews as any) || { best: [], worst: [] },
-    sources: (p.sources as any[]) || [],
-    is_active: p.isActive,
-    created_at: p.createdAt.toISOString(),
-  }));
+export default function ProductsPage() {
+  const [products, setProducts] = useState<LmsProduct[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  return <ProductList products={serialized as any[]} />;
+  useEffect(() => {
+    apiFetch<ApiLmsProduct[]>('/api/staff-lms/products')
+      .then((rows) => setProducts(rows.map(toClientProduct).sort(byPriceThenName)))
+      .catch((e: unknown) => {
+        const message = e instanceof Error ? e.message : 'Failed to load products';
+        log.error('product list load failed', { message });
+        setError(message);
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <SkeletonList count={5} type="card" />;
+
+  if (error) {
+    return (
+      <div className="text-center py-10">
+        <AlertCircle className="h-8 w-8 text-red-300 mx-auto mb-2" />
+        <p className="text-sm text-slate-600">{error}</p>
+      </div>
+    );
+  }
+
+  if (products.length === 0) {
+    return (
+      <div className="text-center py-10">
+        <p className="text-sm text-slate-400">No products yet.</p>
+      </div>
+    );
+  }
+
+  return <ProductList products={products} />;
 }
