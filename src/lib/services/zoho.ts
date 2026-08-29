@@ -1,7 +1,7 @@
 // Workshop-specific Zoho Books queries.
 //
 // TRANSPORT LIVES IN `@/lib/integrations` — this file owns only the queries that are
-// peculiar to the workshop (BCH token extraction, invoice-number format guessing).
+// peculiar to the workshop (invoice-number format guessing).
 //
 // It used to carry its own OAuth client: a module-scoped token cache, a hardcoded
 // `https://accounts.zoho.in/oauth/v2/token`, and credentials read from ZOHO_REFRESH_TOKEN /
@@ -111,89 +111,4 @@ export async function getInvoice(invoiceId: string) {
   const client = await books();
   const data = await client.getInvoice(invoiceId);
   return data.invoice || null;
-}
-
-// Extract ALL BCH token numbers embedded in a Zoho customer_name.
-// Handles single bills ("AADYA GOWDA BCH0617", "ROOPA BCH 0497", "SAGAR BCH-0552",
-// "K MALAYADRIb bch 0337") AND combined bills where one invoice covers several
-// bikes ("GOVIND BCH0534/0535", "BCH 0534, 0535"). Returns the numeric values
-// (e.g. [534, 535]); empty array when no BCH-digits are present ("WALKIN", "BCH").
-export function extractTokenNumbers(customerName: string): number[] {
-  if (!customerName) return [];
-  const found = new Set<number>();
-  const groups = customerName.match(/BCH[\s\-:#/]*0*\d+(?:[\s,/&]+0*\d+)*/gi) || [];
-  for (const g of groups) {
-    for (const d of g.match(/\d+/g) || []) {
-      const n = parseInt(d, 10);
-      if (!Number.isNaN(n)) found.add(n);
-    }
-  }
-  return [...found];
-}
-
-// Page through paid invoices (sorted by date, descending) since the given
-// ISO date (YYYY-MM-DD). Stops when there are no more pages, when an invoice
-// older than sinceDateISO is reached, or after a 25-page safety cap.
-export async function listPaidInvoices(
-  sinceDateISO: string
-): Promise<
-  Array<{
-    invoice_number: string;
-    customer_name: string;
-    status: string;
-    total: number;
-    balance: number;
-    date: string;
-  }>
-> {
-  const client = await books();
-  const results: Array<{
-    invoice_number: string;
-    customer_name: string;
-    status: string;
-    total: number;
-    balance: number;
-    date: string;
-  }> = [];
-
-  for (let page = 1; page <= 25; page++) {
-    const data = await client.apiCall<{
-      invoices?: Array<Record<string, unknown>>;
-      page_context?: { has_more_page: boolean };
-    }>(
-      "GET",
-      invoicesUrl({
-        status: "paid",
-        sort_column: "date",
-        sort_order: "D",
-        per_page: "200",
-        page: String(page),
-      })
-    );
-
-    const invoices = Array.isArray(data?.invoices) ? data.invoices : [];
-
-    let reachedOld = false;
-    for (const inv of invoices) {
-      const date = typeof inv?.date === "string" ? inv.date : "";
-      if (date && date < sinceDateISO) {
-        reachedOld = true;
-        break;
-      }
-      results.push({
-        invoice_number: typeof inv?.invoice_number === "string" ? inv.invoice_number : "",
-        customer_name: typeof inv?.customer_name === "string" ? inv.customer_name : "",
-        status: typeof inv?.status === "string" ? inv.status : "",
-        total: typeof inv?.total === "number" ? inv.total : 0,
-        balance: typeof inv?.balance === "number" ? inv.balance : 0,
-        date,
-      });
-    }
-
-    if (reachedOld) break;
-    if (data?.page_context?.has_more_page !== true) break;
-  }
-
-  log.info("paid invoices listed", { since: sinceDateISO, count: results.length });
-  return results;
 }
