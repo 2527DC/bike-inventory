@@ -71,7 +71,10 @@ preserved across regeneration — but do not remove the marker comments.
 <!-- BEGIN:pending -->
 | Plan | State |
 |---|---|
+| `app-logic-and-problems-removal-plan.md` | proposed, nothing removed yet; three open questions for the owner |
+| `ci-build-database-dependency-plan.md` | CI trigger and Build job being fixed on refactor/integration-config |
 | `ledger-merge-plan.md` | schema, RBAC, backend and frontend shipped; PDF statement import and the 219-gap migration remain |
+| `parallel-agent-delivery-pipeline-plan.md` | machinery for running several plans at once on separate branches; nothing built, 3 open questions |
 | `pdi-module-plan.md` | nothing built, no schema changed. Two blocking questions (Q11, Q17) |
 | `sequence-race-fix-plan.md` | five sites allocate unique numbers with a read-then-write race |
 | `service-module-mobile-readiness-plan.md` | what /api/services/* needs before bch-service-app can be pointed at it |
