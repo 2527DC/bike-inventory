@@ -257,7 +257,44 @@ writing — plus importers of the three old libs.
 - A user holding only `zoho.view` sees status but cannot connect — proving the guard
   survived the route move.
 
-## 11. Open question
+## 11. The fourth client — found 29 Aug 2026, now fixed
+
+§2 counted three Zoho clients. There were **four**. `src/lib/services/zoho.ts` (204 lines,
+the workshop's invoice lookup) was missed because it matches none of the greps this plan
+used to find call sites: it never mentions `zohoConfig`, and it does not import
+`src/lib/zoho.ts`. It carried its own module-scoped token cache, its own hardcoded
+`https://accounts.zoho.in/oauth/v2/token`, and read credentials from **environment
+variables** — `ZOHO_REFRESH_TOKEN`, `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_ORG_ID`.
+
+That is worse than duplication. It is a **second source of truth for one integration**:
+disconnecting Zoho Books in Settings → Integrations did not disconnect it for the workshop,
+because this file never read `IntegrationConfig`. The JobCard invoice lookup kept working
+off env vars regardless of what the UI said.
+
+**Fixed.** Both files now go through `getBooks()`:
+
+| File | Change |
+|---|---|
+| `src/lib/services/zoho.ts` | transport removed — `getAccessToken`, the token cache, `ORG_ID`, `BASE` and `zohoGet` all deleted; the five workshop query functions now call `client.apiCall` |
+| `src/app/api/services/zoho/route.ts` | the bare `catch {}` now logs and distinguishes "not connected" (503) from a genuine Zoho failure (500); the duplicated nine-field invoice mapper is one function |
+
+Two side effects worth recording:
+
+- **`res.json()` on a third-party response is gone.** The old `zohoGet` called it directly,
+  which CLAUDE.md bans — an HTML gateway page surfaced as `Unexpected token '<'`. `apiCall`
+  uses `readJson`, which names the service and status.
+- **Four environment variables are now unused.** Nothing in `src/` reads `ZOHO_REFRESH_TOKEN`,
+  `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET` or `ZOHO_ORG_ID`. They can be removed from `.env`
+  and from the deployment environment.
+
+### Dead code found in passing — decision needed
+
+`extractTokenNumbers` and `listPaidInvoices` in `src/lib/services/zoho.ts` have **zero
+consumers** anywhere in `src/`. They were ported to the shared client rather than deleted,
+so nothing was silently dropped, but they are ~70 lines that nothing calls. Delete them, or
+name what is meant to call them.
+
+## 12. Open question
 
 **Scope.** This document plans the full restructure (table + routes + clients), which is
 what "restructure it to use it properly" implies. It can be stopped earlier:
