@@ -69,10 +69,10 @@ export default function MechanicPage() {
     }
   }, [mechId]);
 
+  // Loads once on mount. The auto-refresh interval was removed along with the
+  // scheduled jobs — use the refresh control instead.
   useEffect(() => {
     fetchJobs();
-    const interval = setInterval(fetchJobs, 60000);
-    return () => clearInterval(interval);
   }, [fetchJobs]);
 
   // Server-side search — finds delivered jobs too

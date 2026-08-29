@@ -4,7 +4,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError, getServerSession } from "@/lib/auth-helpers";
-import { ZohoClient } from "@/lib/zoho";
+import { BooksClient } from "@/lib/integrations";
 
 // GET — Settlement detail with sessions and matches
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -51,7 +51,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       account_name: string;
     }> = [];
     try {
-      const zoho = new ZohoClient();
+      const zoho = new BooksClient();
       const ok = await zoho.init();
       if (ok) {
         const dateStr = settlement.date.toISOString().split("T")[0];

@@ -35,6 +35,11 @@ import {
   IndianRupee,
   Wrench,
   Activity,
+  GraduationCap,
+  BookOpen,
+  Trophy,
+  Swords,
+  HardDrive,
   type LucideIcon,
 } from "lucide-react";
 
@@ -66,6 +71,11 @@ const ICONS: Record<string, LucideIcon> = {
   IndianRupee,
   Wrench,
   Activity,
+  GraduationCap,
+  BookOpen,
+  Trophy,
+  Swords,
+  HardDrive,
 };
 
 export function moduleIcon(name: string | null | undefined): LucideIcon {

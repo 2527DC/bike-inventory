@@ -4,7 +4,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { ZohoClient } from "@/lib/zoho";
+import { BooksClient } from "@/lib/integrations";
 
 export async function PUT(
   req: NextRequest,
@@ -72,7 +72,7 @@ export async function PUT(
 
     if (product.zohoItemId) {
       try {
-        const zoho = new ZohoClient();
+        const zoho = new BooksClient();
         const initialized = await zoho.init();
         if (initialized) {
           await zoho.apiCall("PUT", `/items/${product.zohoItemId}`, {

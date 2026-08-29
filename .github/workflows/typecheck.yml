@@ -20,7 +20,6 @@ name: CI
 #     -f 'required_status_checks[contexts][]=Build'
 on:
   pull_request:
-    branches: [main]
     types: [opened, synchronize, reopened]
 
 # A new push to the same pull request cancels the run still in flight.
@@ -76,8 +75,6 @@ jobs:
 
   build:
     name: Build
-    # Gate: the build only starts once the type check has passed. A type error therefore
-    # costs ~2 minutes rather than a full production build.
     needs: typecheck
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -94,18 +91,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # `npm run build` is `prisma generate && next build`, so no separate generate step.
-      #
-      # The placeholders below are never connected to. Next evaluates modules while
-      # collecting pages, and src/lib/db.ts constructs a PrismaClient at module scope,
-      # which wants the datasource variables to exist. Every page in this app is a client
-      # component that fetches at runtime, so nothing queries a database during the build.
-      # If that ever stops being true, this job needs a real service container rather than
-      # a longer placeholder.
       - name: Build
         run: npm run build
         env:
-          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
-          DIRECT_URL: postgresql://ci:ci@localhost:5432/ci
           NEXTAUTH_SECRET: ci-placeholder-not-a-real-secret
           NEXTAUTH_URL: http://localhost:3000

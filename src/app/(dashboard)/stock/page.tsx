@@ -1,6 +1,7 @@
 "use client";
+import { useDebounce } from "@/hooks/use-debounce";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, Square, X, Cloud, Download, Package, ChevronRight } from "lucide-react";
@@ -8,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { useDebounce, fuzzySearchFields } from "@/lib/utils";
+import { fuzzySearchFields } from "@/lib/utils";
 import { ExportButtons } from "@/components/export-buttons";
 import { exportToExcel, exportToPDF, type ExportColumn } from "@/lib/export";
 import { usePermissions } from "@/lib/use-permissions";
@@ -84,7 +85,6 @@ const QUICK_CHIPS: { key: QuickFilter; label: string }[] = [
 const BICYCLE_SIZES = ['12"', '14"', '16"', '20"', '24"', '26"', '27.5"', '29"'];
 
 const PAGE_SIZE = 100;
-const REFRESH_INTERVAL = 120_000; // 2 minutes
 
 function getStockColor(p: ProductItem) {
   if (p.currentStock <= 0) return "text-red-600";
@@ -144,7 +144,6 @@ export default function StockPage() {
   const [hasMore, setHasMore] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [refreshing, setRefreshing] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // View toggle: list vs per-item
   const [stockView, setStockView] = useState<StockView>("list");
@@ -409,14 +408,6 @@ export default function StockPage() {
   useEffect(() => {
     setPage(1);
     fetchProducts(1);
-  }, [fetchProducts]);
-
-  // Auto-refresh every 30 seconds (silent refresh, no loading spinner)
-  useEffect(() => {
-    intervalRef.current = setInterval(() => {
-      fetchProducts(1, false, true);
-    }, REFRESH_INTERVAL);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [fetchProducts]);
 
   function loadMore() {

@@ -1,16 +1,16 @@
 export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/db";
-import { ZohoClient } from "@/lib/zoho";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError, getCurrentUser } from "@/lib/auth-helpers";
+import { BooksClient } from "@/lib/integrations";
 
 export async function POST() {
   try {
     await requireFeature("zoho", "fetch");
     const currentUser = await getCurrentUser();
 
-    const zoho = new ZohoClient();
+    const zoho = new BooksClient();
     const ready = await zoho.init();
     if (!ready) return errorResponse("Zoho not connected", 400);
 

@@ -24,6 +24,16 @@ export type PermAction = "view" | "create" | "edit" | "delete" | "approve" | "fe
 // prisma/rbac-catalog.ts keeps its own copy for seed-time use.
 const READ_ACTION: PermAction = "view";
 
+/** A sub-module's parent, carried so the sidebar can render the heading. See below. */
+export interface ModuleParent {
+  key: string;
+  label: string;
+  icon: string | null;
+  route: string | null;
+  group: string | null;
+  sortOrder: number;
+}
+
 export interface GrantedModule {
   key: string;
   label: string;
@@ -33,6 +43,23 @@ export interface GrantedModule {
   sortOrder: number;
   /** Actions this user holds on this module, e.g. ["view", "edit"]. */
   actions: PermAction[];
+  /**
+   * The parent module's display fields, present on every child whether or not the parent
+   * itself is granted. **`parent === null` means this is a root module** — that is the
+   * only "am I a child" test callers need, and it is why there is no separate `parentId`
+   * here: one fact, one field.
+   *
+   * This exists because of what getAccess actually returns. The query below walks
+   * role_permissions -> permissions -> modules, so a module the user was NEVER GRANTED is
+   * not in the result at all. A user holding `staff_lms_learning.view` but not
+   * `staff_lms.view` therefore gets the child row and nothing else — and the sidebar would
+   * have no label, icon or group to build the section heading from.
+   *
+   * Carrying the parent here costs one nested select and zero extra queries. It leaks no
+   * access: a label and an icon are navigation chrome, and the child grant already tells
+   * the user this area exists.
+   */
+  parent: ModuleParent | null;
 }
 
 export interface ResolvedAccess {
@@ -89,6 +116,17 @@ export const getAccess = cache(async (userId: string): Promise<ResolvedAccess> =
                       group: true,
                       sortOrder: true,
                       isActive: true,
+                      // The parent may not be granted — see GrantedModule.parent.
+                      parent: {
+                        select: {
+                          key: true,
+                          label: true,
+                          icon: true,
+                          route: true,
+                          group: true,
+                          sortOrder: true,
+                        },
+                      },
                     },
                   },
                 },
@@ -125,6 +163,7 @@ export const getAccess = cache(async (userId: string): Promise<ResolvedAccess> =
         group: mod.group,
         sortOrder: mod.sortOrder,
         actions: [],
+        parent: mod.parent,
       };
       moduleMap.set(mod.key, entry);
     }

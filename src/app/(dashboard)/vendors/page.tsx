@@ -6,7 +6,7 @@ import { Search, Phone, Building2, Star } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { SkeletonList } from "@/components/ui/skeleton";
-import { useDebounce } from "@/lib/utils";
+import { useDebounce } from "@/hooks/use-debounce";
 import { ExportButtons } from "@/components/export-buttons";
 import { FilterSheet } from "@/components/filter-sheet";
 import { DesktopTable } from "@/components/desktop-table";

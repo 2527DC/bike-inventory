@@ -128,11 +128,11 @@ export default function AnalyticsPage() {
     }
   }, [storeId, date]);
 
+  // Loads once on mount. The auto-refresh interval was removed along with the
+  // scheduled jobs — use the refresh control instead.
   useEffect(() => {
     if (!allowed) return;
     void load();
-    const t = setInterval(load, 15000);
-    return () => clearInterval(t);
   }, [allowed, load]);
 
   // A fresh install has no devices, so nothing can ever report footfall. Say so, and say

@@ -1,0 +1,603 @@
+{
+  "info": {
+    "_postman_id": "bch-staff-lms-module",
+    "name": "BCH OPS — Staff LMS / Learning Module",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Comprehensive Postman collection for all Staff LMS / Learning module endpoints.\n\n## Authentication Strategies\n\n### 1. Mobile App Bearer Auth (Recommended for App Integration)\n- Call **00 Auth & Mobile Login → 1. Mobile Login (accessCode)** with `accessCode` (e.g. `BCH-ADM-01` or `BCH-MECH-01`).\n- The test script automatically saves the returned JWT `token` into collection variables.\n- All subsequent requests attach `Authorization: Bearer {{token}}`.\n\n### 2. Web NextAuth Cookie Session\n- Run **00 Auth & Mobile Login → 2. Web CSRF Token** followed by **3. Web Sign in (accessCode)**.\n- NextAuth session cookie (`next-auth.session-token`) is saved and attached automatically."
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "accessCode",
+      "value": "BCH-ADM-01",
+      "type": "string"
+    },
+    {
+      "key": "csrfToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "courseId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "lessonId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "quizId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "weeklyTestId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "productId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "levelId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "playbookId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "00 Auth & Mobile Login",
+      "description": "Endpoints to authenticate mobile app and web clients.",
+      "item": [
+        {
+          "name": "1. Mobile Login (accessCode)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.token) {",
+                  "  pm.collectionVariables.set('token', j.token);",
+                  "  pm.test('Mobile token captured', () => pm.expect(j.token).to.be.a('string'));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accessCode\": \"{{accessCode}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/auth/mobile-login",
+            "description": "Mobile app login with accessCode. Returns JWT token and user permissions."
+          }
+        },
+        {
+          "name": "2. Web CSRF Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "pm.collectionVariables.set('csrfToken', j.csrfToken);",
+                  "pm.test('csrfToken captured', () => pm.expect(j.csrfToken).to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Captures CSRF token for NextAuth web cookie login."
+          }
+        },
+        {
+          "name": "3. Web Sign in (accessCode)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "csrfToken",
+                  "value": "{{csrfToken}}",
+                  "type": "text"
+                },
+                {
+                  "key": "accessCode",
+                  "value": "{{accessCode}}",
+                  "type": "text"
+                },
+                {
+                  "key": "json",
+                  "value": "true",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/auth/callback/credentials",
+            "description": "NextAuth web credential sign in."
+          }
+        },
+        {
+          "name": "4. Verify Session & Permissions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/session",
+            "description": "Verifies active session and roles."
+          }
+        }
+      ]
+    },
+    {
+      "name": "01 Learner & Dashboard",
+      "description": "Learner personal stats, streak, dashboard metrics, and activity heartbeat.",
+      "item": [
+        {
+          "name": "Get Learner Profile & XP (/me)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/me",
+            "description": "Returns current staff level, streak, XP progress, achievements, and recent activity."
+          }
+        },
+        {
+          "name": "Get LMS Dashboard Analytics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/dashboard",
+            "description": "Aggregated analytics, active tips, announcements, and team KPI overview."
+          }
+        },
+        {
+          "name": "Post Activity Heartbeat",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"daily_login\",\n  \"metadata\": { \"source\": \"mobile-app\" }\n}"
+            },
+            "url": "{{baseUrl}}/api/staff-lms/heartbeat",
+            "description": "Maintains active streak and logs daily staff activity."
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 Learning Pathway & Courses",
+      "description": "Structured curriculum, course modules, lessons, and progress tracking.",
+      "item": [
+        {
+          "name": "List All Levels & Courses",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/learning",
+            "description": "Returns levels tree with assigned courses and overall completion status."
+          }
+        },
+        {
+          "name": "List Courses",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/learning/courses",
+            "description": "List all published courses with modules count."
+          }
+        },
+        {
+          "name": "Get Course Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/learning/courses/{{courseId}}",
+            "description": "Fetches a specific course with its lessons and quizzes."
+          }
+        },
+        {
+          "name": "Get Lesson Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/learning/lessons/{{lessonId}}",
+            "description": "Fetches rich text lesson content, media, and interactive checkpoints."
+          }
+        },
+        {
+          "name": "Submit Lesson Progress",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"completed\": true,\n  \"timeSpentSeconds\": 120\n}"
+            },
+            "url": "{{baseUrl}}/api/staff-lms/learning/lessons/{{lessonId}}/progress",
+            "description": "Marks lesson as completed and awards XP."
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Quizzes & Weekly Tests",
+      "description": "Assessment engines, knowledge checks, weekly test series, and grading.",
+      "item": [
+        {
+          "name": "List Available Quizzes",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/learning/quizzes",
+            "description": "Returns all quiz modules and pass rates."
+          }
+        },
+        {
+          "name": "Get Quiz Detail & Questions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/learning/quizzes/{{quizId}}",
+            "description": "Fetches questions and option choices for a quiz."
+          }
+        },
+        {
+          "name": "Submit Quiz Attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"answers\": [\n    { \"questionId\": \"q1\", \"selectedOption\": 2 }\n  ]\n}"
+            },
+            "url": "{{baseUrl}}/api/staff-lms/learning/quizzes/{{quizId}}/attempts",
+            "description": "Evaluates quiz answers, records score, and computes pass/fail."
+          }
+        },
+        {
+          "name": "List Weekly Tests",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/learning/weekly-tests",
+            "description": "Returns the active weekly knowledge test."
+          }
+        },
+        {
+          "name": "Submit Weekly Test Attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"answers\": [\n    { \"questionId\": \"wt-q1\", \"selectedOption\": 1 }\n  ]\n}"
+            },
+            "url": "{{baseUrl}}/api/staff-lms/learning/weekly-tests/{{weeklyTestId}}/attempts",
+            "description": "Submits weekly test for official evaluation."
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 Roleplay & Practice Scenarios",
+      "description": "Customer objections, sales simulations, dialogue practice, and playbooks.",
+      "item": [
+        {
+          "name": "List Playbooks & Scenarios",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/learning/playbooks",
+            "description": "Returns customer simulation scenarios categorized by sales & technical service."
+          }
+        },
+        {
+          "name": "Get Playbook Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/learning/playbooks/{{playbookId}}",
+            "description": "Fetches customer persona, difficulty, checklist items, and dialogue steps."
+          }
+        },
+        {
+          "name": "List Product Objections",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/products/objections",
+            "description": "Returns top customer objections and standard counter-responses."
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 Product Knowledge & Specs",
+      "description": "Bicycle catalog specs, key USPs, competitive comparisons, and price tiers.",
+      "item": [
+        {
+          "name": "List Products for Learning",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/products",
+            "description": "Lists bicycles with brand, category, price, and specs."
+          }
+        },
+        {
+          "name": "Get Product Spec Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/products/{{productId}}",
+            "description": "Full technical specifications, key features, and sales talking points."
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 Leaderboard & Rank",
+      "description": "Store-wide XP leaderboard, staff rankings, and achievements catalog.",
+      "item": [
+        {
+          "name": "Get Store Leaderboard (/rank)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/rank",
+            "description": "Returns team members ordered by XP, level, and weekly streak."
+          }
+        },
+        {
+          "name": "Get Team Performance Analytics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/performance",
+            "description": "Pass rates, average completion times, and store coaching metrics."
+          }
+        },
+        {
+          "name": "List Available Achievements",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/manage/achievements",
+            "description": "Returns all unlockable badges, criteria, and bonus XP rewards."
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 Management & Admin",
+      "description": "Announcements, daily sales tips, video library, and course management.",
+      "item": [
+        {
+          "name": "List Store Announcements",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/manage/announcements",
+            "description": "Fetches bulletin announcements and store updates."
+          }
+        },
+        {
+          "name": "Create Announcement",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Weekend Sale Coaching\",\n  \"content\": \"Focus on recommending helmet & lock bundles.\",\n  \"priority\": \"HIGH\"\n}"
+            },
+            "url": "{{baseUrl}}/api/staff-lms/manage/announcements",
+            "description": "Admin creates a new store announcement."
+          }
+        },
+        {
+          "name": "List Daily Tips",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/manage/tips",
+            "description": "Fetches daily coaching tips."
+          }
+        },
+        {
+          "name": "List Training Videos",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/staff-lms/learning/videos",
+            "description": "Fetches video training lessons and tutorials."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -20,6 +20,8 @@ interface ModuleRow {
   label: string;
   description: string | null;
   group: string | null;
+  /** null = a root module. Sub-modules render indented under their parent. */
+  parentId: string | null;
   permissions: PermissionRow[];
 }
 interface RoleRow {
@@ -164,6 +166,23 @@ export default function PermissionsPage() {
     }
   };
 
+  // Order a group's modules as roots-then-their-children, so the grant screen shows the
+  // same tree the sidebar does. Deliberately NOT collapsible: the sidebar collapses because
+  // it is navigation you scan constantly, while this is a form you fill in once per role —
+  // a hidden section here is a checkbox someone cannot find.
+  //
+  // The trailing append is not defensive padding. A child whose parent sits in a different
+  // `group` (the seeder forbids it, but data drifts) would be picked up by neither loop and
+  // would VANISH from this screen — a permission that cannot be granted because it does not
+  // render. An ugly row beats a missing one.
+  function orderTree(items: ModuleRow[]): ModuleRow[] {
+    const ordered = items
+      .filter((m) => !m.parentId)
+      .flatMap((root) => [root, ...items.filter((c) => c.parentId === root.id)]);
+    const seen = new Set(ordered.map((m) => m.id));
+    return [...ordered, ...items.filter((m) => !seen.has(m.id))];
+  }
+
   // Group modules for display.
   const groups: { title: string; items: ModuleRow[] }[] = [];
   for (const m of modules) {
@@ -242,7 +261,7 @@ export default function PermissionsPage() {
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 px-1">
             {group.title}
           </p>
-          {group.items.map((mod) => {
+          {orderTree(group.items).map((mod) => {
             const ids = mod.permissions.map((p) => p.id);
             const allOn = ids.length > 0 && ids.every((id) => granted.has(id));
             const sorted = [...mod.permissions].sort(
@@ -250,15 +269,25 @@ export default function PermissionsPage() {
             );
 
             return (
-              <Card key={mod.id}>
+              <Card key={mod.id} className={mod.parentId ? "ml-4" : undefined}>
                 <CardContent className="p-3">
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-900">{mod.label}</p>
+                      <p className="text-sm font-semibold text-slate-900">
+                        {mod.parentId && (
+                          <span className="text-slate-400 mr-1" aria-hidden="true">
+                            &#8627;
+                          </span>
+                        )}
+                        {mod.label}
+                      </p>
                       {mod.description && (
                         <p className="text-[11px] text-slate-500">{mod.description}</p>
                       )}
                     </div>
+                    {/* Scoped to THIS module only — it must never cascade a parent's ticks
+                        onto its children. A grant is one row per module × action; a
+                        cascading control would silently write grants nobody chose. */}
                     <button
                       onClick={() => toggleModule(mod)}
                       disabled={readOnly}

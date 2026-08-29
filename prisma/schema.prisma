@@ -33,9 +33,32 @@ model Module {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  // ── Sub-module tree ────────────────────────────────────────────────────────
+  // NULL = a root module, which is every row that existed before Staff LMS. The sidebar
+  // renders roots as collapsible parents and children indented beneath them.
+  //
+  // Restrict, NOT Cascade — deliberately. Deleting a parent must never silently delete
+  // its children: that cascades into `permissions`, which cascades into
+  // `role_permissions`, revoking grants across every role with no error and no audit
+  // trail. Restrict forces the admin (or the seeder) to re-parent or delete children first.
+  //
+  // FOUR INVARIANTS THE FOREIGN KEY CANNOT EXPRESS. All four are asserted in
+  // prisma/seed-rbac.ts, because each fails silently rather than loudly:
+  //   1. Depth is exactly two. A self-FK permits arbitrary nesting and Postgres cannot cap
+  //      it without a recursive CHECK; a grandchild would exist in the DB and render
+  //      NOWHERE — the grant works and the link never appears.
+  //   2. No cycles. A -> B -> A satisfies the FK and hangs a recursive sidebar builder.
+  //   3. `group` belongs to the parent only. A child with its own group gives the sidebar
+  //      two competing grouping mechanisms and renders the section twice.
+  //   4. `sortOrder` is sibling-scoped for children; roots keep the global band ordering.
+  parentId String?  @map("parent_id")
+  parent   Module?  @relation("ModuleTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children Module[] @relation("ModuleTree")
+
   permissions Permission[]
 
   @@index([isActive, sortOrder])
+  @@index([parentId, sortOrder]) // the sidebar reads children by parent, in order
   @@map("modules")
 }
 
@@ -288,6 +311,19 @@ model User {
   uploadedGapEvidence  LedgerGapEvidence[]  @relation("GapEvidenceUploadedBy")
   createdDiscountTerms VendorDiscountTerm[] @relation("DiscountTermCreatedBy")
 
+  // Staff LMS (merged from bch-sales-training). There is ONE user table: a learner is an
+  // ordinary User holding a staff_lms grant, not a separate account. The source app's
+  // `users` row — plaintext 4-digit pin, unsigned session cookie — was deleted on merge.
+  //
+  // All six cascade on delete, so removing a user removes their learning history with
+  // them. /team deactivates rather than deletes today; a future hard delete would be quiet.
+  lmsProgress          LmsProgress?           @relation("LmsProgressUser")
+  lmsQuizAttempts      LmsQuizAttempt[]       @relation("LmsQuizAttemptUser")
+  lmsWeeklyTestAttempts LmsWeeklyTestAttempt[] @relation("LmsWeeklyTestAttemptUser")
+  lmsLessonProgress    LmsLessonProgress[]    @relation("LmsLessonProgressUser")
+  lmsAchievements      LmsUserAchievement[]   @relation("LmsUserAchievementUser")
+  lmsActivityLogs      LmsActivityLog[]       @relation("LmsActivityLogUser")
+
   @@index([roleId])
 }
 
@@ -386,6 +422,11 @@ model Product {
   inboundLineItems   InboundLineItem[]
   brandStockMatches  BrandStockItem[]       @relation("BrandStockMatches")
   brandSkuMappings   BrandSkuMapping[]      @relation("BrandSkuMappingProducts")
+
+  // Staff LMS learning cards that have been soft-linked to this SKU. Optional and NULL on
+  // every seeded row — an LmsProduct is a sales STORY (one bicycle model, mostly narrative
+  // JSON), not a stock-keeping unit, and it maps to N SKUs or to none. See LmsProduct.
+  lmsProducts LmsProduct[] @relation("LmsProductSku")
 
   @@index([status])
   @@index([categoryId])
@@ -832,8 +873,20 @@ model BankTransaction {
   @@index([date])
 }
 
-model ZohoConfig {
-  id                   String    @id @default("singleton")
+// One row per external integration. Replaces ZohoConfig, ZakyaConfig and
+// ZohoInventoryConfig, which were three tables with byte-identical columns — same 13
+// fields in the same order, differing in nothing but their name.
+//
+// `provider` is the primary key and a plain String rather than an enum, deliberately:
+// adding a fourth integration should be a row, not a migration. The three valid values
+// are validated with zod in the route.
+//
+// Valid values: ZOHO_BOOKS | ZAKYA_POS | ZOHO_INVENTORY
+//
+// Secrets are plaintext, matching the tables this replaces. Anyone with database read
+// access holds the OAuth credentials; that is an accepted trade-off, not an oversight.
+model IntegrationConfig {
+  provider             String    @id
   clientId             String?
   clientSecret         String?
   refreshToken         String?
@@ -845,36 +898,37 @@ model ZohoConfig {
   lastSyncAt           DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
+
+  @@map("integration_config")
 }
 
-model ZakyaConfig {
-  id                   String    @id @default("singleton")
-  clientId             String?
-  clientSecret         String?
-  refreshToken         String?
-  accessToken          String?
-  accessTokenExpiresAt DateTime?
-  organizationId       String?
-  organizationName     String?
-  isConnected          Boolean   @default(false)
-  lastSyncAt           DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
-}
+// Where uploaded media lives. One row, chosen and configured from Settings -> Storage
+// rather than from environment variables, so switching provider needs no redeploy.
+//
+// `provider` is a plain String, not an enum, on purpose: adding a provider later should be
+// a row, not a migration. The valid values are validated with zod in the route.
+//
+// Secrets are stored in plaintext, matching ZohoConfig.clientSecret above. That is a
+// deliberate, accepted trade-off, not an oversight: anyone with database read access holds
+// the AWS keys. The API never returns secretAccessKey to the browser - it masks it.
+model StorageConfig {
+  id              String    @id @default("singleton")
+  provider        String    @default("LOCAL") // LOCAL | S3
+  bucket          String?
+  region          String? // real AWS region, e.g. ap-south-1
+  accessKeyId     String?
+  secretAccessKey String?
+  publicBaseUrl   String? // CloudFront domain or public bucket URL; base for stored file URLs
+  localDir        String? // filesystem root when provider = LOCAL
 
-model ZohoInventoryConfig {
-  id                   String    @id @default("singleton")
-  clientId             String?
-  clientSecret         String?
-  refreshToken         String?
-  accessToken          String?
-  accessTokenExpiresAt DateTime?
-  organizationId       String?
-  organizationName     String?
-  isConnected          Boolean   @default(false)
-  lastSyncAt           DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  // Set only by a successful round-trip test, never by saving the form. A provider that has
+  // not proven it can put, get and delete an object must not become the live one.
+  isConnected   Boolean   @default(false)
+  lastTestedAt  DateTime?
+  lastTestError String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model SyncLog {
@@ -2269,4 +2323,475 @@ model FootfallDaily {
 
   @@unique([storeId, businessDate])
   @@map("footfall_daily")
+}
+
+// ─── Staff LMS (merged from bch-sales-training) ──────────────────────────────
+// Course modules, quizzes, product playbooks and team learning progress.
+// Plan: docs/plan/staff-lms-merge-plan.md
+//
+// NAMING — read before adding anything here.
+// Every model is `Lms*` and every table is `lms_*`. This is all-or-nothing: the source
+// app used bare names (`products`, `quizzes`, `videos`, `courses`), and `products` vs
+// this repo's `"Product"` are DISTINCT quoted identifiers in Postgres. One missed @@map
+// and `select * from products` in psql silently hits the wrong table with no error.
+//
+// `training_modules` was renamed to `lms_lessons` ON PURPOSE. "Module" already means a
+// permission area in this codebase (see Module, above). Without the rename,
+// `prisma.module.findMany()` meaning "lessons" returns permission rows — a query that
+// succeeds, looks plausible, and is wrong. In this block a lesson is a LESSON.
+//
+// AUTH — there is no LMS user. The source app's `users` table, its plaintext `pin` and
+// its unsigned `bch-session` cookie were deleted on merge; learners are ordinary `User`
+// rows reached through NextAuth + requireFeature("staff_lms…", action).
+
+model LmsProduct {
+  id    String  @id @default(cuid())
+  name  String
+  brand String
+  // Riding style: MTB | Hybrid | Road | Kids | City | E-Cycle. NOT this repo's Category
+  // (a product class: Bicycles, Spare Parts, Accessories). Orthogonal taxonomies —
+  // neither substitutes for the other, which is why both of these stay plain strings.
+  category String
+  // Display price on a learning card. Float like every other price column here; the
+  // source used Decimal, which JSON-serialises as a string and forced Number() casts.
+  price            Float?
+  imageUrl         String?  @map("image_url")
+  usps             String[] @default([])
+  features         String[] @default([])
+  talkingPoints    String[] @default([]) @map("talking_points")
+  targetCustomer   String?  @map("target_customer")
+  commonObjections Json     @default("[]") @map("common_objections")
+  buyerPsychology  Json     @default("{}") @map("buyer_psychology")
+  uniqueFact       String?  @map("unique_fact")
+  specs            Json     @default("{}")
+  competitors      Json     @default("[]") // deliberately names bikes BCH does NOT stock
+  reviews          Json     @default("{}")
+  sources          Json     @default("[]")
+  faqs             Json     @default("[]")
+  isActive         Boolean  @default(true) @map("is_active")
+
+  // Optional soft link to the stock SKU. NULL on every seeded row. Exists so a future
+  // "in stock / live price" badge on a learning card needs a migration, not a redesign.
+  // Named stockProductId, NOT productId: LmsVideo also carries a product link and that
+  // one points HERE. Two columns named productId meaning different tables is exactly the
+  // ambiguity this block exists to remove.
+  stockProductId String?  @map("stock_product_id")
+  stockProduct   Product? @relation("LmsProductSku", fields: [stockProductId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  videos LmsVideo[] @relation("LmsVideoProduct")
+
+  @@index([isActive])
+  @@index([brand])
+  @@index([category])
+  @@index([stockProductId])
+  @@map("lms_products")
+}
+
+// Win-a-client playbooks. Called "scenarios" in the source app; surfaced as Playbooks.
+model LmsScenario {
+  id          String   @id @default(cuid())
+  title       String
+  type        String
+  description String?
+  checklist   Json     @default("[]")
+  tips        String[] @default([])
+  difficulty  String   @default("beginner")
+  sortOrder   Int      @default(0) @map("sort_order")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([isActive, sortOrder])
+  @@map("lms_scenarios")
+}
+
+model LmsVideoCategory {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  videos LmsVideo[]
+
+  @@index([sortOrder])
+  @@map("lms_video_categories")
+}
+
+model LmsVideo {
+  id              String  @id @default(cuid())
+  title           String
+  description     String?
+  youtubeUrl      String  @map("youtube_url")
+  categoryId      String? @map("category_id")
+  durationMinutes Int?    @map("duration_minutes")
+  sortOrder       Int     @default(0) @map("sort_order")
+  isActive        Boolean @default(true) @map("is_active")
+
+  // Points at the LEARNING product (lms_products), not the stock SKU.
+  lmsProductId String? @map("lms_product_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  category   LmsVideoCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  lmsProduct LmsProduct?       @relation("LmsVideoProduct", fields: [lmsProductId], references: [id], onDelete: SetNull)
+
+  @@index([categoryId])
+  @@index([lmsProductId])
+  @@index([isActive, sortOrder])
+  @@map("lms_videos")
+}
+
+model LmsQuiz {
+  id           String   @id @default(cuid())
+  title        String
+  description  String?
+  type         String   @default("general")
+  difficulty   String   @default("beginner")
+  passingScore Int      @default(70) @map("passing_score")
+  xpReward     Int      @default(50) @map("xp_reward")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  questions LmsQuizQuestion[]
+  attempts  LmsQuizAttempt[]
+
+  @@index([isActive])
+  @@index([type])
+  @@map("lms_quizzes")
+}
+
+model LmsQuizQuestion {
+  id       String @id @default(cuid())
+  quizId   String @map("quiz_id")
+  question String
+  options  Json
+  // NEVER include this in a learner payload — the quiz becomes beatable from devtools.
+  // Grading is server-side; the key is returned only under an `edit` grant.
+  correctIndex Int     @map("correct_index")
+  explanation  String?
+  sortOrder    Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  quiz LmsQuiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
+
+  @@index([quizId, sortOrder])
+  @@map("lms_quiz_questions")
+}
+
+model LmsQuizAttempt {
+  id     String @id @default(cuid())
+  userId String @map("user_id")
+  quizId String @map("quiz_id")
+
+  score       Int
+  total       Int
+  passed      Boolean
+  answers     Json     @default("[]")
+  xpEarned    Int      @default(0) @map("xp_earned")
+  completedAt DateTime @default(now()) @map("completed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User    @relation("LmsQuizAttemptUser", fields: [userId], references: [id], onDelete: Cascade)
+  quiz LmsQuiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
+
+  // checkAchievements counts (userId, passed) on EVERY xp award — the hottest read here.
+  @@index([userId, passed])
+  @@index([quizId])
+  @@index([userId, completedAt])
+  @@map("lms_quiz_attempts")
+}
+
+model LmsAchievement {
+  id          String @id @default(cuid())
+  name        String
+  description String
+  icon        String
+
+  // "quiz_count" | "video_count" | "product_learned" | "streak" | "xp" …
+  // NOTE: `roleplay_count` is deliberately absent. AI roleplay is out of scope, so such a
+  // row could never be satisfied; the award switch logs a warning on an unknown type.
+  criteriaType  String @map("criteria_type")
+  criteriaValue Int    @map("criteria_value")
+  xpReward      Int    @default(100) @map("xp_reward")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  userAchievements LmsUserAchievement[]
+
+  @@index([criteriaType])
+  @@map("lms_achievements")
+}
+
+model LmsUserAchievement {
+  id            String   @id @default(cuid())
+  userId        String   @map("user_id")
+  achievementId String   @map("achievement_id")
+  earnedAt      DateTime @default(now()) @map("earned_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user        User           @relation("LmsUserAchievementUser", fields: [userId], references: [id], onDelete: Cascade)
+  achievement LmsAchievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+  @@index([userId])
+  @@index([achievementId])
+  @@map("lms_user_achievements")
+}
+
+// One row per learner. Created lazily by ensureProgress() — a learner has no row until
+// their first action, and the source app's code silently dropped that first action.
+model LmsProgress {
+  id     String @id @default(cuid())
+  userId String @unique @map("user_id")
+
+  xp             Int      @default(0)
+  level          Int      @default(1)
+  streakDays     Int      @default(0) @map("streak_days")
+  longestStreak  Int      @default(0) @map("longest_streak")
+  lastActiveDate DateTime @default(now()) @map("last_active_date") @db.Date
+
+  videosWatched      String[] @default([]) @map("videos_watched")
+  scenariosCompleted String[] @default([]) @map("scenarios_completed")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation("LmsProgressUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([xp]) // Rank sort
+  @@map("lms_progress")
+}
+
+// Kept separate from OpsActivityLog on purpose: different shape, and the XP engine reads
+// it back to count `product_learned` events.
+//
+// The only model in this block with no `updatedAt`, deliberately — it is append-only, and
+// OpsActivityLog (the house's own activity log) omits it for the same reason. A row here
+// is a fact about a moment; there is nothing to update.
+model LmsActivityLog {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  activityType String   @map("activity_type")
+  details      Json     @default("{}")
+  xpEarned     Int      @default(0) @map("xp_earned")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user User @relation("LmsActivityLogUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  // The performance section full-scans both of these in the source app.
+  @@index([userId, createdAt])
+  @@index([activityType])
+  @@map("lms_activity_log")
+}
+
+model LmsAnnouncement {
+  id        String    @id @default(cuid())
+  title     String
+  content   String
+  priority  String    @default("normal")
+  isActive  Boolean   @default(true) @map("is_active")
+  expiresAt DateTime? @map("expires_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  @@index([isActive, createdAt])
+  @@index([expiresAt])
+  @@map("lms_announcements")
+}
+
+model LmsDailyTip {
+  id           String    @id @default(cuid())
+  content      String
+  category     String    @default("general")
+  scheduledFor DateTime? @map("scheduled_for") @db.Date
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@index([isActive, scheduledFor])
+  @@map("lms_daily_tips")
+}
+
+// Course > Level > Lesson > Question. A learner walks lessons in sortOrder; the next
+// lesson unlocks when the previous one is complete.
+model LmsCourse {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  levels LmsCourseLevel[]
+
+  @@index([isActive])
+  @@map("lms_courses")
+}
+
+model LmsCourseLevel {
+  id          String  @id @default(cuid())
+  courseId    String  @map("course_id")
+  title       String
+  description String?
+  sortOrder   Int     @default(0) @map("sort_order")
+  weekNumber  Int?    @map("week_number")
+  brandFocus  String? @map("brand_focus")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  course  LmsCourse   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons LmsLesson[]
+
+  @@index([courseId, sortOrder])
+  @@map("lms_course_levels")
+}
+
+// A LESSON — one video + pointers + checklist + a short quiz. Was `TrainingModule` /
+// `training_modules` in the source app; renamed so "module" means one thing in this repo.
+model LmsLesson {
+  id          String  @id @default(cuid())
+  levelId     String  @map("level_id")
+  title       String
+  description String?
+  sortOrder   Int     @default(0) @map("sort_order")
+  youtubeUrl  String? @map("youtube_url")
+  keyPointers Json    @default("[]") @map("key_pointers")
+  checklist   Json    @default("[]")
+  xpReward    Int     @default(30) @map("xp_reward")
+  isActive    Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  level     LmsCourseLevel      @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  questions LmsLessonQuestion[]
+  progress  LmsLessonProgress[]
+
+  @@index([levelId, sortOrder])
+  @@index([isActive])
+  @@map("lms_lessons")
+}
+
+model LmsLessonQuestion {
+  id       String @id @default(cuid())
+  lessonId String @map("lesson_id")
+  question String
+  options  Json
+  // Same rule as LmsQuizQuestion.correctIndex — never in a learner payload.
+  correctIndex Int     @map("correct_index")
+  explanation  String?
+  sortOrder    Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  lesson LmsLesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@index([lessonId, sortOrder])
+  @@map("lms_lesson_questions")
+}
+
+model LmsLessonProgress {
+  id       String @id @default(cuid())
+  userId   String @map("user_id")
+  lessonId String @map("lesson_id")
+
+  videoWatched  Boolean   @default(false) @map("video_watched")
+  checklistDone Json      @default("[]") @map("checklist_done")
+  quizScore     Int?      @map("quiz_score")
+  quizTotal     Int?      @map("quiz_total")
+  quizPassed    Boolean   @default(false) @map("quiz_passed")
+  completed     Boolean   @default(false)
+  xpEarned      Int       @default(0) @map("xp_earned")
+  completedAt   DateTime? @map("completed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user   User      @relation("LmsLessonProgressUser", fields: [userId], references: [id], onDelete: Cascade)
+  lesson LmsLesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, lessonId])
+  @@index([userId, completed]) // unlock computation
+  @@index([lessonId])
+  @@map("lms_lesson_progress")
+}
+
+model LmsWeeklyTest {
+  id           String    @id @default(cuid())
+  title        String
+  weekNumber   Int       @map("week_number")
+  description  String?
+  passingScore Int       @default(70) @map("passing_score")
+  xpReward     Int       @default(100) @map("xp_reward")
+  scheduledFor DateTime? @map("scheduled_for") @db.Date
+  isActive     Boolean   @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  questions LmsWeeklyTestQuestion[]
+  attempts  LmsWeeklyTestAttempt[]
+
+  @@index([isActive, weekNumber])
+  @@index([scheduledFor])
+  @@map("lms_weekly_tests")
+}
+
+model LmsWeeklyTestQuestion {
+  id       String @id @default(cuid())
+  testId   String @map("test_id")
+  question String
+  options  Json
+  // Same rule again — never in a learner payload.
+  correctIndex Int     @map("correct_index")
+  explanation  String?
+  sortOrder    Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  test LmsWeeklyTest @relation(fields: [testId], references: [id], onDelete: Cascade)
+
+  @@index([testId, sortOrder])
+  @@map("lms_weekly_test_questions")
+}
+
+model LmsWeeklyTestAttempt {
+  id     String @id @default(cuid())
+  userId String @map("user_id")
+  testId String @map("test_id")
+
+  score       Int
+  total       Int
+  passed      Boolean
+  answers     Json     @default("[]")
+  xpEarned    Int      @default(0) @map("xp_earned")
+  completedAt DateTime @default(now()) @map("completed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User          @relation("LmsWeeklyTestAttemptUser", fields: [userId], references: [id], onDelete: Cascade)
+  test LmsWeeklyTest @relation(fields: [testId], references: [id], onDelete: Cascade)
+
+  @@index([userId, passed])
+  @@index([testId])
+  @@index([userId, completedAt])
+  @@map("lms_weekly_test_attempts")
 }

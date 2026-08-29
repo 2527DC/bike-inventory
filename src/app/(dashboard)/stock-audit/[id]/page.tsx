@@ -1,4 +1,5 @@
 "use client";
+import { useDebounce } from "@/hooks/use-debounce";
 
 import { useState, useEffect, useCallback, useRef, use } from "react";
 import { useSession } from "next-auth/react";
@@ -14,7 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { SkeletonList } from "@/components/ui/skeleton";
-import { useDebounce, fuzzyMatch } from "@/lib/utils";
+import { fuzzyMatch } from "@/lib/utils";
 
 interface StockCountItemData {
   id: string;

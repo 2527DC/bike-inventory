@@ -1,4 +1,6 @@
 import { getServerSession as nextAuthGetServerSession } from "next-auth";
+import { decode } from "next-auth/jwt";
+import { headers } from "next/headers";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { getAccess, userCan, type PermAction } from "@/lib/rbac";
@@ -23,13 +25,47 @@ export async function getServerSession() {
 /**
  * The authenticated user, re-read from the DB so a deactivated account or a role change
  * takes effect immediately rather than riding on a stale JWT.
+ *
+ * Supports both:
+ * 1. Web session cookies (NextAuth getServerSession)
+ * 2. Mobile / API Bearer tokens (Authorization: Bearer <jwt>)
  */
 export async function getCurrentUser(): Promise<CurrentUser | null> {
-  const session = await getServerSession();
-  if (!session?.user) return null;
+  let userId: string | null = null;
 
-  const userId = (session.user as { userId?: string; id?: string }).userId
-    || (session.user as { id?: string }).id;
+  // 1. Check NextAuth cookie session (for Web)
+  try {
+    const session = await getServerSession();
+    if (session?.user) {
+      userId =
+        (session.user as { userId?: string; id?: string }).userId ||
+        (session.user as { id?: string }).id ||
+        null;
+    }
+  } catch {
+    // ignore session lookup failure in non-cookie requests
+  }
+
+  // 2. If no cookie session, check Authorization header (for Mobile App)
+  if (!userId) {
+    try {
+      const headerList = await headers();
+      const authHeader = headerList.get("authorization");
+      if (authHeader && authHeader.startsWith("Bearer ")) {
+        const token = authHeader.substring(7).trim();
+        const secret = process.env.NEXTAUTH_SECRET;
+        if (token && secret) {
+          const decoded = await decode({ token, secret });
+          if (decoded) {
+            userId = (decoded.userId as string) || (decoded.sub as string) || null;
+          }
+        }
+      }
+    } catch {
+      // headers() might not be available in non-request contexts
+    }
+  }
+
   if (!userId) return null;
 
   const dbUser = await prisma.user.findUnique({
@@ -61,7 +97,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
  * Authentication only — "is a real, active user making this request".
  *
  * Use this ONLY where no module/action pair is meaningful: the permission bootstrap
- * endpoint, self-service profile reads, and public/cron handlers. Everything that touches
+ * endpoint, self-service profile reads, and public handlers. Everything that touches
  * a feature must use requireFeature() instead, so access is decided by data rather than code.
  */
 export async function requireAuth(): Promise<CurrentUser> {

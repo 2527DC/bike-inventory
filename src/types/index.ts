@@ -444,3 +444,5 @@ export interface VendorIssue {
   createdById: string;
   createdAt: string;
 }
+
+export * from './lms';

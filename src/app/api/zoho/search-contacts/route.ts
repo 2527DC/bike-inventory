@@ -1,9 +1,9 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
-import { ZohoClient } from "@/lib/zoho";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { BooksClient } from "@/lib/integrations";
 
 export async function GET(req: NextRequest) {
   try {
@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
       return errorResponse("Search query must be at least 2 characters", 400);
     }
 
-    const zoho = new ZohoClient();
+    const zoho = new BooksClient();
     const ready = await zoho.init();
     if (!ready) return errorResponse("Zoho not connected", 400);
 

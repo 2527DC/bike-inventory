@@ -72,7 +72,7 @@ export function fromDateColumn(value: Date): BusinessDate {
  * For the POS models, NOT for count_events. `PosSession.sessionDate` and
  * `CustomerInvoice.invoiceDate` are plain DateTime columns that the rest of the app anchors
  * at UTC midnight — see api/pos/settlement/route.ts (`new Date(date + "T00:00:00Z")`) and
- * api/cron/invoice-pull/route.ts (`new Date(inv.date)` on a Zoho "YYYY-MM-DD").
+ * api/deliveries/import-zoho/route.ts (`new Date(inv.date)` on a Zoho "YYYY-MM-DD").
  *
  * A few rows carry a real timestamp instead (api/deliveries/route.ts writes `new Date()`),
  * so a full-day half-open range is used rather than an equality test: it is correct for both

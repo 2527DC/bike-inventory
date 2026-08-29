@@ -115,8 +115,28 @@ flow silently** — it has already happened once.
 - `/fill/[token]` + `/api/public/*` — customer delivery forms
 - `/api/auth/*` — the login handler itself
 - `/api/my-permissions` — authentication only; gating it deadlocks the permission bootstrap
-- `/api/services/cron/*`, `/api/cron/*` — invoked by a scheduler, no user exists
 - `/api/services/earn-sync` — shared-key guarded, for external pollers
+
+## There are no scheduled jobs
+
+This application has **no cron jobs and no background timers.** `api/cron/*` and
+`api/services/cron/*` were deleted, `CRON_SECRET` is gone, and `vercel.json` no longer
+declares a `crons` array. Screens do not poll either — every one of them loads on mount and
+refreshes only when a person asks.
+
+Anything that used to run on a schedule is now a button behind `requireFeature`:
+
+| Was | Now |
+|---|---|
+| `api/cron/zoho-pull` | `POST /api/zoho/trigger-pull` |
+| `api/cron/invoice-pull` | the **Bulk Fetch** tab on `/deliveries` — pulls a date window and imports after review |
+| `api/cron/overdue-alerts` | `POST /api/alerts/scorecard` (`settings.edit`) |
+| `api/cron/counter-watchdog` | **removed, not replaced** — a dead store counter is no longer reported by anything |
+| `api/cron/footfall-rollup` | **removed, not replaced** — `count_events` is no longer pruned and `FootfallDaily` is never written |
+
+**Do not add a cron, a `setInterval`, or a scheduled route.** If work genuinely has nobody
+to trigger it, raise it rather than reintroducing a scheduler. See
+`docs/implementation/completed/cron-removal-plan.md` for what was removed and what was knowingly given up.
 
 ## The service / workshop module
 
@@ -143,6 +163,14 @@ styling rather than the BCH OPS design system.
 
 - **`prisma generate` fails with `EPERM`** while the dev server is running — it holds the
   query engine. Stop the server first.
+- **`npm run build` needs a reachable database.** Three pages are server components that
+  query Prisma and are statically prerendered, so the build connects to `DATABASE_URL` and
+  fails with `PrismaClientInitializationError` if nothing answers:
+  `/staff-lms/playbooks`, `/staff-lms/product-learning`, `/staff-lms/products`.
+  Start Postgres before building. This is deliberate — they are left static by choice, so
+  their content is baked at build time and only changes on redeploy. Adding
+  `export const dynamic = "force-dynamic"` to any of them would make it render per request
+  and drop the build-time database requirement; do that only if asked.
 - **next-auth v4 types don't resolve** under this project's `moduleResolution: "bundler"`.
   Do **not** add `declare module "next-auth"` augmentation — it shadows the package's real
   types and silently degrades `Session` to `{}` across the codebase. Use local structural

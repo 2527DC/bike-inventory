@@ -7,7 +7,7 @@ import { ArrowLeft, ChevronDown, ChevronRight, Search, AlertTriangle, Package, L
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { useDebounce } from "@/lib/utils";
+import { useDebounce } from "@/hooks/use-debounce";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
 
 // WhatsApp glyph (lucide has no brand icon)

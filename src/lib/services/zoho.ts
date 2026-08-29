@@ -1,79 +1,76 @@
-// Zoho Books API helper — token refresh + invoice queries
+// Workshop-specific Zoho Books queries.
+//
+// TRANSPORT LIVES IN `@/lib/integrations` — this file owns only the queries that are
+// peculiar to the workshop (BCH token extraction, invoice-number format guessing).
+//
+// It used to carry its own OAuth client: a module-scoped token cache, a hardcoded
+// `https://accounts.zoho.in/oauth/v2/token`, and credentials read from ZOHO_REFRESH_TOKEN /
+// ZOHO_CLIENT_ID / ZOHO_CLIENT_SECRET / ZOHO_ORG_ID. That made it a FOURTH Zoho client
+// alongside the three the integration refactor consolidated, and — worse — a second source
+// of truth: disconnecting Zoho Books in Settings did not disconnect it here, because this
+// file never read `IntegrationConfig`.
+//
+// Everything now goes through `getBooks()`, so one connection serves the whole app and
+// `res.json()` on a third-party response is gone (apiCall uses readJson, which names the
+// service and status instead of failing with `Unexpected token '<'`).
 
-import { readJson } from "@/lib/http-json";
+import { getBooks, type BooksClient, type IntegrationInvoice } from "@/lib/integrations";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("services:zoho");
 
-let cachedToken: { token: string; expiresAt: number } | null = null;
+/** A Books invoice plus the billing address the workshop screens read a phone number from. */
+export type ServiceInvoice = IntegrationInvoice & {
+  billing_address?: { phone?: string };
+};
 
-async function getAccessToken(): Promise<string> {
-  // Return cached token if still valid (with 5min buffer)
-  if (cachedToken && Date.now() < cachedToken.expiresAt - 300000) {
-    return cachedToken.token;
+/**
+ * A ready Books client, or a thrown error naming the fix.
+ *
+ * `getBooks()` returns null when the integration is simply not connected — a normal state
+ * for the rest of the app, but not for a caller that was asked to look up an invoice, so it
+ * becomes an error here with the remedy in the message.
+ */
+async function books(): Promise<BooksClient> {
+  const client = await getBooks();
+  if (!client) {
+    log.warn("Zoho Books is not connected — invoice lookup unavailable");
+    throw new Error("Zoho Books is not connected. Connect it in Settings → Integrations.");
   }
-
-  const res = await fetch("https://accounts.zoho.in/oauth/v2/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      refresh_token: process.env.ZOHO_REFRESH_TOKEN!,
-      client_id: process.env.ZOHO_CLIENT_ID!,
-      client_secret: process.env.ZOHO_CLIENT_SECRET!,
-      grant_type: "refresh_token",
-    }),
-  });
-
-  const data = await readJson<{ access_token?: string; expires_in: number; error?: string }>(res, {
-    service: "Zoho Books (token refresh)",
-    endpoint: "/oauth/v2/token",
-  });
-  if (!data.access_token) {
-    log.error("token refresh rejected", { error: data.error });
-    throw new Error("Failed to refresh Zoho token");
-  }
-
-  cachedToken = {
-    token: data.access_token,
-    expiresAt: Date.now() + data.expires_in * 1000,
-  };
-
-  return cachedToken.token;
+  return client;
 }
 
-const ORG_ID = process.env.ZOHO_ORG_ID!;
-const BASE = "https://www.zohoapis.in/books/v3";
-
-async function zohoGet(path: string, params: Record<string, string> = {}) {
-  const token = await getAccessToken();
-  const query = new URLSearchParams({ organization_id: ORG_ID, ...params });
-  const res = await fetch(`${BASE}${path}?${query}`, {
-    headers: { Authorization: `Zoho-oauthtoken ${token}` },
-  });
-  return res.json();
+/** `/invoices?a=1&b=2` — apiCall appends organization_id itself. */
+function invoicesUrl(params: Record<string, string>): string {
+  return `/invoices?${new URLSearchParams(params).toString()}`;
 }
 
 // Search invoices by customer phone
-export async function searchInvoicesByPhone(phone: string) {
-  const data = await zohoGet("/invoices", {
-    phone: phone,
-    sort_column: "created_time",
-    sort_order: "D",
-    per_page: "5",
-  });
-  return data.invoices || [];
+export async function searchInvoicesByPhone(phone: string): Promise<ServiceInvoice[]> {
+  const client = await books();
+  const data = await client.apiCall<{ invoices?: ServiceInvoice[] }>(
+    "GET",
+    invoicesUrl({ phone, sort_column: "created_time", sort_order: "D", per_page: "5" })
+  );
+  const invoices = data.invoices || [];
+  log.info("invoice search by phone", { matches: invoices.length });
+  return invoices;
 }
 
 // Search invoices by invoice number
 // Accepts: "17898", "017898", "INV/25/017898", "INV-017898" etc.
-export async function searchInvoiceByNumber(input: string) {
+export async function searchInvoiceByNumber(input: string): Promise<ServiceInvoice | null> {
+  const client = await books();
   const trimmed = input.trim();
 
+  const byNumber = async (invoice_number: string) =>
+    client.apiCall<{ invoices?: ServiceInvoice[] }>(
+      "GET",
+      invoicesUrl({ invoice_number, per_page: "1" })
+    );
+
   // Try exact match first (for full invoice numbers like "INV/25/017898")
-  const exact = await zohoGet("/invoices", {
-    invoice_number: trimmed,
-    per_page: "1",
-  });
+  const exact = await byNumber(trimmed);
   if (exact.invoices?.length) return exact.invoices[0];
 
   // If user entered just digits, try common Zoho invoice formats
@@ -85,40 +82,34 @@ export async function searchInvoiceByNumber(input: string) {
     // Try common formats: INV/YY/NNNNNN, INV-NNNNNN
     const year = new Date().getFullYear().toString().slice(-2);
     const prevYear = (new Date().getFullYear() - 1).toString().slice(-2);
-    const formats = [
-      `INV/${year}/${padded}`,
-      `INV/${prevYear}/${padded}`,
-      `INV-${padded}`,
-      padded,
-    ];
+    const formats = [`INV/${year}/${padded}`, `INV/${prevYear}/${padded}`, `INV-${padded}`, padded];
 
     for (const fmt of formats) {
-      const res = await zohoGet("/invoices", {
-        invoice_number: fmt,
-        per_page: "1",
-      });
+      const res = await byNumber(fmt);
       if (res.invoices?.length) return res.invoices[0];
     }
   }
 
   // Final fallback: search_text for partial matching
-  const search = await zohoGet("/invoices", {
-    search_text: trimmed,
-    per_page: "5",
-  });
+  const search = await client.apiCall<{ invoices?: ServiceInvoice[] }>(
+    "GET",
+    invoicesUrl({ search_text: trimmed, per_page: "5" })
+  );
   if (search.invoices?.length) {
     const match = search.invoices.find(
-      (inv: { invoice_number: string }) => inv.invoice_number.includes(trimmed) || inv.invoice_number.includes(digits)
+      (inv) => inv.invoice_number.includes(trimmed) || inv.invoice_number.includes(digits)
     );
     return match || search.invoices[0];
   }
 
+  log.info("invoice number not found", { input: trimmed });
   return null;
 }
 
 // Get single invoice details
 export async function getInvoice(invoiceId: string) {
-  const data = await zohoGet(`/invoices/${invoiceId}`);
+  const client = await books();
+  const data = await client.getInvoice(invoiceId);
   return data.invoice || null;
 }
 
@@ -155,6 +146,7 @@ export async function listPaidInvoices(
     date: string;
   }>
 > {
+  const client = await books();
   const results: Array<{
     invoice_number: string;
     customer_name: string;
@@ -165,17 +157,21 @@ export async function listPaidInvoices(
   }> = [];
 
   for (let page = 1; page <= 25; page++) {
-    const data = await zohoGet("/invoices", {
-      status: "paid",
-      sort_column: "date",
-      sort_order: "D",
-      per_page: "200",
-      page: String(page),
-    });
+    const data = await client.apiCall<{
+      invoices?: Array<Record<string, unknown>>;
+      page_context?: { has_more_page: boolean };
+    }>(
+      "GET",
+      invoicesUrl({
+        status: "paid",
+        sort_column: "date",
+        sort_order: "D",
+        per_page: "200",
+        page: String(page),
+      })
+    );
 
-    const invoices: Array<Record<string, unknown>> = Array.isArray(data?.invoices)
-      ? data.invoices
-      : [];
+    const invoices = Array.isArray(data?.invoices) ? data.invoices : [];
 
     let reachedOld = false;
     for (const inv of invoices) {
@@ -195,10 +191,9 @@ export async function listPaidInvoices(
     }
 
     if (reachedOld) break;
-
-    const hasMore = data?.page_context?.has_more_page === true;
-    if (!hasMore) break;
+    if (data?.page_context?.has_more_page !== true) break;
   }
 
+  log.info("paid invoices listed", { since: sinceDateISO, count: results.length });
   return results;
 }
