@@ -1,6 +1,6 @@
 # Store Hierarchy & Team Management Plan
 
-Status: pending — approved, not started; no Store model exists
+Status: pending — approved, not started; no Store model exists. Re-validated 29 Aug 2026: three stale assumptions corrected, three questions raised
 Scope: replace the hardcoded `StockLocation` enum with a real `Store → Warehouse`
 hierarchy, and rebuild `/team` as a paginated table with row actions.
 
@@ -29,15 +29,19 @@ actions, and no way to see or set which store a person belongs to.
 
 ### Where the enum is used today
 
-| Model | Column |
-|---|---|
-| `StockLevel` | `location` (part of `@@unique([productId, location])`) |
-| `TransferOrder` | `fromLocation`, `toLocation` |
-| `TransferOrderItem` | `fromLocation`, `toLocation` |
-| `CountEvent` | `storeId` |
-| `AgentHeartbeat` | `storeId` |
-| `AnalyticsDevice` | `storeId` (part of `@@unique([storeId, agentId])`) |
-| `FootfallDaily` | `storeId` |
+| Model | Column | Line |
+|---|---|---|
+| `StockLevel` | `location` (part of `@@unique([productId, location])`) | 451 |
+| `TransferOrderItem` | `fromLocation`, `toLocation` | 1297–1298 |
+| `CountEvent` | `storeId` | 2216 |
+| `AgentHeartbeat` | `storeId` | 2254 |
+| `AnalyticsDevice` | `storeId` (part of `@@unique([storeId, agentId])`) | 2279 |
+| `FootfallDaily` | `storeId` — **dead table, see below** | 2304 |
+
+> **Corrected 29 Aug 2026.** This table previously listed `TransferOrder` as carrying
+> `fromLocation` / `toLocation`. It does not — `grep -n StockLocation prisma/schema.prisma`
+> returns seven hits: the enum declaration plus six columns, and none of them is on
+> `TransferOrder`. Only `TransferOrderItem` holds the locations. **Six models, not seven.**
 
 ---
 
@@ -58,6 +62,41 @@ These were settled before planning. They are recorded here so the reasoning is n
 | User delete | Hard delete when clean, deactivate when linked | Preserves stock audit trails |
 | `/team` on mobile | Table ≥ `sm`, cards below | 7 columns cannot fit a phone; this is a PWA + Capacitor app |
 | Build order | Team table before the stock migration | Ships something visible and testable before the risky work |
+
+### Re-validation, 29 Aug 2026 — three questions this plan can no longer answer itself
+
+The plan was written before the cron removal, the Zoho consolidation and the seed strip. The
+schema work is unaffected, but three of its assumptions need a decision before Phase 1.
+
+**Q1 — does a store seed contradict the seed policy?**
+Phase 1 adds `prisma/seed-stores.ts`. But `prisma/seed.ts` was stripped on 29 Aug 2026 to
+seed **RBAC and nothing else**, and its header now states *"There is deliberately NO sample
+data."* A store seed either contradicts that or is the first exception to it.
+
+The honest distinction: stores and warehouses are **infrastructure**, not sample data — the
+stock system cannot function with zero warehouses, exactly as it could not function with zero
+roles. That is a defensible exception, but it should be made deliberately and written into
+`seed.ts`'s header, not slipped in. The alternative is to create the two stores and four
+warehouses through `/settings/stores` by hand once, which is ten minutes of clicking and
+keeps the policy absolute.
+
+**Q2 — is `FootfallDaily` worth migrating?**
+Nothing writes it. `grep -rn "footfallDaily" src/` returns **zero hits**, and CLAUDE.md
+records `cron/footfall-rollup` as *"removed, not replaced — `count_events` is no longer
+pruned and `FootfallDaily` is never written."* Migrating its `storeId` to `warehouseId` is
+work on a table that has been dead since the cron removal. Either drop the model in Phase 4
+instead of migrating it, or migrate it and accept it stays empty. Dropping is cleaner; it is
+a decision, not a detail.
+
+**Q3 — is the "no existing data" assumption still true?**
+The decision table below says *"Existing data: None to preserve — Confirmed"*, and Phase 4
+leans on it for a single `db push --accept-data-loss`. That assumption was true when written,
+became false when sample data was seeded, and becomes true again only after
+`database-reset-preserving-integrations-plan.md` runs.
+
+**Sequencing follows from this: run the database reset first, then this plan.** If the order
+is reversed, Phase 4 needs the three-step add-nullable → backfill → drop migration its own
+warning describes.
 
 ### Open item
 
@@ -195,12 +234,11 @@ Every enum column becomes a `warehouseId` FK:
 | Model | Before | After |
 |---|---|---|
 | `StockLevel` | `location` | `warehouseId`, `@@unique([productId, warehouseId])` |
-| `TransferOrder` | `fromLocation` / `toLocation` | `fromWarehouseId` / `toWarehouseId` |
 | `TransferOrderItem` | `fromLocation` / `toLocation` | `fromWarehouseId` / `toWarehouseId` |
 | `CountEvent` | `storeId` | `warehouseId` |
 | `AgentHeartbeat` | `storeId` | `warehouseId` |
 | `AnalyticsDevice` | `storeId` | `warehouseId`, `@@unique([warehouseId, agentId])` |
-| `FootfallDaily` | `storeId` | `warehouseId` |
+| `FootfallDaily` | `storeId` | **decide first — see Q2 below** |
 
 `enum StockLocation` is deleted. Single `db push --accept-data-loss`, then reseed.
 
@@ -224,7 +262,12 @@ Files to rewrite:
 | Layer | Files |
 |---|---|
 | lib | `stock-location.ts`, `validations.ts`, `analytics/store.ts`, `analytics/device-auth.ts` |
-| API | `stock/by-location/[location]`, `stock/by-bin`, `inbound/[id]`, `inbound/[id]/status`, `transfer-orders`, `transfer-orders/[id]/approve`, `stock-counts`, `stock-counts/[id]`, `analytics/dashboard`, `cron/counter-watchdog` |
+| API | `stock/by-location/[location]`, `stock/by-bin`, `inbound/[id]`, `inbound/[id]/status`, `transfer-orders`, `transfer-orders/[id]/approve`, `stock-counts`, `stock-counts/[id]`, `analytics/dashboard` |
+
+> **Corrected 29 Aug 2026.** This list previously ended with `cron/counter-watchdog`.
+> `src/app/api/cron/` **no longer exists** — every cron route was deleted (see
+> `completed/cron-removal-plan.md`), and CLAUDE.md records the counter watchdog as "removed,
+> not replaced". One fewer file to touch.
 | Pages | `transfers`, `transfers/new`, `stock-audit/new`, `stock-audit/brand-count`, `stock/by-location/[location]`, `stock/by-brand`, `inbound/[id]`, `analytics`, `analytics/devices` |
 
 Two behaviours to preserve deliberately:

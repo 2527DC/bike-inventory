@@ -74,13 +74,15 @@ preserved across regeneration — but do not remove the marker comments.
 |---|---|
 | `app-logic-and-problems-removal-plan.md` | proposed, nothing removed yet; three open questions for the owner |
 | `ci-build-database-dependency-plan.md` | CI trigger and Build job being fixed on refactor/integration-config |
-| `frontend-role-check-removal-plan.md` | 16 client-side gates read a session field that no longer exists, so every one of them denies everybody |
+| `database-reset-preserving-integrations-plan.md` | wipe every table and reseed RBAC only, carrying `IntegrationConfig` across on disk |
+| `frontend-role-check-removal-plan.md` | 21 client-side gates read a session field that no longer exists, so every one of them denies everybody |
 | `ledger-merge-plan.md` | schema, RBAC, backend and frontend shipped; PDF statement import and the 219-gap migration remain |
 | `parallel-agent-delivery-pipeline-plan.md` | machinery for running several plans at once on separate branches; nothing built, 3 open questions |
 | `pdi-module-plan.md` | nothing built, no schema changed. Two blocking questions (Q11, Q17) |
 | `sequence-race-fix-plan.md` | five sites allocate unique numbers with a read-then-write race |
 | `service-module-mobile-readiness-plan.md` | what /api/services/* needs before bch-service-app can be pointed at it |
-| `store-hierarchy-and-team-plan.md` | approved, not started; no Store model exists |
+| `store-hierarchy-and-team-plan.md` | replace the StockLocation enum with Store → Warehouse tables; re-validated 29 Aug 2026, 3 stale assumptions corrected and 3 questions open |
+| `zoho-pull-timeout-plan.md` | the `items` and `contacts` steps do one database round trip per record; `bills` and `invoices` in the same file already batch |
 <!-- END:pending -->
 
 ---

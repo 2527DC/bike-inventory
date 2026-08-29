@@ -1,6 +1,6 @@
 # Frontend role-name checks — removal plan
 
-Status: pending — 16 client-side gates read a session field that no longer exists, so every one of them denies everybody
+Status: pending — 21 client-side gates read a session field that no longer exists, so every one of them denies everybody
 Suggested branch: `fix/frontend-role-checks` (its own branch — it touches 15 page files plus the RBAC catalog).
 Prepared 29 Aug 2026.
 
@@ -61,9 +61,16 @@ Every API behind these screens guards itself properly:
 The frontend is over-restrictive, not under. Nothing is exposed. The screens are just
 unusable — which is why this is a bug and not an incident.
 
-## 5. Scope — 16 sites in 15 files
+## 5. Scope — 21 sites in 19 files
 
 All read `session.user.role`. All are permanently false.
+
+> **The first sweep found only 16.** It searched for `role === "` and missed every check
+> written as `["ADMIN","CEO"].includes(role)` or assigned through an intermediate
+> (`userRole`, `canApprove`, `canBulkEdit`). The five extra sites in the second table below
+> came from grepping the *cast* instead — `session?.user as { role` — which catches the
+> field access regardless of what is done with it afterwards. Any future audit of this class
+> should grep the field, never the comparison.
 
 | File | Line(s) |
 |---|---|
@@ -83,6 +90,19 @@ All read `session.user.role`. All are permanently false.
 | `(dashboard)/activity/page.tsx` | 60 |
 | `desktop/activity/page.tsx` | 59 |
 | `(dashboard)/accounts/settlement/page.tsx` | 49 |
+
+### Found in the second sweep — same bug, different spelling
+
+| File | Line(s) | Flag | What it gates |
+|---|---|---|---|
+| `(dashboard)/transfers/new/page.tsx` | 66 | `isAdmin` via `.includes()` | transfer auto-approval — an admin's transfer should skip the approval queue and currently never does |
+| `(dashboard)/stock-audit/[id]/page.tsx` | 75 | `canApprove` (3 names) | approving a stock audit |
+| `(dashboard)/stock-audit/[id]/page.tsx` | 76 | `isAdmin` | "Correct stock levels" — overwrites counted stock |
+| `(dashboard)/stock-audit/[id]/review/page.tsx` | 71 | `canApprove` (4 names) | approving from the review screen |
+| `(dashboard)/stock/page.tsx` | 111 | `canBulkEdit` (3 names) | bulk edit on the stock list |
+
+`(dashboard)/stock-audit/new/page.tsx:43` casts `{ userId?: string; role?: string }` but reads
+only `userId`. The `role` in that type is unused — harmless, not a bug, and left alone.
 
 `accounts/settlement` is the only partial survivor: it reads
 `role === "ADMIN" || role === "CEO" || canDeleteCheck("bills")`, so the permission half
@@ -111,6 +131,20 @@ covers the case. No new judgement was invented where an existing guard already a
 | 14 | `activity` | Team Activity vs My Activity | `canApprove("activity")` |
 | 15 | `desktop/activity` | same | `canApprove("activity")` |
 | 16 | `accounts/settlement` | already permission-gated | delete the role half only |
+| 17 | `transfers/new` | transfer auto-approval | `canApprove("transfers")` |
+| 18 | `stock-audit/[id]` | approve the audit | `canApprove("stock_audit")` |
+| 19 | `stock-audit/[id]` | "Correct stock levels" — overwrites counted stock | `canEdit("stock")` — **confirm**, see below |
+| 20 | `stock-audit/[id]/review` | approve from the review screen | `canApprove("stock_audit")` |
+| 21 | `stock` | bulk edit | `canEdit("stock")` |
+
+Both `transfers` and `stock_audit` declare `["view","create","edit","delete","approve"]`, so
+rows 17, 18 and 20 need no catalog change.
+
+Row 19 is the one judgement call in this batch. "Correct stock levels" does not approve
+anything — it **overwrites each product's `currentStock` with the counted quantity**. That is
+a write to stock, not an audit decision, so it is mapped to `canEdit("stock")` rather than
+`stock_audit.approve`. Someone who may approve a count is not automatically someone who may
+overwrite the books. Say if you disagree.
 
 ### Four flags were doing two jobs
 
@@ -181,11 +215,29 @@ gate it on `canEdit("stock")`, or add a `price_correction` module. Note that
 if the screen is going away, neither option is worth doing and site 6 should be dropped from
 this plan.
 
+> **Owner's steer, 29 Aug 2026:** *"i think u need to bypass because the admin need the
+> access for it and the application must be functional."*
+>
+> Recorded, and the intent is satisfied — but **not** by a bypass, and the distinction
+> matters enough to write down. ADMIN already holds **every permission**, granted in
+> `seed-rbac.ts` step 4. So `canEdit("stock")` is already true for ADMIN the moment the page
+> asks. Any permission check makes the page work for the admin; no special case is needed.
+>
+> A literal bypass — `if (roleKey === "ADMIN") return true` — is banned by CLAUDE.md rule 2
+> ("no admin short-circuit"), and would reintroduce the exact class of bug this plan exists
+> to remove: a hardcoded role name that breaks silently the next time the identity shape
+> changes. It would also permanently lock the page to ADMIN, so no role you create later
+> could ever be given it — the opposite of "the application must be functional".
+>
+> Q1 therefore still needs an answer, but it is a narrower one: **which** permission, not
+> whether to check one. `canEdit("stock")` is the default unless the page is being deleted.
+
 **Q2 — sites 3 and 4 are slated for deletion.**
 `docs/implementation/pending/app-logic-and-problems-removal-plan.md` deletes both
 `/more/app-logic` and `/more/problems`, and removes the `problems` module from the catalog
 entirely. Fixing them here is work that gets thrown away. Fix anyway so they are usable in
-the meantime, or skip both and let the removal plan handle them?
+the meantime, or skip both and let the removal plan handle them? This decides whether the
+job is 21 sites or 19.
 
 **Q3 — site 12 is a behaviour change, not a reveal.** `inbound/[id]:176`:
 
@@ -227,8 +279,12 @@ Excluded deliberately; raise it separately.
 
 - `npm run build` passes. These files are all under `src/`, so the build type-checks them —
   unlike a `prisma/` change, which it does not.
-- `grep -rn 'session?.user as { role' src/` returns **nothing**.
+- `grep -rn 'session?.user as { role' src/` returns **nothing**. This is the grep that
+  matters — it finds the field access however the result is later spelled. The comparison
+  greps below are secondary, and on their own they under-report: they are what missed five
+  sites on the first pass.
 - `grep -rn 'role === "ADMIN"\|role === "CEO"' src/app/` returns **nothing**.
+- `grep -rn '\["ADMIN"' src/app/` returns **nothing**.
 - Signed in as ADMIN, every one of the 16 screens renders its full UI. Today they render a
   denial or hide the element.
 - No flash of denial on load — reload each screen and watch. A flash means a `loading` check
