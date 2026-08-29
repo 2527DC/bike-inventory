@@ -13,7 +13,12 @@ const log = createLogger("integrations:connect");
 // token in the Zoho console and pastes it here, and we trade it for a refresh token.
 export async function POST(req: NextRequest, ctx: { params: Promise<{ provider: string }> }) {
   try {
-    const user = await requireFeature("zoho", "create");
+    // `edit`, not `create`. The zoho module declares actions [view, edit, approve, fetch]
+    // in rbac-catalog.ts, so there is no zoho.create permission row for any role to hold —
+    // the guard returned 403 for everyone, ADMIN included, since ADMIN passes by holding
+    // every real permission rather than by short-circuiting. Fixed on main in PR #7 for the
+    // three routes this one replaced; the consolidation had copied the bug across.
+    const user = await requireFeature("zoho", "edit");
 
     const { provider } = await ctx.params;
     if (!isProviderKey(provider)) return errorResponse("Unknown integration", 400);

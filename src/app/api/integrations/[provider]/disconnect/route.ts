@@ -11,7 +11,9 @@ const log = createLogger("integrations:disconnect");
 // Replaces three identical disconnect routes.
 export async function POST(_req: Request, ctx: { params: Promise<{ provider: string }> }) {
   try {
-    const user = await requireFeature("zoho", "create");
+    // `edit`, not `create` — see the note in the sibling connect route. There is no
+    // zoho.create permission row, so this guard rejected every user including ADMIN.
+    const user = await requireFeature("zoho", "edit");
 
     const { provider } = await ctx.params;
     if (!isProviderKey(provider)) return errorResponse("Unknown integration", 400);
