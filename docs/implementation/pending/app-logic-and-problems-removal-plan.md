@@ -1,6 +1,8 @@
 # Remove the App Logic and App Problems modules — plan
 
-Status: pending
+Status: pending — ready to execute. All three questions were settled 29 Aug 2026 (§9) and the full inventory was re-verified against the tree the same day (§10). Nothing blocks; nothing has been deleted yet.
+Suggested branch: `chore/remove-app-logic-and-problems` (3 directories deleted, 4 files edited, one reseed).
+Runs BEFORE `frontend-role-check-removal-plan.md` — see §10.
 
 ---
 
@@ -65,10 +67,31 @@ or feature requests. Pull these into Claude Code to fix."* It is a scratchpad th
 the real issue tracker, with no notification, no assignment, and no `DELETE` handler despite
 the catalog advertising a `delete` action.
 
-**Side benefit.** Both pages gate on role *names* — `role !== "CEO" && role !== "ADMIN"` in
-App Logic, `role === "ADMIN" || role === "CEO"` in App Problems — which CLAUDE.md calls a bug
-even when the build passes. 17 files still compare role names; this removes 2 of them for
-free.
+**Side benefit — and for App Logic it is not a side benefit, it is a live exposure.**
+
+Both pages gate on role *names*, which CLAUDE.md calls a bug even when the build passes.
+A full sweep on 29 Aug 2026 (`frontend-role-check-removal-plan.md` §5) found **23 such gates
+across 20 files** — an earlier count of 17 was low. This plan removes 2 of them.
+
+But the two are not equivalent, and the difference matters for scheduling:
+
+| Page | Guard | Effect today |
+|---|---|---|
+| `/more/problems:25` | `role === "ADMIN" \|\| role === "CEO"` | allow-list → `role` is `""` → **hidden from everyone** |
+| `/more/app-logic:581` | `if (role && role !== "CEO" && role !== "ADMIN")` | deny-list → `role` is `undefined`, so the guard is **skipped entirely** |
+
+`session.user` carries no `role` field at all (`src/lib/auth.ts:103-105` sets only `userId`,
+`roleKey`, `roleName`), so `role` is falsy — and a falsy value short-circuits the *whole*
+condition on line 581 before either name is compared.
+
+**`/more/app-logic` therefore renders for every signed-in user, not just admins.** It is an
+809-line in-file dump of every screen, API endpoint, permission rule, role-tab layout and
+Zoho flow in the application, and it is currently readable by anyone with an account. It
+fetches nothing, so no API guard limits it — the page *is* the payload.
+
+That does not make this urgent in a security sense (it is internal documentation, behind
+login, and much of it is wrong). It does mean **deleting the page closes an exposure as well
+as removing dead weight**, and it is the reason this plan now gates another one — see §10.
 
 ---
 
@@ -90,7 +113,7 @@ Every location, verified by grep. Nothing else in `src/` references either featu
 |---|---|---|
 | `prisma/schema.prisma` | 1568–1579 | delete `model AppProblem` |
 | `prisma/schema.prisma` | 305 | delete `reportedProblems AppProblem[] @relation("ProblemReportedBy")` from `User` |
-| `prisma/rbac-catalog.ts` | 485–494 | delete the `problems` module entry |
+| `prisma/rbac-catalog.ts` | 486–494 | delete the `problems` module entry |
 | `src/app/(dashboard)/settings/page.tsx` | 56–62 | delete the `/more/app-logic` entry from `ENTRIES` |
 | `docs/data-flow-and-modules.md` | 167–170 | delete the ⚠️ note about `/more/app-logic:182` — with the page gone, the contradiction it warns about is gone too |
 | `docs/data-flow-and-modules.md` | 315 | remove `· /more/problems` from the Admin nav line |
@@ -293,3 +316,41 @@ data, so Step 1's export is a formality. Run the count, confirm it is zero, and 
 the one irreversible risk in this plan does not apply.
 
 **Status.** Plan approved in shape, execution not yet started. Nothing has been deleted.
+
+---
+
+## 10. This plan now gates another one
+
+`frontend-role-check-removal-plan.md` fixes the 23 dead role-name gates described in §2.
+Its Q2 asked whether to fix `/more/app-logic` and `/more/problems` there, given both are
+deleted here. **Owner's decision, 29 Aug 2026: skip both in that plan and let this one delete
+them.** That plan's scope dropped to 21 sites in 18 files as a result.
+
+So the ordering is fixed: **this plan runs first.** Two consequences worth stating plainly.
+
+1. **`/more/app-logic` stays readable by every signed-in user until this plan runs.** That
+   was an acceptable trade when this was expected to happen promptly. If it slips, the right
+   response is to reopen that plan's Q2 for `app-logic` alone — one `usePermissions` call to
+   close it in the meantime — rather than leave it sitting. `/more/problems` carries no such
+   urgency: it is hidden from everyone, so delay costs nothing but an unusable feature.
+2. **Nothing in this plan depends on the other one.** The dependency runs one way. This plan
+   can be executed today exactly as written.
+
+### Re-verified 29 Aug 2026
+
+Every path, line number and mechanism in §3 through §6 was checked against the tree:
+
+| Claim | Result |
+|---|---|
+| `more/app-logic/page.tsx` is 809 lines | ✓ |
+| `api/problems/route.ts` is 65 lines, `GET`/`POST`/`PATCH` | ✓ |
+| `model AppProblem` at `schema.prisma:1568` | ✓ |
+| `User.reportedProblems` at `schema.prisma:305` | ✓ |
+| `problems` module in `rbac-catalog.ts` | ✓ at **486–494** (§3 says 485–494) |
+| `problems` appears in no `ROLE_CATALOG` grant | ✓ — its only two occurrences are the module's own `key` and `route` |
+| `/more/app-logic` entry at `settings/page.tsx:56-62` | ✓ |
+| `docs/data-flow-and-modules.md` lines 167 and 315 | ✓ |
+| No other `src/` reference to either feature | ✓ — only the three files to delete, plus the settings entry and the catalog row |
+| §4.3 — the seed prunes stale modules and cascades | ✓ `seed-rbac.ts:143-149` deletes stale modules; `Permission.module` cascades (`schema.prisma:74`) and `RolePermission.permission` cascades (`:108`), so the module's 4 permissions and any grants go with it |
+
+The inventory is complete. Nothing was found that §3 does not already list.

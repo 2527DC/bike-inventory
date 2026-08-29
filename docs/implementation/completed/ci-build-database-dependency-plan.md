@@ -1,6 +1,7 @@
 # CI Build fails without a database — plan
 
-Status: in-progress — CI trigger and Build job being fixed on refactor/integration-config
+Status: completed — the three Staff LMS pages are client components and the CI trigger no
+longer filters on `main`. Verified 29 Aug 2026.
 
 ---
 
@@ -174,17 +175,45 @@ Fix: drop the `branches` filter so the workflow runs on every pull request.
 Enabling required checks before they can pass locks every PR, including the one that would
 fix it.
 
-## 8. Verification
+## 8. Verification — what was actually confirmed
 
-- The Build job passes in GitHub Actions with no database configured outside the service
-  container.
-- The three pages still appear as `○ (Static)` in the build's route table — proving the fix
-  gave CI a database rather than silently making them dynamic.
-- A PR whose base is not `main` triggers CI.
-- Locally, `npm run build` still passes with Postgres running.
+Option C was chosen, so §7's ordering and the service-container step it sequences no longer
+apply: **CI needs no database at all**, and there is nothing to stage before enabling
+required checks.
 
-## 9. Open decision
+| Claim | How it was confirmed | Result |
+|---|---|---|
+| The build opens no connection | `npm run build` with `DATABASE_URL` on a dead port (`localhost:5433`) | ✓ `EXIT=0`, 160/160 pages |
+| The three pages no longer query Prisma | `grep -c prisma` on each of the three `page.tsx` files | ✓ `0` in all three |
+| They are client components | each file opens with `'use client'` plus a comment saying why | ✓ |
+| The Build job has no database | no `services:` block and no `DATABASE_URL` in `.github/workflows/typecheck.yml` | ✓ |
+| A PR whose base is not `main` triggers CI | the `branches: [main]` filter is gone; trigger is `types: [opened, synchronize, reopened]` | ✓ |
 
-**Does §4 matter to you?** If a Staff LMS Admin adding a playbook expects to see it without a
-redeploy, Option B is required and this CI work becomes unnecessary. That is a product
-question, not a technical one.
+The three routes still appear as `○ (Static)` in the route table, and that is now correct: a
+client component's shell prerenders as static HTML while running **no Prisma query** at build
+time. The dead port is the proof — before this change the same command died with
+`PrismaClientInitializationError`.
+
+## 9. The open decision, resolved
+
+The plan asked: *"Does §4 matter to you — should an admin's new playbook appear without a
+redeploy?"*
+
+**Option C answered it by making the question moot.** The pages fetch at runtime, so
+admin-added content appears immediately. §4 is fixed, not traded away — which is why Option A
+was reverted rather than shipped alongside it.
+
+## 10. What is left, and it is not a code change
+
+Making the checks **required** is a GitHub branch-protection setting, not a file in this repo.
+The workflow header records the command:
+
+```
+gh api -X PUT repos/:owner/:repo/branches/main/protection \
+  -f 'required_status_checks[strict]=true' \
+  -f 'required_status_checks[contexts][]=Type check' \
+  -f 'required_status_checks[contexts][]=Build'
+```
+
+Safe to run now: both checks pass and both run on every PR, so enabling the rule cannot lock a
+branch the way §7 warned about.

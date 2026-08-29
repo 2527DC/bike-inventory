@@ -61,7 +61,9 @@ preserved across regeneration — but do not remove the marker comments.
 | Plan | Shipped |
 |---|---|
 | `analytics-merge-plan.md` | store analytics merged; /analytics, CountEvent and the device endpoints are live |
+| `ci-build-database-dependency-plan.md` | 29 Aug 2026, the three Staff LMS pages became client components so the build opens no database connection, and the CI trigger no longer filters on `main` |
 | `cron-removal-plan.md` | 28 Aug 2026, all cron jobs and screen polling removed |
+| `database-reset-preserving-integrations-plan.md` | 29 Aug 2026, closed WITHOUT implementation — only `ZOHO_BOOKS` was ever connected and its row is backed up by hand in `.env`, so the export/restore scripts were unnecessary. Kept for §0 and the reset runbook |
 | `service-merge-plan.md` | bch-service merged; /services/* and the SERVICE_* roles are live |
 | `storage-implementation-plan.md` | 28 Aug 2026, runtime-switchable storage provider and Settings module |
 | `zoho-config-consolidation-plan.md` | 29 Aug 2026, three Zoho config tables and four clients collapsed into one `IntegrationConfig` row per provider, one `IntegrationClient` base class and three `[provider]` routes |
@@ -72,17 +74,14 @@ preserved across regeneration — but do not remove the marker comments.
 <!-- BEGIN:pending -->
 | Plan | State |
 |---|---|
-| `app-logic-and-problems-removal-plan.md` | proposed, nothing removed yet; three open questions for the owner |
-| `ci-build-database-dependency-plan.md` | CI trigger and Build job being fixed on refactor/integration-config |
-| `database-reset-preserving-integrations-plan.md` | wipe every table and reseed RBAC only, carrying `IntegrationConfig` across on disk |
-| `frontend-role-check-removal-plan.md` | 21 client-side gates read a session field that no longer exists, so every one of them denies everybody |
+| `app-logic-and-problems-removal-plan.md` | ready to execute — delete `/more/app-logic` and `/more/problems`, the `problems` module and `AppProblem`; all questions settled and the inventory re-verified 29 Aug 2026. Runs BEFORE the role-check plan |
+| `frontend-role-check-removal-plan.md` | ready to build — 23 dead role-name gates found, 21 in scope across 18 files; all three questions answered, one catalog line (`activity.approve`); runs after the app-logic removal plan |
 | `ledger-merge-plan.md` | schema, RBAC, backend and frontend shipped; PDF statement import and the 219-gap migration remain |
-| `parallel-agent-delivery-pipeline-plan.md` | machinery for running several plans at once on separate branches; nothing built, 3 open questions |
 | `pdi-module-plan.md` | nothing built, no schema changed. Two blocking questions (Q11, Q17) |
 | `sequence-race-fix-plan.md` | five sites allocate unique numbers with a read-then-write race |
 | `service-module-mobile-readiness-plan.md` | what /api/services/* needs before bch-service-app can be pointed at it |
-| `store-hierarchy-and-team-plan.md` | replace the StockLocation enum with Store → Warehouse tables; re-validated 29 Aug 2026, 3 stale assumptions corrected and 3 questions open |
-| `zoho-pull-timeout-plan.md` | the `items` and `contacts` steps do one database round trip per record; `bills` and `invoices` in the same file already batch |
+| `store-hierarchy-and-team-plan.md` | ready to build — replace the StockLocation enum with Store → Warehouse tables; rewritten 29 Aug 2026, all questions answered, `/stock/by-location/[code]` resolves either level; runs after the database reset |
+| `zoho-pull-timeout-plan.md` | ready to build — `items` (two loops) and `contacts` do one database round trip per record while `bills`/`invoices` already batch; §10 answered, both in one branch as two commits |
 <!-- END:pending -->
 
 ---

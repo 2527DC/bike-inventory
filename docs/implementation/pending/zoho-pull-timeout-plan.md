@@ -1,8 +1,8 @@
 # Zoho pull times out (504) — batching plan
 
-Status: pending — the `items` and `contacts` steps do one database round trip per record; `bills` and `invoices` in the same file already batch
+Status: pending — ready to build. The `items` step (**two loops**) and `contacts` do one database round trip per record; `bills` and `invoices` in the same file already batch. §10 answered 29 Aug 2026: both, one branch, two commits. Nothing blocks.
 Suggested branch: `fix/zoho-pull-batching` (one route file plus a config line).
-Prepared 29 Aug 2026.
+Prepared 29 Aug 2026. Re-verified against the route 29 Aug 2026 — a second `items` loop was found that earlier drafts missed (§2).
 
 ---
 
@@ -27,7 +27,19 @@ This is the guard working. Before `apiFetch`, the same failure surfaced as
 `src/app/api/zoho/trigger-pull/route.ts` handles four pull steps. **Two batch their database
 work and two do not**, and the two that do not are the two that fail.
 
-### The broken shape — `items` (lines 103–147) and `contacts` (lines 218–244)
+### The broken shape — `items` (**two** loops) and `contacts` (lines 218–244)
+
+> **Corrected 29 Aug 2026 — the `items` step contains the same loop TWICE.** The step picks a
+> source before it reads anything: if `ZOHO_INVENTORY` is configured it uses that
+> (`invConfig`, line 97) and loops at **103–147**; otherwise it falls back to `ZOHO_BOOKS`
+> (`booksConfig`, line 146) and loops at **152–167**. Both loops do the identical two
+> `product.findFirst` calls plus a `zohoPullPreview.create` per record.
+>
+> §7's line range (84–197) does cover both, but every code sample and instruction below
+> describes one loop. **Fixing only the loop at 103 leaves the fallback path broken**, and it
+> would look fixed in testing on any environment where `ZOHO_INVENTORY` is connected — which
+> is exactly where the fix will be tested. Convert both, or extract one helper and call it
+> from both paths.
 
 ```ts
 for (const item of items) {
@@ -89,6 +101,11 @@ For `items`:
 5. **One** `createMany` for the previews.
 
 `contacts` gets the same treatment against `prisma.vendor`.
+
+**Both `items` loops get it** — the `ZOHO_INVENTORY` path (103–147) and the `ZOHO_BOOKS`
+fallback (152–167). They are close enough to be one helper taking the item array and
+returning the previews to create; that is preferable to two near-identical rewrites drifting
+apart later.
 
 **Result: ~2N+M round trips become 2 per step.**
 
@@ -175,6 +192,10 @@ preview screen reads.
 - The Vercel log for `/api/zoho/trigger-pull` shows a duration well under 60s, and no
   `FUNCTION_INVOCATION_TIMEOUT`.
 - `contacts` — run a vendor pull and confirm the same.
+- **Both `items` paths are exercised.** The 90-day test above only covers whichever source is
+  configured. Confirm the other path too — disconnect `ZOHO_INVENTORY` (or point the test at
+  an environment without it) so the `ZOHO_BOOKS` fallback at 152–167 actually runs. Skipping
+  this is how the fallback ships still doing one round trip per record.
 
 ## 9. How to confirm the diagnosis before starting
 
@@ -183,12 +204,22 @@ Vercel dashboard → project → **Logs**, filter `/api/zoho/trigger-pull`. A ti
 trace instead. If it is a stack trace, this plan is aimed at the wrong problem and should be
 re-opened before any code is written.
 
-## 10. Open question
+## 10. The open question — ANSWERED 29 Aug 2026
 
-**Does `contacts` get fixed in the same pass?** It has the identical defect and the identical
-fix, and it is in the same function. Doing it separately means reading and re-testing the same
-route twice. Doing it together makes the diff larger and couples a vendor-pull change to a
-stock-pull fix you actually need today.
+**Does `contacts` get fixed in the same pass? Yes — both, one branch, two commits.**
 
-Recommendation: **both**, in one branch, as two commits — the same review, separately
-revertable. Confirm or say items-only.
+Same review, separately revertable. `contacts` has the identical defect and the identical fix
+and sits in the same function, so splitting it across branches means reading and re-testing
+the same route twice.
+
+Commit order, so a revert leaves a coherent state either way:
+
+| # | Contains | Why separable |
+|---|---|---|
+| 1 | both `items` loops batched (`ZOHO_INVENTORY` path **and** the `ZOHO_BOOKS` fallback), `maxDuration` 30 → 60 | fixes the 504 being hit today; the two loops must move together or the fallback ships broken (§2) |
+| 2 | `contacts` batched against `prisma.vendor` | no vendor pull is failing today, so this is the revertable half |
+
+The `items` commit is **not** further splittable. Both loops in that step are the same defect
+reached by two configuration paths, and fixing one alone produces a build that tests green on
+any environment with `ZOHO_INVENTORY` connected while the fallback still does one round trip
+per record.

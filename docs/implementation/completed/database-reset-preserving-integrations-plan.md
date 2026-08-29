@@ -1,8 +1,76 @@
 # Database reset, preserving the Zoho integration config — plan
 
-Status: pending — wipe every table and reseed RBAC only, carrying `IntegrationConfig` across on disk
-Suggested branch: `chore/database-reset` (scripts only; no application code changes).
-Prepared 29 Aug 2026.
+Status: completed — 29 Aug 2026, closed WITHOUT implementation: only `ZOHO_BOOKS` was ever connected and its row is already backed up by hand in `.env`, so the export/restore scripts this plan designed are unnecessary. See §0.
+Suggested branch: none — no code was written.
+Prepared 29 Aug 2026. Closed 29 Aug 2026.
+
+---
+
+## 0. Outcome — NOT IMPLEMENTED, and it never needs to be
+
+**No code from this plan was written.** No `backups/` directory, no `db:export:integrations`,
+no `db:restore:integrations`, no `.gitignore` change. Sections 1–10 below are preserved as the
+record of the approach that was designed and then found unnecessary — read them as history,
+not as instructions.
+
+### Why it was dropped
+
+The plan exists to solve one problem: **a refresh token cannot be regenerated from the client
+id and secret** (§2), so wiping `IntegrationConfig` would mean redoing the self-client
+grant-token flow in the Zoho console. Two facts, both confirmed 29 Aug 2026, dissolve it.
+
+**1. There is only one connection to lose, not three.** §2 assumes all three providers hold
+live credentials. They do not — **`ZOHO_BOOKS` is the only one ever connected.** `ZAKYA_POS`
+and `ZOHO_INVENTORY` have never been synced, so they hold no refresh token and a reset costs
+nothing for either. (`trigger-pull/route.ts:475-477` writes `lastSyncAt` to all three, which is
+what made the three-provider assumption look right on paper.)
+
+**2. That one connection is already backed up, by hand.** The owner copied the full
+`IntegrationConfig` row for `ZOHO_BOOKS` into `.env` as a commented JSON block — all twelve
+columns including `clientId`, `clientSecret`, `refreshToken`, `accessToken`,
+`organizationId` and `organizationName`. Restoring it is one `INSERT`, pasted back.
+
+### Why the manual method is *better* than the scripted one
+
+This is not a shortcut that trades safety for speed. §4 is the longest warning in this
+document, and its subject is that the export writes live secrets to
+`backups/integration-config.json` while **`.gitignore` has no rule that would catch that
+path** — so step 1 of the runbook had to be creating the ignore rule *before the file existed*,
+because a secret committed once stays in git history.
+
+Putting the same data in `.env` removes that failure mode entirely. `.gitignore:34` is
+`.env*`, and `git check-ignore -v .env` confirms the match. The file is already ignored, has
+always been ignored, and needs no new rule. **The hand-rolled approach has a smaller attack
+surface than the tooling this plan proposed**, which is the honest reason to prefer it —
+not that it was less work.
+
+### What the reset actually is now
+
+```
+1.  stop the dev server
+2.  npx prisma db push --force-reset     <- DESTRUCTIVE: drops every table
+3.  npm run db:seed                       <- RBAC, roles, admin user
+4.  paste the ZOHO_BOOKS row back as one INSERT (block at the end of .env)
+5.  verify Settings -> Integrations shows ZOHO_BOOKS Connected
+```
+
+Three sections below still apply and are the reason this file is kept rather than deleted:
+
+- **§8 — which database.** `DATABASE_URL` points at the hosted Supabase instance both Vercel
+  deployments read. Confirm it is the one you mean to wipe. A reset aimed at the wrong
+  database cannot be undone, and no script in this plan could have caught that either.
+- **§7 "Two things the reset also destroys."** Every non-admin user is gone and must be
+  recreated at `/team`; the admin login is recreated from `ADMIN_ACCESS_CODE`.
+- **§3.** There is no "unseed". `npm run db:seed` only ever writes — `--force-reset` is the
+  only thing that removes the old sample rows.
+
+### ⚠️ One standing obligation
+
+**The commented block at the end of `.env` is now the only copy of that refresh token outside
+Zoho's console.** It is not backed up anywhere else, and `.env` is — correctly — never
+committed. Do not delete it, and do not lose the file. If `ZAKYA_POS` or `ZOHO_INVENTORY` is
+ever connected, copy its row into the same block, or this plan's problem comes back for a
+provider that is genuinely at risk.
 
 ---
 
