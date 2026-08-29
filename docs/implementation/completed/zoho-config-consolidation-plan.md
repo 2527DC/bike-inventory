@@ -1,6 +1,6 @@
 # Zoho / Zakya Config Consolidation Plan
 
-Status: in-progress — being implemented on refactor/integration-config
+Status: completed — 29 Aug 2026, three Zoho config tables and clients collapsed into one IntegrationConfig row per provider, one IntegrationClient base class and three [provider] routes
 Branch: `refactor/integration-config` (separate from storage and cron work).
 Prepared 28 Aug 2026.
 
