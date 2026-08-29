@@ -74,6 +74,7 @@ preserved across regeneration — but do not remove the marker comments.
 |---|---|
 | `app-logic-and-problems-removal-plan.md` | proposed, nothing removed yet; three open questions for the owner |
 | `ci-build-database-dependency-plan.md` | CI trigger and Build job being fixed on refactor/integration-config |
+| `frontend-role-check-removal-plan.md` | 16 client-side gates read a session field that no longer exists, so every one of them denies everybody |
 | `ledger-merge-plan.md` | schema, RBAC, backend and frontend shipped; PDF statement import and the 219-gap migration remain |
 | `parallel-agent-delivery-pipeline-plan.md` | machinery for running several plans at once on separate branches; nothing built, 3 open questions |
 | `pdi-module-plan.md` | nothing built, no schema changed. Two blocking questions (Q11, Q17) |
