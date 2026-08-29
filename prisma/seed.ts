@@ -1,3 +1,30 @@
+// ─── The one seed entry point ────────────────────────────────────────────────
+//
+//   npm run db:seed
+//
+// Seeds EVERYTHING, in dependency order, in a single run:
+//
+//   1. RBAC          modules, permissions, the ADMIN role and the admin user  (seed-rbac.ts)
+//   2. Categories
+//   3. Brands
+//   4. Bins          all 12, refreshed on re-run, stale ones deactivated
+//   5. Products
+//   6. Serial items  one per unit of bicycle stock
+//   7. Transactions  a small sample history
+//   8. Staff LMS     videos, achievements, playbooks, quizzes, products  (seed-staff-lms.ts)
+//
+// RBAC runs first because everything below needs the admin user to exist — it owns every
+// sample record.
+//
+// SAFE TO RE-RUN. Every write is an upsert or is guarded by an existence check, so seeding
+// twice changes nothing the second time. There is no separate bin script: prisma/setup-bins.ts
+// used to hold a byte-identical copy of the bin list and was deleted, because two catalogs of
+// the same 12 bins is a drift waiting to happen.
+//
+// Narrower command, for when only the catalog changed:
+//
+//   npm run db:seed:rbac      RBAC only — much faster, touches no sample data
+//
 import { PrismaClient } from "@prisma/client";
 import { seedRbac } from "./seed-rbac";
 import { seedStaffLms } from "./seed-staff-lms";
@@ -74,13 +101,30 @@ async function main() {
     { code: "G2-01", name: "Warehouse G2", location: "Warehouse G2", zone: "G2" },
   ];
 
+  // `update` is populated rather than `{}`: an existing bin must pick up a corrected name,
+  // location or zone on the next seed. Leaving it empty let the catalog here and the row in
+  // the database drift apart with nothing to reconcile them.
   const bins = await Promise.all(
     binData.map((b) =>
-      prisma.bin.upsert({ where: { code: b.code }, update: {}, create: b })
+      prisma.bin.upsert({
+        where: { code: b.code },
+        update: { name: b.name, location: b.location, zone: b.zone },
+        create: b,
+      })
     )
   );
 
-  console.log(`Created ${bins.length} bins`);
+  // Retire bins no longer in the catalog. Deactivated, never deleted — a bin can still be
+  // referenced by historical stock and transaction rows, and deleting one would orphan them.
+  const staleBins = await prisma.bin.updateMany({
+    where: { code: { notIn: binData.map((b) => b.code) }, isActive: true },
+    data: { isActive: false },
+  });
+
+  console.log(
+    `Created ${bins.length} bins` +
+      (staleBins.count ? `, deactivated ${staleBins.count} stale` : "")
+  );
 
   // Create products
   const productData = [
@@ -151,11 +195,25 @@ async function main() {
     { type: "OUTWARD" as const, productId: products[6].id, quantity: 2, previousStock: 14, newStock: 12, referenceNo: "SALE-0458", userId: admin.id },
   ];
 
+  // Guarded rather than upserted: InventoryTransaction has no unique key to upsert on —
+  // `referenceNo` is a nullable String with no @unique. A plain create therefore re-ran the
+  // whole sample set on every seed, so three seeds left three copies and a stock history
+  // that disagreed with the product rows on every dashboard that reads it.
+  let txnsCreated = 0;
   for (const txn of txns) {
+    const exists = await prisma.inventoryTransaction.findFirst({
+      where: { referenceNo: txn.referenceNo, productId: txn.productId, type: txn.type },
+      select: { id: true },
+    });
+    if (exists) continue;
     await prisma.inventoryTransaction.create({ data: txn });
+    txnsCreated++;
   }
 
-  console.log(`Created ${txns.length} transactions`);
+  console.log(
+    `Created ${txnsCreated} transactions` +
+      (txnsCreated < txns.length ? ` (${txns.length - txnsCreated} already present)` : "")
+  );
   
   // Seed Staff LMS Content
   await seedStaffLms(prisma);
