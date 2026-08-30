@@ -1,6 +1,6 @@
 # Master data screens, product delete, and the filter drawer
 
-Status: pending — **three questions in §7 block the destructive half (Part A).** Parts B, C and D are specified and can start immediately.
+Status: pending — **Q1 and Q3 answered 30 Aug 2026; only Q2 and Q4 remain and neither blocks a start.** All four parts are specified.
 Suggested branch: `feat/master-data-screens` off `main`.
 Prepared 30 Aug 2026. Every claim below was checked against the tree and the live database.
 
@@ -12,7 +12,7 @@ Four things, of which three are the same underlying gap: **the taxonomy tables Z
 
 | Part | Ask | Today |
 |---|---|---|
-| **A** | Delete a product from `/stock` | `DELETE /api/products/[id]` exists and **no screen calls it** |
+| **A** | Delete a product from `/stock` — **soft and hard, both** | `DELETE /api/products/[id]` exists, **no screen calls it**, and it soft-deletes while claiming otherwise |
 | **B** | Categories listing + actions, in the sidebar | **No screen, no RBAC module, no PATCH, no DELETE** |
 | **C** | Brands listing + actions, with lead time on the same page | `/more/brands` does **merge only** |
 | **D** | `/receivables` filter is a bottom sheet and reads badly | `FilterSheet` opens upward from the bottom, on **12 screens** |
@@ -204,15 +204,51 @@ Both new screens need to appear. The sidebar is built from the `modules` table, 
 
 ## 7. Open questions
 
-**Q1 — should a product ever be hard-deleted, and by whom?**
-Today's DELETE only sets `status: "INACTIVE"` and nothing calls it. Options: (a) keep it soft always and rename the button "Deactivate" so the UI stops promising something it does not do; (b) `/team`'s rule — hard delete when nothing references it, refuse with counts otherwise; (c) hard delete behind a separate grant.
-**Recommendation: (b).** It matches an existing precedent in this codebase, it never destroys history, and the refusal message is actionable.
+**Q1 — ANSWERED 30 Aug 2026: both. Two distinct actions, not one button that guesses.**
+
+The owner wants a soft delete AND a hard delete, chosen deliberately rather than inferred from
+whether the product happens to have history.
+
+| Action | Does | Guard | Available when |
+|---|---|---|---|
+| **Deactivate** | `status: "INACTIVE"` — hides it from pickers, keeps every record | `stock.edit` | always |
+| **Delete permanently** | removes the row | `stock.delete` | **only when nothing references it** |
+
+Two things this pins down:
+
+- **Hard delete stays refusable.** A product with `InventoryTransaction`, `StockLevel`,
+  `SerialItem`, `InboundLineItem`, `TransferOrderItem`, `StockCountItem` or `PreBooking` rows
+  cannot be removed — the foreign keys forbid it and, more importantly, deleting it would
+  destroy the audit trail. The API refuses with the counts and points at Deactivate:
+
+  ```
+  "BSA REVX 14T has 3 transactions and 1 stock row and cannot be deleted.
+   Deactivate it instead to hide it while keeping its history."
+  ```
+
+- **Deactivate becomes its own verb.** Today `DELETE /api/products/[id]` *says* delete and
+  *does* deactivate. That lie is removed: `PATCH` deactivates, `DELETE` deletes, and each
+  button does what its label says.
+
+The UI shows both, with the destructive one styled as destructive and confirmed separately.
+Rendering the API's `message` verbatim still applies — never report a refusal as a success.
 
 **Q2 — what happens to a category or brand that products still reference?**
 Refuse with a count and offer merge? Or force a merge target as part of the delete? Merge is the operation that actually cleans up wheel-size categories, so it may be worth making it the *primary* action and delete the rare one.
 
-**Q3 — is a right-hand drawer the filter shape you want on desktop?**
-Alternatives: an inline filter bar above the table (no overlay at all), or a left drawer. This changes twelve screens, so it is worth being sure. An inline bar is arguably better for a data table but is a larger change to each page.
+**Q3 — ANSWERED 30 Aug 2026: a right-hand drawer, with an explicit close button.**
+
+Opens on clicking Filter, slides in from the right, and carries an **X in its header** —
+clicking the backdrop must not be the only way out. Applies to **all twelve screens** that use
+`FilterSheet`, which the owner confirmed is wanted.
+
+Required behaviour:
+
+- `X` in the drawer header, and `Esc` closes it
+- backdrop click still closes, as a second route out and not the only one
+- focus moves into the drawer on open and returns to the Filter button on close
+- the drawer scrolls internally; the page behind it does not
+- active-filter chips keep their present behaviour so nothing has to be relearned
 
 **Q4 — should `/more/brand-lead-times` be deleted, or kept as a redirect?**
 It will have no reason to exist once lead time is inline on `/more/brands`. Anyone with it bookmarked gets a 404 unless it redirects.
@@ -226,7 +262,7 @@ It will have no reason to exist once lead time is inline on `/more/brands`. Anyo
 1  D  filter drawer          component-only, 12 screens benefit, zero call-site changes
 2  B  categories screen      catalog + seed FIRST, then routes, then screen
 3  C  brands screen          absorbs lead time; delete /more/brand-lead-times
-4  A  product delete         after Q1
+4  A  product delete         Deactivate + Delete permanently, Q1 answered
 ```
 
 **D first** because it touches one component, needs no schema or catalog change, and is the lowest-risk way to confirm the approach. **A last** because it is the only destructive one.
@@ -235,10 +271,10 @@ It will have no reason to exist once lead time is inline on `/more/brands`. Anyo
 
 ## 9. Verification
 
-- **A** — deleting a product with transactions is **refused** with a count; one with no history is removed and disappears from `/stock`. The dialog says which happened.
+- **A** — **Deactivate** on a product with transactions succeeds and the product leaves the pickers but keeps its history. **Delete permanently** on that same product is **refused** with the counts. Delete permanently on a product with no history removes the row. The dialog says which of the three happened, in the API's own words.
 - **B** — merging `16` into `Bicycles` moves its products and removes `16`; `/stock` category filters still populate for a user **without** `categories.view` (proves `GET` stayed on `stock.view`).
 - **C** — changing a lead time on `/more/brands` changes the expected delivery date on the next inbound shipment for that brand. A user with `brands.edit` and **not** `brands.create` can save it — that is the guard bug the other plan fixes, and testing only as ADMIN proves nothing.
-- **D** — the filter opens as a right drawer at desktop width and as a bottom sheet on a phone, on `/receivables` **and** on at least two other screens that were not touched.
+- **D** — the filter opens as a right drawer at desktop width and as a bottom sheet on a phone, on `/receivables` **and** on at least two other screens that were not touched. The **X** closes it, `Esc` closes it, and focus returns to the Filter button.
 - `npm run build` passes after each part.
 
 ## 10. Board of Agents
