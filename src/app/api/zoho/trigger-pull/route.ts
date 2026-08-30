@@ -262,14 +262,47 @@ export async function POST(req: NextRequest) {
         apiCalls += Math.ceil(contacts.length / 200) || 1;
         const vendors = contacts.filter((c) => c.contact_type === "vendor");
 
+        // Same defect and same fix as `items` above — one `vendor.findFirst` plus one
+        // `create` per contact became two queries total. No vendor pull is failing today
+        // (contact counts are far smaller than item counts), so this is the pre-emptive half.
+        //
+        // Zoho can repeat a contact across pages; dedupe by contact_id before writing,
+        // because ZohoPullPreview has no unique constraint on zohoId.
+        const byId = new Map<string, (typeof vendors)[number]>();
         for (const contact of vendors) {
-          const existing = await prisma.vendor.findFirst({
-            where: { name: { equals: contact.contact_name, mode: "insensitive" } },
-          });
-          if (existing) continue;
+          if (contact.contact_id) byId.set(contact.contact_id, contact);
+        }
+        const uniqueVendors = [...byId.values()];
 
-          await prisma.zohoPullPreview.create({
-            data: {
+        // The old check was `findFirst({ name: { equals, mode: "insensitive" } })` — matching
+        // is case-INSENSITIVE and must stay that way, or "Naren" and "NAREN" both look new
+        // and the review lists the vendor twice.
+        //
+        // Deliberately reading ALL vendor names in one query rather than an `in` clause:
+        // Prisma's `mode: "insensitive"` is not dependable on `in`, and Vendor is a small
+        // table by nature (one row today; tens to hundreds at most) selecting a single
+        // column. Comparing on a lowercased key in memory is exact, and it is one round trip
+        // instead of one per contact — which is the whole point of this change.
+        const knownNames = new Set(
+          (await prisma.vendor.findMany({ select: { name: true } })).map((v) => v.name.trim().toLowerCase())
+        );
+
+        const freshVendors = uniqueVendors.filter(
+          (c) => !knownNames.has(String(c.contact_name || "").trim().toLowerCase())
+        );
+
+        log.debug("contacts batched", {
+          pullId: existingPullId,
+          received: contacts.length,
+          vendors: vendors.length,
+          unique: uniqueVendors.length,
+          existing: uniqueVendors.length - freshVendors.length,
+          new: freshVendors.length,
+        });
+
+        if (freshVendors.length > 0) {
+          await prisma.zohoPullPreview.createMany({
+            data: freshVendors.map((contact) => ({
               pullId: existingPullId,
               entityType: "contact",
               zohoId: contact.contact_id,
@@ -281,14 +314,16 @@ export async function POST(req: NextRequest) {
                 city: contact.billing_address?.city || "",
                 state: contact.billing_address?.state || "",
               },
-            },
+            })),
           });
-          contactsNew++;
+          contactsNew = freshVendors.length;
         }
       } catch (e) {
+        log.error("contacts step failed", { pullId: existingPullId, contactsNew, message: e instanceof Error ? e.message : "Unknown" });
         errors.push(`Contacts: ${e instanceof Error ? e.message : "Unknown"}`);
       }
 
+      log.info("contacts step finished", { pullId: existingPullId, contactsNew, apiCalls, errors: errors.length });
       return successResponse({ step: "contacts", source: "books", contactsNew, apiCalls, errors });
     }
 
