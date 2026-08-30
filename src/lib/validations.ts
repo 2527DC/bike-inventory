@@ -482,7 +482,11 @@ export const preBookingSchema = z.object({
   brandId: z.string().optional(),
 });
 
-export const storeUpdateSchema = z.object({
+// A StoreUpdate POST — the ops-hub noticeboard — not an update TO a store. Renamed from
+// `storeUpdateSchema` on 30 Aug 2026: every other schema here uses *UpdateSchema for a PATCH
+// body (productUpdateSchema, userUpdateSchema), so the old name collided with the real one
+// when Store became a table.
+export const storeUpdatePostSchema = z.object({
   text: z.string().min(1, "Text is required").max(2000),
   category: z.enum(["Sales", "Staff", "Ops", "Issue", "Win", "Other"]),
 });
@@ -773,3 +777,37 @@ export const lmsProgressSchema = z
 
 /** The daily streak ping. Takes no input at all — the session is the whole request. */
 export const lmsHeartbeatSchema = z.object({}).strict();
+
+// ─── Store hierarchy ─────────────────────────────────────────────────────────
+
+// `code` is the stable handle: it reuses the old StockLocation enum strings and is what
+// /stock/by-location/[code] resolves against, so it is uppercase, alphanumeric + underscore,
+// and never contains a space. `name` is free display text and can be renamed at will.
+const SITE_CODE = z
+  .string()
+  .min(2, "Code is required")
+  .max(40)
+  .regex(/^[A-Za-z0-9_]+$/, "Code may use letters, numbers and underscores only");
+
+export const storeSchema = z.object({
+  code: SITE_CODE,
+  name: z.string().min(1, "Name is required").max(100),
+  address: z.string().max(300).optional(),
+  phone: z.string().max(30).optional(),
+  sortOrder: z.number().int().min(0).optional(),
+});
+
+export const storeUpdateSchema = storeSchema.partial().extend({
+  isActive: z.boolean().optional(),
+});
+
+export const warehouseSchema = z.object({
+  storeId: z.string().min(1, "A store is required"),
+  code: SITE_CODE,
+  name: z.string().min(1, "Name is required").max(100),
+  sortOrder: z.number().int().min(0).optional(),
+});
+
+export const warehouseUpdateSchema = warehouseSchema.partial().extend({
+  isActive: z.boolean().optional(),
+});

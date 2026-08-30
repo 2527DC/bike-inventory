@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Plus, ArrowRightLeft, ArrowRight, CheckCircle2, XCircle, Clock, Loader2, Package } from "lucide-react";
-import { stockLocationLabel } from "@/lib/inventory-config";
+// No warehouse lookup needed: the API now returns the warehouse names on each line, so
+// the page renders what it was given instead of translating a code through a table.
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
 import { type DateRangeKey } from "@/components/date-filter";
 import { FilterSheet } from "@/components/filter-sheet";
@@ -21,14 +22,14 @@ interface TransferOrderItem {
   product: { name: string; sku: string; currentStock: number };
   fromBin: { code: string; name: string; location: string } | null;
   toBin: { code: string; name: string; location: string } | null;
-  fromLocation: string | null;
-  toLocation: string | null;
+  fromWarehouse: { id: string; code: string; name: string } | null;
+  toWarehouse: { id: string; code: string; name: string } | null;
 }
 
 // Display label for an endpoint: bin code in bin mode, location name in location mode.
 function endpointLabel(bin: { code: string } | null, loc: string | null): string {
   if (bin) return bin.code;
-  if (loc) return stockLocationLabel(loc);
+  if (loc) return loc;
   return "—";
 }
 
@@ -116,7 +117,7 @@ export default function TransfersPage() {
                 { label: "Items", value: `${order._count.items} item${order._count.items !== 1 ? "s" : ""}` },
                 ...order.items.slice(0, 3).map((item) => ({
                   label: item.product.name,
-                  value: `${endpointLabel(item.fromBin, item.fromLocation)} → ${endpointLabel(item.toBin, item.toLocation)} (Qty: ${item.quantity})`,
+                  value: `${endpointLabel(item.fromBin, item.fromWarehouse?.name ?? null)} → ${endpointLabel(item.toBin, item.toWarehouse?.name ?? null)} (Qty: ${item.quantity})`,
                 })),
               ],
               details: order.notes || undefined,
@@ -235,9 +236,9 @@ export default function TransfersPage() {
                         <div className="flex items-center gap-1 text-xs text-slate-500">
                           <span className="tabular-nums">Qty: {item.quantity}</span>
                           <span>|</span>
-                          <span>{endpointLabel(item.fromBin, item.fromLocation)}</span>
+                          <span>{endpointLabel(item.fromBin, item.fromWarehouse?.name ?? null)}</span>
                           <ArrowRight className="h-2.5 w-2.5 text-purple-500" />
-                          <span>{endpointLabel(item.toBin, item.toLocation)}</span>
+                          <span>{endpointLabel(item.toBin, item.toWarehouse?.name ?? null)}</span>
                         </div>
                       </div>
                     </div>

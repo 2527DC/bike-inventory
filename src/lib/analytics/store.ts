@@ -13,7 +13,8 @@
 // ONLINE while it was dead.
 
 import { prisma } from "@/lib/db";
-import { CountDirection, type StockLocation } from "@prisma/client";
+import { CountDirection } from "@prisma/client";
+import { storeById } from "@/lib/stores";
 import {
   businessDate,
   calendarDayRange,
@@ -87,7 +88,7 @@ function optionalString(value: unknown): string | null {
  */
 export async function addCounts(
   list: RawCountEvent[],
-  opts: { storeId: StockLocation; deviceId?: string | null; now?: number }
+  opts: { storeId: string; deviceId?: string | null; now?: number }
 ): Promise<IngestResult> {
   const { storeId, deviceId = null, now = Date.now() } = opts;
 
@@ -164,7 +165,7 @@ export async function addCounts(
 // ─── Heartbeat ───────────────────────────────────────────────────────────────
 
 export interface BeatInput {
-  storeId: StockLocation;
+  storeId: string;
   deviceId?: string | null;
   agentId?: string;
   queueDepth?: number | null;
@@ -230,7 +231,7 @@ export async function beat(input: BeatInput): Promise<void> {
  * dashboard" while BCC_STORE is the one with a camera is the class of quiet wrongness the
  * whole project exists to avoid. The caller turns null into "say which store".
  */
-export async function resolveDefaultStore(): Promise<StockLocation | null> {
+export async function resolveDefaultStore(): Promise<string | null> {
   const stores = await prisma.analyticsDevice.findMany({
     where: { isActive: true },
     select: { storeId: true },
@@ -242,7 +243,10 @@ export async function resolveDefaultStore(): Promise<StockLocation | null> {
 // ─── Dashboard ───────────────────────────────────────────────────────────────
 
 export interface DashboardPayload {
-  store_id: StockLocation;
+  // The store CODE ("BCH_STORE"), not its id. Stores became rows in the hierarchy
+  // migration and a cuid here would break every consumer reading this JSON, as well as
+  // making the payload unreadable. Codes are stable; ids are not meaningful outside the DB.
+  store_id: string;
   date: BusinessDate;
   timezone: string;
   footfall_basis: "in";
@@ -287,7 +291,7 @@ export interface DashboardPayload {
  *    (UI-004) — a gap in the data must never render as "no customers came in".
  */
 export async function dashboard(opts: {
-  storeId: StockLocation;
+  storeId: string;
   date?: BusinessDate;
   now?: number;
 }): Promise<DashboardPayload> {
@@ -367,8 +371,12 @@ export async function dashboard(opts: {
       ? Math.round((inCount / counterBills) * 10) / 10
       : null;
 
+  // storeId is an id internally; the payload emits the CODE so its value stays readable
+  // and stable for anything downstream reading this JSON.
+  const storeRef = await storeById(storeId);
+
   return {
-    store_id: storeId,
+    store_id: storeRef?.code ?? storeId,
     date,
     timezone: STORE_TZ,
     footfall_basis: "in",

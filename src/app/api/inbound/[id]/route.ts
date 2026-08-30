@@ -4,8 +4,9 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { BIN_TRACKING_ENABLED, DEFAULT_STOCK_LOCATION, isStockLocation, stockLocationLabel, type StockLocation } from "@/lib/inventory-config";
-import { adjustLocationQty } from "@/lib/stock-location";
+import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { resolveWarehouse } from "@/lib/warehouses";
+import { adjustWarehouseQty } from "@/lib/stock-location";
 
 // GET: Shipment detail
 export async function GET(
@@ -81,7 +82,9 @@ export async function PUT(
         return errorResponse("Bin assignment is required when marking items delivered", 400);
       }
       const primaryBinId = binAllocations[0]?.binId ?? null;
-      const location: StockLocation = isStockLocation(body.location) ? body.location : DEFAULT_STOCK_LOCATION;
+      const resolved = await resolveWarehouse(body.warehouseId ?? body.location);
+      if ("error" in resolved) return errorResponse(resolved.error, 400);
+      const warehouse = resolved.warehouse;
 
       await prisma.$transaction(async (tx) => {
         await tx.inboundLineItem.update({
@@ -137,11 +140,11 @@ export async function PUT(
                 previousStock,
                 newStock: runningStock,
                 referenceNo: lineItem.shipment.shipmentNo,
-                notes: `[INBOUND] Brand: ${lineItem.shipment.brand.name} | Bill: ${lineItem.shipment.billNo} | ${lineItem.productName} x${qty} → ${stockLocationLabel(location)}`,
+                notes: `[INBOUND] Brand: ${lineItem.shipment.brand.name} | Bill: ${lineItem.shipment.billNo} | ${lineItem.productName} x${qty} → ${warehouse.name}`,
                 userId: user.id,
               },
             });
-            await adjustLocationQty(tx, matchedProduct.id, location, qty);
+            await adjustWarehouseQty(tx, matchedProduct.id, warehouse.id, qty);
           }
 
           // Auto-create delivery for pre-booked items so outwards clerk can see it

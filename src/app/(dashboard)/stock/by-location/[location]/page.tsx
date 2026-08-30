@@ -6,7 +6,7 @@ import { ArrowLeft, Search, Package, Loader2, ChevronDown, Warehouse, Store } fr
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { DesktopTable } from "@/components/desktop-table";
-import { stockLocationLabel, STOCK_LOCATIONS } from "@/lib/inventory-config";
+
 
 interface LocProduct {
   id: string;
@@ -19,8 +19,12 @@ interface LocProduct {
   reorderLevel: number;
 }
 interface LocData {
-  location: string;
+  code: string;
+  // "warehouse" shows one warehouse; "store" sums across every warehouse at that site.
+  level: "warehouse" | "store";
   label: string;
+  // Per-warehouse totals, present only at store level.
+  warehouses: Array<{ code: string; name: string; units: number }> | null;
   totalUnits: number;
   totalValue: number;
   productCount: number;
@@ -39,7 +43,9 @@ export default function StockByLocationDetailPage({ params }: { params: Promise<
   const [brandFilter, setBrandFilter] = useState("ALL");
   const [search, setSearch] = useState("");
 
-  const kind = STOCK_LOCATIONS.find((l) => l.value === location)?.kind;
+  // "store" or "warehouse", straight from the API — a store view sums across its
+  // warehouses, and the page says which it is showing rather than guessing from the code.
+  const kind = data?.level;
 
   useEffect(() => {
     fetch(`/api/stock/by-location/${location}`)
@@ -76,14 +82,14 @@ export default function StockByLocationDetailPage({ params }: { params: Promise<
 
   const shownUnits = filtered.reduce((s, p) => s + p.qty, 0);
   const shownValue = filtered.reduce((s, p) => s + p.value, 0);
-  const label = data?.label || stockLocationLabel(location);
+  const label = data?.label || location;
 
   return (
     <div className="pb-10">
       <div className="flex items-center gap-3 mb-3">
         <button onClick={goBack} className="p-1" aria-label="Back"><ArrowLeft className="h-5 w-5 text-slate-600" /></button>
-        <div className={`h-9 w-9 rounded-xl flex items-center justify-center ${kind === "Warehouse" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}`}>
-          {kind === "Warehouse" ? <Warehouse className="h-5 w-5" /> : <Store className="h-5 w-5" />}
+        <div className={`h-9 w-9 rounded-xl flex items-center justify-center ${kind === "warehouse" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}`}>
+          {kind === "warehouse" ? <Warehouse className="h-5 w-5" /> : <Store className="h-5 w-5" />}
         </div>
         <div className="flex-1">
           <h1 className="text-lg font-bold text-slate-900">{label}</h1>

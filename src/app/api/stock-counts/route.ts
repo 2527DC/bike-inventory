@@ -6,8 +6,9 @@ import { successResponse, errorResponse, paginatedResponse, parseSearchParams } 
 import { stockCountSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
-import { BIN_TRACKING_ENABLED, isStockLocation, type StockLocation } from "@/lib/inventory-config";
-import { getLocationQtyMap } from "@/lib/stock-location";
+import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { getWarehouseQtyMap } from "@/lib/stock-location";
+import { resolveWarehouse } from "@/lib/warehouses";
 
 export async function GET(req: NextRequest) {
   try {
@@ -77,8 +78,16 @@ export async function POST(req: NextRequest) {
     const binId = body.binId as string | undefined;
     const locationScope = body.location as string | undefined;
     const productType = data.productType || undefined;
-    // Location mode (bins dormant): locationScope is one of the 4 StockLocations.
-    const isLocationScoped = !BIN_TRACKING_ENABLED && isStockLocation(locationScope);
+    // Warehouse mode (bins dormant): locationScope names a warehouse, by id or by code.
+    // Resolved against the database rather than tested against a hardcoded list of four —
+    // and an unrecognised value is rejected instead of silently counting everything.
+    let scopedWarehouse: { id: string; code: string; name: string } | null = null;
+    if (!BIN_TRACKING_ENABLED && locationScope) {
+      const r = await resolveWarehouse(locationScope);
+      if ("error" in r) return errorResponse(r.error, 400);
+      scopedWarehouse = r.warehouse;
+    }
+    const isLocationScoped = scopedWarehouse !== null;
 
     let binIds: string[] | undefined;
     if (!productIds || productIds.length === 0) {
@@ -123,7 +132,7 @@ export async function POST(req: NextRequest) {
 
     // In location mode, systemQty is the quantity AT THE COUNTED LOCATION so the
     // variance is per-location (not against the product's total).
-    const locQtyMap = isLocationScoped ? await getLocationQtyMap(productIds, locationScope as StockLocation) : null;
+    const locQtyMap = scopedWarehouse ? await getWarehouseQtyMap(productIds, scopedWarehouse.id) : null;
 
     // Generate countNo: SC-YYYYMM-NNNN
     const now = new Date();
@@ -142,7 +151,9 @@ export async function POST(req: NextRequest) {
         title: data.title,
         assignedToId: data.assignedToId || user.id,
         binId: binId || null,
-        location: locationScope || null,
+        // StockCount.location is free-text (String?), so the readable CODE is stored rather
+        // than a cuid — this value is rendered on the count screens.
+        location: scopedWarehouse?.code ?? locationScope ?? null,
         productType: productType || null,
         dueDate: new Date(data.dueDate),
         notes: data.notes,

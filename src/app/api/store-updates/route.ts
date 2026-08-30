@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { storeUpdateSchema } from "@/lib/validations";
+import { storeUpdatePostSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function GET() {
@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
   try {
     const user = await requireFeature("settings", "create");
     const body = await req.json();
-    const data = storeUpdateSchema.parse(body);
+    const data = storeUpdatePostSchema.parse(body);
 
     const update = await prisma.storeUpdate.create({
       data: {

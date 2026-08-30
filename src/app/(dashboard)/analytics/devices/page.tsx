@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { usePermissions } from "@/lib/use-permissions";
-import { STOCK_LOCATIONS, stockLocationLabel } from "@/lib/inventory-config";
+import { useStores } from "@/hooks/use-sites";
 
 interface Device {
   id: string;
@@ -31,7 +31,7 @@ interface Device {
 
 // Only sites with a doorway can be counted. Derived from the shared location config rather
 // than a second hardcoded list.
-const COUNTABLE_STORES = STOCK_LOCATIONS.filter((l) => l.kind === "Store");
+// Was STOCK_LOCATIONS.filter(l => l.kind === "Store") — every Store row is countable now.
 
 /**
  * The one-time key panel.
@@ -90,6 +90,11 @@ function KeyReveal({ label, apiKey, onDone }: { label: string; apiKey: string; o
 }
 
 export default function AnalyticsDevicesPage() {
+  const { stores: COUNTABLE_STORES } = useStores();
+  // storeId is a Store.id now, so the label comes from the loaded list rather than a
+  // lookup table. Falls back to the raw id if the store was deactivated after the
+  // device was registered — better a cuid than a blank.
+  const storeName = (id: string) => COUNTABLE_STORES.find((s) => s.id === id)?.name ?? id;
   // `ready` matters: the store grants nothing until the permission set has arrived, so
   // checking canView() while it is still loading renders "no access" to a user who has it.
   const { canView, canEdit, ready: permsReady } = usePermissions();
@@ -103,7 +108,10 @@ export default function AnalyticsDevicesPage() {
 
   const [showForm, setShowForm] = useState(false);
   const [label, setLabel] = useState("");
-  const [storeId, setStoreId] = useState<"BCH_STORE" | "BCC_STORE">("BCH_STORE");
+  // Was a two-member union of the old enum codes. Stores are rows, so this is a Store.id and
+  // starts empty — the list is fetched, and hardcoding a default would name a store that may
+  // not exist.
+  const [storeId, setStoreId] = useState<string>("");
   const [agentId, setAgentId] = useState("edge-1");
   const [saving, setSaving] = useState(false);
 
@@ -244,12 +252,13 @@ export default function AnalyticsDevicesPage() {
                   <label className="mb-1 block text-xs font-medium text-slate-600">Store</label>
                   <select
                     value={storeId}
-                    onChange={(e) => setStoreId(e.target.value as "BCH_STORE" | "BCC_STORE")}
+                    onChange={(e) => setStoreId(e.target.value)}
                     className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
                   >
+                    {COUNTABLE_STORES.length === 0 && <option value="">Loading stores…</option>}
                     {COUNTABLE_STORES.map((s) => (
-                      <option key={s.value} value={s.value}>
-                        {s.label}
+                      <option key={s.id} value={s.id}>
+                        {s.name}
                       </option>
                     ))}
                   </select>
@@ -321,7 +330,7 @@ export default function AnalyticsDevicesPage() {
                       )}
                     </div>
                     <p className="mt-1 text-xs text-slate-500">
-                      {stockLocationLabel(d.storeId)} · {d.agentId} ·{" "}
+                      {storeName(d.storeId)} · {d.agentId} ·{" "}
                       {d.lastSeenAt
                         ? `last seen ${formatDistanceToNow(new Date(d.lastSeenAt), { addSuffix: true })}`
                         : "never seen"}

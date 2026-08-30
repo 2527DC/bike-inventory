@@ -227,24 +227,11 @@ enum ProductType {
   FINISHED_GOOD
 }
 
-// Active stock-tracking locations. Bins (see Bin model) are dormant; per-location
-// quantity lives in StockLevel keyed by this enum. Two sites (BCH, BCC), each with
-// a warehouse and a store. STORE/WAREHOUSE are legacy values kept only so old rows
-// migrate cleanly — they are no longer used by the app.
-enum StockLocation {
-  STORE
-  WAREHOUSE
-  BCH_WAREHOUSE
-  BCH_STORE
-  BCC_WAREHOUSE
-  BCC_STORE
-}
-
 // ─── Store hierarchy ─────────────────────────────────────────────────────────
 //
-// These two models REPLACE the StockLocation enum above. Added in Phase 1 of
-// docs/implementation/pending/store-hierarchy-and-team-plan.md; the enum is still what runs
-// the stock system until Phase 4 repoints the six columns that use it, and is deleted there.
+// These two models REPLACED the StockLocation enum, which is GONE as of Phase 4 of
+// docs/implementation/pending/store-hierarchy-and-team-plan.md. Six columns were repointed at
+// them and FootfallDaily was dropped; there is no enum left to fall back to.
 //
 // The split is not cosmetic — it decides which table each foreign key points at:
 //
@@ -272,8 +259,11 @@ model Store {
   users      User[]
 
   // Footfall is counted at the shop door, so these hang off the store, not a warehouse.
-  // Wired up in Phase 4 — CountEvent, AgentHeartbeat and AnalyticsDevice already carry a
-  // column named `storeId`, so they change TYPE and keep their name.
+  // All three already carried a column named `storeId`; Phase 4 changed its TYPE from the
+  // StockLocation enum to this foreign key and kept the name.
+  countEvents      CountEvent[]
+  agentHeartbeats  AgentHeartbeat[]
+  analyticsDevices AnalyticsDevice[]
 }
 
 /// A godown. Stock lives here. One per store on day one, but the whole point of the model is
@@ -293,9 +283,10 @@ model Warehouse {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users User[]
-
-  // StockLevel and TransferOrderItem are repointed here in Phase 4.
+  users         User[]
+  stockLevels   StockLevel[]
+  transfersFrom TransferOrderItem[] @relation("TransferFromWarehouse")
+  transfersTo   TransferOrderItem[] @relation("TransferToWarehouse")
 
   // `code` is globally unique above, which already prevents a duplicate. This pair is kept
   // because the natural key of a warehouse is (site, code) and a future rename that relaxes
@@ -521,17 +512,20 @@ model Product {
 // truth for "how much, where". Product.currentStock is the cached SUM of these rows,
 // recomputed on every change (see src/lib/stock-location.ts).
 model StockLevel {
-  id               String        @id @default(cuid())
+  id               String    @id @default(cuid())
   productId        String
-  product          Product       @relation(fields: [productId], references: [id])
-  location         StockLocation
-  quantity         Int           @default(0)
-  reservedQuantity Int           @default(0)
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  product          Product   @relation(fields: [productId], references: [id])
+  // Was `location: StockLocation`. Restrict, so a warehouse holding stock cannot be deleted
+  // out from under these rows — the API's delete rule reports the count first (Phase 6).
+  warehouseId      String
+  warehouse        Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  quantity         Int       @default(0)
+  reservedQuantity Int       @default(0)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  @@unique([productId, location])
-  @@index([location])
+  @@unique([productId, warehouseId])
+  @@index([warehouseId])
 }
 
 model SerialItem {
@@ -1370,12 +1364,18 @@ model TransferOrderItem {
   fromBin         Bin?           @relation("TransferFromBin", fields: [fromBinId], references: [id])
   toBinId         String?
   toBin           Bin?           @relation("TransferToBin", fields: [toBinId], references: [id])
-  fromLocation    StockLocation?
-  toLocation      StockLocation?
+  // Was fromLocation/toLocation: StockLocation?. Still nullable — bin mode leaves both
+  // unset — and still Restrict, so a warehouse with transfer history cannot be deleted.
+  fromWarehouseId String?
+  fromWarehouse   Warehouse?     @relation("TransferFromWarehouse", fields: [fromWarehouseId], references: [id], onDelete: Restrict)
+  toWarehouseId   String?
+  toWarehouse     Warehouse?     @relation("TransferToWarehouse", fields: [toWarehouseId], references: [id], onDelete: Restrict)
   createdAt       DateTime       @default(now())
 
   @@index([transferOrderId])
   @@index([productId])
+  @@index([fromWarehouseId])
+  @@index([toWarehouseId])
 }
 
 // ─── Inbound Tracking (Brand Deliveries & Pre-booking) ───────────────────────
@@ -2276,7 +2276,11 @@ model CountEvent {
   // Generating it here would turn every retry into another person walking through the door.
   id String @id
 
-  storeId    StockLocation
+  // Was StockLocation. The COLUMN NAME is unchanged on purpose — footfall is counted at the
+  // shop door, so this always pointed at a store rather than a stock location, and renaming
+  // it would churn every ingest call site for nothing.
+  storeId    String
+  store      Store          @relation(fields: [storeId], references: [id], onDelete: Restrict)
   entranceId String         @default("main") // a store may grow a second door
   direction  CountDirection
 
@@ -2314,8 +2318,9 @@ model CountEvent {
 model AgentHeartbeat {
   id String @id @default(cuid())
 
-  storeId StockLocation
-  agentId String        @default("edge-1")
+  storeId String
+  store   Store  @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  agentId String @default("edge-1")
 
   deviceId String?
   device   AnalyticsDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
@@ -2338,9 +2343,10 @@ model AgentHeartbeat {
 // pilot used, so a camera key can be rotated from an admin screen instead of a redeploy —
 // "access control is DATA, not code" (CLAUDE.md).
 model AnalyticsDevice {
-  id      String        @id @default(cuid())
-  storeId StockLocation
-  agentId String        @default("edge-1")
+  id      String @id @default(cuid())
+  storeId String
+  store   Store  @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  agentId String @default("edge-1")
   label   String // "BCH front door laptop"
 
   // sha-256 of the API key. The key itself is shown once at creation and never stored, so a
@@ -2358,34 +2364,6 @@ model AnalyticsDevice {
   @@unique([storeId, agentId]) // one agent per door per store
   @@index([isActive])
   @@map("analytics_devices")
-}
-
-// Per-store daily rollup. count_events grows by one row per person per direction forever and
-// the dashboard polls every 15s, so past days must not re-aggregate the raw table.
-model FootfallDaily {
-  id      String        @id @default(cuid())
-  storeId StockLocation
-
-  businessDate DateTime @db.Date
-
-  inCount  Int @default(0)
-  outCount Int @default(0)
-
-  // Distinct minutes that carried a heartbeat. Coverage % = observed ÷ expected open minutes
-  // (DAT-005). Missing data is not zero traffic: a gap renders as unknown, never as 0.
-  observedMinutes Int @default(0)
-
-  // Snapshotted from POS at rollup time. TWO counts, never summed — counterBills is the one
-  // that pairs with footfall; totalInvoices includes credit sales and business that never
-  // walked through the door.
-  counterBills  Int?
-  totalInvoices Int?
-
-  computedAt DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  @@unique([storeId, businessDate])
-  @@map("footfall_daily")
 }
 
 // ─── Staff LMS (merged from bch-sales-training) ──────────────────────────────

@@ -464,6 +464,55 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     sortOrder: 530,
     actions: ["view", "edit"],
   },
+
+  // ── Store Management ──────────────────────────────────────────────────────
+  // A parent plus two children, the second module tree in this catalog after Staff LMS.
+  //
+  // `store_management` is a ROOT module and must stay one: `stores` and `warehouses` are its
+  // children, and nesting the parent under `settings` would make them GRANDCHILDREN, which
+  // seed-rbac.ts:48 rejects outright — the sidebar walks exactly two levels, so a grandchild
+  // would exist in the database and render nowhere.
+  //
+  // The parent is a grouping construct and its own `view` grant does almost nothing:
+  // app-sidebar.tsx builds a placeholder parent from a child's carried parent data, so the
+  // heading appears whenever EITHER child is granted. The real gates are stores.* and
+  // warehouses.*. Do not give it CRUD expecting it to gate anything.
+  //
+  // Two modules rather than one, decided 30 Aug 2026: "open a new store" and "add a warehouse
+  // to an existing site" are different decisions, and a warehouse supervisor can reasonably
+  // hold the second without the first.
+  {
+    key: "store_management",
+    label: "Store Management",
+    description: "Sites and the warehouses inside them",
+    icon: "Building2",
+    route: null, // a pure container — no page of its own
+    group: "Admin",
+    sortOrder: 540,
+    actions: ["view"],
+  },
+  {
+    key: "stores",
+    label: "Stores",
+    description: "Store sites — the shops, their codes and contact details",
+    icon: "Building2",
+    route: "/stores",
+    parentKey: "store_management",
+    group: "Admin", // MUST equal the parent's group — the seeder asserts it
+    sortOrder: 541,
+    actions: CRUD,
+  },
+  {
+    key: "warehouses",
+    label: "Warehouses",
+    description: "Warehouses under each store — where stock physically lives",
+    icon: "Warehouse",
+    route: "/stores/warehouses",
+    parentKey: "store_management",
+    group: "Admin",
+    sortOrder: 542,
+    actions: CRUD,
+  },
   {
     // Re-parented under Settings, NOT recreated. The key stays "zoho", so every existing
     // role grant (zoho.view, zoho.fetch, ...) keeps working untouched — permissions key off

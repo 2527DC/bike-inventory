@@ -6,8 +6,9 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { stockCountUpdateSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
-import { BIN_TRACKING_ENABLED, isStockLocation, type StockLocation } from "@/lib/inventory-config";
-import { setLocationQty } from "@/lib/stock-location";
+import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { setWarehouseQty } from "@/lib/stock-location";
+import { warehouseByCode } from "@/lib/warehouses";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -178,10 +179,16 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       if (applyToStock) {
         const BASELINE_END = new Date("2026-07-31T23:59:59+05:30");
         const isBaselinePeriod = new Date() <= BASELINE_END;
-        // Location mode: the count was scoped to one of the 4 locations, so apply the
-        // counted qty to THAT location (currentStock recomputes as the sum).
-        const isLocCount = !BIN_TRACKING_ENABLED && isStockLocation(existing.location);
-        const countLocation = existing.location as StockLocation;
+        // Warehouse mode: the count was scoped to ONE warehouse, so the counted qty applies
+        // to THAT warehouse and currentStock recomputes as the sum across all of them.
+        //
+        // StockCount.location holds the warehouse CODE (free text, written at creation).
+        // A count whose code no longer resolves — the warehouse was renamed or deactivated
+        // after the count was raised — is NOT applied to stock: writing it to the wrong
+        // warehouse, or to none, is worse than leaving the count recorded but unapplied.
+        const countWarehouse =
+          !BIN_TRACKING_ENABLED && existing.location ? await warehouseByCode(existing.location) : null;
+        const isLocCount = countWarehouse !== null;
 
         // Process all items that were counted (including 0 — means item not found at location)
         const countedItems = await tx.stockCountItem.findMany({
@@ -218,7 +225,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
             // --- BASELINE MODE: Stock count = INWARD + PUTAWAY ---
             let newTotal = item.countedQty;
             if (isLocCount) {
-              newTotal = await setLocationQty(tx, product.id, countLocation, item.countedQty);
+              newTotal = await setWarehouseQty(tx, product.id, countWarehouse!.id, item.countedQty);
               if (Object.keys(brandUpdate).length) {
                 await tx.product.update({ where: { id: product.id }, data: brandUpdate });
               }
@@ -242,7 +249,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
                 previousStock: product.currentStock,
                 newStock: newTotal,
                 referenceNo: existing.title,
-                notes: `[STOCK_COUNT] [BASELINE] Counted ${item.countedQty} units${isLocCount ? ` at ${countLocation}` : existing.binId ? " — placed in bin" : ""}${item.suggestedBrand ? ` — brand: ${item.suggestedBrand}` : ""} during "${existing.title}"`,
+                notes: `[STOCK_COUNT] [BASELINE] Counted ${item.countedQty} units${isLocCount ? ` at ${countWarehouse!.name}` : existing.binId ? " — placed in bin" : ""}${item.suggestedBrand ? ` — brand: ${item.suggestedBrand}` : ""} during "${existing.title}"`,
                 userId: user.id,
               },
             });
@@ -251,7 +258,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
             const variance = item.countedQty - (isLocCount ? (item.systemQty ?? 0) : product.currentStock);
 
             if (isLocCount) {
-              await setLocationQty(tx, product.id, countLocation, item.countedQty);
+              await setWarehouseQty(tx, product.id, countWarehouse!.id, item.countedQty);
               if (Object.keys(brandUpdate).length) {
                 await tx.product.update({ where: { id: product.id }, data: brandUpdate });
               }

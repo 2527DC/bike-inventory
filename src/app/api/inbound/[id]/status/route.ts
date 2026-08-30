@@ -5,8 +5,9 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
-import { BIN_TRACKING_ENABLED, DEFAULT_STOCK_LOCATION, isStockLocation, stockLocationLabel, type StockLocation } from "@/lib/inventory-config";
-import { adjustLocationQty } from "@/lib/stock-location";
+import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { resolveWarehouse } from "@/lib/warehouses";
+import { adjustWarehouseQty } from "@/lib/stock-location";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("inbound:status");
@@ -22,7 +23,9 @@ export async function PUT(
     const body = await req.json();
     const { status } = body;
     // Location mode (bins dormant): receive the whole shipment into one location.
-    const location: StockLocation = isStockLocation(body.location) ? body.location : DEFAULT_STOCK_LOCATION;
+    const resolved = await resolveWarehouse(body.warehouseId ?? body.location);
+    if ("error" in resolved) return errorResponse(resolved.error, 400);
+    const warehouse = resolved.warehouse;
     // Support both legacy {lineItemId, binId} and new {lineItemId, binAllocations: [{binId, qty}]}
     const rawAssignments: Array<{ lineItemId: string; binId?: string; binAllocations?: Array<{ binId: string; qty: number }> }> = body.binAssignments || [];
     const binAssignments = rawAssignments.map((ba) => ({
@@ -161,11 +164,11 @@ export async function PUT(
               previousStock,
               newStock: runningStock,
               referenceNo: existing.shipmentNo,
-              notes: `[INBOUND] Brand: ${existing.brand.name} | Bill: ${existing.billNo} | ${li.productName} x${qty} → ${stockLocationLabel(location)}`,
+              notes: `[INBOUND] Brand: ${existing.brand.name} | Bill: ${existing.billNo} | ${li.productName} x${qty} → ${warehouse.name}`,
               userId: user.id,
             },
           });
-          await adjustLocationQty(tx, matchedProduct.id, location, qty);
+          await adjustWarehouseQty(tx, matchedProduct.id, warehouse.id, qty);
         }
       }
 

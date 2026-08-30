@@ -7,7 +7,8 @@ import Link from "next/link";
 import { ArrowLeft, MapPin, Package } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
-import { BIN_TRACKING_ENABLED, STOCK_LOCATIONS, stockLocationLabel, type StockLocation } from "@/lib/inventory-config";
+import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { useWarehouses } from "@/hooks/use-sites";
 
 interface Bin {
   id: string;
@@ -38,6 +39,7 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 export default function NewStockAuditPage() {
+  const { warehouses } = useWarehouses();
   const router = useRouter();
   const { data: session } = useSession();
   const user = session?.user as { userId?: string; role?: string } | undefined;
@@ -47,7 +49,7 @@ export default function NewStockAuditPage() {
   const [notes, setNotes] = useState("");
   const [scope, setScope] = useState<"bin" | "location" | "all">(BIN_TRACKING_ENABLED ? "bin" : "all");
   // Location mode (bins dormant): which of the 4 locations this count is for (required).
-  const [stockLoc, setStockLoc] = useState<StockLocation | "">("");
+  const [stockLoc, setStockLoc] = useState<string>("");
   const [selectedBin, setSelectedBin] = useState("");
   const [selectedLocation, setSelectedLocation] = useState("");
   const [bins, setBins] = useState<Bin[]>([]);
@@ -153,7 +155,7 @@ export default function NewStockAuditPage() {
             { label: "Title", value: title },
             { label: "Assigned To", value: assignedUser?.name || "—" },
             { label: "Due Date", value: new Date(dueDate).toLocaleDateString("en-IN") },
-            { label: "Scope", value: !BIN_TRACKING_ENABLED ? stockLocationLabel(stockLoc || undefined) : scope === "bin" ? `Bin: ${bins.find((b) => b.id === selectedBin)?.code || selectedBin}` : scope === "location" ? `Location: ${selectedLocation}` : "All Products" },
+            { label: "Scope", value: !BIN_TRACKING_ENABLED ? (warehouses.find((w) => w.id === stockLoc)?.name ?? "All warehouses") : scope === "bin" ? `Bin: ${bins.find((b) => b.id === selectedBin)?.code || selectedBin}` : scope === "location" ? `Location: ${selectedLocation}` : "All Products" },
           ],
           redirectTo: `/stock-audit/${data.data.id}`,
         });
@@ -200,12 +202,12 @@ export default function NewStockAuditPage() {
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2">Location *</label>
             <div className="grid grid-cols-2 gap-2">
-              {STOCK_LOCATIONS.map((loc) => (
-                <button key={loc.value} onClick={() => setStockLoc(loc.value)}
+              {warehouses.map((loc) => (
+                <button key={loc.id} onClick={() => setStockLoc(loc.id)}
                   className={`min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
-                    stockLoc === loc.value ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
+                    stockLoc === loc.id ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
                   }`}>
-                  {loc.label}
+                  {loc.name}
                 </button>
               ))}
             </div>

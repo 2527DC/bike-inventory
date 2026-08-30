@@ -1,8 +1,10 @@
 export const dynamic = "force-dynamic";
 
+import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireAuth, AuthError } from "@/lib/auth-helpers";
+import { requireAuth, requireFeature, AuthError } from "@/lib/auth-helpers";
+import { storeSchema } from "@/lib/validations";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("api:stores");
@@ -55,5 +57,36 @@ export async function GET() {
     const message = error instanceof Error ? error.message : "Failed to fetch stores";
     log.error("stores list failed", { message });
     return errorResponse(message, 500);
+  }
+}
+
+// Mutations ARE permission-guarded, unlike the read above. Knowing BCH Store exists is not
+// sensitive; creating or renaming a site is.
+export async function POST(req: NextRequest) {
+  try {
+    await requireFeature("stores", "create");
+    const data = storeSchema.parse(await req.json());
+
+    const code = data.code.trim().toUpperCase();
+    const clash = await prisma.store.findUnique({ where: { code }, select: { name: true } });
+    if (clash) return errorResponse(`Code "${code}" is already used by ${clash.name}`, 409);
+
+    const store = await prisma.store.create({
+      data: {
+        code,
+        name: data.name.trim(),
+        address: data.address?.trim() || null,
+        phone: data.phone?.trim() || null,
+        sortOrder: data.sortOrder ?? 0,
+      },
+    });
+
+    log.info("store created", { storeId: store.id, code: store.code });
+    return successResponse(store, 201);
+  } catch (error) {
+    if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    const message = error instanceof Error ? error.message : "Failed to create the store";
+    log.error("store create failed", { message });
+    return errorResponse(message, 400);
   }
 }

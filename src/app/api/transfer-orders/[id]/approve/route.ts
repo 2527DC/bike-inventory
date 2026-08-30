@@ -4,8 +4,8 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { BIN_TRACKING_ENABLED, stockLocationLabel, type StockLocation } from "@/lib/inventory-config";
-import { adjustLocationQty, getLocationBreakdown } from "@/lib/stock-location";
+import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { adjustWarehouseQty, getWarehouseBreakdown } from "@/lib/stock-location";
 
 // POST: Approve or reject a transfer order
 export async function POST(
@@ -30,6 +30,10 @@ export async function POST(
             product: { select: { id: true, currentStock: true, name: true } },
             fromBin: { select: { id: true, code: true } },
             toBin: { select: { id: true, code: true } },
+            // Warehouses are rows now, so their display names come from the join rather than
+            // from a stockLocationLabel() lookup table.
+            fromWarehouse: { select: { id: true, code: true, name: true } },
+            toWarehouse: { select: { id: true, code: true, name: true } },
           },
         },
       },
@@ -42,7 +46,7 @@ export async function POST(
       // Verify stock is still available at the source
       const breakdown = BIN_TRACKING_ENABLED
         ? new Map<string, Record<string, number>>()
-        : await getLocationBreakdown(order.items.map((i) => i.productId));
+        : await getWarehouseBreakdown(order.items.map((i) => i.productId));
       for (const item of order.items) {
         if (BIN_TRACKING_ENABLED) {
           if (item.product.currentStock < item.quantity) {
@@ -52,10 +56,19 @@ export async function POST(
             );
           }
         } else {
-          const available = item.fromLocation ? (breakdown.get(item.productId)?.[item.fromLocation] ?? 0) : 0;
+          // A transfer line with no source warehouse cannot be approved. Previously this
+          // silently resolved to 0 available and produced an "Insufficient stock" message
+          // that blamed the stock rather than the missing warehouse.
+          if (!item.fromWarehouse || !item.toWarehouse) {
+            return errorResponse(
+              `${item.product.name} has no source or destination warehouse on its transfer line.`,
+              400
+            );
+          }
+          const available = breakdown.get(item.productId)?.[item.fromWarehouse.code] ?? 0;
           if (available < item.quantity) {
             return errorResponse(
-              `Insufficient stock for ${item.product.name} at ${stockLocationLabel(item.fromLocation)}. Available: ${available}, Requested: ${item.quantity}`,
+              `Insufficient stock for ${item.product.name} at ${item.fromWarehouse.name}. Available: ${available}, Requested: ${item.quantity}`,
               400
             );
           }
@@ -93,9 +106,10 @@ export async function POST(
               },
             });
           } else {
-            // Location mode: move qty out of source, into destination. Total unchanged.
-            await adjustLocationQty(tx, item.productId, item.fromLocation as StockLocation, -item.quantity);
-            await adjustLocationQty(tx, item.productId, item.toLocation as StockLocation, item.quantity);
+            // Warehouse mode: move qty out of source, into destination. Total unchanged.
+            // Both are non-null here — the loop above refuses the order otherwise.
+            await adjustWarehouseQty(tx, item.productId, item.fromWarehouseId!, -item.quantity);
+            await adjustWarehouseQty(tx, item.productId, item.toWarehouseId!, item.quantity);
             await tx.inventoryTransaction.create({
               data: {
                 type: "TRANSFER",
@@ -104,7 +118,7 @@ export async function POST(
                 previousStock: item.product.currentStock,
                 newStock: item.product.currentStock,
                 referenceNo: order.orderNo,
-                notes: `[APPROVED] From: ${stockLocationLabel(item.fromLocation)} → To: ${stockLocationLabel(item.toLocation)} | Transfer Order: ${order.orderNo}`,
+                notes: `[APPROVED] From: ${item.fromWarehouse?.name} → To: ${item.toWarehouse?.name} | Transfer Order: ${order.orderNo}`,
                 userId: user.id,
               },
             });

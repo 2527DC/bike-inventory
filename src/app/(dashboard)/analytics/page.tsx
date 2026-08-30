@@ -19,12 +19,13 @@ import { Badge } from "@/components/ui/badge";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { usePermissions } from "@/lib/use-permissions";
-import { STOCK_LOCATIONS } from "@/lib/inventory-config";
+import { useStores } from "@/hooks/use-sites";
 
 // Only sites with a doorway can be counted. Derived from the shared location config rather
 // than a second hardcoded list — the app already has three competing location vocabularies
 // and this is not going to be a fourth.
-const COUNTABLE_STORES = STOCK_LOCATIONS.filter((l) => l.kind === "Store");
+// Was STOCK_LOCATIONS.filter(l => l.kind === "Store"). Every Store row is a shop with a
+// door, so the filter is gone with the enum — see useStores().
 
 interface Dashboard {
   store_id: string;
@@ -93,11 +94,20 @@ function Metric({
 }
 
 export default function AnalyticsPage() {
+  const { stores: COUNTABLE_STORES } = useStores();
   const { canView, canEdit, ready: permsReady } = usePermissions();
   const allowed = canView("analytics");
   const editable = canEdit("analytics");
 
-  const [storeId, setStoreId] = useState<string>(COUNTABLE_STORES[0]?.value ?? "BCH_STORE");
+  // Empty until the store list arrives — it is fetched, not a constant, so there is a
+  // render with nothing to select. The effect below picks the first store once loaded.
+  const [storeId, setStoreId] = useState<string>("");
+
+  // The store list is fetched, so there is a render with nothing selectable. Default to the
+  // first store once it arrives rather than leaving the dashboard on an empty selection.
+  useEffect(() => {
+    if (!storeId && COUNTABLE_STORES.length > 0) setStoreId(COUNTABLE_STORES[0].code);
+  }, [COUNTABLE_STORES, storeId]);
   const [date, setDate] = useState<string>("");
   const [data, setData] = useState<Dashboard | null>(null);
   const [error, setError] = useState("");
@@ -158,7 +168,7 @@ export default function AnalyticsPage() {
   }
 
   const storeLabel =
-    COUNTABLE_STORES.find((s) => s.value === storeId)?.label ?? storeId;
+    COUNTABLE_STORES.find((s) => s.code === storeId)?.name ?? storeId;
 
   return (
     <div className="space-y-4">
@@ -199,9 +209,10 @@ export default function AnalyticsPage() {
           }}
           className="h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm"
         >
+          {COUNTABLE_STORES.length === 0 && <option value="">Loading stores…</option>}
           {COUNTABLE_STORES.map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.label}
+            <option key={s.id} value={s.code}>
+              {s.name}
             </option>
           ))}
         </select>

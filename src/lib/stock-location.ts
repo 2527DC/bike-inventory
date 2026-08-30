@@ -1,12 +1,16 @@
-// Per-location stock helpers. See inventory-config.ts for the location set.
+// Per-warehouse stock helpers.
 //
-// Model: each (product, location) has an explicit StockLevel row. Product.currentStock
-// is the cached SUM of a product's rows, recomputed on every change. There is no
-// "derived" location — counting/receiving/transferring all write a specific location
-// and then recompute the total.
+// Model: each (product, warehouse) has an explicit StockLevel row. Product.currentStock is
+// the cached SUM of a product's rows, recomputed on every change. There is no "derived"
+// location — counting/receiving/transferring all write a specific warehouse and then
+// recompute the total.
+//
+// Every exported function used to take `location: StockLocation`. They now take
+// `warehouseId: string`, because locations are rows: see src/lib/warehouses.ts to resolve a
+// code or a request value to an id. These are the functions that keep Product.currentStock
+// correct, so every caller changed with them.
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import type { StockLocation } from "@/lib/inventory-config";
 
 type Tx = Prisma.TransactionClient;
 type DbClient = Tx | typeof prisma;
@@ -23,64 +27,67 @@ export async function recomputeCurrentStock(tx: Tx, productId: string): Promise<
   return total;
 }
 
-// Change a location's quantity by delta (may be negative). Clamps at 0, upserts the
-// row, then recomputes currentStock. Returns the new total.
-export async function adjustLocationQty(tx: Tx, productId: string, location: StockLocation, delta: number): Promise<number> {
+// Change a warehouse's quantity by delta (may be negative). Clamps at 0, upserts the row,
+// then recomputes currentStock. Returns the new total.
+export async function adjustWarehouseQty(tx: Tx, productId: string, warehouseId: string, delta: number): Promise<number> {
   const existing = await tx.stockLevel.findUnique({
-    where: { productId_location: { productId, location } },
+    where: { productId_warehouseId: { productId, warehouseId } },
     select: { quantity: true },
   });
   const next = Math.max(0, (existing?.quantity ?? 0) + delta);
   await tx.stockLevel.upsert({
-    where: { productId_location: { productId, location } },
+    where: { productId_warehouseId: { productId, warehouseId } },
     update: { quantity: next },
-    create: { productId, location, quantity: next },
+    create: { productId, warehouseId, quantity: next },
   });
   return recomputeCurrentStock(tx, productId);
 }
 
-// Set a location's quantity to an absolute value (clamped >= 0), then recompute
+// Set a warehouse's quantity to an absolute value (clamped >= 0), then recompute
 // currentStock. Used by stock counts. Returns the new total.
-export async function setLocationQty(tx: Tx, productId: string, location: StockLocation, qty: number): Promise<number> {
+export async function setWarehouseQty(tx: Tx, productId: string, warehouseId: string, qty: number): Promise<number> {
   const next = Math.max(0, qty);
   await tx.stockLevel.upsert({
-    where: { productId_location: { productId, location } },
+    where: { productId_warehouseId: { productId, warehouseId } },
     update: { quantity: next },
-    create: { productId, location, quantity: next },
+    create: { productId, warehouseId, quantity: next },
   });
   return recomputeCurrentStock(tx, productId);
 }
 
-// Quantity at one location for many products (productId -> qty, missing = 0).
-export async function getLocationQtyMap(productIds: string[], location: StockLocation, client: DbClient = prisma): Promise<Map<string, number>> {
+// Quantity at one warehouse for many products (productId -> qty, missing = 0).
+export async function getWarehouseQtyMap(productIds: string[], warehouseId: string, client: DbClient = prisma): Promise<Map<string, number>> {
   if (productIds.length === 0) return new Map();
   const rows = await client.stockLevel.findMany({
-    where: { productId: { in: productIds }, location },
+    where: { productId: { in: productIds }, warehouseId },
     select: { productId: true, quantity: true },
   });
   return new Map(rows.map((r) => [r.productId, r.quantity]));
 }
 
-// Quantity at one location for a single product (0 if no row).
-export async function getLocationQty(productId: string, location: StockLocation, client: DbClient = prisma): Promise<number> {
+// Quantity at one warehouse for a single product (0 if no row).
+export async function getWarehouseQty(productId: string, warehouseId: string, client: DbClient = prisma): Promise<number> {
   const row = await client.stockLevel.findUnique({
-    where: { productId_location: { productId, location } },
+    where: { productId_warehouseId: { productId, warehouseId } },
     select: { quantity: true },
   });
   return row?.quantity ?? 0;
 }
 
-// Full per-location breakdown for many products: productId -> { location -> qty }.
-export async function getLocationBreakdown(productIds: string[], client: DbClient = prisma): Promise<Map<string, Record<string, number>>> {
+// Full per-warehouse breakdown for many products: productId -> { warehouseCode -> qty }.
+//
+// Keyed by CODE rather than id: the only consumers render it, and "BCH_WAREHOUSE" is
+// readable in a payload while a cuid is not. Callers that need ids have the rows already.
+export async function getWarehouseBreakdown(productIds: string[], client: DbClient = prisma): Promise<Map<string, Record<string, number>>> {
   const out = new Map<string, Record<string, number>>();
   if (productIds.length === 0) return out;
   const rows = await client.stockLevel.findMany({
     where: { productId: { in: productIds } },
-    select: { productId: true, location: true, quantity: true },
+    select: { productId: true, quantity: true, warehouse: { select: { code: true } } },
   });
   for (const r of rows) {
     const cur = out.get(r.productId) ?? {};
-    cur[r.location] = r.quantity;
+    cur[r.warehouse.code] = r.quantity;
     out.set(r.productId, cur);
   }
   return out;

@@ -9,7 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
-import { BIN_TRACKING_ENABLED, STOCK_LOCATIONS, stockLocationLabel, type StockLocation } from "@/lib/inventory-config";
+import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { useWarehouses } from "@/hooks/use-sites";
 
 interface Product {
   id: string;
@@ -31,8 +32,10 @@ interface TransferItem {
   quantity: number;
   fromBinId: string;
   toBinId: string;
-  fromLocation: StockLocation;
-  toLocation: StockLocation;
+  // Warehouse ids now, not enum members. Empty string means "not chosen yet" — the list
+  // arrives asynchronously, so there is a render where no warehouse can be selected.
+  fromWarehouseId: string;
+  toWarehouseId: string;
 }
 
 const STORAGE_KEY = "transfer-order-draft";
@@ -64,6 +67,8 @@ export default function NewTransferOrderPage() {
   const router = useRouter();
   const { data: session } = useSession();
   const isAdmin = ["ADMIN", "CEO"].includes((session?.user as { role?: string })?.role || "");
+
+  const { warehouses, loading: warehousesLoading } = useWarehouses();
 
   const [bins, setBins] = useState<Bin[]>([]);
   const [items, setItems] = useState<TransferItem[]>([]);
@@ -136,8 +141,10 @@ export default function NewTransferOrderPage() {
         fromBinId: product.bin?.id || "",
         toBinId: "",
         // Default direction: replenish a shop floor from its warehouse
-        fromLocation: "BCH_WAREHOUSE",
-        toLocation: "BCH_STORE",
+        // Defaulted from the loaded list rather than hardcoded codes: the first two
+        // warehouses, or blank when fewer than two exist and the user must choose.
+        fromWarehouseId: warehouses[0]?.id ?? "",
+        toWarehouseId: warehouses[1]?.id ?? "",
       },
     ]);
     setSearch("");
@@ -149,9 +156,11 @@ export default function NewTransferOrderPage() {
       if (i !== index) return item;
       const next = { ...item, [field]: value };
       // If From now equals To, bump To to a different location.
-      if (!BIN_TRACKING_ENABLED && field === "fromLocation" && next.toLocation === value) {
-        const other = STOCK_LOCATIONS.find((l) => l.value !== value);
-        if (other) next.toLocation = other.value;
+      if (!BIN_TRACKING_ENABLED && field === "fromWarehouseId" && next.toWarehouseId === value) {
+        // Source and destination must differ; pick any other warehouse rather than silently
+        // leaving an invalid pair the API will reject.
+        const other = warehouses.find((w) => w.id !== value);
+        if (other) next.toWarehouseId = other.id;
       }
       return next;
     }));
@@ -166,14 +175,14 @@ export default function NewTransferOrderPage() {
     return bin ? `${bin.code} (${bin.name})` : "";
   }
 
-  function locationLabel(loc: StockLocation) {
-    return stockLocationLabel(loc);
+  function locationLabel(warehouseId: string) {
+    return warehouses.find((w) => w.id === warehouseId)?.name ?? "—";
   }
 
   const isValid = items.length > 0 && items.every((i) =>
     BIN_TRACKING_ENABLED
       ? i.fromBinId && i.toBinId && i.fromBinId !== i.toBinId && i.quantity > 0 && i.quantity <= i.product.currentStock
-      : i.fromLocation && i.toLocation && i.fromLocation !== i.toLocation && i.quantity > 0 && i.quantity <= i.product.currentStock
+      : i.fromWarehouseId && i.toWarehouseId && i.fromWarehouseId !== i.toWarehouseId && i.quantity > 0 && i.quantity <= i.product.currentStock
   );
 
   async function handleSubmit(e: React.FormEvent) {
@@ -190,7 +199,7 @@ export default function NewTransferOrderPage() {
           items: items.map((i) => (
             BIN_TRACKING_ENABLED
               ? { productId: i.product.id, quantity: i.quantity, fromBinId: i.fromBinId, toBinId: i.toBinId }
-              : { productId: i.product.id, quantity: i.quantity, fromLocation: i.fromLocation, toLocation: i.toLocation }
+              : { productId: i.product.id, quantity: i.quantity, fromWarehouseId: i.fromWarehouseId, toWarehouseId: i.toWarehouseId }
           )),
           notes: notes || undefined,
         }),
@@ -204,7 +213,7 @@ export default function NewTransferOrderPage() {
           label: i.product.name.length > 28 ? i.product.name.slice(0, 28) + "…" : i.product.name,
           value: BIN_TRACKING_ENABLED
             ? `${getBinLabel(i.fromBinId)} → ${getBinLabel(i.toBinId)} ×${i.quantity}`
-            : `${locationLabel(i.fromLocation)} → ${locationLabel(i.toLocation)} ×${i.quantity}`,
+            : `${locationLabel(i.fromWarehouseId)} → ${locationLabel(i.toWarehouseId)} ×${i.quantity}`,
         }));
         setReceipt({
           type: approved ? "success" : "warning",
@@ -354,20 +363,21 @@ export default function NewTransferOrderPage() {
                   <div className="flex items-center gap-2">
                     <div className="flex-1">
                       <label className="text-xs text-slate-500 mb-0.5 block">From</label>
-                      <select value={item.fromLocation} onChange={(e) => updateItem(index, "fromLocation", e.target.value)}
+                      <select value={item.fromWarehouseId} onChange={(e) => updateItem(index, "fromWarehouseId", e.target.value)}
                         className="w-full min-h-[44px] rounded-lg border border-slate-300 bg-white px-2 text-xs focus:outline-none focus:ring-2 focus:ring-purple-600">
-                        {STOCK_LOCATIONS.map((loc) => (
-                          <option key={loc.value} value={loc.value}>{loc.label}</option>
+                        {warehousesLoading && <option value="">Loading warehouses…</option>}
+                        {warehouses.map((loc) => (
+                          <option key={loc.id} value={loc.id}>{loc.name}</option>
                         ))}
                       </select>
                     </div>
                     <ArrowRight className="h-4 w-4 text-purple-500 shrink-0 mt-7" />
                     <div className="flex-1">
                       <label className="text-xs text-slate-500 mb-0.5 block">To</label>
-                      <select value={item.toLocation} onChange={(e) => updateItem(index, "toLocation", e.target.value)}
+                      <select value={item.toWarehouseId} onChange={(e) => updateItem(index, "toWarehouseId", e.target.value)}
                         className="w-full min-h-[44px] rounded-lg border border-slate-300 bg-white px-2 text-xs focus:outline-none focus:ring-2 focus:ring-purple-600">
-                        {STOCK_LOCATIONS.filter((loc) => loc.value !== item.fromLocation).map((loc) => (
-                          <option key={loc.value} value={loc.value}>{loc.label}</option>
+                        {warehouses.filter((loc) => loc.id !== item.fromWarehouseId).map((loc) => (
+                          <option key={loc.id} value={loc.id}>{loc.name}</option>
                         ))}
                       </select>
                     </div>
@@ -391,7 +401,7 @@ export default function NewTransferOrderPage() {
                 ) : (
                   <div className="bg-purple-50 rounded-lg p-1.5 mt-2 text-center">
                     <p className="text-[11px] text-purple-700 font-medium tabular-nums">
-                      {locationLabel(item.fromLocation)} → {locationLabel(item.toLocation)}
+                      {locationLabel(item.fromWarehouseId)} → {locationLabel(item.toWarehouseId)}
                     </p>
                   </div>
                 )}
