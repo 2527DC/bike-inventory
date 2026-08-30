@@ -37,7 +37,9 @@ export default async function ProfilePage() {
           {(user.name || 'User').charAt(0).toUpperCase()}
         </div>
         <h2 className="text-xl font-bold text-gray-900 mt-3">{user.name || 'User'}</h2>
-        <p className="text-sm text-gray-500 capitalize">{user.role}</p>
+        {/* CurrentUser carries roleId/roleKey/roleName — there is no `role`, so this rendered
+            blank. roleName is the display label an admin edits on /team/permissions. */}
+        <p className="text-sm text-gray-500">{user.roleName}</p>
         <div className="mt-3">
           <p className="text-sm text-gray-500">Level {level}</p>
           <p className="font-bold text-blue-600">{getLevelTitle(level)}</p>

@@ -21,22 +21,11 @@ interface Bin {
 interface User {
   id: string;
   name: string;
-  role: string;
+  // GET /api/users selects role as a RELATION — { id, key, name } — not a string. Rendering
+  // it directly threw "Objects are not valid as a React child" and tripped the error
+  // boundary the moment the user list resolved, which is why the page painted and then died.
+  role: { id: string; key: string; name: string } | null;
 }
-
-const ROLE_LABELS: Record<string, string> = {
-  CEO: "CEO",
-  ADMIN: "Owner / Director",
-  SUPERVISOR: "Ops Manager",
-  PURCHASE_MANAGER: "Purchase Manager",
-  ACCOUNTS_MANAGER: "Finance Head",
-  INWARDS_EXECUTIVE: "Inwards Executive",
-  OUTWARDS_EXECUTIVE: "Outwards Executive",
-  STORE_MANAGER: "Store Manager",
-  SALES_MANAGER: "Sales Manager",
-  SERVICE_MANAGER: "Service Manager",
-  CUSTOM: "Custom Role",
-};
 
 export default function NewStockAuditPage() {
   const { warehouses } = useWarehouses();
@@ -339,7 +328,7 @@ export default function NewStockAuditPage() {
               className="w-full min-h-[44px] rounded-lg border border-slate-300 px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent">
               <option value="">Select a team member...</option>
               {users.filter((u) => u.id !== (user as { userId?: string })?.userId).map((u) => (
-                <option key={u.id} value={u.id}>{u.name} ({ROLE_LABELS[u.role] || u.role})</option>
+                <option key={u.id} value={u.id}>{u.name} ({u.role?.name ?? "No role"})</option>
               ))}
             </select>
           </div>
