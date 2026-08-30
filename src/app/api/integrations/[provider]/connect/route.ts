@@ -26,23 +26,40 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ provider: 
     const body = await req.json().catch(() => null);
     const { clientId, clientSecret, grantToken, organizationId, organizationName } = body || {};
 
-    if (!clientId || !clientSecret || !grantToken) {
-      return errorResponse("Client ID, Client Secret and Grant Token are required", 400);
+    // Fall back to what is already stored. Disconnect clears only the tokens, so the client
+    // id and secret survive it — requiring them in the body meant re-typing credentials the
+    // row already held, and the screen could not even show them to copy from.
+    //
+    // The grant token has no such fallback and never will: it is single-use, Zoho does not
+    // reissue one for a spent grant, and storing it would be storing a spent credential.
+    const stored = await prisma.integrationConfig.findUnique({
+      where: { provider },
+      select: { clientId: true, clientSecret: true, organizationId: true, organizationName: true },
+    });
+
+    const effectiveClientId = (clientId || stored?.clientId || "").trim();
+    const effectiveSecret = (clientSecret || stored?.clientSecret || "").trim();
+
+    if (!effectiveClientId || !effectiveSecret) {
+      return errorResponse("Save the Client ID and Client Secret first, then connect", 400);
+    }
+    if (!grantToken) {
+      return errorResponse("A Grant Token is required", 400);
     }
 
     // A grant token is single-use and short-lived, so this is the step that fails most
     // often. exchangeGrantToken turns Zoho's invalid_code into a message that says so.
-    const tokens = await exchangeGrantToken(provider, clientId, clientSecret, grantToken);
+    const tokens = await exchangeGrantToken(provider, effectiveClientId, effectiveSecret, grantToken);
     const expiresAt = new Date(Date.now() + tokens.expiresIn * 1000);
 
     const data = {
-      clientId,
-      clientSecret,
+      clientId: effectiveClientId,
+      clientSecret: effectiveSecret,
       refreshToken: tokens.refreshToken,
       accessToken: tokens.accessToken,
       accessTokenExpiresAt: expiresAt,
-      organizationId: organizationId || null,
-      organizationName: organizationName || null,
+      organizationId: organizationId || stored?.organizationId || null,
+      organizationName: organizationName || stored?.organizationName || null,
       isConnected: true,
     };
 

@@ -14,21 +14,21 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SkeletonList } from "@/components/ui/skeleton";
 
+// GET status now returns the SAVED details whether or not the integration is connected —
+// disconnect only clears the tokens, so these survive it. `clientSecret` is never sent;
+// `hasClientSecret` is the signal that one is stored, so the field can say "leave blank to
+// keep" instead of forcing the admin to re-type a value they cannot read back.
 interface ZohoStatus {
   connected: boolean;
-  organizationId?: string;
-  organizationName?: string;
+  clientId?: string | null;
+  hasClientSecret?: boolean;
+  organizationId?: string | null;
+  organizationName?: string | null;
   lastSyncAt?: string;
   tokenValid?: boolean;
 }
 
-interface SourceStatus {
-  connected: boolean;
-  organizationId?: string;
-  organizationName?: string;
-  lastSyncAt?: string;
-  tokenValid?: boolean;
-}
+type SourceStatus = ZohoStatus;
 
 interface SyncLogEntry {
   id: string;
@@ -80,6 +80,7 @@ export default function ZohoSettingsPage() {
   const [connectingPos, setConnectingPos] = useState(false);
   const [posError, setPosError] = useState("");
   const [posExpanded, setPosExpanded] = useState(false);
+  const [savingPos, setSavingPos] = useState(false);
 
   // Zoho Inventory state
   const [invStatus, setInvStatus] = useState<SourceStatus | null>(null);
@@ -87,6 +88,7 @@ export default function ZohoSettingsPage() {
   const [connectingInv, setConnectingInv] = useState(false);
   const [invError, setInvError] = useState("");
   const [invExpanded, setInvExpanded] = useState(false);
+  const [savingInv, setSavingInv] = useState(false);
 
   // Books connect form expand (for not-connected state)
   const [booksExpanded, setBooksExpanded] = useState(false);
@@ -94,17 +96,86 @@ export default function ZohoSettingsPage() {
   useEffect(() => {
     fetchStatus();
     fetchLogs();
-    fetch("/api/integrations/ZAKYA_POS/status").then(r => r.json()).then(d => { if (d.success) setPosStatus(d.data); }).catch(() => {});
-    fetch("/api/integrations/ZOHO_INVENTORY/status").then(r => r.json()).then(d => { if (d.success) setInvStatus(d.data); }).catch(() => {});
+    fetchPosStatus();
+    fetchInvStatus();
   }, []);
+
+  // Each fetch also PREFILLS its form. The saved client id and organisation details live in
+  // integration_config and survive a disconnect, so the screen shows them rather than making
+  // the admin find them again. The secret is never sent — the field stays blank and means
+  // "keep the stored one" unless something is typed.
+  async function fetchPosStatus() {
+    try {
+      const d = await (await fetch("/api/integrations/ZAKYA_POS/status")).json();
+      if (d.success) {
+        setPosStatus(d.data);
+        setPosForm((f) => ({
+          ...f,
+          clientId: d.data.clientId || "",
+          orgId: d.data.organizationId || "",
+          orgName: d.data.organizationName || "",
+        }));
+      }
+    } catch { /* the card renders as not-connected; nothing else to do */ }
+  }
+
+  async function fetchInvStatus() {
+    try {
+      const d = await (await fetch("/api/integrations/ZOHO_INVENTORY/status")).json();
+      if (d.success) {
+        setInvStatus(d.data);
+        setInvForm((f) => ({
+          ...f,
+          clientId: d.data.clientId || "",
+          orgId: d.data.organizationId || "",
+          orgName: d.data.organizationName || "",
+        }));
+      }
+    } catch { /* as above */ }
+  }
 
   async function fetchStatus() {
     try {
       const res = await fetch("/api/integrations/ZOHO_BOOKS/status");
       const data = await res.json();
-      if (data.success) setStatus(data.data);
+      if (data.success) {
+        setStatus(data.data);
+        setClientId(data.data.clientId || "");
+        setOrgId(data.data.organizationId || "");
+        setOrgName(data.data.organizationName || "");
+      }
     } catch { /* ignore */ }
     finally { setLoading(false); }
+  }
+
+  /**
+   * Save client and organisation details WITHOUT connecting.
+   *
+   * A blank secret means "keep the stored one", so an organisation name can be corrected
+   * without re-typing a credential. Returns true on success so the caller can clear its
+   * error state.
+   */
+  async function saveDetails(
+    provider: "ZOHO_BOOKS" | "ZAKYA_POS" | "ZOHO_INVENTORY",
+    details: { clientId: string; clientSecret: string; orgId: string; orgName: string },
+  ): Promise<string | null> {
+    try {
+      const res = await fetch(`/api/integrations/${provider}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId: details.clientId,
+          // Omit rather than send "" — the API reads a blank as "keep the stored secret".
+          ...(details.clientSecret ? { clientSecret: details.clientSecret } : {}),
+          organizationId: details.orgId,
+          organizationName: details.orgName,
+        }),
+      });
+      const data = await res.json();
+      return data.success ? null : (data.error || "Could not save");
+    } catch {
+      return "Network error while saving";
+    }
   }
 
   async function fetchLogs() {
@@ -139,7 +210,11 @@ export default function ZohoSettingsPage() {
   async function handleDisconnect() {
     try {
       await fetch("/api/integrations/ZOHO_BOOKS/disconnect", { method: "POST" });
-      setStatus({ connected: false });
+      // Re-read rather than setStatus({ connected: false }): disconnect clears only the
+      // tokens, so the client id and organisation details are still there and must stay
+      // on screen. Blanking the status locally is what made it look like they were lost.
+      await fetchStatus();
+      setGrantToken("");
     } catch { /* ignore */ }
   }
 
@@ -173,7 +248,9 @@ export default function ZohoSettingsPage() {
   async function handleDisconnectPos() {
     try {
       await fetch("/api/integrations/ZAKYA_POS/disconnect", { method: "POST" });
-      setPosStatus({ connected: false });
+      // Re-read: the saved credentials survive a disconnect and must stay on screen.
+      await fetchPosStatus();
+      setPosForm((f) => ({ ...f, grantToken: "" }));
     } catch { /* ignore */ }
   }
 
@@ -207,7 +284,9 @@ export default function ZohoSettingsPage() {
   async function handleDisconnectInv() {
     try {
       await fetch("/api/integrations/ZOHO_INVENTORY/disconnect", { method: "POST" });
-      setInvStatus({ connected: false });
+      // Re-read: the saved credentials survive a disconnect and must stay on screen.
+      await fetchInvStatus();
+      setInvForm((f) => ({ ...f, grantToken: "" }));
     } catch { /* ignore */ }
   }
 
@@ -327,6 +406,11 @@ export default function ZohoSettingsPage() {
     isConnecting: boolean,
     formError: string,
     label: string,
+    // True once a client secret is stored. The field then means "leave blank to keep",
+    // because the secret is never sent to the browser and cannot be shown.
+    hasSavedSecret = false,
+    onSave?: () => void,
+    isSaving = false,
   ) {
     return (
       <form onSubmit={onSubmit} className="mt-2 space-y-2">
@@ -340,8 +424,13 @@ export default function ZohoSettingsPage() {
           <Input placeholder="1000.XXXX..." value={form.clientId} onChange={(e) => setForm({ ...form, clientId: e.target.value })} className="h-8 text-xs" />
         </div>
         <div>
-          <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Client Secret *</label>
-          <Input type="password" placeholder="XXXX..." value={form.clientSecret} onChange={(e) => setForm({ ...form, clientSecret: e.target.value })} className="h-8 text-xs" />
+          <label className="block text-[11px] font-medium text-slate-600 mb-0.5">
+            Client Secret {hasSavedSecret ? "" : "*"}
+          </label>
+          <Input type="password" placeholder={hasSavedSecret ? "Saved — leave blank to keep" : "XXXX..."} value={form.clientSecret} onChange={(e) => setForm({ ...form, clientSecret: e.target.value })} className="h-8 text-xs" />
+          {hasSavedSecret && (
+            <p className="text-[11px] text-slate-400 mt-0.5">A secret is stored. Type a new one only to replace it.</p>
+          )}
         </div>
         <div>
           <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Grant Token *</label>
@@ -356,9 +445,19 @@ export default function ZohoSettingsPage() {
           <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Organization Name</label>
           <Input placeholder="My Bike Store" value={form.orgName} onChange={(e) => setForm({ ...form, orgName: e.target.value })} className="h-8 text-xs" />
         </div>
-        <Button type="submit" disabled={!form.clientId || !form.clientSecret || !form.grantToken || isConnecting} className="w-full min-h-[48px] bg-green-600 hover:bg-green-700 text-sm focus-ring">
-          {isConnecting ? "Connecting..." : `Connect to ${label}`}
-        </Button>
+        <div className="flex gap-2">
+          {onSave && (
+            <Button type="button" variant="outline" onClick={onSave} disabled={!form.clientId || (!form.clientSecret && !hasSavedSecret) || isSaving} className="flex-1 min-h-[48px] text-sm focus-ring">
+              {isSaving ? "Saving..." : "Save details"}
+            </Button>
+          )}
+          {/* The secret is only required when none is stored. Once saved, reconnecting needs
+              a fresh grant token and nothing else — Zoho will not reissue a refresh token for
+              a spent grant, so that step can never be removed. */}
+          <Button type="submit" disabled={!form.clientId || (!form.clientSecret && !hasSavedSecret) || !form.grantToken || isConnecting} className="flex-1 min-h-[48px] bg-green-600 hover:bg-green-700 text-sm focus-ring">
+            {isConnecting ? "Connecting..." : `Connect to ${label}`}
+          </Button>
+        </div>
       </form>
     );
   }
@@ -502,7 +601,13 @@ export default function ZohoSettingsPage() {
                     >
                       Connect {posExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                     </button>
-                    {posExpanded && renderConnectForm(posForm, setPosForm, handleConnectPos, connectingPos, posError, "Zakya POS")}
+                    {posExpanded && renderConnectForm(posForm, setPosForm, handleConnectPos, connectingPos, posError, "Zakya POS", Boolean(posStatus?.hasClientSecret), async () => {
+                      setSavingPos(true);
+                      const err = await saveDetails("ZAKYA_POS", posForm);
+                      setPosError(err || "");
+                      if (!err) { await fetchPosStatus(); setPosForm((f) => ({ ...f, clientSecret: "" })); }
+                      setSavingPos(false);
+                    }, savingPos)}
                   </>
                 )}
               </CardContent>
@@ -549,7 +654,13 @@ export default function ZohoSettingsPage() {
                     >
                       Connect {invExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                     </button>
-                    {invExpanded && renderConnectForm(invForm, setInvForm, handleConnectInv, connectingInv, invError, "Zoho Inventory")}
+                    {invExpanded && renderConnectForm(invForm, setInvForm, handleConnectInv, connectingInv, invError, "Zoho Inventory", Boolean(invStatus?.hasClientSecret), async () => {
+                      setSavingInv(true);
+                      const err = await saveDetails("ZOHO_INVENTORY", invForm);
+                      setInvError(err || "");
+                      if (!err) { await fetchInvStatus(); setInvForm((f) => ({ ...f, clientSecret: "" })); }
+                      setSavingInv(false);
+                    }, savingInv)}
                   </>
                 )}
               </CardContent>
