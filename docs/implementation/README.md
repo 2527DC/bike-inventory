@@ -79,6 +79,7 @@ preserved across regeneration — but do not remove the marker comments.
 | Plan | State |
 |---|---|
 | `ledger-merge-plan.md` | schema, RBAC, backend and frontend shipped; PDF statement import and the 219-gap migration remain |
+| `master-data-screens-and-filter-ui-plan.md` | product delete, a Categories screen (none exists — no PATCH, no DELETE, no module), Brands absorbing lead time, and the filter sheet becoming a desktop drawer. **The filter change moves 12 screens, not just /receivables.** Three questions in §7; needs `product-type-and-brand-lead-time-plan.md` Part B first |
 | `pdi-module-plan.md` | nothing built, no schema changed. Two blocking questions (Q11, Q17) |
 | `product-type-and-brand-lead-time-plan.md` | not started. Two commits on one branch. **Part B** — `BrandLeadTime` (0 rows) folds into `Brand.leadDays`, plus a real guard bug (`brands.create` should be `edit`); no open questions. **Part A** — the `ProductType` enum becomes a table with a screen and a `stock_product_types` sub-module; three questions in §8. `Category` is deliberately NOT merged in — it mirrors Zoho |
 | `sequence-race-fix-plan.md` | five sites allocate unique numbers with a read-then-write race |
