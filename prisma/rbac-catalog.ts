@@ -482,16 +482,6 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     actions: ["view", "edit", "approve", "fetch"],
     parentKey: "settings",
   },
-  {
-    key: "problems",
-    label: "App Problems",
-    description: "In-app problem reports raised by staff",
-    icon: "AlertCircle",
-    route: "/more/problems",
-    group: "Admin",
-    sortOrder: 550,
-    actions: ["view", "create", "edit", "delete"],
-  },
 
   // ── Staff LMS ─────────────────────────────────────────────────────────────
   // The first module tree in this catalog: one parent plus three children, rendered as a

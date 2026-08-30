@@ -302,7 +302,6 @@ model User {
   postedUpdates     StoreUpdate[]      @relation("UpdatePostedBy")
   opsActivityLogs   OpsActivityLog[]   @relation("OpsActivityLoggedBy")
   brandStockUploads BrandStockUpload[] @relation("BrandStockUploadedBy")
-  reportedProblems  AppProblem[]       @relation("ProblemReportedBy")
 
   // Brand ledger reconciliation
   importedStatements   BrandStatement[]     @relation("StatementImportedBy")
@@ -1563,19 +1562,6 @@ model AppSetting {
   key       String   @id
   value     String   @db.Text
   updatedAt DateTime @updatedAt
-}
-
-model AppProblem {
-  id        String   @id @default(cuid())
-  text      String   @db.Text
-  category  String   @default("general")
-  status    String   @default("open")
-  userId    String
-  user      User     @relation("ProblemReportedBy", fields: [userId], references: [id])
-  createdAt DateTime @default(now())
-
-  @@index([status])
-  @@index([createdAt])
 }
 
 // ─── Brand Stock Upload + Smart Reorder ───────────

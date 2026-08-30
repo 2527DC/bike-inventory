@@ -54,13 +54,6 @@ const ENTRIES: Entry[] = [
     module: "settings",
   },
   {
-    href: "/more/app-logic",
-    title: "App Logic",
-    description: "How each screen behaves, and which API it calls",
-    icon: "ClipboardList",
-    module: "settings",
-  },
-  {
     href: "/more/label-designer",
     title: "Label Designer",
     description: "Barcode and shelf label layouts",

@@ -247,8 +247,9 @@ correct — see §3.)
 npm run build
 ```
 
-Must pass. Postgres must be running — three Staff LMS pages are prerendered against the
-database at build time.
+Must pass. **The build no longer needs a database** — the three `/staff-lms/*` pages that used
+to be prerendered server components are `"use client"` as of
+`completed/ci-build-database-dependency-plan.md`, so `next build` opens no connection.
 
 ### In the browser
 

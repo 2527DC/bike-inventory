@@ -1,9 +1,11 @@
 # Frontend role-name checks — removal plan
 
-Status: pending — ready to build. 23 client-side gates in 20 files read a session field that no longer exists; 21 deny everybody and **2 admit everybody** (§2.1). All three questions answered 29 Aug 2026; in-scope work is **21 sites in 18 files** plus one catalog line.
+Status: pending — ready to build. 21 client-side gates in 18 files read a session field that no longer exists; 19 deny everybody and **2 admit everybody** (§2.1 — both are lines of `/price-correction`). All three questions answered 29 Aug 2026; scope is **21 sites in 18 files** plus one catalog line.
 Suggested branch: `fix/frontend-role-checks` (its own branch — it touches 18 page files plus the RBAC catalog).
 Prepared 29 Aug 2026. Counts and line numbers re-verified 29 Aug 2026 against `src/`.
-Prerequisite: `app-logic-and-problems-removal-plan.md` (see §8 Q2).
+Prerequisite: `app-logic-and-problems-removal-plan.md` — **DONE**, executed on branch
+`chore/remove-app-logic-and-problems`. Its two sites (§8 Q2) were deleted rather than fixed, and
+have been struck from every table below. All counts here are post-deletion.
 
 ---
 
@@ -39,14 +41,14 @@ page never asks the database anything.
 Reseeding RBAC will not change the outcome. Neither will granting more permissions. The check
 does not consult the permission system at all.
 
-### 2.1 ⚠️ Two sites fail the OTHER way — corrected 29 Aug 2026
+### 2.1 ⚠️ Two lines — one page — fail the OTHER way
 
 An earlier draft of this plan said *"every one of them denies everybody"* and *"the frontend
-is over-restrictive, not under."* **That is not true of two sites**, and the difference is the
+is over-restrictive, not under."* **That is not true of `/price-correction`**, and the difference is the
 guard's shape, not its intent:
 
 ```ts
-// The 21 safe ones — an ALLOW-list. role is "", so isAdmin is false, so the UI hides.
+// The 19 safe ones — an ALLOW-list. role is "", so isAdmin is false, so the UI hides.
 const isAdmin = role === "ADMIN" || role === "CEO";
 
 // The 2 unsafe ones — a DENY-list with a truthiness guard in front of it.
@@ -57,10 +59,11 @@ if (role && role !== "ADMIN") { /* redirect */ }
 | File | Lines | Effect today |
 |---|---|---|
 | `(dashboard)/price-correction/page.tsx` | 68, 134 | renders for **every** signed-in user |
-| `(dashboard)/more/app-logic/page.tsx` | 581 | renders for **every** signed-in user |
 
-`app-logic` reads `?.role` with no `\|\| ""`, so its value is `undefined` — falsy for the same
-reason.
+> `/more/app-logic:581` was a third such line, and the worst of them — it read `?.role` with no
+> `\|\| ""`, so the value was `undefined`, falsy for the same reason. It is **deleted**.
+> `app-logic-and-problems-removal-plan.md` ran first precisely so this one would not be patched
+> and then thrown away.
 
 **Still not a security hole, and this was checked rather than assumed.** Both APIs behind
 price-correction guard themselves:
@@ -70,9 +73,7 @@ price-correction guard themselves:
 | `api/stock/price-check/route.ts:25` | `requireFeature("stock", "view")` |
 | `api/stock/price-check/[productId]/route.ts:14` | `requireFeature("stock", "edit")` |
 
-So a user without `stock.edit` sees the screen and cannot save from it. `app-logic` fetches
-nothing — it is a static in-file documentation dump of every screen, endpoint and business
-rule, now visible to everyone rather than to admins.
+So a user without `stock.edit` sees the screen and cannot save from it.
 
 **Two consequences for this plan:**
 
@@ -108,13 +109,13 @@ Every API behind these screens guards itself properly:
 | `api/stock/price-check/route.ts:25` | `requireFeature("stock", "view")` |
 | `api/stock/price-check/[productId]/route.ts:14` | `requireFeature("stock", "edit")` |
 
-For the 21 allow-list sites the frontend is over-restrictive: the screens are just unusable.
-For the 2 deny-list sites (§2.1) it is over-permissive, but the API is still the gate and it
+For the 19 allow-list sites the frontend is over-restrictive: the screens are just unusable.
+For the 2 deny-list lines (§2.1) it is over-permissive, but the API is still the gate and it
 holds — a non-admin can open `/price-correction` and cannot save from it.
 
 Nothing is exposed either way, which is why this is a bug and not an incident.
 
-## 5. Scope — 23 sites in 20 files
+## 5. Scope — 21 sites in 18 files
 
 All read `session.user.role`. All evaluate against a value that is always `""` or `undefined`.
 
@@ -125,20 +126,22 @@ All read `session.user.role`. All evaluate against a value that is always `""` o
 > sites in 19 files" in its header while its own tables listed 23 in 20, and §10/§11 still
 > said 16.
 >
-> **23 sites in 20 files** is the verified figure, from
+> **23 sites in 20 files** was the verified figure on 29 Aug 2026, from
 > `grep -rn 'session?.user as { role\|role === "ADMIN"\|role === "CEO"\|\["ADMIN"' src/`
-> (36 matching lines: 20 field reads + 23 gates, with some lines doing both). Every line
-> number in the tables below was re-checked on 29 Aug 2026 and all are current.
+> (36 matching lines: 20 field reads + 23 gates, with some lines doing both).
+>
+> **It is now 21 in 18.** `/more/problems` and `/more/app-logic` were deleted outright by
+> `app-logic-and-problems-removal-plan.md` (§8 Q2), taking one gate each with them. That same
+> grep returns **33** lines today. Every line number below was re-checked on 29 Aug 2026 and
+> re-confirmed after the deletion.
 
-18 sites in 16 files. `→` marks the polarity: **hides** = allow-list, denies everyone;
+16 sites in 14 files. `→` marks the polarity: **hides** = allow-list, denies everyone;
 **shows** = deny-list, admits everyone (§2.1).
 
 | File | Line(s) | Today |
 |---|---|---|
 | `(dashboard)/more/brands/page.tsx` | 21 | hides |
 | `(dashboard)/more/bins/page.tsx` | 29 | hides |
-| `(dashboard)/more/problems/page.tsx` | 25 | hides |
-| `(dashboard)/more/app-logic/page.tsx` | 581 | ⚠️ **shows** |
 | `(dashboard)/deliveries/page.tsx` | 29 | hides |
 | `(dashboard)/price-correction/page.tsx` | 68, 134 | ⚠️ **shows** (both) |
 | `(dashboard)/second-hand/page.tsx` | 58, 114 | hides |
@@ -154,7 +157,7 @@ All read `session.user.role`. All evaluate against a value that is always `""` o
 
 ### Found in the second sweep — same bug, different spelling
 
-5 sites in 4 files, all allow-lists, all hiding. 18 + 5 = **23**.
+5 sites in 4 files, all allow-lists, all hiding. 16 + 5 = **21**.
 
 | File | Line(s) | Flag | What it gates |
 |---|---|---|---|
@@ -180,30 +183,28 @@ covers the case. No new judgement was invented where an existing guard already a
 |---|---|---|---|
 | 1 | `more/brands` | whole page (brand merge) | `canCreate("brands")` |
 | 2 | `more/bins` | whole page | `canCreate("settings")` |
-| 3 | `more/problems` | resolve action on open problems | `canEdit("problems")` |
-| 4 | `more/app-logic` | whole page | `canView("settings")` |
-| 5 | `deliveries` | delete button + `isAdmin` prop to child | `canDelete("deliveries")` |
-| 6 | `price-correction` | whole page + inline save | `canView("stock")` / `canEdit("stock")` — §8 Q1 |
-| 7 | `second-hand` | cost value, revenue, prices **and** actions | split: `canView("cost_price")` + `canEdit("second_hand")` |
-| 8 | `second-hand/verify` | whole page | `canApprove("second_hand")` |
-| 9 | `second-hand/[id]` | margin, cost **and** an action | split, as row 7 |
-| 10 | `stock/[id]` | the Pricing card (Cost / Selling / MRP) | `canView("cost_price")` |
-| 11 | `stock/by-brand` | brand total value + "Highest Value" sort | `canView("cost_price")` |
-| 12 | `inbound/[id]` | line rate/amount/total | `canView("cost_price")` — the approval bypass is **deleted**, see §8 Q3 |
-| 13 | `vendor-issues` | delete button + delete column | `canDelete("vendor_issues")` |
-| 14 | `activity` | Team Activity vs My Activity | `canApprove("activity")` |
-| 15 | `desktop/activity` | same | `canApprove("activity")` |
-| 16 | `accounts/settlement` | already permission-gated | delete the role half only |
-| 17 | `transfers/new` | transfer auto-approval | `canApprove("transfers")` |
-| 18 | `stock-audit/[id]` | approve the audit | `canApprove("stock_audit")` |
-| 19 | `stock-audit/[id]` | "Correct stock levels" — overwrites counted stock | `canEdit("stock")` — **confirm**, see below |
-| 20 | `stock-audit/[id]/review` | approve from the review screen | `canApprove("stock_audit")` |
-| 21 | `stock` | bulk edit | `canEdit("stock")` |
+| 3 | `deliveries` | delete button + `isAdmin` prop to child | `canDelete("deliveries")` |
+| 4 | `price-correction` | whole page + inline save | `canView("stock")` / `canEdit("stock")` — §8 Q1 |
+| 5 | `second-hand` | cost value, revenue, prices **and** actions | split: `canView("cost_price")` + `canEdit("second_hand")` |
+| 6 | `second-hand/verify` | whole page | `canApprove("second_hand")` |
+| 7 | `second-hand/[id]` | margin, cost **and** an action | split, as row 5 |
+| 8 | `stock/[id]` | the Pricing card (Cost / Selling / MRP) | `canView("cost_price")` |
+| 9 | `stock/by-brand` | brand total value + "Highest Value" sort | `canView("cost_price")` |
+| 10 | `inbound/[id]` | line rate/amount/total | `canView("cost_price")` — the approval bypass is **deleted**, see §8 Q3 |
+| 11 | `vendor-issues` | delete button + delete column | `canDelete("vendor_issues")` |
+| 12 | `activity` | Team Activity vs My Activity | `canApprove("activity")` |
+| 13 | `desktop/activity` | same | `canApprove("activity")` |
+| 14 | `accounts/settlement` | already permission-gated | delete the role half only |
+| 15 | `transfers/new` | transfer auto-approval | `canApprove("transfers")` |
+| 16 | `stock-audit/[id]` | approve the audit | `canApprove("stock_audit")` |
+| 17 | `stock-audit/[id]` | "Correct stock levels" — overwrites counted stock | `canEdit("stock")` — **confirm**, see below |
+| 18 | `stock-audit/[id]/review` | approve from the review screen | `canApprove("stock_audit")` |
+| 19 | `stock` | bulk edit | `canEdit("stock")` |
 
 Both `transfers` and `stock_audit` declare `["view","create","edit","delete","approve"]`, so
-rows 17, 18 and 20 need no catalog change.
+rows 15, 16 and 18 need no catalog change.
 
-Row 19 is the one judgement call in this batch. "Correct stock levels" does not approve
+Row 17 is the one judgement call in this batch. "Correct stock levels" does not approve
 anything — it **overwrites each product's `currentStock` with the counted quantity**. That is
 a write to stock, not an audit decision, so it is mapped to `canEdit("stock")` rather than
 `stock_audit.approve`. Someone who may approve a count is not automatically someone who may
@@ -211,12 +212,12 @@ overwrite the books. Say if you disagree.
 
 ### Flags doing two jobs
 
-Rows 7 and 9 use one `isAdmin` to hide **money** and to gate an **action**. Those are
+Rows 5 and 7 use one `isAdmin` to hide **money** and to gate an **action**. Those are
 different questions and get different permissions. `cost_price` exists as its own module for
 exactly this reason — CLAUDE.md: *"Cost-price visibility is its own module."* Collapsing the
 two back together would recreate the problem in permission form.
 
-Row 12 was a third such case until Q3 was answered: its action half (the approval bypass) is
+Row 10 was a third such case until Q3 was answered: its action half (the approval bypass) is
 deleted rather than mapped, leaving only `cost_price.view`.
 
 ### The shared edit
@@ -285,7 +286,8 @@ Three modules that earlier drafts expected to touch, and no longer do:
   grant is introduced on that page. The `canApprove("inbound")` already there (line 86) is
   correct and untouched.
 - **`price_correction`** — Q1 gates the page on `stock` instead. No module, no action.
-- **`problems`** — Q2 defers site 3 to the removal plan, which deletes the module outright.
+- **`problems`** — the module is **gone**. `app-logic-and-problems-removal-plan.md` removed it
+  from the catalog entirely, so there is nothing left to grant or to check.
 
 **So `activity.approve` is the single catalog edit in this plan.** One line in
 `prisma/rbac-catalog.ts`, then `npm run db:seed:rbac`.
@@ -376,7 +378,7 @@ the screen is deleted later, site 6 goes with it and nothing here is wasted — 
 > Q1 therefore still needs an answer, but it is a narrower one: **which** permission, not
 > whether to check one. `canEdit("stock")` is the default unless the page is being deleted.
 
-**Q2 — sites 3 and 4 are slated for deletion.**
+**Q2 — `/more/app-logic` and `/more/problems` (then rows 3 and 4).**
 `docs/implementation/pending/app-logic-and-problems-removal-plan.md` deletes both
 `/more/app-logic` and `/more/problems`, and removes the `problems` module from the catalog
 entirely. Fixing them here is work that gets thrown away. Fix anyway so they are usable in the
@@ -390,10 +392,17 @@ meantime, or skip both and let the removal plan handle them? This decides whethe
 > the application. Skipping that one leaves internal documentation exposed for however long
 > the removal plan takes.
 
-**ANSWERED 29 Aug 2026 — skip both. Sites 3 and 4 are dropped from this plan.**
+**ANSWERED 29 Aug 2026 — skip both. Both sites are dropped from this plan.**
 
 Scope becomes **21 sites in 18 files**.
 
+**And since executed.** That plan ran on branch `chore/remove-app-logic-and-problems`: both
+pages, `/api/problems`, the `AppProblem` model and the `problems` module are deleted. The
+prerequisite is satisfied, the two rows are struck from §5 and §6, and the scope figure above
+is now simply the total rather than a subset.
+
+> **Historical — the prerequisite has since been met. Kept for the reasoning.**
+>
 > **This makes `app-logic-and-problems-removal-plan.md` a prerequisite, not a parallel
 > track.** Because `/more/app-logic` renders for everyone today, skipping it here means the
 > exposure lasts exactly as long as that plan stays unstarted. Run the removal plan **first**.
@@ -463,8 +472,9 @@ Excluded deliberately; raise it separately.
 
 ## 10. Rollout
 
-0. **Run `app-logic-and-problems-removal-plan.md` first** — Q2 defers sites 3 and 4 to it, and
-   `/more/app-logic` is exposed until it runs.
+0. ~~Run `app-logic-and-problems-removal-plan.md` first~~ — **done**, on branch
+   `chore/remove-app-logic-and-problems`. Both pages are deleted and nothing below depends on
+   it any more.
 1. Branch `fix/frontend-role-checks` off `main`.
 2. Q1–Q3 are all answered. Scope is **21 sites in 18 files**. Nothing blocks.
 3. Add `approve` to the `activity` module in `prisma/rbac-catalog.ts`. This is the **only**
@@ -482,14 +492,14 @@ Excluded deliberately; raise it separately.
   matters — it finds the field access however the result is later spelled. The comparison
   greps below are secondary, and on their own they under-report: they are what missed five
   sites on the first pass.
-- `grep -rn 'role === "ADMIN"\|role === "CEO"' src/app/` returns **nothing** (15 lines today).
+- `grep -rn 'role === "ADMIN"\|role === "CEO"' src/app/` returns **nothing** (14 lines today).
 - `grep -rn '\["ADMIN"' src/app/` returns **nothing** (2 lines today).
-- Signed in as ADMIN, all 20 screens render their full UI. Today the 18 allow-list screens
+- Signed in as ADMIN, all 18 screens render their full UI. Today the 16 allow-list screens
   render a denial or hide the element.
-- **The two deny-list screens need the opposite test** (§2.1). `/price-correction` and
-  `/more/app-logic` render for everyone today, so "ADMIN can see it" proves nothing there.
-  Sign in as a **non-admin** and confirm both are now refused. Skipping this is how the one
-  behaviour-removing part of this change ships unverified.
+- **The deny-list screen needs the opposite test** (§2.1). `/price-correction` renders for
+  everyone today, so "ADMIN can see it" proves nothing there. Sign in as a **non-admin** and
+  confirm it is now refused. Skipping this is how the one behaviour-removing part of this
+  change ships unverified.
 - No flash of denial on load — reload each screen and watch. A flash means a `loading` check
   was missed.
 - **The inbound approval gate still holds (Q3).** Open a shipment at `IN_TRANSIT` that nobody
