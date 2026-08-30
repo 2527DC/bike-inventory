@@ -6,6 +6,9 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { getAccess } from "@/lib/rbac";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api:users:id");
 
 const MAX_NAV_TABS = 4;
 
@@ -182,8 +185,15 @@ export async function DELETE(
     try {
       await prisma.user.delete({ where: { id } });
       return successResponse({ deleted: true, deactivated: false, name: user.name, message: `${user.name} permanently deleted.` });
-    } catch {
-      // FK constraint still hit (other relations) — fallback to soft-delete
+    } catch (e) {
+      // FK constraint still hit (other relations) — fallback to soft-delete.
+      // Logged rather than swallowed: this branch is the ONLY signal that a relation exists
+      // which the _count check above does not cover, and /team now shows the user a
+      // "deactivated" result without ever saying which relation caused it.
+      log.warn("hard delete blocked by a relation, deactivating instead", {
+        userId: id,
+        message: e instanceof Error ? e.message : "unknown",
+      });
       await prisma.user.update({
         where: { id },
         data: { isActive: false },

@@ -30,6 +30,11 @@ export async function GET(req: NextRequest) {
           email: true,
           roleId: true,
           role: { select: { id: true, key: true, name: true } },
+          // Where this person works. Both nullable — a user may be assigned to a store, a
+          // warehouse, both or neither, and none of it grants access. /team renders these in
+          // one "Store · Warehouse" column.
+          store: { select: { id: true, code: true, name: true } },
+          warehouse: { select: { id: true, code: true, name: true } },
           isActive: true,
           createdAt: true,
           updatedAt: true,
