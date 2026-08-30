@@ -1,8 +1,19 @@
 # Remove the App Logic and App Problems modules — plan
 
-Status: pending — ready to execute. All three questions were settled 29 Aug 2026 (§9) and the full inventory was re-verified against the tree the same day (§10). Nothing blocks; nothing has been deleted yet.
-Suggested branch: `chore/remove-app-logic-and-problems` (3 directories deleted, 4 files edited, one reseed).
-Runs BEFORE `frontend-role-check-removal-plan.md` — see §10.
+Status: completed — 30 Aug 2026, both screens, `/api/problems`, the `AppProblem` model and the `problems` RBAC module are deleted. Commit `63d1d37` on branch `chore/remove-app-logic-and-problems`.
+Executed 30 Aug 2026 (3 directories deleted, 4 files edited, one reseed), exactly as planned.
+Ran BEFORE `frontend-role-check-removal-plan.md` — see §10. That plan's tables were corrected in the same commit and its prerequisite is now satisfied.
+
+> **One deviation, recorded because §5 Step 1 assumed otherwise.** The `AppProblem` **table
+> never existed in this database** — `prisma migrate diff` reported an empty migration and
+> `db push` said *"already in sync"*. The schema had drifted ahead of the database, so removing
+> the model closed that drift rather than dropping anything. Step 1's CSV export was moot and
+> no data was lost. Verified after the fact: `to_regclass('"AppProblem"')` is NULL, `modules`
+> has no `problems` row, and there are no orphaned permission rows.
+>
+> Seed result: **41 modules, 160 permissions** (was 42 / 164 — `problems` held four actions).
+> `npm run build` passes and the deleted routes are absent from the build manifest.
+> Browser verification (§6) is the one step still owed.
 
 ---
 
