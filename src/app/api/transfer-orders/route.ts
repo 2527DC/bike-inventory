@@ -64,6 +64,11 @@ export async function GET(req: NextRequest) {
               product: { select: { name: true, sku: true, currentStock: true } },
               fromBin: { select: { code: true, name: true, location: true } },
               toBin: { select: { code: true, name: true, location: true } },
+              // /transfers renders these names directly. Without them every transfer line
+              // shows an em-dash for its endpoints — and TypeScript cannot catch it, because
+              // the page declares its own response interface.
+              fromWarehouse: { select: { id: true, code: true, name: true } },
+              toWarehouse: { select: { id: true, code: true, name: true } },
             },
           },
           _count: { select: { items: true } },

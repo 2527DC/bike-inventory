@@ -46,13 +46,9 @@ interface BrandStock {
   products?: BrandProduct[];
 }
 
-// Short labels for the per-location breakdown chips.
-const LOC_SHORT: { key: string; label: string }[] = [
-  { key: "BCH_WAREHOUSE", label: "BCH Whse" },
-  { key: "BCH_STORE", label: "BCH Store" },
-  { key: "BCC_WAREHOUSE", label: "BCC Whse" },
-  { key: "BCC_STORE", label: "BCC Store" },
-];
+// The per-warehouse breakdown chips. Was a hardcoded list of the four old enum values;
+// warehouses are rows, so the chips are built from whatever the API actually returned for
+// this brand. A warehouse added today shows up with no code change.
 
 type SortKey = "name" | "value" | "count" | "stock";
 
@@ -256,7 +252,8 @@ export default function BrandStockPage() {
                         </p>
                         {brand.byLocation && Object.values(brand.byLocation).some((v) => v > 0) && (
                           <div className="flex flex-wrap gap-1 mt-1">
-                            {LOC_SHORT.map((l) => {
+                            {Object.keys(brand.byLocation ?? {}).sort().map((code) => {
+                              const l = { key: code, label: code.replace(/_/g, " ") };
                               const q = brand.byLocation?.[l.key] || 0;
                               if (q <= 0) return null;
                               return (

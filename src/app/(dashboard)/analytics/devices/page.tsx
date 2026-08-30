@@ -21,7 +21,7 @@ import { useStores } from "@/hooks/use-sites";
 interface Device {
   id: string;
   label: string;
-  storeId: "BCH_STORE" | "BCC_STORE";
+  storeId: string;
   agentId: string;
   isActive: boolean;
   lastSeenAt: string | null;

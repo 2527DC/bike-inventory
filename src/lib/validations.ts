@@ -512,13 +512,19 @@ export const heartbeatSchema = z.object({
   agent_version: z.string().max(32).nullable().optional(),
 });
 
-// Device registration. `storeId` is narrowed to the two values that have a doorway to count —
-// the warehouse locations have no entrance and the STORE/WAREHOUSE pair is dead legacy. The
-// Prisma column is the full StockLocation enum, so this is the only place that restriction is
-// enforced; it is deliberately server-side and not just a filtered <select>.
+// Device registration.
+//
+// `storeId` used to be z.enum(["BCH_STORE", "BCC_STORE"]) — the two StockLocation members
+// that had a doorway to count through. That restriction is now expressed by the SCHEMA
+// itself: a camera is registered against a `Store`, and every Store is a shop with a door,
+// so there is no longer a set of location values to exclude. Warehouses cannot be named here
+// because they are a different table.
+//
+// The value must still be a real, active store, and that check is server-side rather than a
+// filtered <select> — see the route, which resolves it before writing.
 export const analyticsDeviceCreateSchema = z.object({
   label: z.string().min(1, "Label is required").max(80),
-  storeId: z.enum(["BCH_STORE", "BCC_STORE"]),
+  storeId: z.string().min(1, "A store is required"),
   agentId: z.string().min(1).max(64).default("edge-1"),
 });
 
