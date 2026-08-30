@@ -51,9 +51,10 @@ function formatINR(n: number) {
 export default function SecondHandDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
+  const { canView, canEdit } = usePermissions();
+  const showMoney = canView("cost_price");
   const { canEdit: canEditCheck } = usePermissions();
-  const isAdmin = role === "ADMIN" || role === "CEO";
+  const isAdmin = canEdit("second_hand");
   const canSell = canEditCheck("second_hand");
 
   const [cycle, setCycle] = useState<SecondHandDetail | null>(null);
@@ -153,7 +154,8 @@ export default function SecondHandDetailPage({ params }: { params: Promise<{ id:
         ? [cycle.photoUrl]
         : [];
 
-  const margin = isAdmin && cycle.sellingPrice && cycle.costPrice ? cycle.sellingPrice - cycle.costPrice : null;
+  // Margin is money, not an action.
+  const margin = showMoney && cycle.sellingPrice && cycle.costPrice ? cycle.sellingPrice - cycle.costPrice : null;
 
   return (
     <div>
@@ -278,7 +280,7 @@ export default function SecondHandDetailPage({ params }: { params: Promise<{ id:
               <span className="text-sm font-semibold text-indigo-700 tabular-nums">{cycle.size}</span>
             </div>
           )}
-          {isAdmin && cycle.costPrice != null && (
+          {showMoney && cycle.costPrice != null && (
             <div className="flex justify-between items-center">
               <span className="text-xs text-slate-500">Cost Price (Exchange)</span>
               <span className="text-sm font-semibold text-slate-900 tabular-nums">{formatINR(cycle.costPrice)}</span>

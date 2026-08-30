@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useSession } from "next-auth/react";
+import { usePermissions } from "@/lib/use-permissions";
 import {
   Package, Truck, ArrowDownCircle, ArrowRightLeft,
   Receipt, IndianRupee, FileText, AlertTriangle, Share2,
@@ -56,8 +57,10 @@ function formatDate(d: Date) {
 
 export default function ActivityPage() {
   const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
-  const isAdmin = role === "CEO" || role === "ADMIN" || role === "SUPERVISOR";
+  // "See the whole team's activity" vs "see only your own" — CLAUDE.md says that shape of
+  // rule IS the module's approve grant. activity.approve was added to the catalog for this.
+  const { canApprove } = usePermissions();
+  const isAdmin = canApprove("activity");
 
   const [date, setDate] = useState(new Date());
   const [activities, setActivities] = useState<Activity[]>([]);

@@ -2,7 +2,6 @@
 import { useDebounce } from "@/hooks/use-debounce";
 
 import { useState, useEffect, useCallback } from "react";
-import { useSession } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Loader2, Truck, Trash2 } from "lucide-react";
@@ -22,11 +21,11 @@ import { ZohoImportFlow } from "./_components/zoho-import-flow";
 import { BottomSheetModal } from "./_components/bottom-sheet-modal";
 
 export default function DeliveriesPage() {
-  const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
-  const { canFetch } = usePermissions();
+  const { canFetch, canDelete } = usePermissions();
   const canFetchInvoices = canFetch("deliveries");
-  const isAdmin = role === "ADMIN" || role === "CEO";
+  // Gates the delete button and is handed to the child as a prop. Deleting a delivery is
+  // exactly deliveries.delete.
+  const isAdmin = canDelete("deliveries");
 
   // ─── Data state ───
   const [deliveries, setDeliveries] = useState<DeliveryItem[]>([]);

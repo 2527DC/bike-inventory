@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useSession } from "next-auth/react";
+import { usePermissions } from "@/lib/use-permissions";
 import { ArrowLeft, Trash2, Tag, ChevronDown } from "lucide-react";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,9 +16,10 @@ interface BrandItem {
 }
 
 export default function BrandsPage() {
-  const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
-  const isAdmin = role === "ADMIN" || role === "CEO";
+  // canCreate, not canView: this page's whole purpose is merging brands, which
+  // api/brands/[id]/merge guards with requireFeature("brands", "create").
+  const { canCreate, loading: permsLoading } = usePermissions();
+  const isAdmin = canCreate("brands");
 
   const [brands, setBrands] = useState<BrandItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -64,10 +65,14 @@ export default function BrandsPage() {
     }
   }
 
+  // `permsLoading` first, always. Rendering a denial before the grants arrive produces a
+  // flash of "access required" on every visit — the same symptom as the bug being fixed.
+  if (permsLoading) return null;
+
   if (!isAdmin) {
     return (
       <div className="text-center py-12">
-        <p className="text-sm text-slate-400">Admin access required</p>
+        <p className="text-sm text-slate-400">You do not have permission to merge brands</p>
       </div>
     );
   }

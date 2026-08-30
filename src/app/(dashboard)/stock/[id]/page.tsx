@@ -82,9 +82,10 @@ function parseTransactionLabel(notes: string | null, type: string): string {
 export default function ProductDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
+  const { canView } = usePermissions();
   const { canEdit: canEditCheck } = usePermissions();
-  const isAdmin = role === "ADMIN" || role === "CEO";
+  // Gates the Pricing card (Cost / Selling / MRP) and nothing else on this page.
+  const isAdmin = canView("cost_price");
   const canEdit = canEditCheck("stock");
   const canEditType = true; // all authenticated users can reclassify product type
   const [product, setProduct] = useState<ProductDetail | null>(null);

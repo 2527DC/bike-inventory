@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { useSession } from "next-auth/react";
+import { usePermissions } from "@/lib/use-permissions";
 import { ArrowLeft, ChevronDown, ChevronRight, Search, AlertTriangle, Package, Loader2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -53,9 +53,10 @@ interface BrandStock {
 type SortKey = "name" | "value" | "count" | "stock";
 
 export default function BrandStockPage() {
-  const { data: session } = useSession();
-  const role = (session?.user as { role?: string } | undefined)?.role;
-  const isAdmin = role === "ADMIN" || role === "CEO";
+  const { canView } = usePermissions();
+  // Both uses are money: the per-brand total value, and the sort option that ranks by it.
+  // Offering "Highest Value" to someone who cannot see the values sorts by an invisible key.
+  const isAdmin = canView("cost_price");
   const [brands, setBrands] = useState<BrandStock[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());

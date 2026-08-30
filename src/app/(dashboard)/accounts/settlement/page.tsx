@@ -43,10 +43,12 @@ type FetchStep = "idle" | "connecting" | "fetching" | "creating" | "done" | "err
 
 export default function SettlementListPage() {
   const { data: session, status: sessionStatus } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
+
   const { canView, canDelete: canDeleteCheck } = usePermissions();
   const canAccess = canView("bills");
-  const isAdmin = role === "ADMIN" || role === "CEO" || canDeleteCheck("bills");
+  // The permission half already worked; the two role comparisons in front of it were dead
+  // weight that could only ever be false. Only the half that did something is left.
+  const isAdmin = canDeleteCheck("bills");
 
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [loading, setLoading] = useState(true);

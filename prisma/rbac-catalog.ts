@@ -78,7 +78,12 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: "/activity",
     group: "Overview",
     sortOrder: 20,
-    actions: ["view", "create"],
+    // `approve` gates "see the whole team’s activity" versus "see only your own". It is not
+    // an approval step — CLAUDE.md says a rule of the shape "supervisors see all records,
+    // juniors see only their own" IS the module’s approve grant, rather than a role name.
+    // Added 30 Aug 2026 for frontend-role-check-removal-plan.md; /activity and
+    // /desktop/activity read it.
+    actions: ["view", "create", "approve"],
   },
 
   // ── Operations ────────────────────────────────────────────────────────────
