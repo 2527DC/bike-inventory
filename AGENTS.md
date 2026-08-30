@@ -22,6 +22,30 @@ If build fails, fix it before anything else. Never skip this.
 ## Next.js
 Breaking changes from your training data. Read `node_modules/next/dist/docs/` first.
 
+## main is NEVER written from local
+
+**Never commit to `main`. Never push to `main`.** Not with approval, not "just this once".
+`main` is updated by **pull request only**.
+
+Work goes on a branch — create it, commit there, push that branch, open a PR.
+
+This is enforced rather than merely documented. `.claude/hooks/ask-git-npm.js` returns
+**deny**, not "ask", for:
+
+- any push naming `main` / `master` / `origin/main`
+- a bare push while checked out on `main`
+- `commit`, `merge`, `rebase`, `cherry-pick`, `revert` or `am` while on `main`
+
+A prompt is not a safeguard here, because a prompt gets approved by reflex. The current
+branch is read at run time, so a bare push is caught even though it names no branch.
+
+Already on `main` with uncommitted work? Branch first — uncommitted changes follow the
+checkout and nothing is lost.
+
+> The hook strips quoted spans before matching, so a command that *carries* git text as data
+> — a heredoc, a `node -e` string — is not mistaken for one that *runs* it. That distinction
+> was learned the hard way: an earlier version denied the very edit adding this section.
+
 ## git and npm commands: ALWAYS ask first
 
 Claude must never run a `git` or `npm` command on its own initiative. Every one of
