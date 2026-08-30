@@ -52,11 +52,43 @@ A product is referenced by `StockLevel`, `InventoryTransaction`, `SerialItem`, `
  to preserve records."
 ```
 
+### Restore, and reaching a deactivated product — added 30 Aug 2026
+
+A soft delete that cannot be undone is a trap, and one you cannot *see* is worse: the
+product vanishes from `/stock` and there is no screen that lists it. Three things follow.
+
+**1. `/stock` must be able to show deactivated products.** The list filters to
+`status: "ACTIVE"` today, so a deactivated product disappears entirely with no way back.
+A status filter — Active / Inactive / All — is the minimum, and it is where the other two
+actions live.
+
+**2. Restore.** `PATCH` back to `ACTIVE`, guarded by `stock.edit` — the same grant that
+deactivated it. Nothing else changes: stock levels, transactions and serials were never
+touched, which is the whole point of a soft delete.
+
+**3. Delete permanently, from the deactivated state.** The common flow is deactivate first,
+then remove for good once you are sure. That second step must still refuse when anything
+references the row — being deactivated does not make a product's history disposable.
+
+So the full set, and each says exactly what it does:
+
+| Action | Effect | Guard | Available when |
+|---|---|---|---|
+| **Deactivate** | `status: "INACTIVE"` | `stock.edit` | product is ACTIVE |
+| **Restore** | `status: "ACTIVE"` | `stock.edit` | product is INACTIVE |
+| **Delete permanently** | row removed | `stock.delete` | **nothing references it** — from either state |
+
+> **Deactivated is not deleted, and the UI must not blur that.** A deactivated product keeps
+> its SKU, so creating a new product with the same SKU still fails on the unique constraint.
+> That is correct — but it is confusing unless the screen can show the deactivated row that
+> is holding the SKU. Another reason the status filter is not optional.
+
 ### Scope
 
 | File | Change |
 |---|---|
-| `api/products/[id]/route.ts` | DELETE returns `{ deleted, deactivated, name, message }`; hard-deletes only when every `_count` is zero |
+| `api/products/[id]/route.ts` | `PATCH` deactivates and restores (`stock.edit`); `DELETE` hard-deletes and refuses with counts when anything references the row (`stock.delete`) |
+| `api/products/route.ts` | accept `?status=INACTIVE` / `?status=ALL`; today it defaults to ACTIVE and offers no way past it |
 | `(dashboard)/stock/page.tsx` | a delete action per row behind `canDelete("stock")`, `confirm()` first, result through `ActionConfirmation` |
 | `(dashboard)/stock/[id]/page.tsx` | the same action on the detail screen |
 
@@ -271,7 +303,7 @@ It will have no reason to exist once lead time is inline on `/more/brands`. Anyo
 
 ## 9. Verification
 
-- **A** — **Deactivate** on a product with transactions succeeds and the product leaves the pickers but keeps its history. **Delete permanently** on that same product is **refused** with the counts. Delete permanently on a product with no history removes the row. The dialog says which of the three happened, in the API's own words.
+- **A** — **Deactivate** on a product with transactions succeeds and it leaves the default list but keeps its history. Switching the status filter to Inactive shows it again. **Restore** brings it back to Active with its stock levels intact. **Delete permanently** on that same product is **refused** with the counts; on a product with no history it removes the row. The dialog says which of the four happened, in the API's own words.
 - **B** — merging `16` into `Bicycles` moves its products and removes `16`; `/stock` category filters still populate for a user **without** `categories.view` (proves `GET` stayed on `stock.view`).
 - **C** — changing a lead time on `/more/brands` changes the expected delivery date on the next inbound shipment for that brand. A user with `brands.edit` and **not** `brands.create` can save it — that is the guard bug the other plan fixes, and testing only as ADMIN proves nothing.
 - **D** — the filter opens as a right drawer at desktop width and as a bottom sheet on a phone, on `/receivables` **and** on at least two other screens that were not touched. The **X** closes it, `Esc` closes it, and focus returns to the Filter button.
