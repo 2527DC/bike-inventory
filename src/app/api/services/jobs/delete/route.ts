@@ -3,14 +3,15 @@ import { prisma } from "@/lib/db";
 import { serviceGuard } from "@/lib/services/guard";
 
 export async function POST(req: NextRequest) {
-  const { user: user, error: authError } = await serviceGuard("service_jobs", "delete");
+  // Authorised by service_jobs.delete alone, which ADMIN, SERVICE_MANAGER and
+  // SERVICE_SUPERVISOR hold. The "Only MANAGER can delete" check that used to follow was
+  // dead — it compared the role KEY "MANAGER" against roleName, which carries Role.name
+  // ("Service Manager") — so nobody could delete a job at all.
+  //
+  // Supervisors gaining this is the grant's own statement, and it is revocable from
+  // /team/permissions. A name list in code is not.
+  const { user, error: authError } = await serviceGuard("service_jobs", "delete");
   if (authError) return authError;
-  if (!user) return NextResponse.json({ error: "Not logged in" }, { status: 401 });
-
-  // Only MANAGER can delete
-  if (user.roleName !== "MANAGER") {
-    return NextResponse.json({ error: "Only admin can delete jobs" }, { status: 403 });
-  }
 
   const { jobId } = await req.json();
   if (!jobId) return NextResponse.json({ error: "Missing jobId" }, { status: 400 });

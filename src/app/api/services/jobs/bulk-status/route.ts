@@ -4,12 +4,15 @@ import { serviceGuard } from "@/lib/services/guard";
 import { STATUS_FLOW } from "@/lib/services/constants";
 
 export async function POST(req: NextRequest) {
-  const { user: user, error: authError } = await serviceGuard("service_jobs", "edit");
+  // service_jobs.APPROVE, not edit. Changing the status of MANY jobs at once is a
+  // supervisory act; service_jobs.edit includes SERVICE_MECHANIC and SERVICE_STAFF, who can
+  // move their own job through the flow but should not sweep the whole queue.
+  //
+  // approve is held by ADMIN, SERVICE_MANAGER and SERVICE_SUPERVISOR — exactly what the dead
+  // role list intended. It was dead because it compared role KEYS against roleName, which
+  // carries Role.name, so this endpoint returned 403 to everyone.
+  const { user, error: authError } = await serviceGuard("service_jobs", "approve");
   if (authError) return authError;
-
-  if (user.roleName !== "SUPERVISOR" && user.roleName !== "MANAGER") {
-    return NextResponse.json({ error: "Not authorized" }, { status: 403 });
-  }
 
   const { jobIds, newStatus } = await req.json();
 

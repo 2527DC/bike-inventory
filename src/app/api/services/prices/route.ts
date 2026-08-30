@@ -12,13 +12,23 @@ export async function GET() {
   return NextResponse.json({ prices });
 }
 
-// POST — create or update a price item (MANAGER, STAFF, BILLING)
+// POST — create or update a price item. Authorised by `service_prices.create`.
+//
+// A second gate used to sit on top of serviceGuard here:
+//
+//     if (!user || !["MANAGER", "STAFF", "BILLING", "SUPERVISOR"].includes(user.roleName))
+//
+// It compared role NAMES against what are actually role KEYS. `roleName` is `Role.name` —
+// "Service Manager", "Administrator" — so NONE of the eight roles matched and this route
+// returned 403 to everyone, ADMIN included. Nobody could add or edit a workshop price.
+//
+// Deleted rather than translated to keys: line below already asked the only question that
+// matters, and `service_prices.create` is held by ADMIN and SERVICE_MANAGER. Re-expressing
+// the same rule as a name list is what CLAUDE.md bans — roles are rows an admin can create
+// at runtime, so no list in code can stay correct. DELETE below was always written this way.
 export async function POST(req: NextRequest) {
-  const { user: user, error: authError } = await serviceGuard("service_prices", "create");
+  const { error: authError } = await serviceGuard("service_prices", "create");
   if (authError) return authError;
-  if (!user || !["MANAGER", "STAFF", "BILLING", "SUPERVISOR"].includes(user.roleName)) {
-    return NextResponse.json({ error: "Not authorized" }, { status: 403 });
-  }
 
   const { id, name, category, price, wheelSize } = await req.json();
 
