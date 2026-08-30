@@ -3,6 +3,7 @@ import { useDebounce } from "@/hooks/use-debounce";
 
 import { useState, useEffect, useCallback, useRef, use } from "react";
 import { useSession } from "next-auth/react";
+import { usePermissions } from "@/lib/use-permissions";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -71,9 +72,13 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
   const { id } = use(params);
   const router = useRouter();
   const { data: session } = useSession();
-  const userRole = (session?.user as { role?: string } | undefined)?.role;
-  const canApprove = userRole === "ADMIN" || userRole === "SUPERVISOR" || userRole === "ACCOUNTS_MANAGER";
-  const isAdmin = userRole === "ADMIN";
+  const { canApprove: canApproveCheck, canEdit } = usePermissions();
+  const canApprove = canApproveCheck("stock_audit");
+  // NOT stock_audit.approve. "Correct stock levels" does not approve anything — it
+  // OVERWRITES each product’s currentStock with the counted quantity. That is a write to
+  // stock, so it is stock.edit: someone who may approve a count is not automatically someone
+  // who may overwrite the books.
+  const isAdmin = canEdit("stock");
   const [summary, setSummary] = useState<StockCountSummary | null>(null);
   // Screenshot receipt shown when a count is completed (WhatsApp verification gate)
   const [receipt, setReceipt] = useState<{ referenceId: string; items: Array<{ label: string; value: string }> } | null>(null);

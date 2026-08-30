@@ -158,7 +158,6 @@ export default function CounterPage() {
 
   const skipKyc = SKIP_KYC_TYPES.includes(jobType);
   const needsPricing = NEEDS_PRICING.includes(jobType);
-  const isMechanic = currentUser?.role === "MECHANIC";
 
   const handleSubmit = async () => {
     const name = customerName || "Walk-in Customer";
@@ -309,14 +308,7 @@ export default function CounterPage() {
 
   // ─── Step 5: Take bike photo ───
   if (step === 5) {
-    const nextStep = () => {
-      if (isMechanic && currentUser) {
-        setMechanicId(currentUser.id);
-        setStep(skipKyc ? 4 : 2);
-      } else {
-        setStep(skipKyc ? 3 : 2);
-      }
-    };
+    const nextStep = () => setStep(skipKyc ? 3 : 2);
 
     const addPhoto = (file: File) => {
       const preview = URL.createObjectURL(file);
@@ -402,8 +394,6 @@ export default function CounterPage() {
       if (!canProceed) return;
       if (needsPricing) {
         setStep(6); // spares & service page
-      } else if (isMechanic) {
-        setStep(4); // auto-submit
       } else {
         setStep(3); // assign mechanic
       }
@@ -587,11 +577,7 @@ export default function CounterPage() {
         const typeLabel = selectedType?.label || jobType;
         setSavedPartsText(`${typeLabel} (₹${amount})`);
       }
-      if (isMechanic) {
-        setStep(4);
-      } else {
-        setStep(3);
-      }
+      setStep(3);
     };
 
     const renderItem = (item: PriceItem) => {
@@ -881,7 +867,7 @@ export default function CounterPage() {
             disabled={needsPricing && selectedCount === 0}
             className="w-full bg-green-600 text-white font-bold py-3.5 rounded-xl text-base active:scale-95 transition-transform disabled:bg-gray-300"
           >
-            {needsPricing && selectedCount === 0 ? "Select items to continue" : isMechanic ? "Create Job" : "Next — Assign Mechanic"}
+            {needsPricing && selectedCount === 0 ? "Select items to continue" : "Next — Assign Mechanic"}
           </button>
         </div>
       </div>
@@ -985,7 +971,7 @@ export default function CounterPage() {
         </div>
       </div>
 
-      {waUrl && !isMechanic && (
+      {waUrl && (
         <SaveContactAndSend
           phone={customerPhone}
           name={customerName || "Customer"}
@@ -993,11 +979,6 @@ export default function CounterPage() {
           jobId={jobId}
           waUrl={waUrl}
         />
-      )}
-      {isMechanic && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mt-4 text-center">
-          <p className="text-sm font-medium text-blue-700">📢 Ask counter staff to send token via WhatsApp</p>
-        </div>
       )}
 
       <button onClick={resetForm}

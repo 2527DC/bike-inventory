@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useSession } from "next-auth/react";
+import { usePermissions } from "@/lib/use-permissions";
 import Link from "next/link";
 import Image from "next/image";
 import { ArrowLeft, CheckCircle2, Loader2 } from "lucide-react";
@@ -23,8 +24,9 @@ interface Cycle {
 
 export default function SecondHandVerifyPage() {
   const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
-  const canVerify = role === "CEO" || role === "ADMIN" || role === "SUPERVISOR";
+  // Verifying an exchange valuation is an approval, so it is second_hand.approve.
+  const { canApprove, loading: permsLoading } = usePermissions();
+  const canVerify = canApprove("second_hand");
 
   const [cycles, setCycles] = useState<Cycle[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,6 +53,11 @@ export default function SecondHandVerifyPage() {
     } catch { /* ignore */ }
     setVerifying(null);
   };
+
+  // permsLoading FIRST. Denying before the grants arrive shows "Access denied" to everyone
+  // on first paint — the same symptom as the bug being fixed, which would make the fix look
+  // like it failed.
+  if (permsLoading) return null;
 
   if (!canVerify) {
     return <div className="p-6 text-center text-gray-500">Access denied</div>;

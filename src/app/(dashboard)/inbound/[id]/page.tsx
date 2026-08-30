@@ -81,9 +81,9 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
   const { id } = use(params);
   const router = useRouter();
   const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
-  const { canEdit: canEditCheck, canApprove: canApproveCheck } = usePermissions();
-  const isAdmin = role === "ADMIN" || role === "CEO";
+  const { canEdit: canEditCheck, canApprove: canApproveCheck, canView } = usePermissions();
+  // Line rate / amount / total are MONEY, so cost_price — not "is this person an admin".
+  const isAdmin = canView("cost_price");
   const canDeliver = canEditCheck("inbound");
   const canApprove = canApproveCheck("inbound");
 
@@ -185,7 +185,16 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
     return Object.entries(groups).map(([binId, qty]) => ({ binId, qty }));
   };
 
-  const isApproved = !!shipment?.approvedAt || isAdmin;
+  // The `|| isAdmin` bypass is DELETED, not mapped to a permission (plan §8 Q3).
+  //
+  // It let an admin see the receive controls on a shipment NOBODY had approved, so stock
+  // entered inventory with approvedAt and approvedBy still null and the record showed no
+  // authoriser. It saved exactly one click — and that click IS the audit record.
+  //
+  // The API never implemented the bypass either: api/inbound/[id]/status requires
+  // inbound.edit and has no concept of "admin is pre-approved". Restoring it client-side
+  // would recreate a frontend-only rule with no server counterpart.
+  const isApproved = !!shipment?.approvedAt;
 
   const handleApprove = async () => {
     setApproveLoading(true);

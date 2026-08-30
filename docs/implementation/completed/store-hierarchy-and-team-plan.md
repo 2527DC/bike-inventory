@@ -1,6 +1,24 @@
 # Store Hierarchy & Team Management Plan
 
-Status: in-progress — building on branch `feat/store-hierarchy`. Revised 30 Aug 2026 on two owner decisions: RBAC is a `Store Management` parent module with `stores` and `warehouses` as its two children (§4 Phase 6), and the database reset is **skipped** (§2.4) — five of the six migrated columns hold no rows and the sixth holds one.
+Status: completed — 30 Aug 2026, all six phases. The StockLocation enum is gone; Store and Warehouse are tables. Branch `feat/store-hierarchy`, commits `df2bcc2` (P1), `51fa7a3` (P2), `55b797c` (P3), `6e21440` (P4+6+5), `8cd9c01` (audit fixes).
+
+> **Two deviations, and one thing still owed.**
+>
+> **§2.4 reset skipped** — five of the six migrated columns held no rows and the sixth held
+> one, so the reset was unnecessary. 21 products, 17 brands, 3 users and the four Brand
+> cash-discount values were preserved.
+>
+> **Phase 4 was not a single `db push --accept-data-loss`.** That assumed empty tables;
+> `StockLevel` had a live row and `warehouseId` is NOT NULL, so one push would have destroyed
+> it. Used add-nullable → backfill → make-required, backing the row up to JSON first.
+>
+> **§6 sections 6.1–6.4 (the browser pass) have NOT been run.** `tsc` is clean and the build
+> passes, but a green build was never sufficient evidence here — an audit after the phases
+> were called done found **five bugs it could not see** (commit `8cd9c01`), including raw SQL
+> grouping on the dropped column, which would have 500’d `/stock/by-brand`, and a missing
+> `select` that would have rendered every transfer endpoint as an em-dash. That is exactly
+> the silent-failure class §5 warns about. Click through §6 before trusting this in
+> production.
 Rewritten 29 Aug 2026: the three open re-validation questions are now answered, the
 hierarchy shape is settled, and `hasEntrance` is dropped.
 

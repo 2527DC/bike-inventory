@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { useSession } from "next-auth/react";
+import { usePermissions } from "@/lib/use-permissions";
 import { ArrowLeft, Warehouse, Plus, Trash2, ChevronRight, MapPin, Layers, Tag } from "lucide-react";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
@@ -24,9 +24,10 @@ function abbreviate(text: string): string {
 }
 
 export default function BinsPage() {
-  const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
-  const isAdmin = role === "ADMIN" || role === "CEO";
+  // api/bins/route.ts guards on requireFeature("settings", "view" / "create"), so the
+  // screen matches the API rather than inventing a bins module.
+  const { canCreate } = usePermissions();
+  const isAdmin = canCreate("settings");
 
   const [bins, setBins] = useState<Bin[]>([]);
   const [loading, setLoading] = useState(true);

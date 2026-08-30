@@ -3,12 +3,12 @@ import { prisma } from "@/lib/db";
 import { serviceGuard } from "@/lib/services/guard";
 
 export async function GET(req: NextRequest) {
-  const { user: user, error: authError } = await serviceGuard("service_reports", "view");
+  // Authorised by service_reports.view alone. A second gate used to follow this line
+  // comparing user.roleName against "MANAGER" / "SUPERVISOR" / "BILLING" — those are role
+  // KEYS, but roleName carries Role.name ("Service Manager"), so no role ever matched and
+  // this endpoint returned 403 to everyone including ADMIN.
+  const { error: authError } = await serviceGuard("service_reports", "view");
   if (authError) return authError;
-
-  if (user.roleName !== "MANAGER" && user.roleName !== "SUPERVISOR" && user.roleName !== "BILLING") {
-    return NextResponse.json({ error: "Not authorized" }, { status: 403 });
-  }
 
   const { searchParams } = new URL(req.url);
   const from = searchParams.get("from");

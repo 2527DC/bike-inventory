@@ -2,6 +2,7 @@
 
 import { useState, useEffect, use } from "react";
 import { useSession } from "next-auth/react";
+import { usePermissions } from "@/lib/use-permissions";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Loader2, Download, ShieldCheck, XCircle, X } from "lucide-react";
@@ -67,8 +68,8 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
   const { id } = use(params);
   const router = useRouter();
   const { data: session } = useSession();
-  const userRole = (session?.user as { role?: string } | undefined)?.role;
-  const canApprove = userRole === "ADMIN" || userRole === "CEO" || userRole === "SUPERVISOR" || userRole === "ACCOUNTS_MANAGER";
+  const { canApprove: canApproveCheck } = usePermissions();
+  const canApprove = canApproveCheck("stock_audit");
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState("");
   const [data, setData] = useState<StockCountData | null>(null);

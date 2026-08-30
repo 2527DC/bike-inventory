@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useSession } from "next-auth/react";
+import { usePermissions } from "@/lib/use-permissions";
 import { useRouter } from "next/navigation";
 import { Loader2, AlertTriangle, Check, Search, IndianRupee } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -31,9 +31,8 @@ interface Summary {
 }
 
 export default function PriceCorrectionPage() {
-  const { data: session } = useSession();
   const router = useRouter();
-  const role = (session?.user as { role?: string })?.role || "";
+  const { canView, canEdit, loading: permsLoading } = usePermissions();
 
   const [items, setItems] = useState<PriceCheckItem[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -65,12 +64,15 @@ export default function PriceCorrectionPage() {
   }, [mismatchOnly]);
 
   useEffect(() => {
-    if (role && role !== "ADMIN") {
+    // Wait for the grants before deciding. Redirecting while permsLoading is true bounces
+    // every user off the page on first paint, including those who may open it.
+    if (permsLoading) return;
+    if (!canView("stock")) {
       router.replace("/more");
       return;
     }
     fetchData();
-  }, [role, router, fetchData]);
+  }, [permsLoading, canView, router, fetchData]);
 
   const handleSave = async (productId: string) => {
     const newPrice = parseFloat(editValue);
@@ -131,7 +133,8 @@ export default function PriceCorrectionPage() {
       )
     : items;
 
-  if (role && role !== "ADMIN") return null;
+  if (permsLoading) return null;
+  if (!canView("stock")) return null;
 
   return (
     <div className="space-y-4">
@@ -324,11 +327,15 @@ export default function PriceCorrectionPage() {
                           }
                         }}
                       />
+                      {/* Save is gated on stock.edit, matching
+                          api/stock/price-check/[productId] which guards on
+                          requireFeature("stock", "edit"). Seeing the mismatch list and
+                          correcting a price are separate permissions. */}
                       <Button
                         size="sm"
                         className="h-8 px-3 text-xs"
                         onClick={() => handleSave(item.productId)}
-                        disabled={isSaving || !editValue}
+                        disabled={isSaving || !editValue || !canEdit("stock")}
                       >
                         {isSaving ? (
                           <Loader2 className="h-3 w-3 animate-spin" />

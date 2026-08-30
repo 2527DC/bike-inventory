@@ -52,10 +52,14 @@ function formatINR(n: number) {
 
 export default function SecondHandPage() {
   const { data: session } = useSession();
-  const role = (session?.user as { role?: string })?.role || "";
+  const { canView, canEdit, canApprove } = usePermissions();
+  // Money. Splitting this out is the point: someone may run the second-hand desk without
+  // being allowed to see what each cycle cost.
+  const showMoney = canView("cost_price");
   const { canCreate: canCreateCheck } = usePermissions();
   const canAdd = canCreateCheck("second_hand");
-  const isAdmin = role === "ADMIN" || role === "CEO";
+  // Actions on the screen (archive toggle, archiving a cycle).
+  const isAdmin = canEdit("second_hand");
 
   const [cycles, setCycles] = useState<SecondHandItem[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -111,7 +115,7 @@ export default function SecondHandPage() {
           <p className="text-xs text-slate-500">Exchange inventory</p>
         </div>
         <div className="flex gap-2">
-          {(role === "CEO" || role === "ADMIN" || role === "SUPERVISOR") && (
+          {canApprove("second_hand") && (
             <Link href="/second-hand/verify">
               <Button size="sm" variant="outline" className="text-amber-700 border-amber-300">
                 Verify
@@ -137,7 +141,7 @@ export default function SecondHandPage() {
 
       {/* Stats — tap a card to filter the list */}
       {stats && (
-        <div className={`grid ${isAdmin ? "grid-cols-3" : "grid-cols-2"} gap-1.5 mb-3`}>
+        <div className={`grid ${showMoney ? "grid-cols-3" : "grid-cols-2"} gap-1.5 mb-3`}>
           <button
             type="button"
             onClick={() => setFilter(filter === "IN_STOCK" ? "ALL" : "IN_STOCK")}
@@ -145,7 +149,7 @@ export default function SecondHandPage() {
           >
             <p className="text-xl font-bold text-green-700 tabular-nums leading-none">{stats.inStock.count}</p>
             <p className="text-[11px] font-medium text-green-600 mt-1">In Stock</p>
-            {isAdmin && <p className="text-[11px] text-green-500 tabular-nums">{formatINR(stats.inStock.totalCostValue)}</p>}
+            {showMoney && <p className="text-[11px] text-green-500 tabular-nums">{formatINR(stats.inStock.totalCostValue)}</p>}
           </button>
           <button
             type="button"
@@ -154,7 +158,7 @@ export default function SecondHandPage() {
           >
             <p className="text-xl font-bold text-blue-700 tabular-nums leading-none">{stats.soldThisMonth.count}</p>
             <p className="text-[11px] font-medium text-blue-600 mt-1">Sold (Month)</p>
-            {isAdmin && <p className="text-[11px] text-blue-500 tabular-nums">{formatINR(stats.soldThisMonth.revenue)}</p>}
+            {showMoney && <p className="text-[11px] text-blue-500 tabular-nums">{formatINR(stats.soldThisMonth.revenue)}</p>}
           </button>
           {isAdmin && (
             <Card className="bg-purple-50 border-purple-200"><CardContent className="p-2.5 text-center">
@@ -296,12 +300,12 @@ export default function SecondHandPage() {
                               Pending
                             </span>
                           )}
-                          {isAdmin && c.costPrice != null && (
+                          {showMoney && c.costPrice != null && (
                             <span className="text-xs font-medium text-slate-700 tabular-nums">
                               Cost: {formatINR(c.costPrice)}
                             </span>
                           )}
-                          {isAdmin && c.sellingPrice && (
+                          {showMoney && c.sellingPrice && (
                             <span className="text-xs font-medium text-green-600 tabular-nums">
                               Sell: {formatINR(c.sellingPrice)}
                             </span>

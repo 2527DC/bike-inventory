@@ -107,10 +107,10 @@ function getStockAccent(p: ProductItem) {
 
 export default function StockPage() {
   const { data: session } = useSession();
-  const userRole = (session?.user as { role?: string })?.role || "";
-  const canBulkEdit = ["ADMIN", "SUPERVISOR", "ACCOUNTS_MANAGER"].includes(userRole);
+  const { canFetch, canEdit } = usePermissions();
+  // Bulk edit writes product fields, so it is stock.edit.
+  const canBulkEdit = canEdit("stock");
 
-  const { canFetch } = usePermissions();
   const canFetchItems = canFetch("stock");
 
   // Fetch Items from Zoho

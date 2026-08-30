@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
+import { usePermissions } from "@/lib/use-permissions";
 import { ArrowLeft, ArrowRight, Search, Plus, Trash2, Package, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -66,7 +67,10 @@ function clearDraft() {
 export default function NewTransferOrderPage() {
   const router = useRouter();
   const { data: session } = useSession();
-  const isAdmin = ["ADMIN", "CEO"].includes((session?.user as { role?: string })?.role || "");
+  // Whether this person's transfer skips the approval queue. That is transfers.approve —
+  // and it has never worked, so an admin's transfer has always gone to the queue.
+  const { canApprove } = usePermissions();
+  const isAdmin = canApprove("transfers");
 
   const { warehouses, loading: warehousesLoading } = useWarehouses();
 

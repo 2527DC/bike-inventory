@@ -1,6 +1,22 @@
 # Frontend role-name checks — removal plan
 
-Status: pending — ready to build. 21 client-side gates in 18 files read a session field that no longer exists; 19 deny everybody and **2 admit everybody** (§2.1 — both are lines of `/price-correction`). All three questions answered 29 Aug 2026; scope is **21 sites in 18 files** plus one catalog line.
+Status: completed — 30 Aug 2026, all 21 sites in 18 files. Commit `53e36cf` on branch `fix/frontend-role-checks`. `activity.approve` added to the catalog and seeded (170 permissions, 1 new).
+
+> **§11’s three greps all return nothing** — no `role === "ADMIN"`, no `["ADMIN"`, and no
+> `session?.user as { role` survives anywhere in `src/`. `tsc --noEmit` is clean and
+> `npm run build` passes.
+>
+> **The browser pass has NOT been run, and one test matters more than the rest.**
+> `/price-correction` was failing OPEN (§2.1), so fixing it REMOVES access. Signing in as
+> ADMIN proves nothing there — the page rendered for everyone. Sign in as a **non-admin**
+> without `stock.view` and confirm the redirect. Skipping that is how the one
+> behaviour-removing change in this plan ships unverified.
+>
+> **Found in passing, out of scope:** `src/app/api/services/prices/route.ts:19` compares role
+> NAMES server-side — `!["MANAGER","STAFF","BILLING","SUPERVISOR"].includes(user.roleName)`.
+> That is a real CLAUDE.md violation and it is load-bearing (a genuine API gate, not a
+> cosmetic one), so changing it could break the workshop. This plan covered frontend gates
+> only; raise it separately.
 Suggested branch: `fix/frontend-role-checks` (its own branch — it touches 18 page files plus the RBAC catalog).
 Prepared 29 Aug 2026. Counts and line numbers re-verified 29 Aug 2026 against `src/`.
 Prerequisite: `app-logic-and-problems-removal-plan.md` — **DONE**, executed on branch
