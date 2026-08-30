@@ -128,7 +128,7 @@ It has **0 rows**, one meaningful column, and all three readers already collapse
 **Default: leave them.** A hard delete already refuses whenever anything references the product, so this only ever affects a product with no history; orphaned objects cost pennies, and deleting the wrong key is unrecoverable. Worth revisiting as a sweep, not inside a delete handler.
 
 **Q4 — ANSWERED: no. Use the side drawer at every width.** The owner wants one consistent filter surface across all screen sizes for flexibility, rather than two presentations to reason about.
-**Default: yes.** Bottom sheet below `sm`, right drawer at `sm` and up. A right drawer on a 375 px screen is a full-screen overlay with extra animation — the bottom sheet is what phones expect and it already works.
+Considered and rejected: a bottom sheet below `sm`. It is the more conventional mobile pattern, but two presentations means two sets of behaviour to keep correct across twelve screens, and the owner would rather have one. Below `sm` the drawer takes the full width, which is the same thing a bottom sheet does with a different animation.
 
 ---
 
