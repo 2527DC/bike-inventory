@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SlidersHorizontal, X } from "lucide-react";
 import { DateFilter, type DateRangeKey } from "@/components/date-filter";
 
@@ -29,13 +29,50 @@ const DATE_LABELS: Record<DateRangeKey, string> = {
 };
 
 /**
- * Single "Filter" button that opens a bottom sheet holding a date range
- * and any number of chip groups. Replaces inline scrolling chip rows so
- * list pages stay clean. Selections apply immediately; the sheet just
- * houses them. Active filters surface as read-only chips next to the button.
+ * Single "Filter" button that opens a right-hand DRAWER holding a date range and any number
+ * of chip groups. Selections apply immediately; the drawer just houses them. Active filters
+ * surface as read-only chips next to the button.
+ *
+ * It was a bottom sheet — `justify-end` + `rounded-t-2xl`, a phone pattern — which is what it
+ * looked like on a wide screen: a panel sliding up from the bottom of a monitor. Now a drawer
+ * at every width, full-width below `sm` where the viewport is narrow anyway.
+ *
+ * ⚠️ USED BY TWELVE SCREENS: bills, expenses, inbound, prebookings, purchase-orders,
+ * receivables, reorder, second-hand, stock-audit, transfers, vendor-issues, vendors. The props
+ * and call signature are unchanged, so all twelve moved together with no page edits — which is
+ * the reason to fix it here rather than in any one page. Changing this component changes all
+ * of them; that is the point, and worth knowing before editing it.
  */
 export function FilterSheet({ dateValue, onDateChange, groups = [], className = "" }: FilterSheetProps) {
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Esc closes, focus moves into the drawer on open and RETURNS to the Filter button on
+  // close. Without the return, closing leaves focus on a detached node and a keyboard user
+  // is dropped back at the top of the document.
+  useEffect(() => {
+    if (!open) return;
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+
+    // Focus the panel itself rather than the first control: the drawer is a container, and
+    // moving straight to a chip would skip the heading a screen reader needs to hear.
+    panelRef.current?.focus();
+
+    // The page behind must not scroll while the drawer is open.
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+      triggerRef.current?.focus();
+    };
+  }, [open]);
 
   const hasDate = !!onDateChange && dateValue !== undefined;
   const dateActive = hasDate && dateValue !== "all";
@@ -51,7 +88,10 @@ export function FilterSheet({ dateValue, onDateChange, groups = [], className = 
     <div className={className}>
       <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide">
         <button
+          ref={triggerRef}
           onClick={() => setOpen(true)}
+          aria-haspopup="dialog"
+          aria-expanded={open}
           className="shrink-0 flex items-center gap-1.5 px-3 min-h-[40px] rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 hover:border-slate-400 cursor-pointer transition-colors"
         >
           <SlidersHorizontal className="h-4 w-4" />
@@ -82,9 +122,22 @@ export function FilterSheet({ dateValue, onDateChange, groups = [], className = 
       </div>
 
       {open && (
-        <div className="fixed inset-0 z-[60] flex flex-col justify-end" role="dialog" aria-modal="true">
+        <div
+          className="fixed inset-0 z-[60] flex justify-end"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Filters"
+        >
+          {/* Backdrop closes too — a second way out, never the only one. */}
           <div className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
-          <div className="relative bg-white rounded-t-2xl p-4 pb-safe max-h-[80vh] overflow-y-auto">
+
+          {/* Full width below sm, a fixed panel above it. h-full + overflow-y-auto so the
+              drawer scrolls internally and long filter lists never push the page. */}
+          <div
+            ref={panelRef}
+            tabIndex={-1}
+            className="relative w-full sm:w-80 h-full bg-white shadow-xl p-4 pb-safe overflow-y-auto focus:outline-none drawer-in"
+          >
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-base font-bold text-slate-900">Filters</h2>
               <button
@@ -129,11 +182,13 @@ export function FilterSheet({ dateValue, onDateChange, groups = [], className = 
               >
                 Reset
               </button>
+              {/* Selections already applied on click — this only dismisses. "Done" implied
+                  a commit step that does not exist. */}
               <button
                 onClick={() => setOpen(false)}
                 className="flex-1 min-h-[44px] rounded-lg bg-slate-900 text-white text-sm font-medium hover:bg-slate-800 cursor-pointer"
               >
-                Done
+                Close
               </button>
             </div>
           </div>

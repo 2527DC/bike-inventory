@@ -4,7 +4,8 @@ import { useDebounce } from "@/hooks/use-debounce";
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, Square, X, Cloud, Download, Package, ChevronRight } from "lucide-react";
+import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, Square, X, Cloud, Download, Package, ChevronRight, EyeOff, RotateCcw, Trash2
+} from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,6 +14,8 @@ import { fuzzySearchFields } from "@/lib/utils";
 import { ExportButtons } from "@/components/export-buttons";
 import { exportToExcel, exportToPDF, type ExportColumn } from "@/lib/export";
 import { usePermissions } from "@/lib/use-permissions";
+import { createLogger } from "@/lib/logger";
+import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { apiFetch } from "@/lib/api-client";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
@@ -84,6 +87,8 @@ const QUICK_CHIPS: { key: QuickFilter; label: string }[] = [
 
 const BICYCLE_SIZES = ['12"', '14"', '16"', '20"', '24"', '26"', '27.5"', '29"'];
 
+const log = createLogger("stock");
+
 const PAGE_SIZE = 100;
 
 function getStockColor(p: ProductItem) {
@@ -107,9 +112,17 @@ function getStockAccent(p: ProductItem) {
 
 export default function StockPage() {
   const { data: session } = useSession();
-  const { canFetch, canEdit } = usePermissions();
+  const { canFetch, canEdit, canDelete } = usePermissions();
   // Bulk edit writes product fields, so it is stock.edit.
   const canBulkEdit = canEdit("stock");
+
+  // Deactivate / restore are edits — the row survives with all its history.
+  // Delete permanently removes it, and only when nothing references it.
+  const mayDeactivate = canEdit("stock");
+  const mayDelete = canDelete("stock");
+
+  const [rowBusy, setRowBusy] = useState<string | null>(null);
+  const [rowOutcome, setRowOutcome] = useState<{ ok: boolean; name: string; message: string } | null>(null);
 
   const canFetchItems = canFetch("stock");
 
@@ -409,6 +422,55 @@ export default function StockPage() {
     setPage(1);
     fetchProducts(1);
   }, [fetchProducts]);
+
+  /**
+   * Deactivate or restore. PATCH, not DELETE — the row keeps every stock level,
+   * transaction and serial. This is the reversible one, and it is the default action.
+   */
+  async function setProductStatus(p: ProductItem, status: "ACTIVE" | "INACTIVE") {
+    setRowBusy(p.id);
+    try {
+      const res = await apiFetch<{ message: string }>(`/api/products/${p.id}`, {
+        method: "PATCH",
+        json: { status },
+      });
+      log.info("product status changed", { productId: p.id, status });
+      setRowOutcome({ ok: true, name: p.name, message: res.message });
+      fetchProducts(1);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not update the product";
+      log.error("product status change failed", { productId: p.id, message: msg });
+      setRowOutcome({ ok: false, name: p.name, message: msg });
+    } finally {
+      setRowBusy(null);
+    }
+  }
+
+  /**
+   * Permanent delete. The API refuses and names what is holding the row whenever anything
+   * references it, so a refusal arrives as 200 with deleted:false — not an error. Rendering
+   * it as a failure would be wrong: nothing broke, the request was declined for a stated
+   * reason.
+   */
+  async function deleteProduct(p: ProductItem) {
+    if (!confirm(`Permanently delete ${p.name}? This cannot be undone. If it has any history you will be told instead.`)) return;
+    setRowBusy(p.id);
+    try {
+      const res = await apiFetch<{ deleted: boolean; name: string; message: string }>(
+        `/api/products/${p.id}`,
+        { method: "DELETE" }
+      );
+      log.info("product delete handled", { productId: p.id, deleted: res.deleted });
+      setRowOutcome({ ok: res.deleted, name: res.name, message: res.message });
+      fetchProducts(1);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not delete the product";
+      log.error("product delete failed", { productId: p.id, message: msg });
+      setRowOutcome({ ok: false, name: p.name, message: msg });
+    } finally {
+      setRowBusy(null);
+    }
+  }
 
   function loadMore() {
     const nextPage = page + 1;
@@ -870,6 +932,45 @@ export default function StockPage() {
                     <div className="text-right shrink-0">
                       <p className={`text-xl font-bold tabular-nums ${getStockColor(p)}`}>{p.currentStock}</p>
                       <Badge variant={badge.variant} className="text-[10px]">{badge.label}</Badge>
+
+                      {/* Hidden in select mode: the whole row is a checkbox target there, and
+                          a button inside it would fight the row's click handler. */}
+                      {!selectMode && (mayDeactivate || mayDelete) && (
+                        <div className="flex gap-1 justify-end mt-1.5">
+                          {mayDeactivate && p.status === "ACTIVE" && (
+                            <RowBtn
+                              label={`Deactivate ${p.name}`}
+                              disabled={rowBusy === p.id}
+                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); void setProductStatus(p, "INACTIVE"); }}
+                            >
+                              <EyeOff className="h-3.5 w-3.5" />
+                            </RowBtn>
+                          )}
+                          {mayDeactivate && p.status === "INACTIVE" && (
+                            <RowBtn
+                              label={`Restore ${p.name}`}
+                              tone="text-green-600"
+                              disabled={rowBusy === p.id}
+                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); void setProductStatus(p, "ACTIVE"); }}
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" />
+                            </RowBtn>
+                          )}
+                          {/* Permanent delete is offered only on an already-deactivated
+                              product. Deactivate first is the safe default, and it means the
+                              destructive button is never a mis-tap away on the main list. */}
+                          {mayDelete && p.status === "INACTIVE" && (
+                            <RowBtn
+                              label={`Permanently delete ${p.name}`}
+                              tone="text-red-600"
+                              disabled={rowBusy === p.id}
+                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); void deleteProduct(p); }}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </RowBtn>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </CardContent>
@@ -895,6 +996,17 @@ export default function StockPage() {
             </Button>
           )}
         </div>
+      )}
+
+      {rowOutcome && (
+        <ActionConfirmation
+          open
+          onClose={() => setRowOutcome(null)}
+          type={rowOutcome.ok ? "success" : "warning"}
+          title={rowOutcome.ok ? "Done" : "Not done"}
+          referenceId={rowOutcome.name}
+          details={rowOutcome.message}
+        />
       )}
 
       {!loading && filtered.length === 0 && (
@@ -1190,5 +1302,31 @@ function PerItemView({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * A row action. Takes the click event so the caller can stopPropagation — every row is
+ * wrapped in a <Link>, and without that a delete would also navigate to the product.
+ */
+function RowBtn({
+  label, onClick, children, tone = "text-slate-600", disabled,
+}: {
+  label: string;
+  onClick: (e: React.MouseEvent) => void;
+  children: React.ReactNode;
+  tone?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      className={`min-h-[32px] min-w-[32px] inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 focus-ring ${tone}`}
+    >
+      {children}
+    </button>
   );
 }
