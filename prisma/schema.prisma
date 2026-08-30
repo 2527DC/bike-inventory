@@ -240,6 +240,70 @@ enum StockLocation {
   BCC_STORE
 }
 
+// ─── Store hierarchy ─────────────────────────────────────────────────────────
+//
+// These two models REPLACE the StockLocation enum above. Added in Phase 1 of
+// docs/implementation/pending/store-hierarchy-and-team-plan.md; the enum is still what runs
+// the stock system until Phase 4 repoints the six columns that use it, and is deleted there.
+//
+// The split is not cosmetic — it decides which table each foreign key points at:
+//
+//   Stock quantity, transfers          -> Warehouse   stock is held in a physical space
+//   Footfall counting, devices         -> Store       a camera counts people through a door
+//
+// `code` on both models deliberately reuses the OLD ENUM STRINGS ("BCH_WAREHOUSE",
+// "BCH_STORE", ...). That is what keeps /stock/by-location/BCH_WAREHOUSE resolvable across
+// the transition and makes the Phase 4 backfill a plain lookup instead of a mapping table.
+
+/// A site — the shop itself, with a door people walk through. Stock does NOT live here;
+/// it lives in this store's Warehouse rows. Footfall does, because the camera is at the door.
+model Store {
+  id        String   @id @default(cuid())
+  code      String   @unique // "BCH_STORE", "BCC_STORE" — the old enum strings
+  name      String // "BCH Store"
+  address   String?
+  phone     String?
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  warehouses Warehouse[]
+  users      User[]
+
+  // Footfall is counted at the shop door, so these hang off the store, not a warehouse.
+  // Wired up in Phase 4 — CountEvent, AgentHeartbeat and AnalyticsDevice already carry a
+  // column named `storeId`, so they change TYPE and keep their name.
+}
+
+/// A godown. Stock lives here. One per store on day one, but the whole point of the model is
+/// that a second one is an INSERT rather than a migration — see the plan's §2.1.
+model Warehouse {
+  id        String   @id @default(cuid())
+  storeId   String
+  // RESTRICT, explicitly. Deleting a store that still has warehouses must FAIL at the
+  // database. The API's delete rule (Phase 6) catches it first and returns a readable
+  // message; this is the backstop for when that check is missed. Never Cascade — it would
+  // silently take the warehouses, and with them every StockLevel row pointing at one.
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  code      String   @unique // "BCH_WAREHOUSE", "BCC_WAREHOUSE"
+  name      String // "BCH Warehouse"
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users User[]
+
+  // StockLevel and TransferOrderItem are repointed here in Phase 4.
+
+  // `code` is globally unique above, which already prevents a duplicate. This pair is kept
+  // because the natural key of a warehouse is (site, code) and a future rename that relaxes
+  // the global constraint must not silently allow two "MAIN" warehouses under one store.
+  @@unique([storeId, code])
+  @@index([storeId])
+}
+
 model User {
   id         String   @id @default(cuid())
   name       String
@@ -256,6 +320,19 @@ model User {
   emoji      String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+
+  // Where this person works. BOTH nullable and independent: a user may be assigned to a
+  // store, to a warehouse, to both, or to neither. Neither is a permission — access is
+  // decided by the role's grants, never by which site someone is attached to. Assigned on
+  // /team in Phase 3.
+  // SetNull, explicitly, and it differs from Warehouse.store on purpose. A staff assignment
+  // must NOT block deleting a site — the person still exists and still logs in, they are
+  // simply unassigned. Restrict here would mean reassigning every employee before a store
+  // could be closed. What blocks a store delete is its warehouses (see Warehouse.store).
+  storeId     String?
+  store       Store?     @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  warehouseId String?
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
 
   transactions InventoryTransaction[]
   stockCounts  StockCount[]
