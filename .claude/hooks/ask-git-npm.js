@@ -65,11 +65,17 @@ process.stdin.on("end", () => {
   // Checked BEFORE the ask, because a prompt the user might approve by reflex is not a
   // safeguard. These are denied outright; the work goes on a branch and reaches main
   // through a PR.
-  const MAIN = "(?:main|master|origin/main|origin/master)";
-
   // `git push` that targets main explicitly, e.g.
   //   git push origin main        git push -u origin main        git push origin HEAD:main
-  const PUSH_TO_MAIN = new RegExp(`\\bgit\\s+push\\b[^\\n;&|]*\\b${MAIN}\\b`, "i");
+  //
+  // `main` must be a WHOLE argument. \bmain\b is not enough: `-` is a word boundary, so it
+  // matched `chore/no-main-writes` and denied pushing a perfectly ordinary branch — which is
+  // exactly what happened the first time this hook was used in anger.
+  //
+  // So the name must be preceded by whitespace, a `:` (HEAD:main) or a remote prefix, and
+  // followed by whitespace or end of argument.
+  const PUSH_TO_MAIN =
+    /\bgit\s+push\b[^\n;&|]*(?:\s|:)(?:origin\/|upstream\/)?(?:main|master)(?=\s|$)/i;
 
   // A bare `git push` while checked out on main. The branch is read at run time rather
   // than parsed from the command, because a bare push carries no branch name at all.
