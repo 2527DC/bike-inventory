@@ -55,15 +55,31 @@ screen.
 
 | | Change | Expected effect |
 |---|---|---|
-| **0a** | **Move the database to Mumbai (`ap-south-1`)** | 355 ms -> ~20 ms. **15-20x on every query in the app.** |
+| ~~0a~~ | ~~Move the database to Mumbai~~ | **REJECTED by the owner, 30 Aug 2026.** See below. |
 | 0b | Merge the two auth reads into one | removes 1 round trip from all 167 guarded routes |
 | 0c | Cache what is genuinely static — modules, categories, brands | removes repeat reads of data that changes weekly |
 | 0d | Batch the remaining N+1s | the import 504 is one instance of this |
 
-**0a dwarfs the rest.** No amount of query tuning beats moving the data 3,000 km closer, and
-everything else in this list is a smaller multiple of the same constant.
+> **0a is rejected. Owner’s decision, 30 Aug 2026 — the database stays in Singapore.**
+>
+> Recorded rather than argued: the case was made and declined. It matters that the reason
+> this section exists does not quietly disappear, because **every remaining item on this list
+> is now a smaller multiple of a constant that is not going to change.** ~355 ms locally, and
+> whatever Vercel measures in production, is the floor for a single round trip.
+>
+> **That makes 0b–0d more valuable, not less.** With the latency fixed you could tolerate a
+> few extra queries; without it, every avoided round trip is the whole win. The work shifts
+> from “make queries faster” to “make fewer of them”:
+>
+> - **0b** halves the auth cost on all 167 guarded routes — the single biggest remaining lever
+> - **0c** removes repeat reads of data that changes weekly (modules, categories, brands)
+> - **0d** is the per-record loops, of which the import 504 is the visible one
+>
+> A cheaper alternative to a full move, if it is ever reconsidered: a **read replica** in
+> `ap-south-1` for the read-heavy screens, leaving writes in Singapore. More moving parts, but
+> no cutover and no downtime.
 
-### 0a is a migration, not a config change — treat it as one
+### 0a is a migration, not a config change — kept for the record only
 
 Repointing `DATABASE_URL` at an empty Mumbai project loses everything. The sequence:
 
