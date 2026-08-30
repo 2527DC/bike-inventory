@@ -417,11 +417,15 @@ model Brand {
   whatsappNumber String?
   cdTermsDays    Int? // Cash Discount terms in days
   cdPercentage   Float? // Cash Discount percentage
+  // Days this brand takes to deliver. Was a whole BrandLeadTime table holding this ONE
+  // integer, keyed 1:1 on brandId. It had 0 rows and all three readers already collapsed a
+  // missing row to `?? 7` — so "no row" and "7" were already synonyms, and @default(7) says
+  // that in the schema instead of encoding it as row-absence at three call sites.
+  leadDays       Int      @default(7)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   products         Product[]
-  leadTime         BrandLeadTime?
   inboundShipments InboundShipment[]
   preBookings      PreBooking[]
   stockUploads     BrandStockUpload[] @relation("BrandStockUploads")
@@ -1379,14 +1383,6 @@ model TransferOrderItem {
 }
 
 // ─── Inbound Tracking (Brand Deliveries & Pre-booking) ───────────────────────
-
-model BrandLeadTime {
-  id        String   @id @default(cuid())
-  brandId   String   @unique
-  brand     Brand    @relation(fields: [brandId], references: [id])
-  leadDays  Int      @default(7)
-  updatedAt DateTime @updatedAt
-}
 
 enum InboundShipmentStatus {
   IN_TRANSIT

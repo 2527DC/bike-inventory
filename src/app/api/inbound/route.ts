@@ -143,10 +143,13 @@ export async function POST(req: NextRequest) {
     const data = inboundShipmentSchema.parse(body);
 
     // Get brand lead time
-    const leadTime = await prisma.brandLeadTime.findUnique({
-      where: { brandId: data.brandId },
+    const brand = await prisma.brand.findUnique({
+      where: { id: data.brandId },
+      select: { leadDays: true },
     });
-    const leadDays = leadTime?.leadDays ?? 7;
+    // Still defaults to 7 for a brand that does not resolve — same behaviour as the old
+    // `?? 7`, which fired when no BrandLeadTime row existed.
+    const leadDays = brand?.leadDays ?? 7;
 
     const billDate = new Date(data.billDate);
     const expectedDeliveryDate = new Date(billDate);

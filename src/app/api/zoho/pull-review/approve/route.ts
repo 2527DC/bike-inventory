@@ -340,9 +340,10 @@ export async function POST(req: NextRequest) {
           }
           const shipmentBrandId = shipmentBrand.id;
 
-          // Look up brand lead time for expected delivery date
-          const brandLeadTime = await prisma.brandLeadTime.findUnique({ where: { brandId: shipmentBrandId } });
-          const leadDays = brandLeadTime?.leadDays || 7;
+          // Lead time comes off the brand row already fetched above — it used to be a
+          // separate BrandLeadTime lookup, i.e. a whole extra round trip INSIDE the
+          // per-record import loop for a value that was already in memory.
+          const leadDays = shipmentBrand.leadDays || 7;
           const expectedDeliveryDate = new Date(billDate);
           expectedDeliveryDate.setDate(expectedDeliveryDate.getDate() + leadDays);
 
