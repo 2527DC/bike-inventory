@@ -67,6 +67,7 @@ preserved across regeneration — but do not remove the marker comments.
 | `database-reset-preserving-integrations-plan.md` | 29 Aug 2026, closed WITHOUT implementation — only `ZOHO_BOOKS` was ever connected and its row is backed up by hand in `.env`, so the export/restore scripts were unnecessary. Kept for §0 and the reset runbook |
 | `service-merge-plan.md` | bch-service merged; /services/* and the SERVICE_* roles are live |
 | `storage-implementation-plan.md` | 28 Aug 2026, runtime-switchable storage provider and Settings module |
+| `store-hierarchy-and-team-plan.md` | 30 Aug 2026, all six phases. The `StockLocation` enum is gone — `Store` and `Warehouse` are tables, `/stores` administers them behind a `store_management` parent module, and `/stock/by-location/[code]` resolves either level. The §2.4 database reset was skipped as unnecessary and no data was lost. **The §6 browser pass has not been run** — an audit after the phases were called done found five bugs the green build could not see |
 | `zoho-config-consolidation-plan.md` | 29 Aug 2026, three Zoho config tables and four clients collapsed into one `IntegrationConfig` row per provider, one `IntegrationClient` base class and three `[provider]` routes |
 | `zoho-pull-timeout-plan.md` | 30 Aug 2026, both `items` loops and `contacts` batched into a fixed number of queries; `maxDuration` 30 -> 60 (headroom, not the fix). Commits `8f143d2`, `947781f`. **§8 not yet run** — the acceptance test is a real 90-day pull returning without a 504, plus the `ZOHO_BOOKS` fallback exercised separately |
 <!-- END:completed -->
@@ -82,7 +83,6 @@ preserved across regeneration — but do not remove the marker comments.
 | `product-type-and-brand-lead-time-plan.md` | not started. Two commits on one branch. **Part B** — `BrandLeadTime` (0 rows) folds into `Brand.leadDays`, plus a real guard bug (`brands.create` should be `edit`); no open questions. **Part A** — the `ProductType` enum becomes a table with a screen and a `stock_product_types` sub-module; three questions in §8. `Category` is deliberately NOT merged in — it mirrors Zoho |
 | `sequence-race-fix-plan.md` | five sites allocate unique numbers with a read-then-write race |
 | `service-module-mobile-readiness-plan.md` | what /api/services/* needs before bch-service-app can be pointed at it |
-| `store-hierarchy-and-team-plan.md` | **in progress** — replace the StockLocation enum with Store → Warehouse tables. Revised 30 Aug 2026: RBAC is a `store_management` parent with `stores` + `warehouses` children (8 CRUD permissions), and the database reset is **skipped** — 5 of 6 migrated columns are empty and the 6th has one row |
 <!-- END:pending -->
 
 ---
