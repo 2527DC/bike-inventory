@@ -17,7 +17,7 @@ import { Pagination } from "@/components/ui/pagination";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { useDebounce } from "@/hooks/use-debounce";
 import { usePermissions } from "@/lib/use-permissions";
-import { apiFetch, apiFetchEnvelope, type PageMeta } from "@/lib/api-client";
+import { apiFetch, apiFetchEnvelope, apiTry, type PageMeta } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("team:list");
@@ -59,6 +59,8 @@ export default function TeamPage() {
   const [meta, setMeta] = useState<PageMeta>({ total: 0, page: 1, limit: PAGE_SIZE, totalPages: 1, hasMore: false });
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState("");
+  const [roleOptions, setRoleOptions] = useState<Array<{ id: string; name: string }>>([]);
   const debouncedSearch = useDebounce(search);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -77,6 +79,7 @@ export default function TeamPage() {
     setError(null);
     const params = new URLSearchParams({ page: String(page), limit: String(PAGE_SIZE) });
     if (debouncedSearch.length >= 2) params.set("search", debouncedSearch);
+    if (roleFilter) params.set("roleId", roleFilter);
 
     try {
       const env = await apiFetchEnvelope<TeamUser[]>(`/api/users?${params}`);
@@ -95,16 +98,30 @@ export default function TeamPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, debouncedSearch]);
+  }, [page, debouncedSearch, roleFilter]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  // A new search must not leave the user on page 7 of the old result set.
+  // Role list for the filter, fetched once. The filter itself is applied SERVER-side via
+  // ?roleId= — pagination is server-side too, so filtering in the browser would leave the
+  // footer claiming "Showing 1-20 of 47" while rendering three rows.
+  useEffect(() => {
+    (async () => {
+      const { data, error: err } = await apiTry<{ roles: Array<{ id: string; name: string; isActive: boolean }> }>("/api/roles");
+      if (err) {
+        log.warn("role filter unavailable", { message: err });
+        return;
+      }
+      setRoleOptions((data?.roles ?? []).filter((r) => r.isActive).map((r) => ({ id: r.id, name: r.name })));
+    })();
+  }, []);
+
+  // A new search or role filter must not leave the user on page 7 of the old result set.
   useEffect(() => {
     setPage(1);
-  }, [debouncedSearch]);
+  }, [debouncedSearch, roleFilter]);
 
   async function toggleActive(u: TeamUser) {
     setBusyId(u.id);
@@ -173,14 +190,29 @@ export default function TeamPage() {
         </div>
       </div>
 
-      <div className="relative mb-3">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-        <Input
-          placeholder="Search team..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="pl-9"
-        />
+      <div className="flex flex-col sm:flex-row gap-2 mb-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <Input
+            placeholder="Search team..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+        {roleOptions.length > 1 && (
+          <select
+            value={roleFilter}
+            onChange={(e) => setRoleFilter(e.target.value)}
+            aria-label="Filter by role"
+            className="min-h-[44px] sm:w-52 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus-ring"
+          >
+            <option value="">All roles</option>
+            {roleOptions.map((r) => (
+              <option key={r.id} value={r.id}>{r.name}</option>
+            ))}
+          </select>
+        )}
       </div>
 
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}

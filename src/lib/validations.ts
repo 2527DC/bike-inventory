@@ -137,6 +137,14 @@ export const userSchema = z.object({
   roleId: z.string().min(1, "Role is required"),
   accessCode: z.string().min(1, "Access code is required"),
   isActive: z.boolean().optional(),
+  // Where this person works. Both optional, and `null` is meaningful — it is how the client
+  // clears an assignment, which `undefined` cannot express (undefined means "leave alone").
+  //
+  // These are NOT permissions. Assigning someone to BCH does not restrict what they can see;
+  // a BCH user still sees BCC stock. Storing and displaying the assignment is the whole
+  // scope — see the plan's Phase 3, "Not in scope".
+  storeId: z.string().min(1).nullable().optional(),
+  warehouseId: z.string().min(1).nullable().optional(),
 });
 
 export const userUpdateSchema = userSchema.partial().extend({

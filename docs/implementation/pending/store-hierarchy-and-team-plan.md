@@ -345,6 +345,17 @@ relations — a `select` addition, no query shape change.
   mean either; both are cheap.
 - `/team/[id]` and `/team/new`: a **Store** select and a **Warehouse** select, the latter
   filtered to the chosen store's warehouses.
+
+> **Deviation, 30 Aug 2026 — `GET /api/stores` and `GET /api/warehouses` are built HERE, not
+> in Phase 5.** The plan assigned them to Phase 5, but the execution order is 1 → 2 → 3 → 4 →
+> 6 → 5, so Phase 3 would have had no way to populate its two selects. They are built exactly
+> as Phase 5 specifies — `requireAuth()` only, never `requireFeature` — and Phase 5 now
+> consumes them instead of creating them. The ⚠️ comment Phase 5 requires is already in both
+> files.
+>
+> Both screens share one `SiteSelect` component (`src/components/site-select.tsx`) so they
+> cannot drift, and validation is shared by `POST` and `PUT` through
+> `src/lib/site-assignment.ts`. The client-side filter is cosmetic; that module is the gate.
 - `POST /api/users` and `PUT /api/users/[id]` accept `storeId` / `warehouseId` and **reject a
   warehouse that does not belong to the chosen store**. The client-side filter is cosmetic;
   the API is the gate.

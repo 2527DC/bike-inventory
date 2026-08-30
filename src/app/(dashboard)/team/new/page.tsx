@@ -6,6 +6,11 @@ import Link from "next/link";
 import { ArrowLeft, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SiteSelect } from "@/components/site-select";
+import { apiTry, apiFetch } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("team:new");
 
 interface RoleOption {
   id: string;
@@ -30,22 +35,28 @@ export default function NewTeamMemberPage() {
   const [email, setEmail] = useState("");
   const [roleId, setRoleId] = useState("");
   const [accessCode, setAccessCode] = useState("");
+  const [storeId, setStoreId] = useState<string | null>(null);
+  const [warehouseId, setWarehouseId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch("/api/roles")
-      .then((r) => r.json())
-      .then((res) => {
-        if (!res.success) return setError(res.error || "Failed to load roles");
-        const active = (res.data.roles as RoleOption[]).filter((r) => r.isActive);
+    (async () => {
+      // apiTry, not fetch().then(r => r.json()) — an expired session returns HTML with
+      // status 200 and the raw parse throws "Unexpected token '<'", hiding the real cause.
+      const { data, error: err } = await apiTry<{ roles: RoleOption[] }>("/api/roles");
+      if (err) {
+        log.error("could not load roles", { message: err });
+        setError(err);
+      } else {
+        const active = (data?.roles ?? []).filter((r) => r.isActive);
         setRoles(active);
         // Default to a non-system role so an admin doesn't accidentally mint another admin.
         const preferred = active.find((r) => r._count.users > 0) || active[0];
         if (preferred) setRoleId(preferred.id);
-      })
-      .catch(() => setError("Failed to load roles"))
-      .finally(() => setRolesLoading(false));
+      }
+      setRolesLoading(false);
+    })();
   }, []);
 
   const selected = roles.find((r) => r.id === roleId);
@@ -57,21 +68,23 @@ export default function NewTeamMemberPage() {
     setSubmitting(true);
     setError("");
     try {
-      const res = await fetch("/api/users", {
+      await apiFetch("/api/users", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        json: {
           name,
           email,
           roleId,
           accessCode: accessCode.toUpperCase(),
-        }),
+          storeId,
+          warehouseId,
+        },
       });
-      const data = await res.json();
-      if (data.success) router.push("/team");
-      else setError(data.error || "Failed to create user");
-    } catch {
-      setError("Network error");
+      log.info("team member created", { roleId, hasStore: Boolean(storeId), hasWarehouse: Boolean(warehouseId) });
+      router.push("/team");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to create user";
+      log.error("create team member failed", { message: msg });
+      setError(msg);
     } finally {
       setSubmitting(false);
     }
@@ -152,6 +165,16 @@ export default function NewTeamMemberPage() {
             </p>
           )}
         </div>
+
+        <SiteSelect
+          storeId={storeId}
+          warehouseId={warehouseId}
+          onChange={({ storeId: s, warehouseId: w }) => {
+            setStoreId(s);
+            setWarehouseId(w);
+          }}
+          disabled={submitting}
+        />
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Access Code *</label>

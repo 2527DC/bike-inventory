@@ -7,6 +7,7 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { getAccess } from "@/lib/rbac";
 import { createLogger } from "@/lib/logger";
+import { validateSiteAssignment } from "@/lib/site-assignment";
 
 const log = createLogger("api:users:id");
 
@@ -39,6 +40,10 @@ export async function GET(
         email: true,
         roleId: true,
         role: { select: { id: true, key: true, name: true } },
+        storeId: true,
+        warehouseId: true,
+        store: { select: { id: true, code: true, name: true } },
+        warehouse: { select: { id: true, code: true, name: true, storeId: true } },
         navTabs: true,
         accessCode: true,
         isActive: true,
@@ -109,6 +114,31 @@ export async function PUT(
     }
     if (body.isActive !== undefined && typeof body.isActive === "boolean") updateData.isActive = body.isActive;
 
+    // Store / warehouse assignment. `null` clears it; `undefined` leaves it alone — the two
+    // are different and the client relies on the distinction.
+    const storeTouched = body.storeId !== undefined;
+    const warehouseTouched = body.warehouseId !== undefined;
+    if (storeTouched || warehouseTouched) {
+      const nextStoreId = storeTouched
+        ? (body.storeId === null ? null : String(body.storeId))
+        : existing.storeId;
+      const nextWarehouseId = warehouseTouched
+        ? (body.warehouseId === null ? null : String(body.warehouseId))
+        : existing.warehouseId;
+
+      // Validated as the row will LOOK AFTER the update, not as the body arrived. Changing
+      // only the store while an old warehouse stays behind is exactly the case that would
+      // otherwise slip through and leave a warehouse under the wrong site.
+      const siteError = await validateSiteAssignment({
+        storeId: nextStoreId,
+        warehouseId: nextWarehouseId,
+      });
+      if (siteError) return errorResponse(siteError, 400);
+
+      if (storeTouched) updateData.storeId = nextStoreId;
+      if (warehouseTouched) updateData.warehouseId = nextWarehouseId;
+    }
+
     // Check uniqueness if email or accessCode changed
     if (body.email && body.email !== existing.email) {
       const dup = await prisma.user.findUnique({ where: { email: body.email } });
@@ -127,6 +157,8 @@ export async function PUT(
         name: true,
         email: true,
         role: { select: { id: true, key: true, name: true } },
+        store: { select: { id: true, code: true, name: true } },
+        warehouse: { select: { id: true, code: true, name: true } },
         isActive: true,
         updatedAt: true,
       },
