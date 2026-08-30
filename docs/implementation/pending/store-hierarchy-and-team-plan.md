@@ -571,8 +571,9 @@ warehouse under `BCH_STORE`. No schema change, no deploy.
 ## 6. Verification
 
 `npm run build` at the end of Phase 3, Phase 4, Phase 6 and Phase 5 — in execution order
-(1 → 2 → 3 → 4 → 6 → 5), and it must pass before the next phase starts. Note that the build needs a reachable database (three `/staff-lms/*` pages are
-statically prerendered server components); start Postgres first.
+(1 → 2 → 3 → 4 → 6 → 5), and it must pass before the next phase starts. Note that the build itself no longer needs a reachable database — the three `/staff-lms/*`
+pages became client components in `completed/ci-build-database-dependency-plan.md`. Postgres
+is still required for the `db push` and seed steps in Phases 1, 4 and 6.
 
 Pages to open and check by hand:
 

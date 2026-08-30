@@ -164,11 +164,6 @@ app's own inventory routes. Every route that writes `InventoryTransaction`:
 | `transfers`, `transfer-orders/[id]/approve` | moved between locations |
 | `zoho/import/invoices`, `zoho/import/clean` | legacy import paths |
 
-> ⚠️ **The in-app documentation contradicts this.** `/more/app-logic:182` tells staff that
-> the inbound Zoho fetch "Creates inward transactions, increases product currentStock". It
-> does not. Approving a bill creates a *shipment awaiting receipt*; stock moves later, when
-> someone confirms the goods arrived.
-
 ---
 
 ## 7. Operations-level modules
@@ -312,7 +307,7 @@ Operations   /stock · /inbound · /deliveries · /transfers · /stock-audit
 Purchase     /vendors · /purchase-orders · /more/brands · /vendor-issues · /reorder
 Accounts     /bills · /expenses · /receivables · /ledger
 Insights     /reports · /analytics
-Admin        /team · /team/permissions · /more/problems
+Admin        /team · /team/permissions
              /settings
                 ├── /settings/storage
                 └── /settings/integrations
