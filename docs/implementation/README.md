@@ -65,6 +65,7 @@ preserved across regeneration — but do not remove the marker comments.
 | `ci-build-database-dependency-plan.md` | 29 Aug 2026, the three Staff LMS pages became client components so the build opens no database connection, and the CI trigger no longer filters on `main` |
 | `cron-removal-plan.md` | 28 Aug 2026, all cron jobs and screen polling removed |
 | `database-reset-preserving-integrations-plan.md` | 29 Aug 2026, closed WITHOUT implementation — only `ZOHO_BOOKS` was ever connected and its row is backed up by hand in `.env`, so the export/restore scripts were unnecessary. Kept for §0 and the reset runbook |
+| `frontend-role-check-removal-plan.md` | 30 Aug 2026, all 21 dead role-name gates replaced with permission checks across 18 files, plus `activity.approve` in the catalog. 19 denied everyone; **2 failed OPEN** — `/price-correction` was rendering for every signed-in user, so fixing it removes access. **Not yet tested as a non-admin**, which is the only test that proves that half |
 | `service-merge-plan.md` | bch-service merged; /services/* and the SERVICE_* roles are live |
 | `storage-implementation-plan.md` | 28 Aug 2026, runtime-switchable storage provider and Settings module |
 | `store-hierarchy-and-team-plan.md` | 30 Aug 2026, all six phases. The `StockLocation` enum is gone — `Store` and `Warehouse` are tables, `/stores` administers them behind a `store_management` parent module, and `/stock/by-location/[code]` resolves either level. The §2.4 database reset was skipped as unnecessary and no data was lost. **The §6 browser pass has not been run** — an audit after the phases were called done found five bugs the green build could not see |
@@ -77,7 +78,6 @@ preserved across regeneration — but do not remove the marker comments.
 <!-- BEGIN:pending -->
 | Plan | State |
 |---|---|
-| `frontend-role-check-removal-plan.md` | ready to build — **21 dead role-name gates in 18 files**, all in scope; prerequisite met 30 Aug 2026, tables and counts corrected in commit `63d1d37`. One catalog line (`activity.approve`). Only `/price-correction` still fails open |
 | `ledger-merge-plan.md` | schema, RBAC, backend and frontend shipped; PDF statement import and the 219-gap migration remain |
 | `pdi-module-plan.md` | nothing built, no schema changed. Two blocking questions (Q11, Q17) |
 | `product-type-and-brand-lead-time-plan.md` | not started. Two commits on one branch. **Part B** — `BrandLeadTime` (0 rows) folds into `Brand.leadDays`, plus a real guard bug (`brands.create` should be `edit`); no open questions. **Part A** — the `ProductType` enum becomes a table with a screen and a `stock_product_types` sub-module; three questions in §8. `Category` is deliberately NOT merged in — it mirrors Zoho |
