@@ -68,6 +68,7 @@ preserved across regeneration — but do not remove the marker comments.
 | `service-merge-plan.md` | bch-service merged; /services/* and the SERVICE_* roles are live |
 | `storage-implementation-plan.md` | 28 Aug 2026, runtime-switchable storage provider and Settings module |
 | `zoho-config-consolidation-plan.md` | 29 Aug 2026, three Zoho config tables and four clients collapsed into one `IntegrationConfig` row per provider, one `IntegrationClient` base class and three `[provider]` routes |
+| `zoho-pull-timeout-plan.md` | 30 Aug 2026, both `items` loops and `contacts` batched into a fixed number of queries; `maxDuration` 30 -> 60 (headroom, not the fix). Commits `8f143d2`, `947781f`. **§8 not yet run** — the acceptance test is a real 90-day pull returning without a 504, plus the `ZOHO_BOOKS` fallback exercised separately |
 <!-- END:completed -->
 
 ### pending/
@@ -82,7 +83,6 @@ preserved across regeneration — but do not remove the marker comments.
 | `sequence-race-fix-plan.md` | five sites allocate unique numbers with a read-then-write race |
 | `service-module-mobile-readiness-plan.md` | what /api/services/* needs before bch-service-app can be pointed at it |
 | `store-hierarchy-and-team-plan.md` | ready to build — replace the StockLocation enum with Store → Warehouse tables; rewritten 29 Aug 2026, all questions answered, `/stock/by-location/[code]` resolves either level; runs after the database reset |
-| `zoho-pull-timeout-plan.md` | ready to build — `items` (two loops) and `contacts` do one database round trip per record while `bills`/`invoices` already batch; §10 answered, both in one branch as two commits |
 <!-- END:pending -->
 
 ---

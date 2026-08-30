@@ -1,6 +1,8 @@
 # Zoho pull times out (504) — batching plan
 
-Status: pending — ready to build. The `items` step (**two loops**) and `contacts` do one database round trip per record; `bills` and `invoices` in the same file already batch. §10 answered 29 Aug 2026: both, one branch, two commits. Nothing blocks.
+Status: completed — 30 Aug 2026, both `items` loops and `contacts` batched; `maxDuration` 30 -> 60. Commits `8f143d2` and `947781f` on `fix/zoho-pull-batching`. ~2N+M database round trips became a fixed number per step.
+
+> **Filed as completed on the owner’s decision with §8 NOT yet run.** `npm run build` passes and the code is complete, but the acceptance test is behavioural and nobody has performed it: a **90-day pull on `/stock` returning without a 504**, and the **`ZOHO_BOOKS` fallback exercised separately** (this environment has `ZOHO_INVENTORY` connected, so a normal test only covers the first of the two loops). If a wide pull still 504s, re-open — and read §5 first: `listAllItems` still fetches Zoho pages serially with no cap, which this change did not touch.
 Suggested branch: `fix/zoho-pull-batching` (one route file plus a config line).
 Prepared 29 Aug 2026. Re-verified against the route 29 Aug 2026 — a second `items` loop was found that earlier drafts missed (§2).
 
