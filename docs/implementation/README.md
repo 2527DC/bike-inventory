@@ -61,6 +61,7 @@ preserved across regeneration — but do not remove the marker comments.
 | Plan | Shipped |
 |---|---|
 | `analytics-merge-plan.md` | store analytics merged; /analytics, CountEvent and the device endpoints are live |
+| `app-logic-and-problems-removal-plan.md` | 30 Aug 2026, `/more/app-logic`, `/more/problems`, `/api/problems`, the `AppProblem` model and the `problems` module all deleted (commit `63d1d37`). The table never existed in this database, so `db push` dropped nothing — the schema had drifted ahead of it |
 | `ci-build-database-dependency-plan.md` | 29 Aug 2026, the three Staff LMS pages became client components so the build opens no database connection, and the CI trigger no longer filters on `main` |
 | `cron-removal-plan.md` | 28 Aug 2026, all cron jobs and screen polling removed |
 | `database-reset-preserving-integrations-plan.md` | 29 Aug 2026, closed WITHOUT implementation — only `ZOHO_BOOKS` was ever connected and its row is backed up by hand in `.env`, so the export/restore scripts were unnecessary. Kept for §0 and the reset runbook |
@@ -74,10 +75,10 @@ preserved across regeneration — but do not remove the marker comments.
 <!-- BEGIN:pending -->
 | Plan | State |
 |---|---|
-| `app-logic-and-problems-removal-plan.md` | ready to execute — delete `/more/app-logic` and `/more/problems`, the `problems` module and `AppProblem`; all questions settled and the inventory re-verified 29 Aug 2026. Runs BEFORE the role-check plan |
-| `frontend-role-check-removal-plan.md` | ready to build — 23 dead role-name gates found, 21 in scope across 18 files; all three questions answered, one catalog line (`activity.approve`); runs after the app-logic removal plan |
+| `frontend-role-check-removal-plan.md` | ready to build — **21 dead role-name gates in 18 files**, all in scope; prerequisite met 30 Aug 2026, tables and counts corrected in commit `63d1d37`. One catalog line (`activity.approve`). Only `/price-correction` still fails open |
 | `ledger-merge-plan.md` | schema, RBAC, backend and frontend shipped; PDF statement import and the 219-gap migration remain |
 | `pdi-module-plan.md` | nothing built, no schema changed. Two blocking questions (Q11, Q17) |
+| `product-type-and-brand-lead-time-plan.md` | not started. Two commits on one branch. **Part B** — `BrandLeadTime` (0 rows) folds into `Brand.leadDays`, plus a real guard bug (`brands.create` should be `edit`); no open questions. **Part A** — the `ProductType` enum becomes a table with a screen and a `stock_product_types` sub-module; three questions in §8. `Category` is deliberately NOT merged in — it mirrors Zoho |
 | `sequence-race-fix-plan.md` | five sites allocate unique numbers with a read-then-write race |
 | `service-module-mobile-readiness-plan.md` | what /api/services/* needs before bch-service-app can be pointed at it |
 | `store-hierarchy-and-team-plan.md` | ready to build — replace the StockLocation enum with Store → Warehouse tables; rewritten 29 Aug 2026, all questions answered, `/stock/by-location/[code]` resolves either level; runs after the database reset |
