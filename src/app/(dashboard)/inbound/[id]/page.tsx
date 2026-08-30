@@ -12,7 +12,8 @@ import { Badge } from "@/components/ui/badge";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { usePermissions } from "@/lib/use-permissions";
-import { BIN_TRACKING_ENABLED, STOCK_LOCATIONS, DEFAULT_STOCK_LOCATION, stockLocationLabel, type StockLocation } from "@/lib/inventory-config";
+import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { useWarehouses } from "@/hooks/use-sites";
 
 interface LineItem {
   id: string;
@@ -76,6 +77,7 @@ function formatDate(d: string) {
 }
 
 export default function InboundDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { warehouses } = useWarehouses();
   const { id } = use(params);
   const router = useRouter();
   const { data: session } = useSession();
@@ -112,7 +114,17 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
   // Per-item bin selections: lineItemId → array of binIds (one per unit)
   const [binSelections, setBinSelections] = useState<Record<string, string[]>>({});
   // Location mode (bins dormant): where this shipment's stock is received
-  const [receiveLocation, setReceiveLocation] = useState<StockLocation>(DEFAULT_STOCK_LOCATION);
+  // Was DEFAULT_STOCK_LOCATION. There is no default warehouse any more — the API rejects a
+  // missing one with a 400 rather than guessing, because putting stock in the wrong building
+  // reports nothing anywhere. Set to the first warehouse once the list loads, so a normal
+  // receive still carries one without the user having to think about it.
+  const [receiveLocation, setReceiveLocation] = useState<string>("");
+
+  // Pick the first warehouse once the list arrives, so a normal receive carries one without
+  // the user choosing. Only when nothing is selected — never clobber a deliberate choice.
+  useEffect(() => {
+    if (!receiveLocation && warehouses.length > 0) setReceiveLocation(warehouses[0].id);
+  }, [warehouses, receiveLocation]);
   const [shipmentType, setShipmentType] = useState<"BICYCLE" | "SPARE_PART" | "ACCESSORY" | "MIXED" | null>(null);
 
   useEffect(() => {
@@ -219,7 +231,7 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
       const res = await fetch(`/api/inbound/${id}/status`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(BIN_TRACKING_ENABLED ? { status, binAssignments } : { status, location: receiveLocation }),
+        body: JSON.stringify(BIN_TRACKING_ENABLED ? { status, binAssignments } : { status, warehouseId: receiveLocation }),
       }).then((r) => r.json());
       if (res.success) {
         setActionError("");
@@ -277,7 +289,7 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
         body: JSON.stringify(
           BIN_TRACKING_ENABLED
             ? { lineItemId: li.id, deliveredQty: li.quantity, binAllocations }
-            : { lineItemId: li.id, deliveredQty: li.quantity, location: receiveLocation }
+            : { lineItemId: li.id, deliveredQty: li.quantity, warehouseId: receiveLocation }
         ),
       }).then((r) => r.json());
       if (res.success) {
@@ -293,7 +305,7 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
             { label: "Quantity", value: `${li.quantity} units` },
             BIN_TRACKING_ENABLED
               ? { label: "Bin", value: bins.find(b => b.id === (binSelections[li.id]?.[0]))?.code || "Assigned" }
-              : { label: "Location", value: stockLocationLabel(receiveLocation) },
+              : { label: "Location", value: warehouses.find((w) => w.id === receiveLocation)?.name ?? "—" },
           ],
           details: `Bill: ${shipment?.billNo}`,
         });
@@ -653,17 +665,17 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
             <MapPin className="h-3.5 w-3.5" /> Receive into
           </p>
           <div className="grid grid-cols-2 gap-2">
-            {STOCK_LOCATIONS.map((loc) => (
+            {warehouses.map((loc) => (
               <button
-                key={loc.value}
-                onClick={() => setReceiveLocation(loc.value)}
+                key={loc.id}
+                onClick={() => setReceiveLocation(loc.id)}
                 className={`py-2.5 rounded-lg text-sm font-semibold border transition-colors ${
-                  receiveLocation === loc.value
+                  receiveLocation === loc.id
                     ? "bg-blue-600 text-white border-blue-600"
                     : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
                 }`}
               >
-                {loc.label}
+                {loc.name}
               </button>
             ))}
           </div>

@@ -3,7 +3,8 @@ export const revalidate = 60; // cache 1 minute
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { BIN_TRACKING_ENABLED, STOCK_LOCATIONS } from "@/lib/inventory-config";
+import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { listWarehouses } from "@/lib/warehouses";
 
 export async function GET() {
   try {
@@ -11,26 +12,29 @@ export async function GET() {
 
     // ── Location mode (bins dormant): per-location summary across the 4 locations ──
     if (!BIN_TRACKING_ENABLED) {
-      const rows = await prisma.$queryRaw<Array<{ location: string; total_stock: number; total_value: number; product_count: number }>>`
+      const rows = await prisma.$queryRaw<Array<{ warehouse_id: string; total_stock: number; total_value: number; product_count: number }>>`
         SELECT
-          sl.location::text as location,
+          sl."warehouseId" as warehouse_id,
           COALESCE(SUM(sl.quantity), 0)::int as total_stock,
           COALESCE(SUM(sl.quantity * p."sellingPrice"), 0)::float as total_value,
           COUNT(*) FILTER (WHERE sl.quantity > 0)::int as product_count
         FROM "StockLevel" sl
         JOIN "Product" p ON p.id = sl."productId"
         WHERE p.status = 'ACTIVE'
-        GROUP BY sl.location
+        GROUP BY sl."warehouseId"
       `;
-      const byLoc = new Map(rows.map((r) => [r.location, r]));
+      const byWarehouse = new Map(rows.map((r) => [r.warehouse_id, r]));
 
-      const locations = STOCK_LOCATIONS.map((loc) => {
-        const r = byLoc.get(loc.value);
+      // Driven by the warehouse TABLE, not a constant, so a warehouse with no stock still
+      // appears (at zero) and a newly created one needs no code change to show up.
+      const warehouses = await listWarehouses();
+      const locations = warehouses.map((w) => {
+        const r = byWarehouse.get(w.id);
         return {
-          key: loc.value,
-          label: loc.label,
-          site: loc.site,
-          kind: loc.kind,
+          key: w.code,
+          id: w.id,
+          label: w.name,
+          storeId: w.storeId,
           totalStock: r?.total_stock ?? 0,
           totalValue: r?.total_value ?? 0,
           productCount: r?.product_count ?? 0,

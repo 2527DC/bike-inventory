@@ -38,13 +38,16 @@ export async function GET() {
         WHERE status = 'ACTIVE' AND "brandId" IS NOT NULL
         GROUP BY "brandId"
       `,
-      // Per-brand × per-location unit totals (the "where does this brand's stock sit" breakdown)
+      // Per-brand × per-warehouse unit totals (the "where does this brand's stock sit"
+      // breakdown). Keyed by warehouse CODE so the client can label a chip without a second
+      // lookup — the same choice getWarehouseBreakdown makes.
       prisma.$queryRaw<Array<{ brandId: string; location: string; qty: number }>>`
-        SELECT p."brandId", sl.location::text as location, COALESCE(SUM(sl.quantity), 0)::int as qty
+        SELECT p."brandId", w.code::text as location, COALESCE(SUM(sl.quantity), 0)::int as qty
         FROM "StockLevel" sl
         JOIN "Product" p ON p.id = sl."productId"
+        JOIN "Warehouse" w ON w.id = sl."warehouseId"
         WHERE p.status = 'ACTIVE' AND p."brandId" IS NOT NULL
-        GROUP BY p."brandId", sl.location
+        GROUP BY p."brandId", w.code
       `,
     ]);
 

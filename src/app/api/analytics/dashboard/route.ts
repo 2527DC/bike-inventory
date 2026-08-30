@@ -7,7 +7,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
-import { StockLocation } from "@prisma/client";
+import { resolveStoreParam } from "@/lib/stores";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { dashboard, resolveDefaultStore } from "@/lib/analytics/store";
@@ -16,11 +16,9 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("analytics:dashboard");
 
-const STORE_VALUES = Object.values(StockLocation);
-
-function isStoreLocation(value: string): value is StockLocation {
-  return (STORE_VALUES as string[]).includes(value);
-}
+// Stores are rows now, so a valid ?store= is whatever the database says it is, resolved by
+// CODE or id. The old check was Object.values(StockLocation) — a compile-time list that
+// could not know about a store an admin created this morning.
 
 export async function GET(req: NextRequest) {
   try {
@@ -29,13 +27,14 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
 
     const storeParam = searchParams.get("store");
-    let storeId: StockLocation | null;
+    let storeId: string | null;
 
     if (storeParam) {
-      if (!isStoreLocation(storeParam)) {
+      const store = await resolveStoreParam(storeParam);
+      if (!store) {
         return errorResponse(`unknown store "${storeParam}"`, 400);
       }
-      storeId = storeParam;
+      storeId = store.id;
     } else {
       // No hardcoded default — see resolveDefaultStore(). Showing one store's numbers under
       // another store's name is worse than asking the caller to be explicit.

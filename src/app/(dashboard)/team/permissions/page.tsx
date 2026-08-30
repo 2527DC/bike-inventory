@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { ArrowLeft, Save, ShieldCheck, Plus, Trash2, Lock } from "lucide-react";
+import { ArrowLeft, Save, ShieldCheck, Plus, Trash2, Lock, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { usePermissions } from "@/lib/use-permissions";
@@ -42,6 +43,7 @@ export default function PermissionsPage() {
   const [modules, setModules] = useState<ModuleRow[]>([]);
   const [roles, setRoles] = useState<RoleRow[]>([]);
   const [selectedRoleId, setSelectedRoleId] = useState<string>("");
+  const [roleSearch, setRoleSearch] = useState("");
   const [granted, setGranted] = useState<Set<string>>(new Set());
 
   const [loading, setLoading] = useState(true);
@@ -51,6 +53,19 @@ export default function PermissionsPage() {
 
   const selectedRole = roles.find((r) => r.id === selectedRoleId);
   const readOnly = !canEdit("roles") || selectedRole?.isSystem;
+
+  // Matches name OR key: an admin who knows the role as SERVICE_MANAGER should find it by
+  // typing that, not only by its display name. The SELECTED role always stays visible even
+  // when it does not match, so the permission grid below never loses its header.
+  const q = roleSearch.trim().toLowerCase();
+  const visibleRoles = q
+    ? roles.filter(
+        (r) =>
+          r.id === selectedRoleId ||
+          r.name.toLowerCase().includes(q) ||
+          r.key.toLowerCase().includes(q)
+      )
+    : roles;
 
   // Load the catalog and the role list together.
   useEffect(() => {
@@ -226,9 +241,26 @@ export default function PermissionsPage() {
         </div>
       )}
 
-      {/* Role picker */}
+      {/* Role picker. Filtering is CLIENT-SIDE on purpose: every role already arrives in
+          the one /api/roles request, so a round trip per keystroke would be slower, not
+          faster, and would make the pill row flicker while typing. */}
+      {roles.length > 4 && (
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <Input
+            placeholder="Search roles..."
+            value={roleSearch}
+            onChange={(e) => setRoleSearch(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+      )}
+
       <div className="flex gap-2 overflow-x-auto pb-1">
-        {roles.map((r) => (
+        {visibleRoles.length === 0 && (
+          <p className="text-xs text-slate-500 py-2">No role matches “{roleSearch}”.</p>
+        )}
+        {visibleRoles.map((r) => (
           <button
             key={r.id}
             onClick={() => setSelectedRoleId(r.id)}

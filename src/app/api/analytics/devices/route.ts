@@ -18,6 +18,7 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { generateDeviceKey, hashDeviceKey } from "@/lib/analytics/device-auth";
 import { HEARTBEAT_STALE_MS } from "@/lib/analytics/store";
 import { analyticsDeviceCreateSchema } from "@/lib/validations";
+import { resolveStoreParam } from "@/lib/stores";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("analytics:devices");
@@ -73,12 +74,20 @@ export async function POST(req: NextRequest) {
       return errorResponse(parsed.error.issues[0]?.message ?? "Invalid device", 400);
     }
 
+    // The zod schema can only assert that a string arrived. Stores are rows now, so
+    // "is this a real, active store" is a database question — and asking it here turns a
+    // raw foreign-key violation into a sentence the admin can act on.
+    const store = await resolveStoreParam(parsed.data.storeId);
+    if (!store) {
+      return errorResponse(`"${parsed.data.storeId}" is not an active store`, 400);
+    }
+
     const key = generateDeviceKey();
 
     const device = await prisma.analyticsDevice.create({
       data: {
         label: parsed.data.label,
-        storeId: parsed.data.storeId,
+        storeId: store.id,
         agentId: parsed.data.agentId,
         keyHash: hashDeviceKey(key),
       },

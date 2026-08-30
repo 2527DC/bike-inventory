@@ -9,7 +9,8 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { BIN_TRACKING_ENABLED, STOCK_LOCATIONS, stockLocationLabel, type StockLocation } from "@/lib/inventory-config";
+import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { useWarehouses } from "@/hooks/use-sites";
 
 interface Brand { id: string; name: string; _count: { products: number } }
 interface BinOption { id: string; code: string; name: string; location: string }
@@ -37,6 +38,9 @@ function clearBrandCountDraft() {
 }
 
 export default function BrandCountPage() {
+  const { warehouses } = useWarehouses();
+  const locationName = (id: string | null | undefined) =>
+    warehouses.find((w) => w.id === id)?.name ?? "—";
   const { data: session } = useSession();
   const userName = (session?.user as { name?: string })?.name || "You";
 
@@ -46,7 +50,7 @@ export default function BrandCountPage() {
   const [categories, setCategories] = useState<CategoryOption[]>([]);
   const [selectedBrand, setSelectedBrand] = useState<Brand | null>(null);
   const [selectedBin, setSelectedBin] = useState<BinOption | null>(null);
-  const [selectedLocation, setSelectedLocation] = useState<StockLocation | null>(null);
+  const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
   const [products, setProducts] = useState<ProductItem[]>([]);
   const [counts, setCounts] = useState<Record<string, { qty: number | null; reorder: number | null }>>({});
   const [loading, setLoading] = useState(false);
@@ -76,7 +80,7 @@ export default function BrandCountPage() {
         step?: Step;
         selectedBrand?: Brand | null;
         selectedBin?: BinOption | null;
-        selectedLocation?: StockLocation | null;
+        selectedLocation?: string | null;
         products?: ProductItem[];
         counts?: Record<string, { qty: number | null; reorder: number | null }>;
       };
@@ -163,7 +167,7 @@ export default function BrandCountPage() {
     setStep("count");
   };
 
-  const handleSelectLocation = (loc: StockLocation) => {
+  const handleSelectLocation = (loc: string) => {
     setSelectedLocation(loc);
     setStep("count");
   };
@@ -250,7 +254,7 @@ export default function BrandCountPage() {
 
       const title = BIN_TRACKING_ENABLED && selectedBin
         ? `${selectedBrand.name} @ ${selectedBin.name} — Brand Count`
-        : `${selectedBrand.name} @ ${stockLocationLabel(selectedLocation)} — Brand Count`;
+        : `${selectedBrand.name} @ ${locationName(selectedLocation)} — Brand Count`;
       const res = await fetch("/api/stock-counts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -374,7 +378,7 @@ export default function BrandCountPage() {
               : `Step 2: ${selectedBrand?.name} — Select location`)}
             {step === "count" && (BIN_TRACKING_ENABLED
               ? `Step 3: Count ${selectedBrand?.name} items in ${selectedBin?.name}`
-              : `Step 3: Count ${selectedBrand?.name} at ${stockLocationLabel(selectedLocation)}`)}
+              : `Step 3: Count ${selectedBrand?.name} at ${locationName(selectedLocation)}`)}
             {step === "submitted" && "Done! Waiting for approval"}
           </p>
         </div>
@@ -452,14 +456,14 @@ export default function BrandCountPage() {
       {step === "bin" && !BIN_TRACKING_ENABLED && (
         <div className="space-y-2">
           <p className="text-xs text-slate-600 mb-2">Which location are you counting {selectedBrand?.name} at?</p>
-          {STOCK_LOCATIONS.map((loc) => (
-            <button key={loc.value} onClick={() => handleSelectLocation(loc.value)}
+          {warehouses.map((loc) => (
+            <button key={loc.id} onClick={() => handleSelectLocation(loc.id)}
               className="w-full flex items-center justify-between p-3 bg-white border border-slate-200 rounded-lg hover:border-blue-400 transition-colors text-left">
               <div className="flex items-center gap-2">
-                <MapPin className={`h-4 w-4 ${loc.kind === "Warehouse" ? "text-amber-500" : "text-blue-500"}`} />
+                <MapPin className={`h-4 w-4 ${"text-amber-500"}`} />
                 <div>
-                  <p className="text-sm font-medium text-slate-900">{loc.label}</p>
-                  <p className="text-[10px] text-slate-500">{loc.kind}</p>
+                  <p className="text-sm font-medium text-slate-900">{loc.name}</p>
+                  <p className="text-[10px] text-slate-500">{loc.store.name}</p>
                 </div>
               </div>
               <ChevronRight className="h-4 w-4 text-slate-400" />
@@ -775,7 +779,7 @@ export default function BrandCountPage() {
           <div>
             <p className="text-lg font-bold text-green-900">Count Submitted!</p>
             <p className="text-sm text-slate-600 mt-1">
-              {countedCount} items counted for {selectedBrand?.name}{BIN_TRACKING_ENABLED && selectedBin ? ` in ${selectedBin.name}` : selectedLocation ? ` at ${stockLocationLabel(selectedLocation)}` : ""}
+              {countedCount} items counted for {selectedBrand?.name}{BIN_TRACKING_ENABLED && selectedBin ? ` in ${selectedBin.name}` : selectedLocation ? ` at ${locationName(selectedLocation)}` : ""}
             </p>
             <p className="text-xs text-slate-500 mt-2">
               This is a verification count — it records the numbers and any variance, but does not change stock. Stock is added through Inwards.
@@ -807,7 +811,7 @@ export default function BrandCountPage() {
             <div>
               <p className="text-xs text-slate-600"><strong>{countedCount}</strong> of {totalProducts} counted</p>
               <p className="text-[10px] text-slate-400">
-                by {userName} · {selectedBrand?.name}{BIN_TRACKING_ENABLED && selectedBin ? ` · ${selectedBin.code}` : selectedLocation ? ` · ${stockLocationLabel(selectedLocation)}` : ""}
+                by {userName} · {selectedBrand?.name}{BIN_TRACKING_ENABLED && selectedBin ? ` · ${selectedBin.code}` : selectedLocation ? ` · ${locationName(selectedLocation)}` : ""}
               </p>
             </div>
             <button onClick={handleSubmit} disabled={submitting}

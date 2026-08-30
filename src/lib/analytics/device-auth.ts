@@ -23,7 +23,8 @@
 
 import { createHash, randomBytes } from "crypto";
 import { prisma } from "@/lib/db";
-import type { StockLocation } from "@prisma/client";
+// storeId is a Store.id now, not an enum member. DAT-002 is unchanged and unchanged in
+// importance: this value comes from the KEY, never from the request body.
 
 /** Hash a raw device key for storage or lookup. Same function on both paths, always. */
 export function hashDeviceKey(raw: string): string {
@@ -42,7 +43,7 @@ export interface AuthedDevice {
   ok: true;
   deviceId: string;
   /** The authoritative store for this request. Never read the store from the body. */
-  storeId: StockLocation;
+  storeId: string;
   agentId: string;
 }
 

@@ -1,6 +1,6 @@
 # Store Hierarchy & Team Management Plan
 
-Status: pending — approved, not started; no `Store` model exists.
+Status: in-progress — building on branch `feat/store-hierarchy`. Revised 30 Aug 2026 on two owner decisions: RBAC is a `Store Management` parent module with `stores` and `warehouses` as its two children (§4 Phase 6), and the database reset is **skipped** (§2.4) — five of the six migrated columns hold no rows and the sixth holds one.
 Rewritten 29 Aug 2026: the three open re-validation questions are now answered, the
 hierarchy shape is settled, and `hasEntrance` is dropped.
 
@@ -101,7 +101,7 @@ previous draft, which renamed all of them to `warehouseId`.
 > stops being answerable; *"8 at BCH"* is what remains.
 >
 > **This is reversible without a migration.** Warehouses are rows. Adding a second warehouse
-> under `BCH_STORE` through `/settings/stores` restores the split with a single insert and no
+> under `BCH_STORE` through `/stores` restores the split with a single insert and no
 > redeploy — which is the entire point of the change. The seed picks the starting shape, not
 > the permanent one.
 
@@ -128,35 +128,61 @@ place tells the next reader that footfall rollups exist. Phase 4 deletes the mod
 rollups are rebuilt later they will want a schema designed for whatever that feature actually
 needs, not this one.
 
-### 2.4 Sequencing — the reset runs first
+### 2.4 Sequencing — the reset is SKIPPED, decided 30 Aug 2026
 
-Phase 4 leans on a single `db push --accept-data-loss`, which is only safe with no rows.
-That was true when this plan was written, became false when sample data was seeded, and
-becomes true again only after the database is reset.
+> **Reversal, recorded because this section previously said the opposite.** Earlier drafts
+> opened *"Reset the database, then start Phase 1"*. That is no longer the instruction, and
+> running `--force-reset` now would destroy live data for no technical gain.
 
-**Reset the database, then start Phase 1 of this plan.**
+Phase 4 converts six enum columns into foreign keys. Postgres cannot change an enum column
+into a text FK in place while rows exist, which is why an empty database made Phase 4 a
+single `db push`. The plan therefore demanded a reset.
 
-`database-reset-preserving-integrations-plan.md` is now in `completed/` — closed *without*
-implementation, because only `ZOHO_BOOKS` was ever connected and its row is backed up by hand
-in `.env`. So the prerequisite is no longer a plan to execute; it is five steps, recorded in
-that document's §0:
+**Counted on 30 Aug 2026, five of the six columns have nothing in them:**
 
 ```
-1.  stop the dev server
-2.  npx prisma db push --force-reset     <- DESTRUCTIVE: drops every table
-3.  npm run db:seed                       <- RBAC, roles, admin user
-4.  paste the ZOHO_BOOKS row back as one INSERT (commented block at the end of .env)
-5.  verify Settings -> Integrations shows ZOHO_BOOKS Connected
+TransferOrderItem    0        CountEvent         0
+AgentHeartbeat       0        AnalyticsDevice    0
+FootfallDaily        0        StockLevel         1   <- the only row in scope
 ```
 
-Two carry-overs from that document that matter here: confirm `DATABASE_URL` is the database
-you mean to wipe (it points at the hosted Supabase instance both Vercel deployments read),
-and every non-admin user is destroyed and must be recreated at `/team`.
+So the migration is not a data problem, it is a **one-row** problem:
 
-If that order is reversed, Phase 4 is void as written: every one of the six columns then
-needs an add-nullable → backfill → drop sequence, and there is no correct backfill for
-`StockLevel` rows sitting at `BCH_STORE` / `BCC_STORE`, because those cease to be stock
-locations (§2.1). Do not start Phase 4 without confirming the tables are empty.
+```
+location=BCH_STORE   qty=2   SKU 9733   BSA REVX 14T GRY/ORG/WHT
+```
+
+That single row is exactly the case this section used to call *"no correct backfill"* — after
+§2.1, `BCH_STORE` is a shop with a door and stock lives in a Warehouse, so a row claiming
+stock at a Store has nowhere valid to land. At one row that is a decision, not a migration.
+
+**Decision: move it to `BCH_WAREHOUSE`, then migrate normally.** Stock cannot live in a Store
+under the new model, `BCH_WAREHOUSE` is the godown for that same site, and 2 units are
+trivially correctable from `/stock` afterwards if they really are on the shop floor.
+
+```sql
+-- run BEFORE Phase 4, and confirm it reports 1 row
+UPDATE "StockLevel" SET location = 'BCH_WAREHOUSE' WHERE location = 'BCH_STORE';
+UPDATE "StockLevel" SET location = 'BCC_WAREHOUSE' WHERE location = 'BCC_STORE';
+SELECT location, count(*) FROM "StockLevel" GROUP BY location;   -- no *_STORE rows may remain
+```
+
+The second statement is a safety net, not an expectation — there are no `BCC_STORE` rows
+today, but Phase 4 must not run while any `*_STORE` row exists and the check above is what
+proves it.
+
+**What skipping the reset preserves:** 21 products, 17 brands, 9 categories, 1 vendor, and
+**3 users** including the two non-admin accounts. It also preserves the only cash-discount
+data in the database — four `Brand` rows (BSA 1.5%/10d, Firefox 3%/20d, Hero 2%/15d,
+Trek 2.5%/30d) which no `Vendor` row duplicates.
+
+**A reset is still available if wanted**, and the runbook lives in
+`completed/database-reset-preserving-integrations-plan.md` §0. It is a preference about data
+tidiness — the existing rows carry real defects (a product branded with its *vendor's* name,
+a bicycle typed `SPARE_PART`, and 383 of 385 units with no `StockLevel` location at all) —
+**not a prerequisite of this plan.** Do not conflate the two. If it is ever run, note that
+every non-admin user is destroyed and the `ZOHO_BOOKS` integration row must be pasted back
+from the commented block at the end of `.env`.
 
 ---
 
@@ -229,7 +255,8 @@ Ordered so the visible work lands before the destructive work.
 > Three reasons, in order of severity:
 >
 > 1. **A guard on a module that does not exist denies everyone.** `userCan` resolves
->    `access.permissions["stores"]?.[action] === true` (`src/lib/rbac.ts:193`). For a module
+>    `access.permissions["stores"]?.[action] === true` (`src/lib/rbac.ts:193`), and the same
+>    for `"warehouses"`. For a module
 >    with no row, that is `undefined === true` — **false, including for ADMIN**, which holds
 >    every permission only because those permissions exist. Phase 5 rewrites `transfers`,
 >    `stock-audit` and `inbound` to read warehouses through the API. If any of that is guarded
@@ -242,7 +269,7 @@ Ordered so the visible work lands before the destructive work.
 >    `/stock/by-location/[code]` to resolve a store to the sum across its warehouses — and its
 >    verification (§6.2b) requires adding a second warehouse to prove the resolution works at
 >    all. With one warehouse per store the store view and the warehouse view are identical
->    numbers, so without `/settings/stores` that check cannot be performed.
+>    numbers, so without `/stores` that check cannot be performed.
 >
 > Phase 5 remains the last code written either way. Nothing else in the plan depends on the
 > swap.
@@ -318,6 +345,17 @@ relations — a `select` addition, no query shape change.
   mean either; both are cheap.
 - `/team/[id]` and `/team/new`: a **Store** select and a **Warehouse** select, the latter
   filtered to the chosen store's warehouses.
+
+> **Deviation, 30 Aug 2026 — `GET /api/stores` and `GET /api/warehouses` are built HERE, not
+> in Phase 5.** The plan assigned them to Phase 5, but the execution order is 1 → 2 → 3 → 4 →
+> 6 → 5, so Phase 3 would have had no way to populate its two selects. They are built exactly
+> as Phase 5 specifies — `requireAuth()` only, never `requireFeature` — and Phase 5 now
+> consumes them instead of creating them. The ⚠️ comment Phase 5 requires is already in both
+> files.
+>
+> Both screens share one `SiteSelect` component (`src/components/site-select.tsx`) so they
+> cannot drift, and validation is shared by `POST` and `PUT` through
+> `src/lib/site-assignment.ts`. The client-side filter is cosmetic; that module is the gate.
 - `POST /api/users` and `PUT /api/users/[id]` accept `storeId` / `warehouseId` and **reject a
   warehouse that does not belong to the chosen store**. The client-side filter is cosmetic;
   the API is the gate.
@@ -396,18 +434,18 @@ decline to pick; a stock write may not.
 New `src/lib/warehouses.ts` reads the set from the database with a request-scoped cache, so a
 dropdown does not issue four queries.
 
-#### The two read endpoints, and why they are NOT behind `stores`
+#### The two read endpoints, and why they are NOT behind `stores` or `warehouses`
 
 `GET /api/warehouses` and `GET /api/stores` — list endpoints for client components filling a
 location dropdown.
 
-**These are guarded by `requireAuth()` only, not by `requireFeature("stores", …)`.** The
+**These are guarded by `requireAuth()` only, never by `requireFeature("stores"/"warehouses", …)`.** The
 distinction is the point:
 
 | Endpoint | Guard | Who needs it |
 |---|---|---|
 | `GET /api/warehouses`, `GET /api/stores` | `requireAuth()` | **everyone** — anyone creating a transfer, running a stock count or receiving an inbound needs to name a location |
-| everything else on those resources (Phase 6) | `requireFeature("stores", …)` | admins configuring the hierarchy |
+| everything else on those resources (Phase 6) | `requireFeature("stores"/"warehouses", …)` | admins configuring the hierarchy |
 
 Gating the list on `stores.view` would mean every user who creates a transfer must also hold
 the stores-admin grant. That is backwards: the dropdown is infrastructure, the CRUD is
@@ -478,57 +516,126 @@ dashboard payload (lines 245, 371). Its value would go from `"BCH_STORE"` to a c
 `store.code` instead of `store.id`** so the payload keeps its readable value and nothing
 downstream that reads that JSON breaks.
 
-### Phase 6 — `/settings/stores`
+### Phase 6 — `/stores`
 
-#### The catalog entry, written out
+#### The catalog entries, written out
 
-`stores` is a **child module of `settings`**, matching `settings_storage` and `zoho`, which
-are the two existing `/settings/*` children (`parentKey: "settings"` at
-`rbac-catalog.ts:455` and `:483`). Add to `MODULE_CATALOG`:
+> **Revised 30 Aug 2026 — owner's decision. THREE modules under a `Store Management` parent.**
+>
+> An earlier draft made `stores` a child of `settings` at `/settings/stores` and argued
+> against a second module: *"warehouses are administered on the same screen and have no
+> separate route, so a `warehouses` module would be a second toggle for one screen."*
+>
+> That reasoning was about **screens**. The owner's is about **authority**, and it is the
+> better argument: *"add a warehouse to an existing site"* and *"open a new store"* are
+> different decisions. A warehouse supervisor can reasonably do the first and not the second.
+> Expressing that as two permissions is exactly what permissions-as-data is for — the same
+> reasoning `cost_price` already exists under.
+>
+> **This forced the hierarchy out of `settings`.** The owner asked for a `Store Management`
+> module with Store and Warehouse beneath it. Nesting that under `settings` would put the
+> children three levels deep, which `seed-rbac.ts:48` rejects outright. So `store_management`
+> is a **root** module in the Admin group — a dedicated sidebar section beside Team, Roles and
+> Settings rather than something buried inside Settings — with `stores` and `warehouses` as
+> its two children.
+
+Add all three to `MODULE_CATALOG`:
 
 ```ts
 {
+  key: "store_management",
+  label: "Store Management",
+  description: "Sites and the warehouses inside them",
+  icon: "Building2",
+  route: null,                    // a pure container — no page of its own
+  group: "Admin",
+  sortOrder: 540,                 // Admin band: team 500, roles 510, settings 520-522,
+                                  // whatsapp_templates 530 -> store management 540
+  actions: ["view"],
+},
+{
   key: "stores",
-  label: "Stores & Warehouses",
-  description: "Store hierarchy, warehouses and their codes",
-  icon: "Building2",              // lucide name, resolved client-side
-  route: "/settings/stores",
-  parentKey: "settings",          // nests under Settings, as storage and zoho do
-  group: "Admin",                 // MUST match the parent's group — the seeder asserts it
-  sortOrder: 523,                 // settings 520, storage 521, zoho 522 -> stores 523
+  label: "Stores",
+  description: "Store sites — the shops, their codes and contact details",
+  icon: "Building2",
+  route: "/stores",
+  parentKey: "store_management",
+  group: "Admin",                 // MUST equal the parent's group
+  sortOrder: 541,
   actions: CRUD,                  // view, create, edit, delete
+},
+{
+  key: "warehouses",
+  label: "Warehouses",
+  description: "Warehouses under each store — where stock physically lives",
+  icon: "Warehouse",
+  route: "/stores/warehouses",
+  parentKey: "store_management",
+  group: "Admin",
+  sortOrder: 542,
+  actions: CRUD,
 },
 ```
 
-Four things this pins down that the earlier draft left loose:
+Five things this pins down:
 
-- **`sortOrder: 523`** continues the settings cluster. Do **not** use `550` — that is
-  `problems`, which `app-logic-and-problems-removal-plan.md` deletes; taking a slot as it is
-  being freed couples two independent plans for no gain.
-- **`group` must equal the parent's**, or `seed-rbac.ts` rejects the catalog. It is one of the
-  four invariants asserted there because the foreign key cannot express it.
-- **`CRUD`** is the existing helper — `["view","create","edit","delete"]`. No `approve`: there
-  is no approval step on a warehouse.
-- **One module, not two.** Warehouses are administered on the same screen as their stores and
-  have no separate route, so `stores` covers both. A `warehouses` module would be a second
-  toggle for one screen.
+- **`store_management` is a grouping construct, and its own `view` grant does almost nothing.**
+  `app-sidebar.tsx:104` builds a placeholder parent from the child's carried parent data, so
+  the section heading renders whenever **any child** is granted, with or without the parent's
+  own row. It is declared `route: null` — `ModuleSeed.route` is `string | null`, documented as
+  *"null = no direct page (permission-only module)"* — with a single `view` action.
+  **The real gates are `stores.*` and `warehouses.*`.** Do not give the parent CRUD expecting
+  it to gate anything; it would be four permission rows that grant nothing observable.
+- **Depth is exactly two.** `stores` and `warehouses` are **siblings** under
+  `store_management`, not a chain. `store_management -> stores -> warehouses` would be three
+  levels and `seed-rbac.ts:48` throws: *"parent is itself a child. The sidebar renders exactly
+  two levels, so a grandchild would exist in the DB and appear nowhere."*
+- **All three `group`s are `"Admin"`.** A child declaring a different group from its parent is
+  rejected by `seed-rbac.ts:57` — two competing grouping mechanisms render the section twice.
+- **`sortOrder` 540 / 541 / 542** continues the Admin band after `whatsapp_templates` (530).
+  Do **not** use `550` — that was `problems`, deleted by
+  `completed/app-logic-and-problems-removal-plan.md`; taking a slot as it is freed couples two
+  unrelated changes for no gain.
+- **`icon: "Warehouse"` must be added to `src/lib/module-icons.ts`.** Verified 30 Aug 2026:
+  `Building2` is exported, `Warehouse` is **not**. Icons resolve client-side from that map and
+  an unmapped name renders nothing rather than erroring — a silent blank in the sidebar.
 
-Then `npm run db:seed:rbac`, which creates the module and its four permissions. **Only ADMIN
-holds them** until an admin grants them on `/team/permissions` — no seeded role asks for
-`stores`, exactly as no seeded role asks for `problems` today.
+#### What each permission actually gates
+
+| Permission | Gates |
+|---|---|
+| `stores.view` | seeing the store list at all |
+| `stores.create` | **opening a new site** — the decision the owner wanted separated |
+| `stores.edit` | renaming a store, changing its address or phone, deactivating it |
+| `stores.delete` | removing a store that has no warehouses |
+| `warehouses.view` | seeing the warehouses under a store |
+| `warehouses.create` | **adding a warehouse to an existing site** |
+| `warehouses.edit` | renaming, reordering, deactivating a warehouse |
+| `warehouses.delete` | removing a warehouse that holds no stock |
+
+A warehouse supervisor gets `stores.view` + all four `warehouses.*` and cannot open a new
+site. That combination is the point of the split, and it is the case to test in §6.
+
+Then `npm run db:seed:rbac`, which creates **two modules and eight permissions**. **Only
+ADMIN holds them** until an admin grants them on `/team/permissions` — no seeded role asks
+for either, and ADMIN passes because it holds every permission by construction, never because
+of its name.
 
 #### Routes
 
 | Route | Guard |
 |---|---|
-| `GET/POST /api/stores`, `GET/PUT/DELETE /api/stores/[id]` | `requireFeature("stores", …)` |
-| `POST /api/warehouses`, `GET/PUT/DELETE /api/warehouses/[id]` | `requireFeature("stores", …)` |
+| `POST /api/stores`, `PUT/DELETE /api/stores/[id]` | `requireFeature("stores", …)` |
+| `POST /api/warehouses`, `PUT/DELETE /api/warehouses/[id]` | `requireFeature("warehouses", …)` |
 | `GET /api/warehouses`, `GET /api/stores` — the **list** endpoints | `requireAuth()` — built in Phase 5, see above |
 
 The list endpoints are deliberately not repeated here. They are built once, in Phase 5, on
 `requireAuth()`; Phase 6 adds the mutations beside them and must not re-guard the reads.
 
-- Screen: store list → expand to its warehouses → create / edit / delete both.
+- Screen: `/stores` — store list, expand a store to see its warehouses, create / edit /
+  delete at both levels. One screen, two permission sets: the warehouse controls read
+  `warehouses.*` and the store controls read `stores.*`, so a warehouse supervisor sees the
+  list and the warehouse buttons but not "New store".
 
 **Delete rule**, matching `/team`: hard-delete when nothing references the row; when a
 warehouse holds stock or transfer history, refuse with a precise message — *"BCH Warehouse
@@ -555,16 +662,20 @@ warehouse under `BCH_STORE`. No schema change, no deploy.
   `BCC_WAREHOUSE` on day one. Adding a warehouse under a store restores intra-site moves with
   no code change, which is the point of the migration.
 - **Analytics moves three models at once**, and `FootfallDaily` disappears.
-- **Existing role grants** — the new `stores` module means every non-system role starts with no
-  access to it until granted on `/team/permissions`. ADMIN is unaffected: it holds every
-  permission by construction, not by name. **But "by construction" means the permission rows
-  must exist first** — before `db:seed:rbac` runs, `requireFeature("stores", …)` denies even
-  ADMIN. That is why Phase 6 precedes Phase 5; see the note at the top of §4.
+- **Existing role grants** — the new `stores` and `warehouses` modules mean every non-system
+  role starts with no access to either until granted on `/team/permissions`. ADMIN is
+  unaffected: it holds every permission by construction, not by name. **But "by construction"
+  means the permission rows must exist first** — before `db:seed:rbac` runs,
+  `requireFeature("stores", …)` denies even ADMIN. That is why Phase 6 precedes Phase 5; see
+  the note at the top of §4.
+- **`stores` is a root module, so it appears as its own sidebar section entry** under Admin,
+  beside Team / Roles / Settings rather than inside Settings, with Warehouses nested beneath
+  it. Anyone expecting it under Settings will not find it there.
 - **The two list endpoints are authentication-only, by design.** `GET /api/warehouses` and
-  `GET /api/stores` are not behind `stores`. If a reviewer "tightens" them to
-  `requireFeature("stores", "view")`, every location dropdown breaks for every user who is not
-  a stores admin — and it will look like a permission that was never granted rather than a
-  regression. The comment in those two files must say so.
+  `GET /api/stores` are not behind `stores` or `warehouses`. If a reviewer "tightens" them to
+  `requireFeature("warehouses", "view")`, every location dropdown breaks for every user who is
+  not a warehouse admin — and it will look like a permission that was never granted rather
+  than a regression. The comment in those two files must say so.
 - **Phases 2–3 ship against an enum-based stock layer.** That is the price of doing the visible
   work first. The two areas do not overlap.
 
@@ -577,7 +688,7 @@ is still required for the `db push` and seed steps in Phases 1, 4 and 6.
 
 Pages to open and check by hand:
 
-`/team` · `/team/[id]` · `/team/new` · `/team/permissions` · `/settings/stores` ·
+`/team` · `/team/[id]` · `/team/new` · `/team/permissions` · `/stores` ·
 `/stock/by-location/BCH_WAREHOUSE` · `/stock/by-location/BCH_STORE` · `/stock/by-brand` ·
 `/transfers` · `/transfers/new` ·
 `/stock-audit/brand-count` · `/stock-audit/new` · `/analytics` · `/analytics/devices` ·
@@ -591,7 +702,7 @@ Specific things to confirm, not just "the page loads":
 2b. `/stock/by-location/BCH_STORE` shows the **sum** of its warehouses, and
    `/stock/by-location/BCH_WAREHOUSE` shows just that one. With one warehouse per store the
    two numbers are equal — so to prove the resolution actually works, add a second warehouse
-   under `BCH_STORE` via `/settings/stores`, put stock in it, and confirm the store view
+   under `BCH_STORE` via `/stores`, put stock in it, and confirm the store view
    grows while the warehouse view does not. An unknown code must 404, not render empty.
 3. `/team` delete on a user *with* transactions shows the API's "deactivated instead" message,
    not "deleted".
@@ -599,8 +710,8 @@ Specific things to confirm, not just "the page loads":
 5. A counting agent POST still authenticates and writes a `CountEvent` against the right store,
    with no change on the agent side.
 6. **A non-admin can still use a location dropdown.** Create a role holding `transfers` but
-   **not** `stores`, assign it to a test user, and open `/transfers/new`. The warehouse
-   selector must be populated. If it is empty, a read endpoint was guarded on `stores` — the
+   **not** `stores` or `warehouses`, assign it to a test user, and open `/transfers/new`. The
+   warehouse selector must be populated. If it is empty, a read endpoint was guarded — the
    failure this plan's §5 warns about, and the one that looks like a missing grant rather
    than a bug.
 7. **`/team/permissions` shows Stores & Warehouses nested under Settings**, indented beside

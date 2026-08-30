@@ -32,6 +32,21 @@ export interface ApiEnvelope<T> {
   success: boolean;
   data: T;
   error?: string;
+  /**
+   * Present only on responses built by `paginatedResponse` (src/lib/api-utils.ts). It sits
+   * BESIDE `data`, not inside it, which is why `apiFetch` — which returns `data` — cannot
+   * see it. Callers that need the page block use `apiFetchPage` below.
+   */
+  pagination?: PageMeta;
+}
+
+/** The block `paginatedResponse` attaches. Shape is fixed by src/lib/api-utils.ts. */
+export interface PageMeta {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  hasMore: boolean;
 }
 
 /** Thrown for any non-success outcome. Carries enough to log or branch on. */
@@ -65,6 +80,23 @@ export async function apiFetch<T = unknown>(
   url: string,
   init: (Omit<RequestInit, "body"> & { json?: unknown; body?: BodyInit | null }) = {}
 ): Promise<T> {
+  return (await apiFetchEnvelope<T>(url, init)).data;
+}
+
+/**
+ * As `apiFetch`, but returns the WHOLE envelope instead of just `data`.
+ *
+ * Exists because `paginatedResponse` puts its page block beside `data`, so a list screen that
+ * needs `total` / `totalPages` cannot get them from `apiFetch`. Before this, the only way was
+ * to hand-roll `fetch` in the page and re-implement the HTML guard badly — which is the exact
+ * thing CLAUDE.md bans and this module exists to prevent.
+ *
+ *     const { data, pagination } = await apiFetchPage<TeamUser[]>("/api/users?page=2");
+ */
+export async function apiFetchEnvelope<T = unknown>(
+  url: string,
+  init: (Omit<RequestInit, "body"> & { json?: unknown; body?: BodyInit | null }) = {}
+): Promise<ApiEnvelope<T>> {
   const id = ++requestSeq;
   const method = (init.method || "GET").toUpperCase();
   const started = Date.now();
@@ -139,7 +171,7 @@ export async function apiFetch<T = unknown>(
   }
 
   log.debug(`#${id} <- ${method} ${url} — ${res.status} ok (${ms}ms)`);
-  return payload.data;
+  return payload;
 }
 
 /**

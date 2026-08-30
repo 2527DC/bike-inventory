@@ -10,6 +10,11 @@ import { Badge } from "@/components/ui/badge";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { usePermissions } from "@/lib/use-permissions";
 import { usePermissionStore } from "@/stores/permissions";
+import { SiteSelect } from "@/components/site-select";
+import { apiTry, apiFetch } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("team:detail");
 
 interface GrantedModule {
   key: string;
@@ -24,6 +29,10 @@ interface UserDetail {
   roleId: string;
   role: { id: string; key: string; name: string } | null;
   accessCode?: string;
+  storeId: string | null;
+  warehouseId: string | null;
+  store: { id: string; code: string; name: string } | null;
+  warehouse: { id: string; code: string; name: string; storeId: string } | null;
   navTabs?: string[];
   grantedModules?: GrantedModule[];
   isActive: boolean;
@@ -60,6 +69,8 @@ export default function EditTeamMemberPage({ params }: { params: Promise<{ id: s
   const [accessCode, setAccessCode] = useState("");
   const [isActive, setIsActive] = useState(true);
   const [navTabs, setNavTabs] = useState<string[]>([]);
+  const [storeId, setStoreId] = useState<string | null>(null);
+  const [warehouseId, setWarehouseId] = useState<string | null>(null);
   const [grantedModules, setGrantedModules] = useState<GrantedModule[]>([]);
 
   const [loading, setLoading] = useState(true);
@@ -69,26 +80,41 @@ export default function EditTeamMemberPage({ params }: { params: Promise<{ id: s
   const [success, setSuccess] = useState("");
 
   useEffect(() => {
-    Promise.all([
-      fetch(`/api/users/${id}`).then((r) => r.json()),
-      fetch("/api/roles").then((r) => r.json()),
-    ])
-      .then(([u, rl]) => {
-        if (u.success) {
-          const d = u.data as UserDetail;
-          setUser(d);
-          setName(d.name);
-          setEmail(d.email);
-          setRoleId(d.roleId);
-          setAccessCode(d.accessCode || "");
-          setIsActive(d.isActive);
-          setNavTabs(Array.isArray(d.navTabs) ? d.navTabs : []);
-          setGrantedModules(d.grantedModules || []);
-        }
-        if (rl.success) setRoles((rl.data.roles as RoleOption[]).filter((r) => r.isActive));
-      })
-      .catch(() => setError("Failed to load member"))
-      .finally(() => setLoading(false));
+    (async () => {
+      // apiTry, not fetch().then(r => r.json()) — an expired session returns HTML with status
+      // 200, so res.ok does not catch it and the raw parse throws "Unexpected token '<'".
+      // The previous version also swallowed the reason in a catch that set a generic string.
+      const [u, rl] = await Promise.all([
+        apiTry<UserDetail>(`/api/users/${id}`),
+        apiTry<{ roles: RoleOption[] }>("/api/roles"),
+      ]);
+
+      if (u.error) {
+        log.error("could not load member", { userId: id, message: u.error });
+        setError(u.error);
+      } else if (u.data) {
+        const d = u.data;
+        setUser(d);
+        setName(d.name);
+        setEmail(d.email);
+        setRoleId(d.roleId);
+        setAccessCode(d.accessCode || "");
+        setIsActive(d.isActive);
+        setNavTabs(Array.isArray(d.navTabs) ? d.navTabs : []);
+        setGrantedModules(d.grantedModules || []);
+        setStoreId(d.storeId ?? null);
+        setWarehouseId(d.warehouseId ?? null);
+      }
+
+      if (rl.error) {
+        log.error("could not load roles", { message: rl.error });
+        setError((prev) => prev || rl.error!);
+      } else {
+        setRoles((rl.data?.roles ?? []).filter((r) => r.isActive));
+      }
+
+      setLoading(false);
+    })();
   }, [id]);
 
   const selectedRole = roles.find((r) => r.id === roleId);
@@ -99,23 +125,25 @@ export default function EditTeamMemberPage({ params }: { params: Promise<{ id: s
     setError("");
     setSuccess("");
     try {
-      const res = await fetch(`/api/users/${id}`, {
+      // storeId/warehouseId are sent explicitly, including as null. The API treats null as
+      // "clear it" and undefined as "leave alone", so omitting them would make an assignment
+      // impossible to remove from this screen.
+      await apiFetch(`/api/users/${id}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, roleId, accessCode, isActive, navTabs }),
-      }).then((r) => r.json());
+        json: { name, email, roleId, accessCode, isActive, navTabs, storeId, warehouseId },
+      });
 
-      if (res.success) {
-        setSuccess("Saved. The change applies on their next request — no re-login needed.");
-        // Their granted modules may have changed with the role, so refresh the picker source.
-        const u = await fetch(`/api/users/${id}`).then((r) => r.json());
-        if (u.success) setGrantedModules(u.data.grantedModules || []);
-        setTimeout(() => setSuccess(""), 4000);
-      } else {
-        setError(res.error || "Failed to save");
-      }
-    } catch {
-      setError("Network error");
+      log.info("member saved", { userId: id, roleId, hasStore: Boolean(storeId) });
+      setSuccess("Saved. The change applies on their next request — no re-login needed.");
+
+      // Their granted modules may have changed with the role, so refresh the picker source.
+      const { data: fresh } = await apiTry<UserDetail>(`/api/users/${id}`);
+      if (fresh) setGrantedModules(fresh.grantedModules || []);
+      setTimeout(() => setSuccess(""), 4000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to save";
+      log.error("save member failed", { userId: id, message: msg });
+      setError(msg);
     } finally {
       setSaving(false);
     }
@@ -242,6 +270,16 @@ export default function EditTeamMemberPage({ params }: { params: Promise<{ id: s
               </p>
             )}
           </div>
+
+          <SiteSelect
+            storeId={storeId}
+            warehouseId={warehouseId}
+            onChange={({ storeId: st, warehouseId: wh }) => {
+              setStoreId(st);
+              setWarehouseId(wh);
+            }}
+            disabled={!mayEdit || saving}
+          />
 
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Access Code</label>

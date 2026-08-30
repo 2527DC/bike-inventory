@@ -82,7 +82,7 @@ preserved across regeneration — but do not remove the marker comments.
 | `product-type-and-brand-lead-time-plan.md` | not started. Two commits on one branch. **Part B** — `BrandLeadTime` (0 rows) folds into `Brand.leadDays`, plus a real guard bug (`brands.create` should be `edit`); no open questions. **Part A** — the `ProductType` enum becomes a table with a screen and a `stock_product_types` sub-module; three questions in §8. `Category` is deliberately NOT merged in — it mirrors Zoho |
 | `sequence-race-fix-plan.md` | five sites allocate unique numbers with a read-then-write race |
 | `service-module-mobile-readiness-plan.md` | what /api/services/* needs before bch-service-app can be pointed at it |
-| `store-hierarchy-and-team-plan.md` | ready to build — replace the StockLocation enum with Store → Warehouse tables; rewritten 29 Aug 2026, all questions answered, `/stock/by-location/[code]` resolves either level; runs after the database reset |
+| `store-hierarchy-and-team-plan.md` | **in progress** — replace the StockLocation enum with Store → Warehouse tables. Revised 30 Aug 2026: RBAC is a `store_management` parent with `stores` + `warehouses` children (8 CRUD permissions), and the database reset is **skipped** — 5 of 6 migrated columns are empty and the 6th has one row |
 <!-- END:pending -->
 
 ---

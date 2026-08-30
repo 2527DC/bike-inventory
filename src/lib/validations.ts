@@ -137,6 +137,14 @@ export const userSchema = z.object({
   roleId: z.string().min(1, "Role is required"),
   accessCode: z.string().min(1, "Access code is required"),
   isActive: z.boolean().optional(),
+  // Where this person works. Both optional, and `null` is meaningful — it is how the client
+  // clears an assignment, which `undefined` cannot express (undefined means "leave alone").
+  //
+  // These are NOT permissions. Assigning someone to BCH does not restrict what they can see;
+  // a BCH user still sees BCC stock. Storing and displaying the assignment is the whole
+  // scope — see the plan's Phase 3, "Not in scope".
+  storeId: z.string().min(1).nullable().optional(),
+  warehouseId: z.string().min(1).nullable().optional(),
 });
 
 export const userUpdateSchema = userSchema.partial().extend({
@@ -474,7 +482,11 @@ export const preBookingSchema = z.object({
   brandId: z.string().optional(),
 });
 
-export const storeUpdateSchema = z.object({
+// A StoreUpdate POST — the ops-hub noticeboard — not an update TO a store. Renamed from
+// `storeUpdateSchema` on 30 Aug 2026: every other schema here uses *UpdateSchema for a PATCH
+// body (productUpdateSchema, userUpdateSchema), so the old name collided with the real one
+// when Store became a table.
+export const storeUpdatePostSchema = z.object({
   text: z.string().min(1, "Text is required").max(2000),
   category: z.enum(["Sales", "Staff", "Ops", "Issue", "Win", "Other"]),
 });
@@ -500,13 +512,19 @@ export const heartbeatSchema = z.object({
   agent_version: z.string().max(32).nullable().optional(),
 });
 
-// Device registration. `storeId` is narrowed to the two values that have a doorway to count —
-// the warehouse locations have no entrance and the STORE/WAREHOUSE pair is dead legacy. The
-// Prisma column is the full StockLocation enum, so this is the only place that restriction is
-// enforced; it is deliberately server-side and not just a filtered <select>.
+// Device registration.
+//
+// `storeId` used to be z.enum(["BCH_STORE", "BCC_STORE"]) — the two StockLocation members
+// that had a doorway to count through. That restriction is now expressed by the SCHEMA
+// itself: a camera is registered against a `Store`, and every Store is a shop with a door,
+// so there is no longer a set of location values to exclude. Warehouses cannot be named here
+// because they are a different table.
+//
+// The value must still be a real, active store, and that check is server-side rather than a
+// filtered <select> — see the route, which resolves it before writing.
 export const analyticsDeviceCreateSchema = z.object({
   label: z.string().min(1, "Label is required").max(80),
-  storeId: z.enum(["BCH_STORE", "BCC_STORE"]),
+  storeId: z.string().min(1, "A store is required"),
   agentId: z.string().min(1).max(64).default("edge-1"),
 });
 
@@ -765,3 +783,37 @@ export const lmsProgressSchema = z
 
 /** The daily streak ping. Takes no input at all — the session is the whole request. */
 export const lmsHeartbeatSchema = z.object({}).strict();
+
+// ─── Store hierarchy ─────────────────────────────────────────────────────────
+
+// `code` is the stable handle: it reuses the old StockLocation enum strings and is what
+// /stock/by-location/[code] resolves against, so it is uppercase, alphanumeric + underscore,
+// and never contains a space. `name` is free display text and can be renamed at will.
+const SITE_CODE = z
+  .string()
+  .min(2, "Code is required")
+  .max(40)
+  .regex(/^[A-Za-z0-9_]+$/, "Code may use letters, numbers and underscores only");
+
+export const storeSchema = z.object({
+  code: SITE_CODE,
+  name: z.string().min(1, "Name is required").max(100),
+  address: z.string().max(300).optional(),
+  phone: z.string().max(30).optional(),
+  sortOrder: z.number().int().min(0).optional(),
+});
+
+export const storeUpdateSchema = storeSchema.partial().extend({
+  isActive: z.boolean().optional(),
+});
+
+export const warehouseSchema = z.object({
+  storeId: z.string().min(1, "A store is required"),
+  code: SITE_CODE,
+  name: z.string().min(1, "Name is required").max(100),
+  sortOrder: z.number().int().min(0).optional(),
+});
+
+export const warehouseUpdateSchema = warehouseSchema.partial().extend({
+  isActive: z.boolean().optional(),
+});

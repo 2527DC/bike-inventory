@@ -6,16 +6,20 @@ import { successResponse, errorResponse, paginatedResponse, parseSearchParams } 
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { z } from "zod";
-import { BIN_TRACKING_ENABLED, stockLocationLabel } from "@/lib/inventory-config";
-import { adjustLocationQty, getLocationBreakdown } from "@/lib/stock-location";
+import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { adjustWarehouseQty, getWarehouseBreakdown } from "@/lib/stock-location";
+import { listWarehouses } from "@/lib/warehouses";
 
 const itemSchema = z.object({
   productId: z.string().min(1),
   quantity: z.number().int().min(1),
   fromBinId: z.string().optional(),
   toBinId: z.string().optional(),
-  fromLocation: z.enum(["BCH_WAREHOUSE", "BCH_STORE", "BCC_WAREHOUSE", "BCC_STORE"]).optional(),
-  toLocation: z.enum(["BCH_WAREHOUSE", "BCH_STORE", "BCC_WAREHOUSE", "BCC_STORE"]).optional(),
+  // Was a z.enum of the four old StockLocation values — a compile-time list that cannot
+  // know about a warehouse an admin created this morning. Validated against the database
+  // below instead: "must be an active warehouse id".
+  fromWarehouseId: z.string().min(1).optional(),
+  toWarehouseId: z.string().min(1).optional(),
 });
 
 const createSchema = z.object({
@@ -60,6 +64,11 @@ export async function GET(req: NextRequest) {
               product: { select: { name: true, sku: true, currentStock: true } },
               fromBin: { select: { code: true, name: true, location: true } },
               toBin: { select: { code: true, name: true, location: true } },
+              // /transfers renders these names directly. Without them every transfer line
+              // shows an em-dash for its endpoints — and TypeScript cannot catch it, because
+              // the page declares its own response interface.
+              fromWarehouse: { select: { id: true, code: true, name: true } },
+              toWarehouse: { select: { id: true, code: true, name: true } },
             },
           },
           _count: { select: { items: true } },
@@ -95,6 +104,13 @@ export async function POST(req: NextRequest) {
     // bins is only populated/used in bin mode
     let bins: { id: string; code: string }[] = [];
 
+    // One query for the whole request. Turns an id into a name for messages, and its
+    // membership check is what proves an id names a real, ACTIVE warehouse — the zod schema
+    // can only assert that a string arrived. Declared before the branch because the write
+    // transaction further down needs it too.
+    const warehouses = await listWarehouses();
+    const byId = new Map(warehouses.map((w) => [w.id, w]));
+
     if (BIN_TRACKING_ENABLED) {
       for (const item of data.items) {
         if (!item.fromBinId || !item.toBinId) return errorResponse("Source and destination bins are required", 400);
@@ -114,15 +130,19 @@ export async function POST(req: NextRequest) {
       }
     } else {
       // Location mode: move quantity between any two of the tracked locations.
-      const breakdown = await getLocationBreakdown(productIds);
+      const breakdown = await getWarehouseBreakdown(productIds);
       for (const item of data.items) {
         const product = productMap.get(item.productId);
         if (!product) return errorResponse(`Product not found: ${item.productId}`, 404);
-        if (!item.fromLocation || !item.toLocation) return errorResponse("Source and destination locations are required", 400);
-        if (item.fromLocation === item.toLocation) return errorResponse("Source and destination locations must be different", 400);
-        const available = breakdown.get(product.id)?.[item.fromLocation] ?? 0;
+        if (!item.fromWarehouseId || !item.toWarehouseId) return errorResponse("Source and destination warehouses are required", 400);
+        if (item.fromWarehouseId === item.toWarehouseId) return errorResponse("Source and destination warehouses must be different", 400);
+        const fromWh = byId.get(item.fromWarehouseId);
+        const toWh = byId.get(item.toWarehouseId);
+        if (!fromWh) return errorResponse("Source is not an active warehouse", 400);
+        if (!toWh) return errorResponse("Destination is not an active warehouse", 400);
+        const available = breakdown.get(product.id)?.[fromWh.code] ?? 0;
         if (available < item.quantity) {
-          return errorResponse(`Insufficient stock for ${product.name} at ${stockLocationLabel(item.fromLocation)}. Available: ${available}`, 400);
+          return errorResponse(`Insufficient stock for ${product.name} at ${fromWh.name}. Available: ${available}`, 400);
         }
       }
     }
@@ -157,8 +177,8 @@ export async function POST(req: NextRequest) {
               quantity: item.quantity,
               fromBinId: BIN_TRACKING_ENABLED ? item.fromBinId : null,
               toBinId: BIN_TRACKING_ENABLED ? item.toBinId : null,
-              fromLocation: BIN_TRACKING_ENABLED ? null : item.fromLocation,
-              toLocation: BIN_TRACKING_ENABLED ? null : item.toLocation,
+              fromWarehouseId: BIN_TRACKING_ENABLED ? null : item.fromWarehouseId,
+              toWarehouseId: BIN_TRACKING_ENABLED ? null : item.toWarehouseId,
             })),
           },
         },
@@ -205,8 +225,8 @@ export async function POST(req: NextRequest) {
             });
           } else {
             // Location mode: move qty out of source, into destination. Total unchanged.
-            await adjustLocationQty(tx, item.productId, item.fromLocation!, -item.quantity);
-            await adjustLocationQty(tx, item.productId, item.toLocation!, item.quantity);
+            await adjustWarehouseQty(tx, item.productId, item.fromWarehouseId!, -item.quantity);
+            await adjustWarehouseQty(tx, item.productId, item.toWarehouseId!, item.quantity);
             await tx.inventoryTransaction.create({
               data: {
                 type: "TRANSFER",
@@ -215,7 +235,7 @@ export async function POST(req: NextRequest) {
                 previousStock: product.currentStock,
                 newStock: product.currentStock,
                 referenceNo: orderNo,
-                notes: `[APPROVED] From: ${stockLocationLabel(item.fromLocation)} → To: ${stockLocationLabel(item.toLocation)} | Transfer Order: ${orderNo}`,
+                notes: `[APPROVED] From: ${byId.get(item.fromWarehouseId!)?.name} → To: ${byId.get(item.toWarehouseId!)?.name} | Transfer Order: ${orderNo}`,
                 userId: user.id,
               },
             });
