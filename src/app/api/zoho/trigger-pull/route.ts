@@ -1,11 +1,21 @@
 export const dynamic = "force-dynamic";
-export const maxDuration = 30; // Bill details now fetched in approve step
+// 60, not 30. Headroom, NOT the fix — the fix is that `items` and `contacts` no longer do one
+// database round trip per record (see buildItemPreviews below). Raising this alone would only
+// move the cliff from ~400 items to ~800.
+export const maxDuration = 60;
 
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, failure } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { BooksClient, InventoryClient, ZakyaClient } from "@/lib/integrations";
+import { BooksClient, InventoryClient, ZakyaClient, type IntegrationItem } from "@/lib/integrations";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("zoho:trigger-pull");
+
+// A single `IN (...)` with several thousand values produces a very large query. Chunk the
+// lookup and merge the results.
+const LOOKUP_CHUNK = 1000;
 
 /*
  * 3-SOURCE MANUAL PULL (step-by-step):
@@ -15,6 +25,109 @@ import { BooksClient, InventoryClient, ZakyaClient } from "@/lib/integrations";
  * Bills:     Zoho Books (fallback Zakya POS)
  * Invoices:  Zakya POS (fallback Books)
  */
+
+/**
+ * Turn a batch of Zoho items into ZohoPullPreview rows, in a fixed number of queries.
+ *
+ * Replaces a per-item loop that ran two `product.findFirst` calls plus a `create` for EVERY
+ * record. Each of those crosses Mumbai (`vercel.json` "regions": ["bom1"]) to Singapore
+ * (`DATABASE_URL` ap-southeast-1) at roughly 40 ms, sequentially, so a ~400-item catalog spent
+ * ~32 s on latency alone and the function died at `maxDuration` — the 504 users were seeing.
+ * `bills` and `invoices` in this same file were already written this way; `items` and
+ * `contacts` were simply never converted.
+ *
+ * Called from BOTH item sources on purpose. The ZOHO_INVENTORY path and the ZOHO_BOOKS
+ * fallback ran equivalent loops, and fixing only the first would ship a fallback that still
+ * times out — while testing green on any environment where Inventory is connected, which is
+ * exactly where it would be tested.
+ *
+ * Returns the number of previews written.
+ */
+async function buildItemPreviews(items: IntegrationItem[], pullId: string): Promise<number> {
+  // Zoho can return the same item_id on more than one page. ZohoPullPreview has NO unique
+  // constraint on zohoId, so `createMany({ skipDuplicates })` cannot help — dedupe here or
+  // the review screen lists the same product twice.
+  const byId = new Map<string, IntegrationItem>();
+  for (const item of items) {
+    if (item.item_id) byId.set(item.item_id, item);
+  }
+  const unique = [...byId.values()];
+  if (unique.length === 0) return 0;
+
+  // Empty SKUs must never reach an `in` clause. Many Zoho items carry `sku: ""`, and
+  // `{ sku: { in: ["", ...] } }` matches every local product with a blank SKU — which would
+  // mark brand-new items as already existing and silently drop them from the review.
+  const skus = [...new Set(unique.map((i) => i.sku).filter((s): s is string => !!s && s.trim() !== ""))];
+  const ids = [...new Set(unique.map((i) => i.item_id).filter((s): s is string => !!s))];
+
+  const knownSkus = new Set<string>();
+  const knownIds = new Set<string>();
+  const absorb = (rows: Array<{ sku: string | null; zohoItemId: string | null }>) => {
+    for (const r of rows) {
+      if (r.sku) knownSkus.add(r.sku);
+      if (r.zohoItemId) knownIds.add(r.zohoItemId);
+    }
+  };
+
+  for (let i = 0; i < skus.length; i += LOOKUP_CHUNK) {
+    absorb(
+      await prisma.product.findMany({
+        where: { sku: { in: skus.slice(i, i + LOOKUP_CHUNK) } },
+        select: { sku: true, zohoItemId: true },
+      })
+    );
+  }
+  for (let i = 0; i < ids.length; i += LOOKUP_CHUNK) {
+    absorb(
+      await prisma.product.findMany({
+        where: { zohoItemId: { in: ids.slice(i, i + LOOKUP_CHUNK) } },
+        select: { sku: true, zohoItemId: true },
+      })
+    );
+  }
+
+  // Existing items are FROZEN — Zoho never modifies an item already in the app (brand,
+  // category, pricing, SKU, name and stock all stay as edited). Only brand-new items are
+  // pulled in for review. This is the set-based form of the `continue` the old loop used; it
+  // is a deliberate business rule, not an optimisation, and must survive any rewrite.
+  const fresh = unique.filter((item) => {
+    if (item.sku && knownSkus.has(item.sku)) return false;
+    if (item.item_id && knownIds.has(item.item_id)) return false;
+    return true;
+  });
+
+  log.debug("items batched", {
+    pullId,
+    received: items.length,
+    unique: unique.length,
+    frozen: unique.length - fresh.length,
+    new: fresh.length,
+  });
+
+  if (fresh.length === 0) return 0;
+
+  await prisma.zohoPullPreview.createMany({
+    data: fresh.map((item) => ({
+      pullId,
+      entityType: "item",
+      zohoId: item.item_id,
+      data: {
+        name: item.name,
+        sku: item.sku || "",
+        costPrice: Number(item.purchase_rate || 0),
+        sellingPrice: Number(item.rate || 0),
+        gstRate: Number(item.tax_percentage || 18),
+        hsnCode: String(item.hsn_or_sac || ""),
+        stockOnHand: Number(item.stock_on_hand || 0),
+        productType: String(item.product_type || item.item_type || ""),
+        brand: String(item.brand || item.manufacturer || "").trim(),
+        categoryName: String(item.category_name || ""),
+      },
+    })),
+  });
+
+  return fresh.length;
+}
 
 export async function POST(req: NextRequest) {
   // Captured for the catch. A 500 has to name WHICH step failed — init, items, bills and
@@ -100,43 +213,7 @@ export async function POST(req: NextRequest) {
           apiCalls += Math.ceil(allItems.length / 200) || 1;
           const items = allItems.filter(item => Number(item.stock_on_hand || 0) > 0);
 
-          for (const item of items) {
-            const zohoBrand = String(item.brand || item.manufacturer || "").trim();
-            let existing: { id: string; brand?: { name: string } | null } | null = null;
-            if (item.sku) {
-              existing = await prisma.product.findFirst({ where: { sku: item.sku }, include: { brand: { select: { name: true } } } });
-            }
-            if (!existing && item.item_id) {
-              existing = await prisma.product.findFirst({ where: { zohoItemId: item.item_id }, include: { brand: { select: { name: true } } } });
-            }
-            if (existing) {
-              // Existing items are FROZEN — Zoho never modifies items already in the
-              // app (brand, category, pricing, SKU, name, stock all stay as edited).
-              // Only brand-new items are pulled in for review below.
-              continue;
-            }
-
-            await prisma.zohoPullPreview.create({
-              data: {
-                pullId: existingPullId,
-                entityType: "item",
-                zohoId: item.item_id,
-                data: {
-                  name: item.name,
-                  sku: item.sku || "",
-                  costPrice: Number(item.purchase_rate || 0),
-                  sellingPrice: Number(item.rate || 0),
-                  gstRate: Number(item.tax_percentage || 18),
-                  hsnCode: String(item.hsn_or_sac || ""),
-                  stockOnHand: Number(item.stock_on_hand || 0),
-                  productType: String(item.product_type || item.item_type || ""),
-                  brand: zohoBrand,
-                  categoryName: String(item.category_name || ""),
-                },
-              },
-            });
-            itemsNew++;
-          }
+          itemsNew += await buildItemPreviews(items, existingPullId);
         } else {
           // Fallback to Books
           const zoho = new BooksClient();
@@ -149,50 +226,20 @@ export async function POST(req: NextRequest) {
             apiCalls += Math.ceil(allItems.length / 200) || 1;
             const items = allItems.filter(item => Number(item.stock_on_hand || 0) > 0);
 
-            for (const item of items) {
-              const zohoItem = item as Record<string, unknown>;
-              const zohoBrand = String(item.brand || item.manufacturer || "").trim();
-              let existing: { id: string; brand?: { name: string } | null } | null = null;
-              if (item.sku) {
-                existing = await prisma.product.findFirst({ where: { sku: item.sku }, include: { brand: { select: { name: true } } } });
-              }
-              if (!existing && item.item_id) {
-                existing = await prisma.product.findFirst({ where: { zohoItemId: item.item_id }, include: { brand: { select: { name: true } } } });
-              }
-              if (existing) {
-                // Existing items are FROZEN — Zoho never modifies items already in the app.
-                continue;
-              }
-
-              await prisma.zohoPullPreview.create({
-                data: {
-                  pullId: existingPullId,
-                  entityType: "item",
-                  zohoId: item.item_id,
-                  data: {
-                    name: item.name,
-                    sku: item.sku || "",
-                    costPrice: Number(zohoItem.purchase_rate || 0),
-                    sellingPrice: Number(zohoItem.rate || 0),
-                    gstRate: Number(zohoItem.tax_percentage || 18),
-                    hsnCode: String(zohoItem.hsn_or_sac || ""),
-                    stockOnHand: Number(zohoItem.stock_on_hand || 0),
-                    productType: String(zohoItem.product_type || zohoItem.item_type || ""),
-                    brand: zohoBrand,
-                    categoryName: String(item.category_name || ""),
-                  },
-                },
-              });
-              itemsNew++;
-            }
+            // Same helper as the Inventory path above. These two loops were byte-for-byte
+            // equivalent apart from a redundant `as Record<string, unknown>` cast — every
+            // field it reached for is already on IntegrationItem.
+            itemsNew += await buildItemPreviews(items, existingPullId);
           } else {
             errors.push("Items: no source connected");
           }
         }
       } catch (e) {
+        log.error("items step failed", { pullId: existingPullId, source, itemsNew, message: e instanceof Error ? e.message : "Unknown" });
         errors.push(`Items: ${e instanceof Error ? e.message : "Unknown"}`);
       }
 
+      log.info("items step finished", { pullId: existingPullId, source, itemsNew, apiCalls, errors: errors.length });
       return successResponse({ step: "items", source, itemsNew, apiCalls, errors });
     }
 
