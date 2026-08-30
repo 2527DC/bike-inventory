@@ -1,6 +1,6 @@
 # Store Hierarchy & Team Management Plan
 
-Status: pending — approved, not started; no `Store` model exists.
+Status: in-progress — building on branch `feat/store-hierarchy`. Revised 30 Aug 2026 on two owner decisions: RBAC is a `Store Management` parent module with `stores` and `warehouses` as its two children (§4 Phase 6), and the database reset is **skipped** (§2.4) — five of the six migrated columns hold no rows and the sixth holds one.
 Rewritten 29 Aug 2026: the three open re-validation questions are now answered, the
 hierarchy shape is settled, and `hasEntrance` is dropped.
 
@@ -128,35 +128,61 @@ place tells the next reader that footfall rollups exist. Phase 4 deletes the mod
 rollups are rebuilt later they will want a schema designed for whatever that feature actually
 needs, not this one.
 
-### 2.4 Sequencing — the reset runs first
+### 2.4 Sequencing — the reset is SKIPPED, decided 30 Aug 2026
 
-Phase 4 leans on a single `db push --accept-data-loss`, which is only safe with no rows.
-That was true when this plan was written, became false when sample data was seeded, and
-becomes true again only after the database is reset.
+> **Reversal, recorded because this section previously said the opposite.** Earlier drafts
+> opened *"Reset the database, then start Phase 1"*. That is no longer the instruction, and
+> running `--force-reset` now would destroy live data for no technical gain.
 
-**Reset the database, then start Phase 1 of this plan.**
+Phase 4 converts six enum columns into foreign keys. Postgres cannot change an enum column
+into a text FK in place while rows exist, which is why an empty database made Phase 4 a
+single `db push`. The plan therefore demanded a reset.
 
-`database-reset-preserving-integrations-plan.md` is now in `completed/` — closed *without*
-implementation, because only `ZOHO_BOOKS` was ever connected and its row is backed up by hand
-in `.env`. So the prerequisite is no longer a plan to execute; it is five steps, recorded in
-that document's §0:
+**Counted on 30 Aug 2026, five of the six columns have nothing in them:**
 
 ```
-1.  stop the dev server
-2.  npx prisma db push --force-reset     <- DESTRUCTIVE: drops every table
-3.  npm run db:seed                       <- RBAC, roles, admin user
-4.  paste the ZOHO_BOOKS row back as one INSERT (commented block at the end of .env)
-5.  verify Settings -> Integrations shows ZOHO_BOOKS Connected
+TransferOrderItem    0        CountEvent         0
+AgentHeartbeat       0        AnalyticsDevice    0
+FootfallDaily        0        StockLevel         1   <- the only row in scope
 ```
 
-Two carry-overs from that document that matter here: confirm `DATABASE_URL` is the database
-you mean to wipe (it points at the hosted Supabase instance both Vercel deployments read),
-and every non-admin user is destroyed and must be recreated at `/team`.
+So the migration is not a data problem, it is a **one-row** problem:
 
-If that order is reversed, Phase 4 is void as written: every one of the six columns then
-needs an add-nullable → backfill → drop sequence, and there is no correct backfill for
-`StockLevel` rows sitting at `BCH_STORE` / `BCC_STORE`, because those cease to be stock
-locations (§2.1). Do not start Phase 4 without confirming the tables are empty.
+```
+location=BCH_STORE   qty=2   SKU 9733   BSA REVX 14T GRY/ORG/WHT
+```
+
+That single row is exactly the case this section used to call *"no correct backfill"* — after
+§2.1, `BCH_STORE` is a shop with a door and stock lives in a Warehouse, so a row claiming
+stock at a Store has nowhere valid to land. At one row that is a decision, not a migration.
+
+**Decision: move it to `BCH_WAREHOUSE`, then migrate normally.** Stock cannot live in a Store
+under the new model, `BCH_WAREHOUSE` is the godown for that same site, and 2 units are
+trivially correctable from `/stock` afterwards if they really are on the shop floor.
+
+```sql
+-- run BEFORE Phase 4, and confirm it reports 1 row
+UPDATE "StockLevel" SET location = 'BCH_WAREHOUSE' WHERE location = 'BCH_STORE';
+UPDATE "StockLevel" SET location = 'BCC_WAREHOUSE' WHERE location = 'BCC_STORE';
+SELECT location, count(*) FROM "StockLevel" GROUP BY location;   -- no *_STORE rows may remain
+```
+
+The second statement is a safety net, not an expectation — there are no `BCC_STORE` rows
+today, but Phase 4 must not run while any `*_STORE` row exists and the check above is what
+proves it.
+
+**What skipping the reset preserves:** 21 products, 17 brands, 9 categories, 1 vendor, and
+**3 users** including the two non-admin accounts. It also preserves the only cash-discount
+data in the database — four `Brand` rows (BSA 1.5%/10d, Firefox 3%/20d, Hero 2%/15d,
+Trek 2.5%/30d) which no `Vendor` row duplicates.
+
+**A reset is still available if wanted**, and the runbook lives in
+`completed/database-reset-preserving-integrations-plan.md` §0. It is a preference about data
+tidiness — the existing rows carry real defects (a product branded with its *vendor's* name,
+a bicycle typed `SPARE_PART`, and 383 of 385 units with no `StockLevel` location at all) —
+**not a prerequisite of this plan.** Do not conflate the two. If it is ever run, note that
+every non-admin user is destroyed and the `ZOHO_BOOKS` integration row must be pasted back
+from the commented block at the end of `.env`.
 
 ---
 
@@ -483,7 +509,7 @@ downstream that reads that JSON breaks.
 
 #### The catalog entries, written out
 
-> **Revised 30 Aug 2026 — owner's decision. TWO modules, and `stores` is top-level.**
+> **Revised 30 Aug 2026 — owner's decision. THREE modules under a `Store Management` parent.**
 >
 > An earlier draft made `stores` a child of `settings` at `/settings/stores` and argued
 > against a second module: *"warehouses are administered on the same screen and have no
@@ -495,25 +521,36 @@ downstream that reads that JSON breaks.
 > Expressing that as two permissions is exactly what permissions-as-data is for — the same
 > reasoning `cost_price` already exists under.
 >
-> **This forced `stores` out of `settings`.** `warehouses` must be a child of `stores`, and
-> `settings -> stores -> warehouses` is three levels, which `seed-rbac.ts:48` throws on:
-> *"parent 'stores' is itself a child. The sidebar renders exactly two levels, so a grandchild
-> would exist in the DB and appear nowhere."* Making `stores` a root is what makes the child
-> legal, and it is what the owner asked for — a dedicated sidebar entry, not something buried
-> inside Settings.
+> **This forced the hierarchy out of `settings`.** The owner asked for a `Store Management`
+> module with Store and Warehouse beneath it. Nesting that under `settings` would put the
+> children three levels deep, which `seed-rbac.ts:48` rejects outright. So `store_management`
+> is a **root** module in the Admin group — a dedicated sidebar section beside Team, Roles and
+> Settings rather than something buried inside Settings — with `stores` and `warehouses` as
+> its two children.
 
-Add both to `MODULE_CATALOG`:
+Add all three to `MODULE_CATALOG`:
 
 ```ts
+{
+  key: "store_management",
+  label: "Store Management",
+  description: "Sites and the warehouses inside them",
+  icon: "Building2",
+  route: null,                    // a pure container — no page of its own
+  group: "Admin",
+  sortOrder: 540,                 // Admin band: team 500, roles 510, settings 520-522,
+                                  // whatsapp_templates 530 -> store management 540
+  actions: ["view"],
+},
 {
   key: "stores",
   label: "Stores",
   description: "Store sites — the shops, their codes and contact details",
-  icon: "Building2",              // lucide name, resolved client-side
+  icon: "Building2",
   route: "/stores",
-  group: "Admin",                 // a ROOT module: no parentKey
-  sortOrder: 540,                 // Admin band: team 500, roles 510, settings 520-522,
-                                  // whatsapp_templates 530 -> stores 540
+  parentKey: "store_management",
+  group: "Admin",                 // MUST equal the parent's group
+  sortOrder: 541,
   actions: CRUD,                  // view, create, edit, delete
 },
 {
@@ -522,30 +559,35 @@ Add both to `MODULE_CATALOG`:
   description: "Warehouses under each store — where stock physically lives",
   icon: "Warehouse",
   route: "/stores/warehouses",
-  parentKey: "stores",            // the child. Depth is exactly two — see the note above
-  group: "Admin",                 // MUST equal the parent's group — the seeder asserts it
-  sortOrder: 541,
+  parentKey: "store_management",
+  group: "Admin",
+  sortOrder: 542,
   actions: CRUD,
 },
 ```
 
 Five things this pins down:
 
-- **`stores` is a ROOT module — it carries no `parentKey`.** That is the whole reason
-  `warehouses` can be its child. If anyone later "tidies" `stores` back under `settings`, the
-  seed throws on the next run and the catalog will not load at all. That failure is loud,
-  which is the one mercy here.
-- **`sortOrder: 540 / 541`** continues the Admin band after `whatsapp_templates` (530). Do
-  **not** use `550` — that was `problems`, deleted by
+- **`store_management` is a grouping construct, and its own `view` grant does almost nothing.**
+  `app-sidebar.tsx:104` builds a placeholder parent from the child's carried parent data, so
+  the section heading renders whenever **any child** is granted, with or without the parent's
+  own row. It is declared `route: null` — `ModuleSeed.route` is `string | null`, documented as
+  *"null = no direct page (permission-only module)"* — with a single `view` action.
+  **The real gates are `stores.*` and `warehouses.*`.** Do not give the parent CRUD expecting
+  it to gate anything; it would be four permission rows that grant nothing observable.
+- **Depth is exactly two.** `stores` and `warehouses` are **siblings** under
+  `store_management`, not a chain. `store_management -> stores -> warehouses` would be three
+  levels and `seed-rbac.ts:48` throws: *"parent is itself a child. The sidebar renders exactly
+  two levels, so a grandchild would exist in the DB and appear nowhere."*
+- **All three `group`s are `"Admin"`.** A child declaring a different group from its parent is
+  rejected by `seed-rbac.ts:57` — two competing grouping mechanisms render the section twice.
+- **`sortOrder` 540 / 541 / 542** continues the Admin band after `whatsapp_templates` (530).
+  Do **not** use `550` — that was `problems`, deleted by
   `completed/app-logic-and-problems-removal-plan.md`; taking a slot as it is freed couples two
   unrelated changes for no gain.
-- **Both `group`s are `"Admin"`.** A child with a different group from its parent is rejected
-  by `seed-rbac.ts:57` — two competing grouping mechanisms render the section twice.
-- **`CRUD`** is the existing helper — `["view","create","edit","delete"]`. No `approve` on
-  either: there is no approval step on a store or a warehouse.
-- **`icon: "Warehouse"` must be added to `src/lib/module-icons.ts`** if it is not already
-  exported there. Icons are resolved client-side from that map, and an unmapped name renders
-  nothing rather than erroring — a silent blank in the sidebar.
+- **`icon: "Warehouse"` must be added to `src/lib/module-icons.ts`.** Verified 30 Aug 2026:
+  `Building2` is exported, `Warehouse` is **not**. Icons resolve client-side from that map and
+  an unmapped name renders nothing rather than erroring — a silent blank in the sidebar.
 
 #### What each permission actually gates
 
