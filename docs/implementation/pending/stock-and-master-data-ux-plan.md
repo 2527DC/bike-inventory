@@ -6,6 +6,110 @@ Prepared 30 Aug 2026. Every claim checked against the tree and the live database
 
 ---
 
+## 0. Phase 0 — the application is slow, and it is mostly geography
+
+Added 30 Aug 2026. The owner reports slow screen loads **both locally and in production**.
+This phase outweighs the other five combined and should go first.
+
+### Measured, from the owner's machine
+
+```
+SELECT 1        median 355 ms      min 306   max 412
+```
+
+That is the round trip alone — no query work, no parsing. Because:
+
+```
+app deployed        vercel.json  "regions": ["bom1"]        Mumbai
+active database     ap-southeast-1                          SINGAPORE
+sitting unused      ap-south-1, COMMENTED OUT in .env       Mumbai
+```
+
+A Mumbai Supabase URL is already in `.env`, commented. Someone started this and stopped.
+
+### It is multiplied by the permission system
+
+Every guarded route does **two** database reads before its own work:
+
+```
+requireAuth()  -> getCurrentUser()   1 query
+userCan()      -> getAccess()        1 query, 170 RolePermission rows, 3-table join
+```
+
+**167 routes** are guarded. `getAccess` is wrapped in React `cache()`, but that dedupes
+**within a single request only** — deliberately, so a revoked grant applies immediately
+rather than surviving in a cross-request cache. So the cost is real and repeats per call.
+
+One API call therefore costs ~2 round trips before it starts. The dashboard fires **7 in
+parallel**, each paying that toll; parallelism hides some of it, but the slowest gates the
+screen.
+
+### And almost nothing is cached
+
+```
+204 routes   export const dynamic = "force-dynamic"    no caching at all
+  7 routes   export const revalidate                   cached
+```
+
+### The fix, in order of impact
+
+| | Change | Expected effect |
+|---|---|---|
+| ~~0a~~ | ~~Move the database to Mumbai~~ | **REJECTED by the owner, 30 Aug 2026.** See below. |
+| 0b | Merge the two auth reads into one | removes 1 round trip from all 167 guarded routes |
+| 0c | Cache what is genuinely static — modules, categories, brands | removes repeat reads of data that changes weekly |
+| 0d | Batch the remaining N+1s | the import 504 is one instance of this |
+
+> **0a is rejected. Owner’s decision, 30 Aug 2026 — the database stays in Singapore.**
+>
+> Recorded rather than argued: the case was made and declined. It matters that the reason
+> this section exists does not quietly disappear, because **every remaining item on this list
+> is now a smaller multiple of a constant that is not going to change.** ~355 ms locally, and
+> whatever Vercel measures in production, is the floor for a single round trip.
+>
+> **That makes 0b–0d more valuable, not less.** With the latency fixed you could tolerate a
+> few extra queries; without it, every avoided round trip is the whole win. The work shifts
+> from “make queries faster” to “make fewer of them”:
+>
+> - **0b** halves the auth cost on all 167 guarded routes — the single biggest remaining lever
+> - **0c** removes repeat reads of data that changes weekly (modules, categories, brands)
+> - **0d** is the per-record loops, of which the import 504 is the visible one
+>
+> A cheaper alternative to a full move, if it is ever reconsidered: a **read replica** in
+> `ap-south-1` for the read-heavy screens, leaving writes in Singapore. More moving parts, but
+> no cutover and no downtime.
+
+### 0a is a migration, not a config change — kept for the record only
+
+Repointing `DATABASE_URL` at an empty Mumbai project loses everything. The sequence:
+
+```
+1  confirm the ap-south-1 project exists and whether it holds anything
+2  pg_dump the Singapore database                  (small: 171 products, 911 previews)
+3  restore into ap-south-1
+4  verify row counts match, table by table
+5  repoint DATABASE_URL and DIRECT_URL, locally AND in Vercel
+6  re-measure SELECT 1
+7  keep the Singapore project untouched for a few days as the rollback
+```
+
+> **There is downtime**, and both Vercel deployments read this database. The data is small
+> enough that the window is minutes, but it is a cutover and wants a quiet moment.
+
+> **The 355 ms figure is from the owner's laptop.** Vercel's `bom1` has better peering to
+> Singapore, so production is likely 40-80 ms rather than 355 — still bad, and still the
+> dominant cost, but the local experience is markedly worse. Both were reported as slow.
+> Vercel's function logs give the production number precisely; worth reading before and
+> after so the improvement is measured rather than assumed.
+
+### 0b, concretely
+
+`requireAuth()` and `getAccess()` both read the same `User` row. They could be one query
+returning the user and their role's permissions together, halving the auth cost on every
+guarded route without weakening anything — the per-request freshness that makes a revoked
+grant apply immediately is preserved, because it is still read per request.
+
+---
 ## 1. The five, and what is already true
 
 | # | Phase | Status today |
@@ -22,7 +126,7 @@ Two of the five are already fixed. What follows is the other three, plus verific
 
 ## 2. Questions — answer to refine, not to unblock
 
-**Q1 — Stock audit: which screen, and what symptom?**
+**Q1 — ANSWERED: fixed.** The owner confirms `/stock-audit/new` is working after `a578aac`. This phase is verification only.
 `/stock-audit/new` crashed with *"This page couldn't load"* and was fixed in `a578aac`: it rendered `role` — an object from `/api/users` — directly as a React child, which throws *"Objects are not valid as a React child"* and trips the error boundary. It painted first and died when the user list arrived, which matches the report exactly.
 **Default: treat it as fixed and verify only.** If a different screen or symptom is meant, this phase reopens.
 
@@ -30,12 +134,17 @@ Two of the five are already fixed. What follows is the other three, plus verific
 It has **0 rows**, one meaningful column, and all three readers already collapse a missing row to `?? 7`.
 **Default: yes, fold it** (Phase 4a). Building the inline editor against a surviving 1:1 table means rewriting it the moment the fold happens anyway.
 
-**Q3 — On a permanent delete, also delete the product's S3 images?**
+**Q3 — On a permanent delete, also delete the product's S3 images?** *(still open)*
+
+> The owner's reply — *"by default make it soft delete not hard delete, and in that screen
+> I must be able to see the soft deleted listing so I can delete it hard"* — answers the
+> DELETE UX, which §6 already specifies and now states as the default. It does not answer
+> the images question, which is narrower:
 `Product.imageUrls` is a `String[]` of S3 URLs and **nothing cleans them up** — no product route calls `storage.delete` or `keyFromUrl`.
 **Default: leave them.** A hard delete already refuses whenever anything references the product, so this only ever affects a product with no history; orphaned objects cost pennies, and deleting the wrong key is unrecoverable. Worth revisiting as a sweep, not inside a delete handler.
 
-**Q4 — Keep the bottom sheet on phones?**
-**Default: yes.** Bottom sheet below `sm`, right drawer at `sm` and up. A right drawer on a 375 px screen is a full-screen overlay with extra animation — the bottom sheet is what phones expect and it already works.
+**Q4 — ANSWERED: no. Use the side drawer at every width.** The owner wants one consistent filter surface across all screen sizes for flexibility, rather than two presentations to reason about.
+Considered and rejected: a bottom sheet below `sm`. It is the more conventional mobile pattern, but two presentations means two sets of behaviour to keep correct across twelve screens, and the owner would rather have one. Below `sm` the drawer takes the full width, which is the same thing a bottom sheet does with a different animation.
 
 ---
 
@@ -79,10 +188,12 @@ Fixing the component moves all twelve. That is the *reason* to fix it there — 
 
 ### The shape
 
+**One presentation at every width** — a right-hand drawer. Decided 30 Aug 2026: the owner
+wants a single consistent filter surface rather than two behaviours to reason about.
+
 | Width | Presentation |
 |---|---|
-| below `sm` | bottom sheet, unchanged |
-| `sm` and up | right drawer, `w-80`, full height, slides in from the right |
+| all | right drawer, full height, slides in from the right; `w-80` at `sm` and up, full width below |
 
 Required behaviour, all of it:
 
@@ -183,6 +294,8 @@ Without it a deactivated product **vanishes with no way back**: `/stock` filters
 One branch, five commits, each independently revertable:
 
 ```
+0a ops           database -> Mumbai           NOT a code change. Migration + cutover.
+0b perf          one auth query, not two      167 routes
 1  fix(storage)   S3 Content-Length            ALREADY DONE on fix/zoho-import-reliability
 2  test           stock audit — verify only    no commit unless it reopens
 3  feat(ui)       filter becomes a side drawer 1 file, 12 screens benefit
