@@ -76,11 +76,29 @@ export class S3Provider implements StorageProvider {
   }
 
   async put(key: string, body: ArrayBuffer | Buffer | Blob, contentType: string): Promise<string> {
-    log.debug("-> PUT object", { key, contentType });
+    // S3 REQUIRES Content-Length on a PUT and refuses Transfer-Encoding: chunked with
+    //
+    //   501 NotImplemented — "A header you provided implies functionality that is not
+    //   implemented"   <Header>Transfer-Encoding</Header>
+    //
+    // Chunked is what undici falls back to when it cannot determine the body's length. The
+    // caller always passes something whose length IS known, so the length is lost in
+    // between: aws4fetch re-wraps the body in a `new Request()` to compute the SigV4 payload
+    // hash, and a known-length body does not survive that rebuild.
+    //
+    // Normalising to a Uint8Array and stating the length explicitly is what keeps it a sized
+    // body. Do not "simplify" this back to passing `body` straight through.
+    const bytes = await toBytes(body);
+
+    log.debug("-> PUT object", { key, contentType, bytes: bytes.byteLength });
     const res = await this.client.fetch(this.objectUrl(key), {
       method: "PUT",
-      headers: { "Content-Type": contentType, "Cache-Control": IMMUTABLE_CACHE_CONTROL },
-      body: body as BodyInit,
+      headers: {
+        "Content-Type": contentType,
+        "Cache-Control": IMMUTABLE_CACHE_CONTROL,
+        "Content-Length": String(bytes.byteLength),
+      },
+      body: bytes,
     });
     if (!res.ok) {
       const detail = (await res.text()).slice(0, 200);
@@ -172,11 +190,26 @@ export class S3Provider implements StorageProvider {
       `<MaxAgeSeconds>86400</MaxAgeSeconds>` +
       `</CORSRule></CORSConfiguration>`;
 
-    log.debug("-> PUT bucket CORS", { bucket: this.bucket, origins: merged.length });
+    // Same Content-Length requirement as put() — see the note there. A string body happens
+    // to survive aws4fetch's rebuild more often than a Buffer does, but relying on that is
+    // relying on an implementation detail of a library we do not control.
+    const bytes = new TextEncoder().encode(xml);
+
+    // `origins: merged.length`, not the old single `allowedOrigin` — this method now takes a
+    // list and writes the union with what the bucket already allowed, so there is no one
+    // origin to name.
+    log.debug("-> PUT bucket CORS", {
+      bucket: this.bucket,
+      origins: merged.length,
+      bytes: bytes.byteLength,
+    });
     const res = await this.client.fetch(`${this.bucketEndpoint()}/?cors`, {
       method: "PUT",
-      headers: { "Content-Type": "application/xml" },
-      body: xml,
+      headers: {
+        "Content-Type": "application/xml",
+        "Content-Length": String(bytes.byteLength),
+      },
+      body: bytes,
     });
     if (!res.ok) {
       const detail = (await res.text()).slice(0, 300);
@@ -186,6 +219,28 @@ export class S3Provider implements StorageProvider {
     log.info("bucket CORS policy applied", { bucket: this.bucket, origins: merged.length });
     return merged;
   }
+}
+
+/**
+ * Normalise an upload body to a Uint8Array whose byte length is knowable.
+ *
+ * This exists for one reason: S3 rejects `Transfer-Encoding: chunked` with 501
+ * NotImplemented, and undici sends chunked whenever it cannot size the body. A Buffer is
+ * already a Uint8Array, but aws4fetch re-wraps the body in a `Request` to sign it and the
+ * length does not survive — so the size is asserted explicitly by the callers instead.
+ *
+ * A Blob has to be read into memory to be measured. Uploads here are photos and small
+ * documents, so that is acceptable; a genuinely large file would want a multipart upload,
+ * which this provider does not implement.
+ */
+async function toBytes(body: ArrayBuffer | Buffer | Blob): Promise<Uint8Array<ArrayBuffer>> {
+  if (body instanceof Blob) return new Uint8Array(await body.arrayBuffer());
+  if (body instanceof ArrayBuffer) return new Uint8Array(body);
+  // Copies. A Buffer can be a view onto a pooled or shared ArrayBuffer, and a view carrying
+  // `ArrayBufferLike` is not accepted as a `BodyInit`. Copying yields a Uint8Array backed by
+  // a plain ArrayBuffer, and also detaches the upload from Node's shared Buffer pool — worth
+  // it for the photo-sized payloads this handles.
+  return new Uint8Array(body);
 }
 
 /** Encode each path segment but keep the slashes — the key's shape is part of its identity. */

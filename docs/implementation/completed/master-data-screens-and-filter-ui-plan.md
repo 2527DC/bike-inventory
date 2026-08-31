@@ -2,8 +2,9 @@
 
 Status: completed — 30 Aug 2026. Parts A, C and D shipped (commits `eda3013`, `1e4ed73`,
 `78d388f`); **Part B was moved out**, not built here — it is now
-`pending/sidebar-categories-and-accounts-trim-plan.md`. Q1 was answered by the
-implementation: delete is soft by default with a hard delete behind blocker counts.
+`pending/sidebar-categories-and-accounts-trim-plan.md`, and Q2 went with it. Q1 and Q3 were
+answered on `main` the same day and the implementation matches both answers: delete is soft
+by default with a hard delete behind blocker counts, and the filter is a right drawer.
 Branch: **`perf/single-auth-query-v2`** — Parts A, C and D landed on this branch, not on the
 `feat/master-data-screens` this document originally proposed.
 Prepared 30 Aug 2026. Every claim below was checked against the tree and the live database.
@@ -16,7 +17,7 @@ Four things, of which three are the same underlying gap: **the taxonomy tables Z
 
 | Part | Ask | Today |
 |---|---|---|
-| **A** | Delete a product from `/stock` | `DELETE /api/products/[id]` exists and **no screen calls it** |
+| **A** | Delete a product from `/stock` — **soft and hard, both** | `DELETE /api/products/[id]` exists, **no screen calls it**, and it soft-deletes while claiming otherwise |
 | **B** | Categories listing + actions, in the sidebar | **No screen, no RBAC module, no PATCH, no DELETE** |
 | **C** | Brands listing + actions, with lead time on the same page | `/more/brands` does **merge only** |
 | **D** | `/receivables` filter is a bottom sheet and reads badly | `FilterSheet` opens upward from the bottom, on **12 screens** |
@@ -56,11 +57,43 @@ A product is referenced by `StockLevel`, `InventoryTransaction`, `SerialItem`, `
  to preserve records."
 ```
 
+### Restore, and reaching a deactivated product — added 30 Aug 2026
+
+A soft delete that cannot be undone is a trap, and one you cannot *see* is worse: the
+product vanishes from `/stock` and there is no screen that lists it. Three things follow.
+
+**1. `/stock` must be able to show deactivated products.** The list filters to
+`status: "ACTIVE"` today, so a deactivated product disappears entirely with no way back.
+A status filter — Active / Inactive / All — is the minimum, and it is where the other two
+actions live.
+
+**2. Restore.** `PATCH` back to `ACTIVE`, guarded by `stock.edit` — the same grant that
+deactivated it. Nothing else changes: stock levels, transactions and serials were never
+touched, which is the whole point of a soft delete.
+
+**3. Delete permanently, from the deactivated state.** The common flow is deactivate first,
+then remove for good once you are sure. That second step must still refuse when anything
+references the row — being deactivated does not make a product's history disposable.
+
+So the full set, and each says exactly what it does:
+
+| Action | Effect | Guard | Available when |
+|---|---|---|---|
+| **Deactivate** | `status: "INACTIVE"` | `stock.edit` | product is ACTIVE |
+| **Restore** | `status: "ACTIVE"` | `stock.edit` | product is INACTIVE |
+| **Delete permanently** | row removed | `stock.delete` | **nothing references it** — from either state |
+
+> **Deactivated is not deleted, and the UI must not blur that.** A deactivated product keeps
+> its SKU, so creating a new product with the same SKU still fails on the unique constraint.
+> That is correct — but it is confusing unless the screen can show the deactivated row that
+> is holding the SKU. Another reason the status filter is not optional.
+
 ### Scope
 
 | File | Change |
 |---|---|
-| `api/products/[id]/route.ts` | DELETE returns `{ deleted, deactivated, name, message }`; hard-deletes only when every `_count` is zero |
+| `api/products/[id]/route.ts` | `PATCH` deactivates and restores (`stock.edit`); `DELETE` hard-deletes and refuses with counts when anything references the row (`stock.delete`) |
+| `api/products/route.ts` | accept `?status=INACTIVE` / `?status=ALL`; today it defaults to ACTIVE and offers no way past it |
 | `(dashboard)/stock/page.tsx` | a delete action per row behind `canDelete("stock")`, `confirm()` first, result through `ActionConfirmation` |
 | `(dashboard)/stock/[id]/page.tsx` | the same action on the detail screen |
 
@@ -214,15 +247,51 @@ Both new screens need to appear. The sidebar is built from the `modules` table, 
 
 ## 7. Open questions
 
-**Q1 — should a product ever be hard-deleted, and by whom?**
-Today's DELETE only sets `status: "INACTIVE"` and nothing calls it. Options: (a) keep it soft always and rename the button "Deactivate" so the UI stops promising something it does not do; (b) `/team`'s rule — hard delete when nothing references it, refuse with counts otherwise; (c) hard delete behind a separate grant.
-**Recommendation: (b).** It matches an existing precedent in this codebase, it never destroys history, and the refusal message is actionable.
+**Q1 — ANSWERED 30 Aug 2026: both. Two distinct actions, not one button that guesses.**
+
+The owner wants a soft delete AND a hard delete, chosen deliberately rather than inferred from
+whether the product happens to have history.
+
+| Action | Does | Guard | Available when |
+|---|---|---|---|
+| **Deactivate** | `status: "INACTIVE"` — hides it from pickers, keeps every record | `stock.edit` | always |
+| **Delete permanently** | removes the row | `stock.delete` | **only when nothing references it** |
+
+Two things this pins down:
+
+- **Hard delete stays refusable.** A product with `InventoryTransaction`, `StockLevel`,
+  `SerialItem`, `InboundLineItem`, `TransferOrderItem`, `StockCountItem` or `PreBooking` rows
+  cannot be removed — the foreign keys forbid it and, more importantly, deleting it would
+  destroy the audit trail. The API refuses with the counts and points at Deactivate:
+
+  ```
+  "BSA REVX 14T has 3 transactions and 1 stock row and cannot be deleted.
+   Deactivate it instead to hide it while keeping its history."
+  ```
+
+- **Deactivate becomes its own verb.** Today `DELETE /api/products/[id]` *says* delete and
+  *does* deactivate. That lie is removed: `PATCH` deactivates, `DELETE` deletes, and each
+  button does what its label says.
+
+The UI shows both, with the destructive one styled as destructive and confirmed separately.
+Rendering the API's `message` verbatim still applies — never report a refusal as a success.
 
 **Q2 — what happens to a category or brand that products still reference?**
 Refuse with a count and offer merge? Or force a merge target as part of the delete? Merge is the operation that actually cleans up wheel-size categories, so it may be worth making it the *primary* action and delete the rare one.
 
-**Q3 — is a right-hand drawer the filter shape you want on desktop?**
-Alternatives: an inline filter bar above the table (no overlay at all), or a left drawer. This changes twelve screens, so it is worth being sure. An inline bar is arguably better for a data table but is a larger change to each page.
+**Q3 — ANSWERED 30 Aug 2026: a right-hand drawer, with an explicit close button.**
+
+Opens on clicking Filter, slides in from the right, and carries an **X in its header** —
+clicking the backdrop must not be the only way out. Applies to **all twelve screens** that use
+`FilterSheet`, which the owner confirmed is wanted.
+
+Required behaviour:
+
+- `X` in the drawer header, and `Esc` closes it
+- backdrop click still closes, as a second route out and not the only one
+- focus moves into the drawer on open and returns to the Filter button on close
+- the drawer scrolls internally; the page behind it does not
+- active-filter chips keep their present behaviour so nothing has to be relearned
 
 **Q4 — should `/more/brand-lead-times` be deleted, or kept as a redirect?**
 It will have no reason to exist once lead time is inline on `/more/brands`. Anyone with it bookmarked gets a 404 unless it redirects.
@@ -236,7 +305,7 @@ It will have no reason to exist once lead time is inline on `/more/brands`. Anyo
 1  D  filter drawer          component-only, 12 screens benefit, zero call-site changes
 2  B  categories screen      catalog + seed FIRST, then routes, then screen
 3  C  brands screen          absorbs lead time; delete /more/brand-lead-times
-4  A  product delete         after Q1
+4  A  product delete         Deactivate + Delete permanently, Q1 answered
 ```
 
 **D first** because it touches one component, needs no schema or catalog change, and is the lowest-risk way to confirm the approach. **A last** because it is the only destructive one.
@@ -245,10 +314,10 @@ It will have no reason to exist once lead time is inline on `/more/brands`. Anyo
 
 ## 9. Verification
 
-- **A** — deleting a product with transactions is **refused** with a count; one with no history is removed and disappears from `/stock`. The dialog says which happened.
+- **A** — **Deactivate** on a product with transactions succeeds and it leaves the default list but keeps its history. Switching the status filter to Inactive shows it again. **Restore** brings it back to Active with its stock levels intact. **Delete permanently** on that same product is **refused** with the counts; on a product with no history it removes the row. The dialog says which of the four happened, in the API's own words.
 - **B** — merging `16` into `Bicycles` moves its products and removes `16`; `/stock` category filters still populate for a user **without** `categories.view` (proves `GET` stayed on `stock.view`).
 - **C** — changing a lead time on `/more/brands` changes the expected delivery date on the next inbound shipment for that brand. A user with `brands.edit` and **not** `brands.create` can save it — that is the guard bug the other plan fixes, and testing only as ADMIN proves nothing.
-- **D** — the filter opens as a right drawer at desktop width and as a bottom sheet on a phone, on `/receivables` **and** on at least two other screens that were not touched.
+- **D** — the filter opens as a right drawer at desktop width and as a bottom sheet on a phone, on `/receivables` **and** on at least two other screens that were not touched. The **X** closes it, `Esc` closes it, and focus returns to the Filter button.
 - `npm run build` passes after each part.
 
 ## 10. Board of Agents
