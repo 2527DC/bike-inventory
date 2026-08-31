@@ -53,7 +53,8 @@ export class InventoryClient extends IntegrationClient {
     return this.apiCall<{ item: { item_id: string; name: string; sku: string } }>(
       "POST",
       "/items",
-      itemData
+      itemData,
+      "items.create.inventory"
     );
   }
 }

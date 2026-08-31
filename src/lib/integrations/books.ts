@@ -24,11 +24,11 @@ export class BooksClient extends IntegrationClient {
         item_type: "inventory",
         product_type: "goods",
       }),
-    });
+    }, "items.create");
   }
 
   async getItem(itemId: string) {
-    return this.apiCall<{ item: Record<string, unknown> }>("GET", `/items/${itemId}`);
+    return this.apiCall<{ item: Record<string, unknown> }>("GET", `/items/${itemId}`, undefined, "items.get");
   }
 
   // ─── Contacts (vendors and customers) ──────────────────────────────────────
@@ -50,7 +50,7 @@ export class BooksClient extends IntegrationClient {
           state: vendor.state || undefined,
         },
       }),
-    });
+    }, "contacts.create");
   }
 
   async searchContacts(searchText: string, contactType?: string) {
@@ -65,7 +65,12 @@ export class BooksClient extends IntegrationClient {
         mobile?: string;
         billing_address?: { city?: string; state?: string; address?: string };
       }>;
-    }>("GET", `/contacts?search_text=${encodeURIComponent(searchText)}${typeParam}&per_page=10`);
+    }>(
+      "GET",
+      `/contacts?search_text=${encodeURIComponent(searchText)}${typeParam}&per_page=10`,
+      undefined,
+      "contacts.search"
+    );
   }
 
   async listContacts(page = 1, lastModifiedTime?: string) {
@@ -84,7 +89,12 @@ export class BooksClient extends IntegrationClient {
         billing_address?: { city?: string; state?: string };
       }>;
       page_context?: { has_more_page: boolean };
-    }>("GET", `/contacts?contact_type=vendor&page=${page}&per_page=200${modifiedParam}`);
+    }>(
+      "GET",
+      `/contacts?contact_type=vendor&page=${page}&per_page=200${modifiedParam}`,
+      undefined,
+      "contacts.list"
+    );
   }
 
   async listAllContacts(lastModifiedTime?: string) {
@@ -121,7 +131,7 @@ export class BooksClient extends IntegrationClient {
           rate: item.rate,
         })),
       }),
-    });
+    }, "invoices.create");
   }
 
   async createBill(data: {
@@ -145,7 +155,7 @@ export class BooksClient extends IntegrationClient {
           hsn_or_sac: item.hsn || "",
         })),
       }),
-    });
+    }, "bills.create");
   }
 
   /**
@@ -157,7 +167,9 @@ export class BooksClient extends IntegrationClient {
   async getOrganizations() {
     return this.apiCall<{ organizations: Array<{ organization_id: string; name: string }> }>(
       "GET",
-      "/../organizations"
+      "/../organizations",
+      undefined,
+      "organizations.list"
     );
   }
 }
