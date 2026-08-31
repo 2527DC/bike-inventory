@@ -31,6 +31,48 @@ export class BooksClient extends IntegrationClient {
     return this.apiCall<{ item: Record<string, unknown> }>("GET", `/items/${itemId}`, undefined, "items.get");
   }
 
+  /**
+   * Update fields on an existing Zoho item.
+   *
+   * This was the ONLY write to Zoho with no client method — `api/stock/price-check` called
+   * `apiCall("PUT", …)` raw from inside a route handler, so the one endpoint in this
+   * application that OVERWRITES existing Zoho data appeared in no client and no listing.
+   * Every other write creates a new record; this one changes a record that is already there,
+   * which makes it the one most worth having in a single, findable place.
+   *
+   * `JSONString` wrapping is Books' convention for writes — see createItem. Zoho Inventory
+   * posts the object directly, which is why this lives on BooksClient rather than the base.
+   */
+  async updateItem(itemId: string, fields: Record<string, unknown>) {
+    return this.apiCall<{ item?: Record<string, unknown> }>(
+      "PUT",
+      `/items/${itemId}`,
+      { JSONString: JSON.stringify(fields) },
+      "items.update"
+    );
+  }
+
+  /**
+   * Search invoices by any combination of Zoho's query parameters.
+   *
+   * Generic in the row type because the caller owns the shape it wants back: the workshop
+   * reads a handful of fields off an invoice and declares its own `ServiceInvoice`, and the
+   * client has no business knowing about that type.
+   *
+   * The invoice-number FORMAT GUESSING that surrounds this in src/lib/services/zoho.ts —
+   * "17898" -> "017898" -> "INV/25/017898" -> search_text — deliberately stays there. That
+   * is workshop business logic about how the counter writes invoice numbers, not transport.
+   */
+  async searchInvoices<T>(params: Record<string, string>) {
+    const query = new URLSearchParams(params).toString();
+    return this.apiCall<{ invoices?: T[] }>(
+      "GET",
+      `/invoices?${query}`,
+      undefined,
+      "invoices.search"
+    );
+  }
+
   // ─── Contacts (vendors and customers) ──────────────────────────────────────
   // Only Books deals in contacts. This is where every Vendor imported from Zoho comes from.
 

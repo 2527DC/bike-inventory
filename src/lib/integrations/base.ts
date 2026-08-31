@@ -200,13 +200,24 @@ export abstract class IntegrationClient {
   /**
    * One HTTP call to the provider, with auth, a single 401 retry and 429 backoff.
    *
-   * `key` names the call from src/lib/integrations/endpoints.ts. It is a LOG LABEL and
-   * nothing else — no dispatch reads it, and the URL is still built by the caller. It
-   * exists so a debug line says `bills.list` instead of an interpolated path carrying a
-   * date range and a search term, which makes one request impossible to correlate with
-   * the next.
+   * **`protected` on purpose — this is the boundary, enforced by the compiler.**
+   *
+   * Four call sites used to reach it from outside `src/lib/integrations/`: a `PUT /items/{id}`
+   * in a route handler and three invoice searches in the workshop layer. Each was a Zoho
+   * endpoint that existed in no client and appeared in no listing, which is precisely the
+   * problem the registry was written to solve — a registry anyone can bypass documents
+   * nothing. Every one of them now has a client method (`updateItem`, `searchInvoices`), so
+   * the door can be shut behind them.
+   *
+   * Adding a Zoho call therefore means adding a method here plus an entry in endpoints.ts.
+   * That is a rule a review can forget; `protected` cannot.
+   *
+   * `key` names the call from endpoints.ts. It is a LOG LABEL and nothing else — no dispatch
+   * reads it, and the URL is still built by the caller. It exists so a debug line says
+   * `bills.list` instead of an interpolated path carrying a date range and a search term,
+   * which makes one request impossible to correlate with the next.
    */
-  async apiCall<T>(
+  protected async apiCall<T>(
     method: string,
     endpoint: string,
     body?: Record<string, unknown>,

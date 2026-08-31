@@ -70,6 +70,15 @@ export const ENDPOINTS = {
     owner: "listInvoices / listAllInvoices",
     purpose: "Pull sales invoices for delivery matching and receivables",
   },
+  "invoices.search": {
+    key: "invoices.search",
+    method: "GET",
+    path: "/invoices?phone|invoice_number|search_text&per_page&sort_column&sort_order",
+    providers: BOOKS_ONLY,
+    owner: "BooksClient.searchInvoices",
+    purpose:
+      "Find a customer's invoice at the workshop counter — by phone, by invoice number, or by free text",
+  },
   "invoices.get": {
     key: "invoices.get",
     method: "GET",
