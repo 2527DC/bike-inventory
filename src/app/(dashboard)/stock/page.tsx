@@ -447,20 +447,49 @@ export default function StockPage() {
   }
 
   /**
-   * Permanent delete. The API refuses and names what is holding the row whenever anything
-   * references it, so a refusal arrives as 200 with deleted:false — not an error. Rendering
-   * it as a failure would be wrong: nothing broke, the request was declined for a stated
-   * reason.
+   * Permanent delete, in one dialog: ask the API what is attached, show that, then delete.
+   *
+   * The confirmation names the actual records before anything is destroyed, so the
+   * destructive answer is never a surprise — and because only one dialog is ever raised, a
+   * browser cannot suppress the one that matters. The server still refuses a delete that
+   * did not ask for force, so this screen is not the only gate.
    */
   async function deleteProduct(p: ProductItem) {
-    if (!confirm(`Permanently delete ${p.name}? This cannot be undone. If it has any history you will be told instead.`)) return;
     setRowBusy(p.id);
     try {
-      const res = await apiFetch<{ deleted: boolean; name: string; message: string }>(
-        `/api/products/${p.id}`,
+      // Ask what is attached FIRST. ?check=true counts and returns; it deletes nothing.
+      //
+      // This exists so there is exactly ONE dialog. There used to be two chained confirm()
+      // calls — one before the request, a second after the API refused and named the
+      // blockers. Chrome puts a "Prevent this page from creating additional dialogs"
+      // checkbox on the SECOND dialog of a chain, and once that is ticked every later
+      // confirm() returns false with nothing shown. The force path was therefore
+      // unreachable: you saw the refusal message and never got the prompt. A single dialog
+      // cannot be suppressed that way.
+      const check = await apiFetch<{ name: string; blockers?: string[] }>(
+        `/api/products/${p.id}?check=true`,
         { method: "DELETE" }
       );
-      log.info("product delete handled", { productId: p.id, deleted: res.deleted });
+      const blockers = check.blockers ?? [];
+      const what = blockers.join(", ");
+      log.debug("product delete check", { productId: p.id, blockers });
+
+      const ok = confirm(
+        what
+          ? `${check.name} has ${what}.\n\nDelete the product AND all of that data permanently?\n\nThis removes its stock history and cannot be undone.`
+          : `Permanently delete ${check.name}? This cannot be undone.`
+      );
+      if (!ok) return;
+
+      // force only when something is actually attached, so a clean product still takes the
+      // safe path and the server keeps its own guard either way.
+      const res = await apiFetch<{ deleted: boolean; name: string; message: string }>(
+        `/api/products/${p.id}${what ? "?force=true" : ""}`,
+        { method: "DELETE" }
+      );
+      if (what) log.warn("product force deleted", { productId: p.id, blockers });
+      else log.info("product deleted", { productId: p.id });
+
       setRowOutcome({ ok: res.deleted, name: res.name, message: res.message });
       fetchProducts(1);
     } catch (e) {
