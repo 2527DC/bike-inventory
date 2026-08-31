@@ -74,27 +74,21 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
   callbacks: {
+    // Runs at sign-in (with `user`) AND on every session read (without it) — with the JWT
+    // strategy, next-auth invokes this callback each time the cookie is decoded. So
+    // anything done here happens on EVERY authenticated request.
+    //
+    // It therefore does no database work. It used to re-read the User row here to refresh
+    // token.roleKey / token.roleName, which cost one query per session read on top of
+    // getAccess() — the same row, twice. Those two fields are now served from getAccess()
+    // instead (see getCurrentUser in src/lib/auth-helpers.ts), which reads them fresh from
+    // the database per request, so the copies in the token are display fallbacks and
+    // nothing reads them for a decision.
     async jwt({ token, user }: { token: AppToken; user?: AppAuthUser }) {
       if (user) {
         token.userId = user.id;
         token.roleKey = (user as unknown as { roleKey: string }).roleKey;
         token.roleName = (user as unknown as { roleName: string }).roleName;
-      } else if (token.userId) {
-        // Refresh the role label live so a reassigned user sees the change without
-        // logging out. This is DISPLAY ONLY — authorisation never reads the token, it
-        // resolves permissions from the DB per request (src/lib/rbac.ts).
-        try {
-          const dbUser = await prisma.user.findUnique({
-            where: { id: token.userId as string },
-            select: { role: { select: { key: true, name: true } } },
-          });
-          if (dbUser?.role) {
-            token.roleKey = dbUser.role.key;
-            token.roleName = dbUser.role.name;
-          }
-        } catch {
-          /* keep the existing token values on a transient DB error */
-        }
       }
       return token;
     },

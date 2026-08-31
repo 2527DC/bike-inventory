@@ -67,6 +67,18 @@ export interface ResolvedAccess {
   roleId: string;
   roleKey: string;
   roleName: string;
+  /**
+   * The identity fields, so a caller does not need a SECOND read of the same User row.
+   *
+   * getCurrentUser() used to issue its own `user.findUnique` alongside this one, and the
+   * next-auth jwt callback a third — three round trips to the same row on every guarded
+   * request, across 190 route files. This query already touches that row; carrying four
+   * more columns costs nothing and removed both of the others.
+   *
+   * `null` when the user does not exist, is deactivated, or sits on a deactivated role —
+   * exactly the cases where getCurrentUser() returns null.
+   */
+  user: { id: string; name: string; email: string; isActive: boolean } | null;
   /** module key -> { action -> true }. Absent action means "not granted". */
   permissions: Record<string, Partial<Record<PermAction, boolean>>>;
   /** Only modules the user can view, ordered for the sidebar. */
@@ -78,6 +90,9 @@ const EMPTY_ACCESS = (userId: string): ResolvedAccess => ({
   roleId: "",
   roleKey: "",
   roleName: "",
+  // null, not a placeholder: an inactive user is not a user with an empty name. Callers
+  // test this to decide "is there anybody here", so it must be honest.
+  user: null,
   permissions: {},
   modules: [],
 });
@@ -95,6 +110,9 @@ export const getAccess = cache(async (userId: string): Promise<ResolvedAccess> =
     where: { id: userId },
     select: {
       id: true,
+      // name and email are here for getCurrentUser — see ResolvedAccess.user.
+      name: true,
+      email: true,
       isActive: true,
       role: {
         select: {
@@ -180,6 +198,7 @@ export const getAccess = cache(async (userId: string): Promise<ResolvedAccess> =
     roleId: user.role.id,
     roleKey: user.role.key,
     roleName: user.role.name,
+    user: { id: user.id, name: user.name, email: user.email, isActive: user.isActive },
     permissions,
     modules,
   };

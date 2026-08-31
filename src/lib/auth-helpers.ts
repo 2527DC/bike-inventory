@@ -1,8 +1,8 @@
+import { cache } from "react";
 import { getServerSession as nextAuthGetServerSession } from "next-auth";
 import { decode } from "next-auth/jwt";
 import { headers } from "next/headers";
 import { authOptions } from "@/lib/auth";
-import { prisma } from "@/lib/db";
 import { getAccess, userCan, type PermAction } from "@/lib/rbac";
 
 export type { PermAction };
@@ -29,8 +29,12 @@ export async function getServerSession() {
  * Supports both:
  * 1. Web session cookies (NextAuth getServerSession)
  * 2. Mobile / API Bearer tokens (Authorization: Bearer <jwt>)
+ *
+ * Wrapped in React cache() for the same reason getAccess is: a route that calls
+ * requireFeature twice would otherwise decode the session cookie twice. Request-scoped, so
+ * two requests never share a result — see the note on getAccess in src/lib/rbac.ts.
  */
-export async function getCurrentUser(): Promise<CurrentUser | null> {
+export const getCurrentUser = cache(async function getCurrentUser(): Promise<CurrentUser | null> {
   let userId: string | null = null;
 
   // 1. Check NextAuth cookie session (for Web)
@@ -68,30 +72,33 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 
   if (!userId) return null;
 
-  const dbUser = await prisma.user.findUnique({
-    where: { id: userId },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      isActive: true,
-      roleId: true,
-      role: { select: { key: true, name: true, isActive: true } },
-    },
-  });
+  // Reads through getAccess rather than issuing its own `user.findUnique`.
+  //
+  // Three separate reads of the SAME User row used to happen on every guarded request,
+  // across 190 route files: the next-auth jwt callback (role label), this function
+  // (identity) and getAccess (permissions). The jwt callback's read is gone
+  // (src/lib/auth.ts) and this one now comes out of getAccess, which already selects
+  // everything needed here — so requireFeature() costs ONE query: requireAuth and userCan
+  // share it via React cache().
+  //
+  // Per-request freshness is unchanged. cache() dedupes within a single request only, by
+  // design, so a permission revoked a moment ago still applies on the next request.
+  const access = await getAccess(userId);
 
-  if (!dbUser || !dbUser.isActive || !dbUser.role?.isActive) return null;
+  // getAccess returns user: null for a missing user, a deactivated one, or one whose ROLE is
+  // deactivated — exactly the three cases this used to reject itself.
+  if (!access.user) return null;
 
   return {
-    id: dbUser.id,
-    name: dbUser.name,
-    email: dbUser.email,
-    roleId: dbUser.roleId,
-    roleKey: dbUser.role.key,
-    roleName: dbUser.role.name,
-    isActive: dbUser.isActive,
+    id: access.user.id,
+    name: access.user.name,
+    email: access.user.email,
+    roleId: access.roleId,
+    roleKey: access.roleKey,
+    roleName: access.roleName,
+    isActive: access.user.isActive,
   };
-}
+});
 
 /**
  * Authentication only — "is a real, active user making this request".
