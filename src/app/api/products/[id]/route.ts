@@ -152,7 +152,7 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -202,14 +202,99 @@ export async function DELETE(
     if (c.brandSkuMappings) blockers.push(`${c.brandSkuMappings} SKU mapping(s)`);
     if (c.lmsProducts) blockers.push(`${c.lmsProducts} training record(s)`);
 
-    if (blockers.length) {
+    // ?check=true answers "what is attached" and returns WITHOUT deleting anything.
+    //
+    // The screen calls this first so it can raise ONE accurate confirmation naming the
+    // blockers, rather than attempting a delete and asking a second time after a refusal.
+    // Two chained browser dialogs were unreliable — see the note in stock/page.tsx.
+    if (new URL(req.url).searchParams.get("check") === "true") {
+      log.debug("product delete check", { productId: id, blockers });
+      return successResponse({
+        deleted: false,
+        name: product.name,
+        blockers,
+        canForce: blockers.length > 0,
+        message: blockers.length
+          ? `${product.name} has ${blockers.join(", ")}.`
+          : `${product.name} has no records attached.`,
+      });
+    }
+
+    // ?force=true removes the product AND everything attached to it.
+    //
+    // Deliberately opt-in and never the default. The safe path refuses and explains; this one
+    // destroys audit history, and the caller has to ask for that in the URL. It exists because
+    // a Zoho import can leave hundreds of junk products carrying a transaction and a handful
+    // of serials, and refusing forever means they can never be cleaned up.
+    const force = new URL(req.url).searchParams.get("force") === "true";
+
+    if (blockers.length && !force) {
       log.info("product delete refused", { productId: id, blockers });
       return successResponse({
         deleted: false,
         name: product.name,
+        blockers,
+        // `canForce` tells the screen a second, destructive option exists. Without it the UI
+        // would have to guess, or offer force on products that do not need it.
+        canForce: true,
         message:
           `${product.name} has ${blockers.join(", ")} and cannot be deleted. ` +
           `Deactivate it instead to hide it while keeping its history.`,
+      });
+    }
+
+    if (blockers.length && force) {
+      // One transaction: either the product and all of its records go, or none do. A partial
+      // cascade would leave orphaned lines pointing at a product that no longer exists.
+      //
+      // ORDER MATTERS. SerialTransactionItem sits beneath BOTH SerialItem and
+      // InventoryTransaction, so it must go first or those deletes hit a foreign key.
+      await prisma.$transaction(async (tx) => {
+        const serials = await tx.serialItem.findMany({
+          where: { productId: id },
+          select: { id: true },
+        });
+        const txns = await tx.inventoryTransaction.findMany({
+          where: { productId: id },
+          select: { id: true },
+        });
+
+        if (serials.length || txns.length) {
+          await tx.serialTransactionItem.deleteMany({
+            where: {
+              OR: [
+                { serialItemId: { in: serials.map((r) => r.id) } },
+                { transactionId: { in: txns.map((r) => r.id) } },
+              ],
+            },
+          });
+        }
+
+        // The product's own records — meaningless without it.
+        await tx.serialItem.deleteMany({ where: { productId: id } });
+        await tx.inventoryTransaction.deleteMany({ where: { productId: id } });
+        await tx.stockLevel.deleteMany({ where: { productId: id } });
+
+        // Lines on OTHER documents. Removing these changes what that shipment, order, transfer
+        // or count says — which is why force is opt-in and the response names them.
+        await tx.inboundLineItem.deleteMany({ where: { productId: id } });
+        await tx.purchaseOrderItem.deleteMany({ where: { productId: id } });
+        await tx.transferOrderItem.deleteMany({ where: { productId: id } });
+        await tx.stockCountItem.deleteMany({ where: { productId: id } });
+        await tx.brandSkuMapping.deleteMany({ where: { productId: id } });
+
+        // Optional references: the row survives, it just stops pointing here.
+        await tx.brandStockItem.updateMany({ where: { productId: id }, data: { productId: null } });
+
+        await tx.product.delete({ where: { id } });
+      });
+
+      log.warn("product FORCE deleted with its records", { productId: id, sku: product.sku, blockers });
+      return successResponse({
+        deleted: true,
+        forced: true,
+        name: product.name,
+        message: `${product.name} and its ${blockers.join(", ")} were permanently deleted.`,
       });
     }
 

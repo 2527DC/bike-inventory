@@ -125,20 +125,63 @@ export class S3Provider implements StorageProvider {
   }
 
   /**
-   * Apply the CORS policy that browser presigned uploads require.
+   * The origins the bucket currently allows, or null when that cannot be determined.
    *
-   * Without this every direct upload dies at the preflight, and the browser reports it as
-   * an opaque network error rather than anything that names CORS — which is exactly why
-   * this is offered as a button instead of a documentation step.
+   * `null` and `[]` are different answers and callers must not conflate them: `[]` means
+   * S3 answered and the bucket allows nothing (404 NoSuchCORSConfiguration — the state a
+   * fresh bucket is in), while `null` means we were not allowed to look (no
+   * s3:GetBucketCors) and know nothing either way. Reporting "no CORS configured" for the
+   * second case would send someone to fix a bucket that may be perfectly fine.
    *
-   * Needs s3:PutBucketCors on the IAM user. If that grant is absent this throws, and the
-   * UI falls back to showing the policy for the user to paste into the console.
+   * Origins are parsed with a regex rather than an XML parser on purpose: the response is
+   * a fixed, machine-generated shape from S3, and this file has no XML dependency.
    */
-  async applyCors(allowedOrigin: string): Promise<void> {
+  async readCorsOrigins(): Promise<string[] | null> {
+    const res = await this.client.fetch(`${this.bucketEndpoint()}/?cors`, { method: "GET" });
+
+    if (res.status === 404) {
+      log.debug("bucket has no CORS configuration", { bucket: this.bucket });
+      return [];
+    }
+    if (!res.ok) {
+      log.warn("could not read the bucket CORS policy", { bucket: this.bucket, status: res.status });
+      return null;
+    }
+
+    const xml = await res.text();
+    const origins = [...xml.matchAll(/<AllowedOrigin>([^<]*)<\/AllowedOrigin>/g)].map((m) => m[1]);
+    log.debug("bucket CORS read", { bucket: this.bucket, origins: origins.length });
+    return origins;
+  }
+
+  /**
+   * Allow `origins` to upload to this bucket from a browser.
+   *
+   * Without a matching rule every presigned PUT dies at the preflight, and the browser
+   * reports it as an opaque network error rather than anything that names CORS — which is
+   * exactly why this is offered as a button instead of a documentation step.
+   *
+   * **Merges rather than replaces.** The first version wrote one rule with one origin, so
+   * applying it from localhost silently revoked production's access, and applying it from
+   * production revoked localhost's. Whoever clicked last won and the other environment
+   * started failing with the same unreadable network error. The union of what the bucket
+   * already allows and what is passed in is written back as a single rule; that rule's
+   * methods and headers are a superset of what a browser upload needs.
+   *
+   * Needs s3:PutBucketCors (and s3:GetBucketCors to merge; without it the existing origins
+   * cannot be read and only `origins` survives). If PutBucketCors is absent this throws,
+   * and the UI falls back to showing the policy for the user to paste into the console.
+   *
+   * @returns every origin the bucket allows after the write.
+   */
+  async applyCors(origins: string[]): Promise<string[]> {
+    const existing = (await this.readCorsOrigins()) ?? [];
+    const merged = [...new Set([...existing, ...origins.filter(Boolean)])];
+
     const xml =
       `<?xml version="1.0" encoding="UTF-8"?>` +
       `<CORSConfiguration><CORSRule>` +
-      `<AllowedOrigin>${escapeXml(allowedOrigin)}</AllowedOrigin>` +
+      merged.map((o) => `<AllowedOrigin>${escapeXml(o)}</AllowedOrigin>`).join("") +
       `<AllowedMethod>GET</AllowedMethod>` +
       `<AllowedMethod>PUT</AllowedMethod>` +
       `<AllowedMethod>HEAD</AllowedMethod>` +
@@ -152,7 +195,14 @@ export class S3Provider implements StorageProvider {
     // relying on an implementation detail of a library we do not control.
     const bytes = new TextEncoder().encode(xml);
 
-    log.debug("-> PUT bucket CORS", { bucket: this.bucket, allowedOrigin, bytes: bytes.byteLength });
+    // `origins: merged.length`, not the old single `allowedOrigin` — this method now takes a
+    // list and writes the union with what the bucket already allowed, so there is no one
+    // origin to name.
+    log.debug("-> PUT bucket CORS", {
+      bucket: this.bucket,
+      origins: merged.length,
+      bytes: bytes.byteLength,
+    });
     const res = await this.client.fetch(`${this.bucketEndpoint()}/?cors`, {
       method: "PUT",
       headers: {
@@ -166,11 +216,11 @@ export class S3Provider implements StorageProvider {
       log.error("CORS policy could not be applied", { status: res.status });
       throw new Error(`Could not apply the CORS policy (${res.status}): ${detail}`);
     }
-    log.info("bucket CORS policy applied", { bucket: this.bucket });
+    log.info("bucket CORS policy applied", { bucket: this.bucket, origins: merged.length });
+    return merged;
   }
 }
 
-/** Encode each path segment but keep the slashes — the key's shape is part of its identity. */
 /**
  * Normalise an upload body to a Uint8Array whose byte length is knowable.
  *
@@ -193,6 +243,7 @@ async function toBytes(body: ArrayBuffer | Buffer | Blob): Promise<Uint8Array<Ar
   return new Uint8Array(body);
 }
 
+/** Encode each path segment but keep the slashes — the key's shape is part of its identity. */
 function encodeKey(key: string): string {
   return key.split("/").map(encodeURIComponent).join("/");
 }

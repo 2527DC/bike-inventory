@@ -222,6 +222,27 @@ export const MODULE_CATALOG: ModuleSeed[] = [
 
   // ── Accounts ──────────────────────────────────────────────────────────────
   {
+    // The accounts hub at /accounts — six screens and ~2,500 lines that shipped WITHOUT a
+    // module row. The sidebar renders getAccess().modules, so a screen with no module can
+    // never appear there: /accounts was reachable only through two <Link>s on the home
+    // dashboard, and it borrowed `bills.view` for its permission because it had none of
+    // its own. This entry is what puts it in the sidebar.
+    //
+    // `view` only, deliberately. This is a read-only roll-up — every action it links to
+    // (record a payment, upload a statement, settle a day) lives on another screen and is
+    // gated by that screen's own module. Granting someone the hub should not grant them
+    // the writes underneath it.
+    key: "accounts",
+    label: "Accounts",
+    description: "Accounts hub — payables, receivables, settlement and vendor ledger",
+    icon: "Calculator",
+    route: "/accounts",
+    group: "Accounts",
+    // Ahead of bills (300) so the hub heads its own section rather than trailing it.
+    sortOrder: 290,
+    actions: ["view"],
+  },
+  {
     key: "bills",
     label: "Bills & Payments",
     description: "Vendor bills, payments, credits and bank statements",

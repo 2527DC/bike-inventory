@@ -7,7 +7,10 @@ import type { BillStatus, POStatus, InvoiceStatus } from "@prisma/client";
 
 export async function GET() {
   try {
-    await requireFeature("bills", "view");
+    // `accounts`, not `bills`. This endpoint feeds the /accounts hub, which now has its own
+    // module — gating it on another module's grant meant the hub could not be given to
+    // anyone without also handing them Bills & Payments.
+    await requireFeature("accounts", "view");
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 

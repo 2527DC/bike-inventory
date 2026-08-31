@@ -21,7 +21,12 @@ import {
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { SkeletonDashboard } from "@/components/ui/skeleton";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { usePermissions } from "@/lib/use-permissions";
+import { apiFetch } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("accounts:hub");
 
 interface AccountsSummary {
   stats: {
@@ -60,16 +65,33 @@ function formatCurrency(amount: number) {
 export default function AccountsPage() {
   const { status: sessionStatus } = useSession();
   const { canView } = usePermissions();
-  const canAccess = canView("bills");
+  // This hub has its own module now, so it is no longer gated on `bills.view`. Cosmetic
+  // either way — /api/accounts/summary re-checks `accounts.view`.
+  const canAccess = canView("accounts");
 
   const [data, setData] = useState<AccountsSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/accounts/summary")
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setData(res.data); })
-      .catch(() => {})
+    // apiFetch, not fetch().then(r => r.json()). An expired session answers 307 -> /login,
+    // which returns HTML with status 200, so `res.ok` and `res.success` both miss it and
+    // the raw .json() failed with `Unexpected token '<'`. The old handler then swallowed
+    // that in a bare `.catch(() => {})` and rendered an empty dashboard as if the numbers
+    // were genuinely zero — a silent wrong answer on a financial screen.
+    apiFetch<AccountsSummary>("/api/accounts/summary")
+      .then((summary) => {
+        setData(summary);
+        log.debug("accounts summary loaded", {
+          overdue: summary.overdueBillsList?.length ?? 0,
+          recentPayments: summary.recentPayments?.length ?? 0,
+        });
+      })
+      .catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : "Could not load the accounts summary";
+        log.error("accounts summary failed", { message: msg });
+        setError(msg);
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -113,6 +135,14 @@ export default function AccountsPage() {
         <h1 className="text-lg font-bold text-slate-900">Accounts</h1>
         <p className="text-[11px] text-slate-500 tabular-nums">{todayLabel}</p>
       </div>
+
+      {/* Say the numbers are missing rather than rendering zeros. On a payables screen a
+          silent ₹0 reads as "nothing is owed", which is the opposite of "we could not ask". */}
+      {error && (
+        <div className="mb-4">
+          <ErrorBanner message={error} />
+        </div>
+      )}
 
       {/* Quick Actions */}
       <div className="flex gap-2 mb-4 overflow-x-auto scrollbar-hide pb-1">
