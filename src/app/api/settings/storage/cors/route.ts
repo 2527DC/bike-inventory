@@ -29,27 +29,32 @@ export async function POST(req: NextRequest) {
       return errorResponse("CORS only applies to S3 buckets", 400);
     }
 
-    // The origin the browser will actually upload FROM. Prefer what this request carries,
-    // since that is by definition the real origin; fall back to the configured app URL.
-    const origin =
-      req.headers.get("origin") ||
-      process.env.NEXTAUTH_URL?.replace(/\/+$/, "") ||
-      null;
+    // Every origin this application is served from, not just the one that happened to click
+    // the button. The request's own Origin header is authoritative for "where the browser
+    // is right now"; NEXTAUTH_URL covers the deployed app when the button is clicked from
+    // localhost, and localhost covers development when it is clicked from production.
+    // applyCors merges these with whatever the bucket already allows, so no environment
+    // loses access by someone else pressing the button.
+    const origins = [
+      req.headers.get("origin"),
+      process.env.NEXTAUTH_URL?.replace(/\/+$/, ""),
+      "http://localhost:3000",
+    ].filter((o): o is string => !!o);
 
-    if (!origin) {
+    if (origins.length === 0) {
       return errorResponse(
         "Could not determine the app origin. Set NEXTAUTH_URL, or apply the policy by hand.",
         400
       );
     }
 
-    await store.applyCors(origin);
-    log.info("bucket CORS applied", { userId: user.id, origin });
+    const allowed = await store.applyCors(origins);
+    log.info("bucket CORS applied", { userId: user.id, origins: allowed.length });
 
     return successResponse({
       applied: true,
-      origin,
-      note: `Uploads are now allowed from ${origin}. If you serve the app from another domain too, add it in the AWS console.`,
+      origins: allowed,
+      note: `Uploads are allowed from ${allowed.length} origin(s): ${allowed.join(", ")}. Existing entries were kept.`,
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);

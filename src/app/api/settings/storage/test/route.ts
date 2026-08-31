@@ -24,7 +24,10 @@ export async function POST(req: NextRequest) {
     }
 
     log.info("storage test requested", { userId: user.id, provider });
-    const result = await runStorageTest(provider);
+    // The Origin header is where the browser running this test lives, which is exactly the
+    // origin a real upload would need the bucket to allow. Passing it turns the CORS step
+    // from a guess into a check.
+    const result = await runStorageTest(provider, req.headers.get("origin"));
 
     const row = await prisma.storageConfig.findUnique({ where: { id: "singleton" } });
 

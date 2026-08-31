@@ -108,7 +108,7 @@ export default function StorageSettingsPage() {
   async function applyCors() {
     setBusy("cors");
     setNotice(null);
-    const { data, error: err } = await apiTry<{ origin: string; note: string }>(
+    const { data, error: err } = await apiTry<{ origins: string[]; note: string }>(
       "/api/settings/storage/cors",
       { method: "POST" }
     );

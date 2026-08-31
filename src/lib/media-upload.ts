@@ -11,8 +11,24 @@
 // Supabase", which was invisible to anyone reading the calling code. The provider is now
 // explicit and comes from the database.
 import { apiFetch, ApiError } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("media:upload-client");
 
 const ONE_YEAR = "public, max-age=31536000, immutable"; // keys are unique + immutable
+
+// A presigned PUT can fail before it ever reaches S3 — the browser rejects it at the CORS
+// preflight when the bucket carries no matching rule, and reports a network error with no
+// status that names neither CORS nor the bucket. That is a bucket misconfiguration, but a
+// person uploading a photo of a second-hand cycle cannot act on it, so this module falls
+// back to POSTing through /api/upload, which is server-side and has no origin to check.
+//
+// The cap is what makes the fallback safe to take silently: a serverless request body is
+// limited to 4.5 MB on Vercel, so anything larger MUST go straight to the bucket and a
+// failure there has to surface as a failure. Compressed photos are 30–150 KB (maxEdge 800,
+// webp), so the flow that actually hits the CORS wall is comfortably inside it; videos are
+// not, and they keep the original error.
+const DIRECT_FALLBACK_MAX_BYTES = 4 * 1024 * 1024;
 
 interface PresignPresigned {
   mode: "presigned";
@@ -56,27 +72,59 @@ export async function uploadMedia(blob: Blob, key: string, contentType?: string)
   if (plan.mode === "presigned") {
     // Third-party endpoint, so a raw fetch is correct here: there is no JSON envelope to
     // read and apiFetch would try to parse one.
-    const res = await fetch(plan.uploadUrl, {
-      method: "PUT",
-      headers: { "Content-Type": type, "Cache-Control": ONE_YEAR },
-      body: blob,
-    });
-    if (!res.ok) {
-      // A failed preflight lands here as a network error with status 0 — the usual cause is
-      // a missing bucket CORS policy, which the Storage settings page can apply.
-      throw new Error(
-        `Upload failed (${res.status || "network error"}). If this persists, check the bucket CORS policy in Settings → Storage.`
-      );
+    let res: Response | null = null;
+    let networkError: string | null = null;
+    try {
+      res = await fetch(plan.uploadUrl, {
+        method: "PUT",
+        headers: { "Content-Type": type, "Cache-Control": ONE_YEAR },
+        body: blob,
+      });
+    } catch (e) {
+      // fetch() REJECTS (it does not resolve with a status) when the request never
+      // completed: a rejected CORS preflight, DNS failure, or offline. There is no status
+      // to read, which is why the browser console shows ERR_FAILED and nothing else.
+      networkError = e instanceof Error ? e.message : "network error";
     }
-    return plan.publicUrl;
+
+    if (res?.ok) return plan.publicUrl;
+
+    const detail = networkError ? `network error — ${networkError}` : `status ${res!.status}`;
+
+    if (blob.size <= DIRECT_FALLBACK_MAX_BYTES) {
+      log.warn("presigned PUT failed, falling back to the API", {
+        provider: plan.provider,
+        key,
+        bytes: blob.size,
+        detail,
+      });
+      return putThroughApi(blob, key, type, "/api/upload");
+    }
+
+    log.error("presigned PUT failed and the file is too large to proxy", {
+      provider: plan.provider,
+      key,
+      bytes: blob.size,
+      detail,
+    });
+    throw new Error(
+      `Upload failed (${networkError ? "network error" : res!.status}). The file is too large to send through the app, so it must go straight to the bucket — check the bucket CORS policy in Settings → Storage.`
+    );
   }
 
-  // Direct: the file passes through our API.
+  // Direct: the provider cannot presign (the local filesystem), so the file always passes
+  // through our API.
+  return putThroughApi(blob, key, type, plan.uploadPath);
+}
+
+/** POST the blob through our own API, which uploads server-side. No origin, so no CORS. */
+async function putThroughApi(blob: Blob, key: string, type: string, path: string): Promise<string> {
   const form = new FormData();
   form.append("file", blob instanceof File ? blob : new File([blob], key.split("/").pop() || "upload", { type }));
   form.append("key", key);
 
-  const { url } = await apiFetch<{ url: string }>(plan.uploadPath, { method: "POST", body: form });
+  const { url } = await apiFetch<{ url: string }>(path, { method: "POST", body: form });
+  log.debug("stored via the API", { key, bytes: blob.size });
   return url;
 }
 

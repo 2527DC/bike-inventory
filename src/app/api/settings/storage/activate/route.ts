@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
 
     log.info("activation requested", { userId: user.id, provider });
 
-    const result = await runStorageTest(provider);
+    const result = await runStorageTest(provider, req.headers.get("origin"));
     if (!result.ok) {
       // Record the failure so the screen can explain it, but do NOT switch.
       await prisma.storageConfig.upsert({

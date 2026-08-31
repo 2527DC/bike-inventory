@@ -4,6 +4,7 @@
 // refuses to switch if it fails, so a broken provider can never become the live one.
 import { createLogger } from "@/lib/logger";
 import { LocalProvider } from "./local";
+import { S3Provider } from "./s3";
 import { buildProvider, loadStorageSettings } from "./index";
 import type { StorageProviderKey } from "./types";
 
@@ -28,8 +29,17 @@ export interface StorageTestResult {
  * Writing alone is not proof. A bucket can accept a PUT and still be unreadable at the
  * public URL, which is exactly the misconfiguration that would otherwise surface days later
  * as broken images nobody can explain.
+ *
+ * `browserOrigin` is where the person running the test has their browser — the origin a
+ * real upload would come FROM. Every step above it runs server-side with IAM credentials,
+ * which is why this test used to pass on a bucket where no browser upload could ever
+ * succeed: a server-side PUT has no origin and never triggers a preflight. Pass it and the
+ * CORS step below closes that hole.
  */
-export async function runStorageTest(provider: StorageProviderKey): Promise<StorageTestResult> {
+export async function runStorageTest(
+  provider: StorageProviderKey,
+  browserOrigin?: string | null
+): Promise<StorageTestResult> {
   const steps: StorageTestStep[] = [];
   const fail = (error: string): StorageTestResult => ({ ok: false, provider, steps, error });
 
@@ -94,6 +104,42 @@ export async function runStorageTest(provider: StorageProviderKey): Promise<Stor
   }
 
   if (!readBack) return fail("The test object was written but could not be read back.");
+
+  // ── Browser uploads (S3 only) ───────────────────────────────────────────────
+  // Deliberately NOT part of `ok`. A missing CORS rule does not make the provider unusable
+  // — uploads fall back through /api/upload (src/lib/media-upload.ts) — so failing the
+  // whole test here would refuse activation for a bucket that works. It is reported as its
+  // own step because it is the difference between fast direct uploads and every photo
+  // passing through a serverless function.
+  if (store instanceof S3Provider) {
+    const origins = await store.readCorsOrigins();
+
+    if (origins === null) {
+      steps.push({
+        name: "Browser uploads (CORS)",
+        ok: true,
+        detail: "Could not check — the IAM user has no s3:GetBucketCors. Not necessarily a problem.",
+      });
+    } else if (!browserOrigin) {
+      steps.push({
+        name: "Browser uploads (CORS)",
+        ok: true,
+        detail: `The bucket allows ${origins.length} origin(s). The app origin could not be determined from this request.`,
+      });
+    } else {
+      const allowed = origins.includes("*") || origins.includes(browserOrigin);
+      steps.push({
+        name: "Browser uploads (CORS)",
+        ok: allowed,
+        detail: allowed
+          ? `${browserOrigin} may upload directly to the bucket.`
+          : `${browserOrigin} is NOT in the bucket CORS policy, so direct uploads fail their preflight and are routed through the app instead. Press "Apply CORS" to fix it.`,
+      });
+      if (!allowed) {
+        log.warn("bucket CORS does not allow the app origin", { provider, browserOrigin });
+      }
+    }
+  }
 
   log.info("storage self-test passed", { provider });
   return { ok: true, provider, steps };
