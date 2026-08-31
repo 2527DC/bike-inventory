@@ -4,7 +4,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { BooksClient, ZakyaClient } from "@/lib/integrations";
+import { getBooks, getZakya, type IntegrationClient } from "@/lib/integrations";
 
 /*
  * Direct invoice import — fetches invoice details from Zoho and creates Delivery.
@@ -20,18 +20,17 @@ export async function POST(req: NextRequest) {
       return errorResponse("No invoice IDs provided", 400);
     }
 
-    // Init clients
-    const zoho = new BooksClient();
-    const booksReady = await zoho.init();
-    const zakya = new ZakyaClient();
-    const posReady = await zakya.init();
+    // Both sources in parallel — each is a config read and a possible token refresh, and
+    // the answers are independent. Request-scoped, so any later step reuses these.
+    const [zoho, zakya] = await Promise.all([getBooks(), getZakya()]);
 
-    if (!booksReady && !posReady) {
+    if (!zoho && !zakya) {
       return errorResponse("No Zoho source connected", 400);
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const client: any = booksReady ? zoho : zakya;
+    // Books preferred, Zakya as the fallback. Typed `IntegrationClient` rather than `any`:
+    // getInvoice lives on the base class, so both providers satisfy it.
+    const client: IntegrationClient = (zoho ?? zakya)!;
 
     let imported = 0;
     const errors: string[] = [];
@@ -47,18 +46,28 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
+        // Delivery.invoiceNo is required and is what every later lookup matches on, so an
+        // invoice without a number cannot be imported. Previously the client was typed
+        // `any`, so `undefined` reached prisma.delivery.create() and failed there with a
+        // Prisma error naming a column rather than a sentence naming the invoice.
+        const invoiceNo = inv.invoice_number;
+        if (!invoiceNo) {
+          errors.push(`Invoice ${invoiceId}: Zoho returned no invoice number`);
+          continue;
+        }
+
         // Skip BCC (Bharath Cycle Centre) invoices
-        if (inv.invoice_number?.startsWith("BCC/")) {
-          errors.push(`${inv.invoice_number}: skipped (Centre invoice)`);
+        if (invoiceNo.startsWith("BCC/")) {
+          errors.push(`${invoiceNo}: skipped (Centre invoice)`);
           continue;
         }
 
         // Check duplicate
         const exists = await prisma.delivery.findFirst({
-          where: { invoiceNo: inv.invoice_number },
+          where: { invoiceNo },
         });
         if (exists) {
-          errors.push(`${inv.invoice_number}: already imported`);
+          errors.push(`${invoiceNo}: already imported`);
           continue;
         }
 
@@ -91,11 +100,15 @@ export async function POST(req: NextRequest) {
 
         await prisma.delivery.create({
           data: {
-            invoiceNo: inv.invoice_number,
-            zohoInvoiceId: inv.invoice_id,
-            invoiceDate: new Date(inv.date),
+            invoiceNo,
+            zohoInvoiceId: inv.invoice_id ?? null,
+            // Zoho always sends a date on an invoice, so the fallback is unreachable in
+            // practice — it exists because the field is optional on the type, not because
+            // a dateless invoice is expected. If one ever appears it files under today,
+            // which is visibly wrong rather than silently absent.
+            invoiceDate: new Date(inv.date ?? Date.now()),
             invoiceAmount: Number(inv.total || 0),
-            customerName: inv.customer_name,
+            customerName: inv.customer_name ?? "Unknown",
             customerPhone: phone || null,
             customerAddress: customerAddress || null,
             customerArea: inv.shipping_address?.city || null,

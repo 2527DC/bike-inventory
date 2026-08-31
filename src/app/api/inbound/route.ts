@@ -265,8 +265,17 @@ export async function POST(req: NextRequest) {
 
     // Push draft bill to Zoho (best effort)
     try {
-      const { InventoryClient } = await import("@/lib/integrations");
-      const zohoInv = new InventoryClient();
+      // getInventory(), which initialises. This used to be `new InventoryClient()` with NO
+      // init() call at all, so apiCall threw "Zoho Inventory client not initialized" on
+      // every attempt and the catch below logged it as a non-critical warning. The draft
+      // push has therefore never once succeeded — a silent failure that looked like a
+      // working feature because the shipment itself was created fine.
+      const { getInventory } = await import("@/lib/integrations");
+      const zohoInv = await getInventory();
+      if (!zohoInv) {
+        log.info("Zoho Inventory not connected; skipping the draft push", { shipmentNo });
+        return successResponse(shipment, 201);
+      }
 
       const brand = await prisma.brand.findUnique({ where: { id: data.brandId }, select: { name: true } });
       await zohoInv.createItem({

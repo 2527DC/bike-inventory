@@ -8,7 +8,13 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, failure } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { BooksClient, InventoryClient, ZakyaClient, type IntegrationItem } from "@/lib/integrations";
+import {
+  getBooks,
+  getInventory,
+  getZakya,
+  type IntegrationClient,
+  type IntegrationItem,
+} from "@/lib/integrations";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("zoho:trigger-pull");
@@ -162,13 +168,21 @@ export async function POST(req: NextRequest) {
         data: { syncType: "cron-pull", status: "running", triggeredBy: "manual" },
       });
 
-      // Check at least one source is connected
-      const zoho = new BooksClient();
-      const booksReady = await zoho.init();
-      const zakya = new ZakyaClient();
-      const posReady = await zakya.init();
-      const inventory = new InventoryClient();
-      const inventoryReady = await inventory.init();
+      // Check at least one source is connected.
+      //
+      // In parallel, and through the factory. Each of these is a config read plus a possible
+      // token refresh, and there is no reason to do three of them one after another when the
+      // answer to each is independent. The clients themselves are discarded here — this step
+      // only reports which sources are usable — but they are request-scoped, so the later
+      // steps that ask for the same provider reuse what this call already initialised.
+      const [books, zakya, inventory] = await Promise.all([
+        getBooks(),
+        getZakya(),
+        getInventory(),
+      ]);
+      const booksReady = !!books;
+      const posReady = !!zakya;
+      const inventoryReady = !!inventory;
 
       if (!booksReady && !posReady && !inventoryReady) {
         return errorResponse("No Zoho sources connected", 400);
@@ -202,10 +216,9 @@ export async function POST(req: NextRequest) {
 
       try {
         // Try Inventory first
-        const inventory = new InventoryClient();
-        const inventoryReady = await inventory.init();
+        const inventory = await getInventory();
 
-        if (inventoryReady) {
+        if (inventory) {
           source = "inventory";
           const invConfig = await prisma.integrationConfig.findUnique({ where: { provider: "ZOHO_INVENTORY" } });
           const lastSync = fromDate || invConfig?.lastSyncAt?.toISOString().slice(0, 10) || defaultLastSync;
@@ -216,9 +229,8 @@ export async function POST(req: NextRequest) {
           itemsNew += await buildItemPreviews(items, existingPullId);
         } else {
           // Fallback to Books
-          const zoho = new BooksClient();
-          const booksReady = await zoho.init();
-          if (booksReady) {
+          const zoho = await getBooks();
+          if (zoho) {
             source = "books";
             const booksConfig = await prisma.integrationConfig.findUnique({ where: { provider: "ZOHO_BOOKS" } });
             const lastSync = fromDate || booksConfig?.lastSyncAt?.toISOString().slice(0, 10) || defaultLastSync;
@@ -250,9 +262,8 @@ export async function POST(req: NextRequest) {
       const errors: string[] = [];
 
       try {
-        const zoho = new BooksClient();
-        const booksReady = await zoho.init();
-        if (!booksReady) {
+        const zoho = await getBooks();
+        if (!zoho) {
           return successResponse({ step: "contacts", source: "skipped", contactsNew: 0, apiCalls: 0, errors: ["Books not connected"] });
         }
 
@@ -342,15 +353,15 @@ export async function POST(req: NextRequest) {
 
         // Use Zoho Books for bills (Inventory token lacks bills scope)
         {
-          const zoho = new BooksClient();
-          const booksReady = await zoho.init();
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          let client: any = null;
-          if (booksReady) { client = zoho; source = "books"; }
+          // Books first, Zakya as the fallback. `IntegrationClient` rather than `any`:
+          // listAllBills lives on the base class, so both providers satisfy the type and the
+          // eslint-disable that used to sit here is no longer needed.
+          let client: IntegrationClient | null = await getBooks();
+          if (client) source = "books";
           else {
             // Fallback to Zakya POS
-            const zakya = new ZakyaClient();
-            if (await zakya.init()) { client = zakya; source = "pos"; }
+            client = await getZakya();
+            if (client) source = "pos";
           }
 
           if (!client) {
@@ -438,23 +449,13 @@ export async function POST(req: NextRequest) {
       let source = "none";
 
       try {
-        // Try Zakya POS first
-        const zakya = new ZakyaClient();
-        const posReady = await zakya.init();
-
-        // Determine which client and source to use
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        let client: any = null;
-        if (posReady) {
-          client = zakya;
-          source = "pos";
-        } else {
-          const zoho = new BooksClient();
-          const booksReady = await zoho.init();
-          if (booksReady) {
-            client = zoho;
-            source = "books";
-          }
+        // Zakya POS first for invoices, Books as the fallback — the reverse of bills above,
+        // which is deliberate and documented at the top of this file.
+        let client: IntegrationClient | null = await getZakya();
+        if (client) source = "pos";
+        else {
+          client = await getBooks();
+          if (client) source = "books";
         }
 
         if (!client) {

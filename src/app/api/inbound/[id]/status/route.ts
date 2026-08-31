@@ -223,8 +223,16 @@ export async function PUT(
     // Push purchase bill to Zoho Books on full delivery (best effort)
     if (status === "DELIVERED") {
       try {
-        const { BooksClient } = await import("@/lib/integrations");
-        const zoho = new BooksClient();
+        // getBooks(), which initialises. This used to be `new BooksClient()` with NO init()
+        // call, so createBill threw "Zoho Books client not initialized" every time and the
+        // catch swallowed it as best-effort. No vendor bill has ever reached Zoho from a
+        // DELIVERED shipment.
+        const { getBooks } = await import("@/lib/integrations");
+        const zoho = await getBooks();
+        if (!zoho) {
+          log.info("Zoho Books not connected; no bill pushed", { shipmentId: id });
+          return successResponse(updated);
+        }
         const billDate = existing.billDate.toISOString().split("T")[0];
         const dueDate = new Date(existing.billDate);
         dueDate.setDate(dueDate.getDate() + 30);

@@ -1,7 +1,10 @@
 # Categories in the sidebar, Bills and Expenses out of it
 
-Status: pending — specified and ready to run. Decisions in §1 are answered; no blocking
-questions.
+Status: completed — 31 Aug 2026, both parts, commit `e0cff4f`. Bills & Payments and Expenses
+carry `route: null`; the `categories` module, `/more/categories`, and PATCH / DELETE / merge
+all exist, and `db:seed:rbac` has been run (46 modules, 175 permissions, 4 new on ADMIN).
+**The §6 browser pass has NOT been run** — the screen has never been opened, so merge and the
+refused delete are unproven.
 Branch: **`feat/categories-module`** — cut from `perf/single-auth-query-v2`, not `main`, so
 it carries the auth, S3 and accounts-module work that has not merged yet.
 Prepared 30 Aug 2026. Every count below was measured against the tree, not estimated.

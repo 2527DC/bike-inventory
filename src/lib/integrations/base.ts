@@ -92,6 +92,40 @@ export interface IntegrationCustomerPayment {
   account_name: string;
 }
 
+/**
+ * One invoice as `GET /invoices/{id}` returns it — richer than the list shape, which is why
+ * this is separate from IntegrationInvoice.
+ *
+ * The index signature keeps every field Zoho sends reachable, but the named fields are the
+ * ones this application actually reads, and naming them is the point: callers used to take
+ * this through a variable typed `any`, and `any` hid a real defect — `inv.invoice_number`
+ * was `unknown` and `.startsWith()` on it only failed once the `any` was removed.
+ */
+export interface IntegrationInvoiceDetail {
+  invoice_id?: string;
+  invoice_number?: string;
+  customer_name?: string;
+  date?: string;
+  total?: number;
+  balance?: number;
+  status?: string;
+  salesperson_name?: string;
+  line_items?: LineItem[];
+  contact_persons?: Array<{ phone?: string; mobile?: string }>;
+  billing_address?: ZohoAddress;
+  shipping_address?: ZohoAddress;
+  [field: string]: unknown;
+}
+
+export interface ZohoAddress {
+  address?: string;
+  street2?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  phone?: string;
+}
+
 export interface LineItem {
   name: string;
   sku?: string;
@@ -366,9 +400,11 @@ export abstract class IntegrationClient {
   }
 
   async getInvoice(invoiceId: string) {
-    return this.apiCall<{ invoice?: { line_items?: LineItem[] } & Record<string, unknown> }>(
+    return this.apiCall<{ invoice?: IntegrationInvoiceDetail }>(
       "GET",
-      `/invoices/${invoiceId}`
+      `/invoices/${invoiceId}`,
+      undefined,
+      "invoices.get"
     );
   }
 

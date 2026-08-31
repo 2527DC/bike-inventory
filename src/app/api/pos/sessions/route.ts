@@ -4,7 +4,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { BooksClient, ZakyaClient } from "@/lib/integrations";
+import { getBooks, getZakya } from "@/lib/integrations";
 
 // GET — List POS sessions (from DB)
 export async function GET(req: NextRequest) {
@@ -44,9 +44,8 @@ export async function POST(req: NextRequest) {
 
     if (!dateFrom || !dateTo) return errorResponse("dateFrom and dateTo required", 400);
 
-    const zakya = new ZakyaClient();
-    const ok = await zakya.init();
-    if (!ok) return errorResponse("Zakya POS not connected. Configure in Settings → Zakya.", 400);
+    const zakya = await getZakya();
+    if (!zakya) return errorResponse("Zakya POS not connected. Configure in Settings → Zakya.", 400);
 
     // Force mode: delete existing sessions (and unlink from settlements) for this date range
     if (force) {
@@ -85,9 +84,8 @@ export async function POST(req: NextRequest) {
     let paymentError: string | null = null;
 
     // Try Zoho Books first (separate OAuth, has customer payments)
-    const zoho = new BooksClient();
-    const zohoOk = await zoho.init();
-    if (zohoOk) {
+    const zoho = await getBooks();
+    if (zoho) {
       try {
         payments = await zoho.listAllCustomerPayments(dateFrom, dateTo);
         paymentSource = "zoho-books";
