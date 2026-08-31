@@ -200,6 +200,26 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     actions: CRUD,
   },
   {
+    // The product taxonomy, which until now had no screen and no module of its own.
+    //
+    // Five of the seven places that create a Category are Zoho import routes mirroring
+    // `category_name` verbatim, and nothing in the UI ever called POST /api/categories — so
+    // the taxonomy was entirely Zoho's and could not be corrected from the app. That is why
+    // 151 products sit in "Uncategorized" and several categories are wheel sizes.
+    //
+    // GET /api/categories deliberately stays on `stock.view`: every product form reads it
+    // for a dropdown, and re-guarding it here would empty those dropdowns for anyone who is
+    // not a taxonomy admin — a silent empty list rather than an honest 403.
+    key: "categories",
+    label: "Categories",
+    description: "Product categories — the taxonomy Zoho imports into",
+    icon: "Tag",
+    route: "/more/categories",
+    group: "Purchase",
+    sortOrder: 225, // between Brands (220) and Vendor / Ops Issues (230)
+    actions: CRUD,
+  },
+  {
     key: "vendor_issues",
     label: "Vendor / Ops Issues",
     description: "Issue tracking, notes and daily reports",
@@ -243,21 +263,40 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     actions: ["view"],
   },
   {
+    // ── route: null is DELIBERATE — hidden from the sidebar, NOT removed ──────
+    //
+    // All three navigation surfaces render getAccess().modules and skip an entry that has
+    // no route and no children (app-sidebar.tsx, bottom-nav.tsx, desktop/sidebar.tsx), so
+    // nulling the route takes Bills & Payments out of the navigation while leaving every
+    // permission it grants intact.
+    //
+    // Deleting the module instead would delete its permissions, and userCan answers
+    // `undefined === true` -> FALSE FOR EVERYONE, ADMIN INCLUDED. `bills` is checked by 20
+    // files — the Zoho bill pull, settlement, inbound receiving, the vendor detail screen
+    // and the accounts hub, not just /bills — so removing it would 403 the whole accounting
+    // import chain.
+    //
+    // /bills stays reachable by URL and from its card on the home dashboard, and it is
+    // still grantable on /team/permissions. Put "/bills" back here to restore the sidebar
+    // entry; that is the entire change.
     key: "bills",
     label: "Bills & Payments",
     description: "Vendor bills, payments, credits and bank statements",
     icon: "FileText",
-    route: "/bills",
+    route: null,
     group: "Accounts",
     sortOrder: 300,
     actions: ["view", "create", "edit", "delete", "approve", "fetch"],
   },
   {
+    // route: null — hidden from the sidebar, not removed. See the note on `bills` above;
+    // `expenses` is checked by 5 files and /expenses stays reachable by URL and from the
+    // dashboard card. Restore by putting "/expenses" back.
     key: "expenses",
     label: "Expenses",
     description: "Expense entry and approval",
     icon: "Receipt",
-    route: "/expenses",
+    route: null,
     group: "Accounts",
     sortOrder: 310,
     actions: ["view", "create", "edit", "delete", "approve"],

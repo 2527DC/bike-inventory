@@ -6,6 +6,7 @@
 //
 // Server-side only. Keys must never reach the browser; the browser uploads via short-lived
 // presigned PUT URLs issued by /api/media/presign.
+import { createHash } from "node:crypto";
 import { AwsClient } from "aws4fetch";
 import { createLogger } from "@/lib/logger";
 import {
@@ -195,6 +196,22 @@ export class S3Provider implements StorageProvider {
     // relying on an implementation detail of a library we do not control.
     const bytes = new TextEncoder().encode(xml);
 
+    // PutBucketCors REQUIRES an integrity header. Without one S3 answers:
+    //
+    //   400 InvalidRequest — "Missing required header for this request:
+    //                         Content-MD5 OR x-amz-checksum-*"
+    //
+    // This is a bucket-configuration API rule, not a signing one, so SigV4 being correct does
+    // not help — and it applies to a handful of other bucket PUTs (lifecycle, tagging,
+    // DeleteObjects) but NOT to a normal object PUT, which is why put() above needs nothing
+    // like this. It is also why this button had never actually worked: the request was well
+    // formed and correctly signed, and S3 rejected it anyway.
+    //
+    // MD5 here is a transport checksum, not a security claim — S3 defines the header that
+    // way. x-amz-checksum-sha256 is the modern alternative if md5 is ever unavailable (a
+    // FIPS-restricted Node build would reject it).
+    const contentMd5 = createHash("md5").update(bytes).digest("base64");
+
     // `origins: merged.length`, not the old single `allowedOrigin` — this method now takes a
     // list and writes the union with what the bucket already allowed, so there is no one
     // origin to name.
@@ -208,6 +225,7 @@ export class S3Provider implements StorageProvider {
       headers: {
         "Content-Type": "application/xml",
         "Content-Length": String(bytes.byteLength),
+        "Content-MD5": contentMd5,
       },
       body: bytes,
     });
