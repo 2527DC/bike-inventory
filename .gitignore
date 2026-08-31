@@ -42,6 +42,11 @@ next-env.d.ts
 
 /src/generated/prisma
 
+# Captured API responses kept for debugging. Real data from the live database — never
+# committed. Add the sample here rather than deleting it; the capacity notes in
+# docs/implementation/pending/zoho-provider-endpoint-registry-plan.md are measured from it.
+/docs/stock-fetch-response.json
+
 # AI agent tooling — machine-local state, not project source
 /.claude-flow/
 /.ruflo/

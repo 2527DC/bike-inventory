@@ -1,7 +1,11 @@
 # Master data screens, product delete, and the filter drawer
 
-Status: pending — **three questions in §7 block the destructive half (Part A).** Parts B, C and D are specified and can start immediately.
-Suggested branch: `feat/master-data-screens` off `main`.
+Status: completed — 30 Aug 2026. Parts A, C and D shipped (commits `eda3013`, `1e4ed73`,
+`78d388f`); **Part B was moved out**, not built here — it is now
+`pending/sidebar-categories-and-accounts-trim-plan.md`. Q1 was answered by the
+implementation: delete is soft by default with a hard delete behind blocker counts.
+Branch: **`perf/single-auth-query-v2`** — Parts A, C and D landed on this branch, not on the
+`feat/master-data-screens` this document originally proposed.
 Prepared 30 Aug 2026. Every claim below was checked against the tree and the live database.
 
 ---
@@ -65,6 +69,12 @@ A product is referenced by `StockLevel`, `InventoryTransaction`, `SerialItem`, `
 ---
 
 ## 3. Part B — Categories management
+
+> **MOVED, 30 Aug 2026 — do not build from this section.** Part B now lives in
+> `sidebar-categories-and-accounts-trim-plan.md`, so it can be run on its own without the
+> filter drawer, the brands rework and product delete. That plan carries the catalog entry,
+> the routes and the screen, plus a second part hiding Bills and Expenses from the sidebar.
+> What follows is kept for the reasoning only.
 
 ### The gap, precisely
 
