@@ -91,6 +91,7 @@ preserved across regeneration — but do not remove the marker comments.
 | `storage-implementation-plan.md` | 28 Aug 2026, runtime-switchable storage provider and Settings module |
 | `store-hierarchy-and-team-plan.md` | 30 Aug 2026, all six phases. The `StockLocation` enum is gone — `Store` and `Warehouse` are tables, `/stores` administers them behind a `store_management` parent module, and `/stock/by-location/[code]` resolves either level. The §2.4 database reset was skipped as unnecessary and no data was lost. **The §6 browser pass has not been run** — an audit after the phases were called done found five bugs the green build could not see |
 | `zoho-config-consolidation-plan.md` | 29 Aug 2026, three Zoho config tables and four clients collapsed into one `IntegrationConfig` row per provider, one `IntegrationClient` base class and three `[provider]` routes |
+| `zoho-provider-endpoint-registry-plan.md` | 31 Aug 2026, all four parts (`67be82d`, `7c16903`, `631db1d`, `0cff195`). **A** `endpoints.ts` lists all 16 endpoints + 2 OAuth grants and `apiCall` logs a stable key instead of an interpolated URL — it also stopped logging entire request bodies. **C** clients are request-scoped, so the approve loop pays one `init()` instead of one per record. **D** the four raw `apiCall` sites are gone and `apiCall` is `protected`, so the compiler enforces the boundary. **B** 34 sites through the factory — which **revived two Zoho writes that had never worked**: inbound's item push and the DELIVERED bill push both skipped `init()` and failed silently. **Part E (batch-size guidance on the approve screen) NOT built**; §7's manual checks unrun |
 | `zoho-pull-timeout-plan.md` | 30 Aug 2026, both `items` loops and `contacts` batched into a fixed number of queries; `maxDuration` 30 -> 60 (headroom, not the fix). Commits `8f143d2`, `947781f`. **§8 not yet run** — the acceptance test is a real 90-day pull returning without a 504, plus the `ZOHO_BOOKS` fallback exercised separately |
 <!-- END:completed -->
 
@@ -107,7 +108,6 @@ preserved across regeneration — but do not remove the marker comments.
 | `service-module-mobile-readiness-plan.md` | what /api/services/* needs before bch-service-app can be pointed at it |
 | `stock-and-master-data-ux-plan.md` | the owner’s five, one branch and one commit per phase. **Two are already done** (S3 fix, stock-audit crash). Remaining: the filter becomes a right drawer (**12 screens**, component-only), `/more/brands` becomes the brand master with lead time inline, and product deactivate / restore / delete-with-refusal plus a status filter. Four questions in §2, none blocking |
 | `zoho-import-reliability-and-observability-plan.md` | from a live 504 on `pull-review/approve`. Five parts: S3 `Content-Length`, `apiFetch` in 6 screens, batching the import loop (~5 round trips per record to ~8 total), the three swallowed failures in `/deliveries`, and integration credentials surviving a disconnect. **Five questions in §8 block the logging half only** |
-| `zoho-provider-endpoint-registry-plan.md` | specified and ready to start. No blocking questions. |
 <!-- END:pending -->
 
 ---

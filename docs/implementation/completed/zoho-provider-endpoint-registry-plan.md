@@ -1,8 +1,13 @@
 # One provider layer, one endpoint registry
 
-Status: pending — specified and ready to start. No blocking questions.
-Branch: **`refactor/zoho-endpoint-registry`** — create it with exactly this name, off `main`.
-This document is the reference for that branch, and Part E below extends its scope.
+Status: completed — 31 Aug 2026, Parts A, B, C and D. Commits `67be82d` (registry),
+`7c16903` (one client per request), `631db1d` (escape hatches closed, `apiCall` protected),
+`0cff195` (36 sites through the factory). Both acceptance greps in §7 now return nothing.
+**Part E was NOT built** — the batch-size guidance on the approve screen is still only §10 on
+paper. **§7's manual checks are unrun**: no connect/disconnect in Settings, and no real bill,
+invoice or item import since the change.
+Branch: **`refactor/zoho-endpoint-registry`** — cut from `feat/categories-module`, not `main`,
+so it carries the auth, S3, accounts and categories work that has not merged yet.
 Prepared 30 Aug 2026. Every count below was measured against the tree, not estimated.
 
 ---
