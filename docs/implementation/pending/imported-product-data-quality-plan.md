@@ -31,6 +31,7 @@ size badge. It is printing exactly what the import wrote.
 | `brand` = "Imported" | `api/zoho/pull-review/approve/route.ts:75` — `defaultBrand` is found-or-created as a Brand literally named `Imported`, used whenever the preview's `brand` field is empty | `Product.brandId` is **required** (`schema.prisma:451`), so the import cannot leave it blank. It invents a brand instead |
 | `category` = "Uncategorized" | same route, `resolveCategory()` — `(d.categoryName \|\| "").trim() \|\| "Uncategorized"` | `Product.categoryId` is **required** (`schema.prisma:449`). Same forced invention |
 | `size` = null | **nothing writes `size` on any import path.** `grep "size:" src/app/api/zoho` returns no writes | Zoho has no size field; for bicycles the size is inside the name (`26''`, `24 SS`, `29 MS`) |
+| `bin` = null | nothing writes `binId` on any import path either (`grep binId src/app/api/zoho` is empty) | `Product.binId` is **nullable** (`schema.prisma:478`), so unlike brand and category nothing is invented — the shelf is simply unknown. Zoho has no bin concept and never will: bins are this warehouse's physical shelves. See Part E |
 | `type` | regex on the name in the approve route | Works for this row — `bicycl` matches — but it is a guess, and no one is told it was guessed |
 
 The preview built at pull time **already carries** `brand` and `categoryName`
@@ -106,6 +107,22 @@ renders.
 Two rules: only apply it when `type === "BICYCLE"`, and never overwrite a `size` a person
 typed. Offer it as a one-off backfill for existing rows behind `stock.edit`, not as an
 automatic migration.
+
+## 6a. Part E — the bin, which no import can ever fill
+
+Listed in `zoho-provider-endpoint-registry-plan.md` §8 as "location never written", and it
+is a different kind of problem from the three above: **there is nothing to import.** A bin
+is a physical shelf in this warehouse; Zoho has never heard of it. No mapping, no detail
+call and no parse will produce one.
+
+So the fix is not on the import side at all — it is the same fix-up workflow as Part A.
+Add bin to the **Needs details** filter and to the bulk assign that `/stock` already
+carries for brand, category and status, so a newly imported batch can be walked to a shelf
+in one action rather than one product at a time.
+
+Do **not** invent a placeholder bin to match the brand and category behaviour. `binId` is
+nullable precisely so absence can be recorded honestly, and a fake `Unassigned` bin would
+show up in every by-bin count and pick list as though it were a real location.
 
 ## 7. Part D — the root cause, and why it is not being fixed here
 
