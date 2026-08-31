@@ -5,9 +5,20 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { createLogger } from "@/lib/logger";
+// Type-only. The clients themselves are still loaded through a dynamic import inside the
+// handler, so importing the type here adds nothing to the module graph at runtime.
+import type { BooksClient } from "@/lib/integrations";
+
+// This route had no logger at all — a 499-line import handler whose only record of what it
+// did was the response body, which a 504 never delivers.
+const log = createLogger("zoho:approve");
 
 // POST — approve or reject a pull
 export async function POST(req: NextRequest) {
+  // Wall-clock for the finish log. This route dies at maxDuration = 60 under load, so how
+  // long a successful run took is the number that says how close to the cliff it is.
+  const startedAt = Date.now();
   try {
     const user = await requireFeature("zoho", "approve");
     const body = await req.json();
@@ -156,9 +167,13 @@ export async function POST(req: NextRequest) {
           let lineItems = (d.lineItems as Array<{ name: string; sku: string; quantity: number; rate: number; itemTotal: number }>) || [];
           if (lineItems.length === 0 && preview.zohoId) {
             try {
-              const { BooksClient } = await import("@/lib/integrations");
-              const zoho = new BooksClient();
-              if (await zoho.init()) {
+              // getBooks(), not `new BooksClient()` + init(). This sits INSIDE the
+              // per-preview loop, so the old form paid one IntegrationConfig read — and a
+              // token refresh whenever the token was near expiry — for every bill in the
+              // batch. getBooks is request-scoped, so the whole approve now pays once.
+              const { getBooks } = await import("@/lib/integrations");
+              const zoho = await getBooks();
+              if (zoho) {
                 const detail = await zoho.getBill(preview.zohoId);
                 lineItems = (detail.bill?.line_items || []).map((li) => ({
                   name: li.name, sku: li.sku || "", quantity: li.quantity, rate: li.rate, itemTotal: li.item_total, item_id: li.item_id,
@@ -215,14 +230,24 @@ export async function POST(req: NextRequest) {
           let defaultCategory = await prisma.category.findFirst({ where: { name: "Uncategorized" } });
           if (!defaultCategory) defaultCategory = await prisma.category.create({ data: { name: "Uncategorized", description: "Auto-created from bill import" } });
 
-          // Init Zoho client for fetching item details (category, HSN, etc.)
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          let zohoForItems: any = null;
+          // The client for fetching item details (category, HSN, tax). Same shared,
+          // request-scoped client as the getBill call above — asking twice in one request
+          // returns the same instance, so this costs nothing after the first bill.
+          //
+          // `any` is gone with it: getBooks() returns a typed BooksClient | null, and the
+          // eslint-disable that suppressed the complaint is no longer needed.
+          let zohoForItems: BooksClient | null = null;
           try {
-            const { BooksClient: ZC } = await import("@/lib/integrations");
-            const z = new ZC();
-            if (await z.init()) zohoForItems = z;
-          } catch { /* best effort */ }
+            const { getBooks } = await import("@/lib/integrations");
+            zohoForItems = await getBooks();
+          } catch (e) {
+            // Best effort — a missing item detail costs category and HSN, not the import.
+            // But a swallowed error with no log is a bug, so say what was lost.
+            log.warn("item detail client unavailable; importing without category/HSN", {
+              pullId,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
 
           for (let liIdx = 0; liIdx < lineItems.length; liIdx++) {
             const li = lineItems[liIdx];
@@ -428,9 +453,10 @@ export async function POST(req: NextRequest) {
           // Fetch invoice detail from Zoho for line items + salesperson
           if ((lineItems.length === 0 || !salesPerson) && preview.zohoId) {
             try {
-              const { BooksClient } = await import("@/lib/integrations");
-              const zoho = new BooksClient();
-              if (await zoho.init()) {
+              // Third and last per-record construction in this loop — same shared client.
+              const { getBooks } = await import("@/lib/integrations");
+              const zoho = await getBooks();
+              if (zoho) {
                 const detail = await zoho.getInvoice(preview.zohoId);
                 const inv = detail.invoice;
                 if (inv) {
@@ -486,6 +512,24 @@ export async function POST(req: NextRequest) {
       data: { status: newStatus, approvedAt: remainingPending === 0 ? new Date() : undefined },
     });
 
+    // The one durable record of what an approve actually did. Identifiers and counts only —
+    // never the records themselves. This matters most in the case where the response never
+    // arrives: if the function is killed at maxDuration the client sees a 504 with no body,
+    // and without this line there is no way afterwards to tell what got in before the kill.
+    log.info("approve finished", {
+      pullId,
+      requestedBy: user.id,
+      entityType: entityType || "all",
+      contacts: results.contacts,
+      items: results.items,
+      bills: results.bills,
+      invoices: results.invoices,
+      errors: results.errors.length,
+      remainingPending,
+      status: newStatus,
+      ms: Date.now() - startedAt,
+    });
+
     return successResponse({
       action: "approved",
       entityType: entityType || "all",
@@ -494,6 +538,8 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Approval failed", 500);
+    const message = error instanceof Error ? error.message : "Approval failed";
+    log.error("approve failed", { message });
+    return errorResponse(message, 500);
   }
 }
