@@ -83,6 +83,18 @@ export const categorySchema = z.object({
   reorderLevel: z.number().int().min(0).optional(),
 });
 
+/**
+ * PATCH sends only what changed, so every field is optional — but `.partial()` alone would
+ * accept `{}` and turn an empty body into a no-op 200. The refine makes that a 400.
+ *
+ * `parentId` accepts null explicitly: detaching a child from its parent is a real edit, and
+ * `undefined` (absent) has to keep meaning "leave it alone".
+ */
+export const categoryUpdateSchema = categorySchema
+  .partial()
+  .extend({ parentId: z.string().nullable().optional() })
+  .refine((d) => Object.keys(d).length > 0, { message: "Nothing to update" });
+
 export const brandSchema = z.object({
   name: z.string().min(1, "Name is required").max(100),
   contactName: z.string().optional(),

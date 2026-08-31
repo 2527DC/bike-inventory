@@ -2,7 +2,8 @@
 
 Status: pending — specified and ready to run. Decisions in §1 are answered; no blocking
 questions.
-Branch: **`feat/categories-module`** — create it with exactly this name, off `main`.
+Branch: **`feat/categories-module`** — cut from `perf/single-auth-query-v2`, not `main`, so
+it carries the auth, S3 and accounts-module work that has not merged yet.
 Prepared 30 Aug 2026. Every count below was measured against the tree, not estimated.
 
 ---
