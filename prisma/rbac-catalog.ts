@@ -87,14 +87,42 @@ export const MODULE_CATALOG: ModuleSeed[] = [
   },
 
   // ── Operations ────────────────────────────────────────────────────────────
+  //
+  // Stock Management is a PARENT with six children — the third module tree in this catalog,
+  // after Staff LMS and Store Management.
+  //
+  // Unlike `store_management`, this parent HAS a route, and that is about the phone:
+  // bottom-nav.tsx filters to `!m.parent`, so a routeless parent would drop Stock, Inbound
+  // and Deliveries off the mobile bottom bar entirely and leave a stock user with
+  // Second-Hand / Scanner / POS. The hub page keeps the tab.
+  //
+  // Every child KEEPS ITS KEY. Permissions are keyed on the module key, not on position in
+  // the tree, so every existing stock.view / inbound.create / deliveries.approve /
+  // transfers.edit / stock_audit.approve grant survives this move untouched. The seeder
+  // upserts route, group, sortOrder and parentId in both create and update, so a re-seed
+  // performs the re-parenting on rows that already exist — exactly how `zoho` was moved
+  // under `settings`.
+  {
+    key: "stock_management",
+    label: "Stock Management",
+    description: "Stock, product types, audits, inbound, dispatch and transfers",
+    icon: "Boxes",
+    route: "/stock-management",
+    group: "Operations",
+    sortOrder: 100,
+    // A grouping construct. Its own view grant gates the hub page and nothing else — the real
+    // gates are stock.*, inbound.* and the rest. Do not give it CRUD expecting it to gate them.
+    actions: ["view"],
+  },
   {
     key: "stock",
     label: "Stock & Inventory",
     description: "Products, serials, stock levels and locations",
     icon: "Package",
     route: "/stock",
-    group: "Operations",
-    sortOrder: 100,
+    parentKey: "stock_management",
+    group: "Operations", // MUST equal the parent's — the seeder asserts it
+    sortOrder: 101,
     // `fetch` is GONE. It gated the "Fetch Stock" button on /stock, which pulled the catalog
     // from Zoho; that import was deleted and products now arrive from
     // scripts/import-products.ts. Verified before removing: no `requireFeature("stock",
@@ -104,13 +132,12 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     actions: ["view", "create", "edit", "delete"],
   },
   {
-    // Added with Part B, which turned `ProductType` from a Prisma enum into a table. The
-    // screen it points at cannot be reached without this row, so it ships with the feature
-    // rather than waiting for Part C.
+    // Added with Part B, which turned `ProductType` from a Prisma enum into a table.
     //
-    // A ROOT for now. Part C re-parents it under `stock_management` by adding `parentKey`;
-    // the seeder upserts `parentId` on every run, so that move needs no data migration — the
-    // same mechanism that moved `zoho` under `settings`.
+    // A child of `stock_management`, NOT of `stock` — and that is a hard constraint, not a
+    // preference. seed-rbac.ts rejects a grandchild outright, because the sidebar walks
+    // exactly two levels: nesting this under `stock` would create a row that exists in the
+    // database, grants correctly, and renders nowhere.
     //
     // No `delete` action, and that is deliberate: `Product.productTypeId` is required with a
     // RESTRICT foreign key, so a type in use cannot be removed and one that is not still
@@ -120,8 +147,9 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     description: "The product type list — the tabs on Stock and what every product is filed under",
     icon: "Tag",
     route: "/product-types",
-    group: "Operations",
-    sortOrder: 101, // stock is 100; 101-109 is free
+    parentKey: "stock_management",
+    group: "Operations", // MUST equal the parent's — the seeder asserts it
+    sortOrder: 102,
     actions: ["view", "create", "edit"],
   },
   {
@@ -130,8 +158,9 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     description: "Incoming shipments, receiving, putaway",
     icon: "ArrowDownCircle",
     route: "/inbound",
-    group: "Operations",
-    sortOrder: 110,
+    parentKey: "stock_management",
+    group: "Operations", // MUST equal the parent's — the seeder asserts it
+    sortOrder: 104,
     actions: ["view", "create", "edit", "delete", "approve", "fetch"],
   },
   {
@@ -140,8 +169,9 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     description: "Outward dispatch, delivery runs, pre-bookings",
     icon: "Truck",
     route: "/deliveries",
-    group: "Operations",
-    sortOrder: 120,
+    parentKey: "stock_management",
+    group: "Operations", // MUST equal the parent's — the seeder asserts it
+    sortOrder: 105,
     actions: ["view", "create", "edit", "delete", "approve", "fetch"],
   },
   {
@@ -150,8 +180,9 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     description: "Inter-location transfer orders",
     icon: "ArrowRightLeft",
     route: "/transfers",
-    group: "Operations",
-    sortOrder: 130,
+    parentKey: "stock_management",
+    group: "Operations", // MUST equal the parent's — the seeder asserts it
+    sortOrder: 106,
     actions: ["view", "create", "edit", "delete", "approve"],
   },
   {
@@ -160,8 +191,9 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     description: "Physical stock counts, reconciliation and resets",
     icon: "ClipboardCheck",
     route: "/stock-audit",
-    group: "Operations",
-    sortOrder: 140,
+    parentKey: "stock_management",
+    group: "Operations", // MUST equal the parent's — the seeder asserts it
+    sortOrder: 103,
     actions: ["view", "create", "edit", "delete", "approve"],
   },
   {

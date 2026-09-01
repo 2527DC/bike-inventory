@@ -22,6 +22,7 @@ import {
   Warehouse,
   ShoppingCart,
   Tag,
+  Boxes,
   AlertCircle,
   RefreshCw,
   FileText,
@@ -80,6 +81,7 @@ const ICONS: Record<string, LucideIcon> = {
   Trophy,
   Swords,
   HardDrive,
+  Boxes,
 };
 
 export function moduleIcon(name: string | null | undefined): LucideIcon {

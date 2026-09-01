@@ -1426,3 +1426,69 @@ refusal), `/stock` (tabs from the table, default All, price line, name clamp), `
 (type picker, size badge), `/stock-audit/new` (type filter), `/stock-audit/brand-count`
 (the `p.type.replace` line), `/reorder`, and `/` plus `/desktop` for the Stock Value and Low
 Stock tiles after the `api/dashboard/stats` rename.
+
+---
+
+# 18. PART C AS BUILT — 1 Sep 2026
+
+Built, and it went as the plan described — one file plus one page, no schema change, no
+component edited. The seeder's own output is the verification.
+
+## 18.1 The tree, read back from the database
+
+```
+stock_management   100  /stock-management   Operations   parentId: null   <- a ROOT
+  stock            101  /stock              Operations
+  product_types    102  /product-types      Operations
+  stock_audit      103  /stock-audit        Operations
+  inbound          104  /inbound            Operations
+  deliveries       105  /deliveries         Operations
+  transfers        106  /transfers          Operations
+```
+
+In the owner's stated order — stocks, product types, stock audit, inbound, dispatch,
+transfers — rather than the old numeric one.
+
+## 18.2 The claim that mattered, and how it was checked
+
+The plan asserted that keeping every child's **key** means every existing grant survives,
+because permissions key on the module key rather than on position in the tree. Two independent
+confirmations:
+
+- `db:seed:rbac` reported **no stale permissions removed**. A lost grant would have shown up
+  there, as `stock.fetch` did in Part A.
+- Queried directly: **29 role grants across the six children**, and every non-admin role's
+  grant count unchanged (`SERVICE_MANAGER: 27`, `STAFF_LMS_ADMIN: 25`, and the rest).
+
+Module counts moved exactly as predicted: **39 root / 8 child → 34 root / 14 child**. Six
+modules became children, one new root appeared.
+
+## 18.3 One thing the plan did not mention: the icon
+
+`stock_management` uses `Boxes`, and **`Boxes` was not in `src/lib/module-icons.ts`**.
+`moduleIcon()` falls back to `Package` for an unknown name — silently, by design, so the
+sidebar never crashes on a typo. The parent would have rendered with the *same* icon as its
+own `stock` child, which looks like a bug and is invisible in code review.
+
+Added to the map. Worth remembering: **adding a module with a new icon is two files, not one.**
+
+## 18.4 The hub page
+
+`src/app/(dashboard)/stock-management/page.tsx` lists the six children **from the granted
+module list**, not from a literal array — the same store the sidebar reads. A person without
+`transfers.view` sees no Transfers card, and the page cannot drift when a module is added or
+renamed. Cosmetic, as CLAUDE.md requires: each destination re-checks server-side.
+
+It handles the case where somebody holds `stock_management.view` and none of the children,
+saying so rather than rendering an empty page that looks broken.
+
+## 18.5 Verified, and not
+
+- `npx tsc --noEmit` clean; `npx eslint` on the changed files reported **nothing at all**.
+- Tree and grants verified by querying the database, above.
+- **`npm run build` NOT run** — the cadence in §12 puts the second and final build after
+  commit 4.
+- **Nothing opened in a browser.** Specifically unchecked: that the desktop rail still renders
+  (§15.6 — it ignores `m.parent`, so the six will appear as flat siblings there, which is
+  expected), and that **Stock Management now shows in the phone's bottom bar**, which is the
+  entire reason the parent was given a route.
