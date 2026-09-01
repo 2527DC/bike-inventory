@@ -95,7 +95,13 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: "/stock",
     group: "Operations",
     sortOrder: 100,
-    actions: ["view", "create", "edit", "delete", "fetch"],
+    // `fetch` is GONE. It gated the "Fetch Stock" button on /stock, which pulled the catalog
+    // from Zoho; that import was deleted and products now arrive from
+    // scripts/import-products.ts. Verified before removing: no `requireFeature("stock",
+    // "fetch")` and no `canFetch("stock")` existed anywhere — the wizard's API calls were
+    // gated by `zoho.fetch`, so nothing loses access. The seeder's stale-permission sweep
+    // (seed-rbac.ts) deletes the row and its grants on the next `npm run db:seed:rbac`.
+    actions: ["view", "create", "edit", "delete"],
   },
   {
     key: "inbound",

@@ -95,14 +95,6 @@ export const ENDPOINTS = {
     owner: "listCustomerPayments / listAllCustomerPayments",
     purpose: "Payments received, for receivables reconciliation",
   },
-  "items.list": {
-    key: "items.list",
-    method: "GET",
-    path: "/items?page&per_page&status&last_modified_time",
-    providers: ALL,
-    owner: "listItems / listAllItems",
-    purpose: "The product catalog pull",
-  },
 
   // ── Zoho Books only (books.ts) ────────────────────────────────────────────
   "items.create": {

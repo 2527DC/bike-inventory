@@ -12,7 +12,7 @@ import {
 import { productSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
-import { PLACEHOLDER_BRAND, PLACEHOLDER_CATEGORY } from "@/lib/import-placeholders";
+import { PLACEHOLDER_BRAND_NAMES_LOWER } from "@/lib/import-placeholders";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
 
 export async function GET(req: NextRequest) {
@@ -57,21 +57,26 @@ export async function GET(req: NextRequest) {
     }
 
     if (needsDetails) {
-      // A product "needs details" when the import had to invent a value for it. Brand and
-      // category are non-null columns, so the import writes a placeholder rather than being
-      // able to say "unknown" — matching those two names IS the query for "nobody has looked
-      // at this row yet". Case-insensitive so it agrees with `isPlaceholderBrand` on the card;
-      // otherwise a renamed brand could render as a placeholder and still escape this filter.
+      // A product "needs details" when nobody has given it a real brand. `Product.brandId` is
+      // non-null, so an import with no brand cannot record "unknown" — it writes one of the
+      // placeholder names instead, and matching those IS the query for "nobody has looked at
+      // this row yet". Case-insensitive, and sharing `PLACEHOLDER_BRAND_NAMES_LOWER` with
+      // `isPlaceholderBrand` so the filter and the card can never disagree: if they did, a
+      // row would render as needing a brand while the filter meant to collect it passed by.
       //
-      // The bin is a third kind of missing detail, and the only one no import could ever fill:
-      // a bin is a physical shelf in this warehouse and Zoho has never heard of it. It is
-      // included only while bin tracking is on — with `BIN_TRACKING_ENABLED` false the bin UI
-      // is hidden everywhere, so counting every product as "needs a bin" would swamp the
-      // filter with rows a person has no screen to fix.
+      // CATEGORY IS DELIBERATELY NOT TESTED HERE, and must not be added back. Every product
+      // the catalog import creates is `Uncategorized`, so the name is the normal state of the
+      // whole catalog rather than the exception — including it would return all 8,175 rows
+      // and the filter would stop distinguishing anything.
+      //
+      // The bin is the other kind of missing detail, and the only one no import could ever
+      // fill: a bin is a physical shelf here and Zoho has never heard of it. Included only
+      // while bin tracking is on — with `BIN_TRACKING_ENABLED` false the bin UI is hidden
+      // everywhere, so counting every product as "needs a bin" would swamp the filter with
+      // rows a person has no screen to fix.
       and.push({
         OR: [
-          { brand: { name: { equals: PLACEHOLDER_BRAND, mode: "insensitive" as const } } },
-          { category: { name: { equals: PLACEHOLDER_CATEGORY, mode: "insensitive" as const } } },
+          { brand: { name: { in: PLACEHOLDER_BRAND_NAMES_LOWER, mode: "insensitive" as const } } },
           ...(BIN_TRACKING_ENABLED ? [{ binId: null }] : []),
         ],
       });

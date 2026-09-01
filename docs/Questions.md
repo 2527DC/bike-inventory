@@ -65,3 +65,20 @@
 
  and i selcetd the 14 itsem and clicked the import it gives me approved but the items are not showin in the stock page 
  
+
+ what  i think is i dont want the fetch and import of product itself i want  to remove all the    
+  related backend and frontend i dont wat to fetch the product from  itself remove related thing    
+  create a plan for that  what i will do is  that i  will run the seeding for that or direct        
+  insert where from u i will give  the relatd  file so that u can make a direct insert operation    
+  and  we will make a modules as stock managemnt in that i will have stocks  module and product     
+  type module where the product type module  must be the submodule in the  stock management  , and  
+  another submodule of  stock audit module too  /stock-audit stock-auditin the stock management     
+  module and also the inbound and  delivery dispatch sibde bar modules to the  stock mangment and  also the stock transfer  inside the  stock managemnt submodule 
+
+
+
+  2nd 
+
+  push notification , email notiication ,  intigration  and ai agent intigration set up  respected to listing  module and 
+   the push and email notfication must have just turn on and off related details configuration rnd for to use which push notifictaion i prefer aws 
+

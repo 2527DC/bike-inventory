@@ -5,7 +5,7 @@ import { useSession } from "next-auth/react";
 import Link from "next/link";
 import {
   Package, ArrowDownCircle, ArrowUpCircle, AlertTriangle,
-  IndianRupee, Brain, Truck, Clock, CheckCircle2, Flag,
+  IndianRupee, Truck, Clock, CheckCircle2, Flag,
   Users, ShieldAlert, ChevronRight, Share2, Loader2,
 } from "lucide-react";
 import { DashboardCard } from "@/components/dashboard-card";
@@ -32,7 +32,6 @@ interface CEOData {
   openVendorIssues: number;
   // Lists
   overdueBillsList: Array<{ id: string; billNo: string; amount: number; paidAmount: number; dueDate: string; vendor: { name: string } }>;
-  insights: Array<{ type: string; title: string; severity: string; value: number }>;
   // Inbound
   inboundInTransit: number;
   inboundArrivingThisWeek: number;
@@ -219,7 +218,7 @@ function AdminDashboard() {
 
     Promise.all([
       safeFetch("/api/accounts/summary"),
-      safeFetch("/api/ai/dashboard-insights"),
+      safeFetch("/api/dashboard/stats"),
       safeFetch(`/api/inventory/inwards?dateFrom=${today}&limit=1`),
       safeFetch(`/api/inventory/outwards?dateFrom=${today}&limit=1`),
       safeFetch("/api/health/summary"),
@@ -245,7 +244,6 @@ function AdminDashboard() {
           inboundInTransit: inboundRes.success ? (inboundRes.data?.inTransit?.items || 0) : 0,
           inboundArrivingThisWeek: inboundRes.success ? (inboundRes.data?.arrivingThisWeek?.items || 0) : 0,
           overdueBillsList: acct?.overdueBillsList || [],
-          insights: insightData.filter((i: { type: string }) => i.type !== "stock_value" && i.type !== "reorder"),
           people: healthRes.success ? (healthRes.data?.people || []) : [],
           todaySummary: healthRes.success ? (healthRes.data?.today || {}) : {},
           criticalAlerts: healthRes.success ? (healthRes.data?.criticalAlerts || []) : [],
@@ -328,8 +326,10 @@ function AdminDashboard() {
         </Link>
       </div>
 
-      {/* Operations + Service Row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mt-3">
+      {/* Operations + Service Row — three tiles since the AI Insights tile was removed with
+          the /ai page. grid-cols-3 rather than the old 2/4 split, which now left a hole at
+          both breakpoints. Matches the other three-tile grids in this file. */}
+      <div className="grid grid-cols-3 gap-2 mt-3">
         <Link href="/reorder" className="focus-ring rounded-xl">
           <Card className={`min-h-[44px] ${data.lowStockCount > 0 ? "border-red-200" : ""}`}>
             <CardContent className="p-2.5 text-center">
@@ -357,15 +357,6 @@ function AdminDashboard() {
             </CardContent>
           </Card>
         </Link>
-        <Link href="/ai" className="focus-ring rounded-xl">
-          <Card className="min-h-[44px]">
-            <CardContent className="p-2.5 text-center">
-              <Brain className="h-4 w-4 text-purple-500 mx-auto mb-0.5" />
-              <p className="text-xl font-bold text-slate-900 tabular-nums leading-none">{data.insights.length}</p>
-              <p className="text-[11px] font-medium text-slate-500 mt-1">AI Insights</p>
-            </CardContent>
-          </Card>
-        </Link>
       </div>
 
       {/* Daily Pulse */}
@@ -389,29 +380,6 @@ function AdminDashboard() {
       <div className="mb-3">
         <ShareDailyReport />
       </div>
-
-      {/* Smart Insights */}
-      {data.insights.length > 0 && (
-        <Card className="mt-4">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-1.5">
-              <Brain className="h-4 w-4 text-purple-600" />
-              Smart Insights
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {data.insights.slice(0, 4).map((item) => (
-              <div key={item.type} className="flex items-center gap-2">
-                <Badge variant={item.severity === "danger" ? "danger" : item.severity === "warning" ? "warning" : item.severity === "success" ? "success" : "info"} className="text-[10px] shrink-0">
-                  {item.severity === "danger" ? "!" : item.severity === "warning" ? "~" : "i"}
-                </Badge>
-                <p className="text-xs text-slate-700">{item.title}</p>
-              </div>
-            ))}
-            <Link href="/ai" className="text-xs text-blue-600 font-medium block pt-1 focus-ring rounded">View all insights</Link>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Critical Alerts moved to top of dashboard */}
 
@@ -916,7 +884,7 @@ function PurchaseManagerDashboard() {
     const safeFetch = (url: string) => fetch(url).then((r) => r.ok ? r.json() : { success: false }).catch(() => ({ success: false }));
     Promise.all([
       safeFetch("/api/products?limit=1&status=ACTIVE"),
-      safeFetch("/api/ai/dashboard-insights"),
+      safeFetch("/api/dashboard/stats"),
       safeFetch(`/api/inventory/inwards?dateFrom=${today}&limit=1`),
     ]).then(([prodRes, insightsRes, inwardsRes]) => {
       const insightData = insightsRes.success ? insightsRes.data : [];

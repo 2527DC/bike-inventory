@@ -7,7 +7,7 @@ import { stockCountUpdateSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
-import { PLACEHOLDER_BRAND } from "@/lib/import-placeholders";
+import { isPlaceholderBrand } from "@/lib/import-placeholders";
 import { setWarehouseQty } from "@/lib/stock-location";
 import { warehouseByCode } from "@/lib/warehouses";
 
@@ -208,10 +208,12 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           if (!product) continue;
 
           // Apply the counter's suggested brand only when the current one carries no
-          // information: the import's placeholder, or one of the two other "no brand" names
-          // this catalog has collected. A real brand is never overwritten by a count.
+          // information. The three "no brand" names this catalog has collected used to be
+          // listed inline here; they now live in `isPlaceholderBrand`, so this test, the
+          // /stock card and the "Needs details" filter share one definition and cannot drift
+          // apart. A real brand is never overwritten by a count.
           let brandUpdate: Record<string, string> = {};
-          if (item.suggestedBrand && (!product.brand || [PLACEHOLDER_BRAND, "Unbranded", "General"].includes(product.brand.name))) {
+          if (item.suggestedBrand && (!product.brand || isPlaceholderBrand(product.brand.name))) {
             const targetBrand = await tx.brand.findFirst({
               where: { name: { equals: item.suggestedBrand, mode: "insensitive" } },
             });

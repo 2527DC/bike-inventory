@@ -25,18 +25,45 @@ export const PLACEHOLDER_BRAND = "Imported";
 export const PLACEHOLDER_CATEGORY = "Uncategorized";
 
 /**
- * True when the brand on a product is the import's placeholder, not a real manufacturer.
+ * Every name that means "no real brand", whatever wrote the row.
  *
- * Case-insensitive on purpose, and the "Needs details" query in `api/products` matches the
- * same way (`mode: "insensitive"`). A person can rename a brand from /more/brands; if the
- * display test and the filter test disagreed about case, a card would render as a
- * placeholder while the filter that is supposed to collect it passed it by.
+ * Three writers, three spellings, one meaning:
+ *   Imported    the Zoho item import. Nothing writes it any more — that import was deleted —
+ *               but rows created before then still carry it.
+ *   Unbranded   `scripts/import-products.ts`, for all 8,175 rows of the catalog import.
+ *   General     seen on hand-created rows; `api/stock-counts/[id]` has always treated it as
+ *               overwritable, and that list is now defined here instead of inline.
+ *
+ * One definition rather than three, because the display test and the "Needs details" filter
+ * MUST agree. If they drift, a card renders as needing a brand while the filter meant to
+ * collect it passes it by — and a filter that finds nothing looks exactly like a catalog
+ * with no problems.
+ */
+const PLACEHOLDER_BRAND_NAMES = [PLACEHOLDER_BRAND, "Unbranded", "General"];
+
+/** Lower-cased, for the case-insensitive Prisma `in` filter in `api/products`. */
+export const PLACEHOLDER_BRAND_NAMES_LOWER = PLACEHOLDER_BRAND_NAMES.map((n) => n.toLowerCase());
+
+/**
+ * True when the brand on a product is a placeholder, not a real manufacturer.
+ *
+ * Case-insensitive on purpose, and the "Needs details" query matches the same way. A person
+ * can rename a brand from /more/brands; if the two disagreed about case the filter would
+ * silently miss rows the card is flagging.
  */
 export function isPlaceholderBrand(name: string | null | undefined): boolean {
-  return (name ?? "").trim().toLowerCase() === PLACEHOLDER_BRAND.toLowerCase();
+  return PLACEHOLDER_BRAND_NAMES_LOWER.includes((name ?? "").trim().toLowerCase());
 }
 
-/** True when the category on a product is the import's placeholder. See above. */
+/**
+ * True when the category on a product is the import's placeholder.
+ *
+ * NOTE: this is no longer a "needs attention" signal and must not be used as one. Every
+ * product the catalog import creates is `Uncategorized`, so it is the normal state of the
+ * whole catalog rather than the exception — which is why the "Needs details" filter and the
+ * /stock card both stopped testing it. Kept because the bill import still writes the name
+ * (`api/zoho/pull-review/approve`), and something may yet want to ask.
+ */
 export function isPlaceholderCategory(name: string | null | undefined): boolean {
   return (name ?? "").trim().toLowerCase() === PLACEHOLDER_CATEGORY.toLowerCase();
 }
