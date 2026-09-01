@@ -5,9 +5,22 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { createLogger } from "@/lib/logger";
+import { PLACEHOLDER_BRAND, PLACEHOLDER_CATEGORY } from "@/lib/import-placeholders";
+import { parseBicycleSize } from "@/lib/product-size";
+// Type-only. The clients themselves are still loaded through a dynamic import inside the
+// handler, so importing the type here adds nothing to the module graph at runtime.
+import type { BooksClient } from "@/lib/integrations";
+
+// This route had no logger at all — a 499-line import handler whose only record of what it
+// did was the response body, which a 504 never delivers.
+const log = createLogger("zoho:approve");
 
 // POST — approve or reject a pull
 export async function POST(req: NextRequest) {
+  // Wall-clock for the finish log. This route dies at maxDuration = 60 under load, so how
+  // long a successful run took is the number that says how close to the cliff it is.
+  const startedAt = Date.now();
   try {
     const user = await requireFeature("zoho", "approve");
     const body = await req.json();
@@ -61,12 +74,17 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── APPROVE: write to real tables ───
-    const results = { contacts: 0, items: 0, bills: 0, invoices: 0, errors: [] as string[] };
+    // `sizesParsed` counts the bicycles whose wheel size was recovered from the name. It is
+    // in the finish log rather than only the response because a 504 delivers no response.
+    const results = { contacts: 0, items: 0, bills: 0, invoices: 0, sizesParsed: 0, errors: [] as string[] };
 
-    // Mirror Zoho categories — use exact category_name from Zoho, fallback to "Uncategorized"
+    // Mirror Zoho categories — use exact category_name from Zoho, falling back to the
+    // placeholder. The name is a shared constant, not a literal: the "Needs details" filter
+    // on /stock finds these rows by comparing against the same value, and a drifted spelling
+    // would make that filter quietly return nothing.
     const categoryCache: Record<string, string> = {};
     async function resolveCategory(zohoCategoryName?: string): Promise<string> {
-      const catName = (zohoCategoryName || "").trim() || "Uncategorized";
+      const catName = (zohoCategoryName || "").trim() || PLACEHOLDER_CATEGORY;
       if (!categoryCache[catName]) {
         let cat = await prisma.category.findFirst({ where: { name: catName } });
         if (!cat) cat = await prisma.category.create({ data: { name: catName, description: `Zoho category: ${catName}` } });
@@ -74,9 +92,9 @@ export async function POST(req: NextRequest) {
       }
       return categoryCache[catName];
     }
-    let defaultBrand = await prisma.brand.findFirst({ where: { name: "Imported" } });
+    let defaultBrand = await prisma.brand.findFirst({ where: { name: PLACEHOLDER_BRAND } });
     if (!defaultBrand) {
-      defaultBrand = await prisma.brand.create({ data: { name: "Imported" } });
+      defaultBrand = await prisma.brand.create({ data: { name: PLACEHOLDER_BRAND } });
     }
 
     // Imported records are attributed to a system-role account when one exists, so the audit
@@ -134,6 +152,16 @@ export async function POST(req: NextRequest) {
 
           const itemCategoryId = await resolveCategory(String(d.categoryName || ""));
 
+          // Zoho has no size field, but for this catalog a bicycle's wheel size is the first
+          // thing in its own name (`26''BICYCLE S/S(...)`). Recover it here — the /stock card
+          // already renders the badge, it has simply never had anything to render.
+          //
+          // BICYCLE only, and only from a known wheel size. A spare part with a number in its
+          // name has no wheel size, and a leading number that is not a size this shop sells is
+          // a model number. This is a create, so there is no person-typed size to overwrite.
+          const parsedSize = autoType === "BICYCLE" ? parseBicycleSize(String(d.name)) : null;
+          if (parsedSize) results.sizesParsed++;
+
           await prisma.product.create({
             data: {
               sku,
@@ -141,6 +169,7 @@ export async function POST(req: NextRequest) {
               categoryId: itemCategoryId,
               brandId: itemBrandId,
               type: autoType,
+              size: parsedSize,
               costPrice: Number(d.costPrice || 0),
               sellingPrice: Number(d.sellingPrice || 0),
               mrp: Number(d.sellingPrice || 0),
@@ -156,9 +185,13 @@ export async function POST(req: NextRequest) {
           let lineItems = (d.lineItems as Array<{ name: string; sku: string; quantity: number; rate: number; itemTotal: number }>) || [];
           if (lineItems.length === 0 && preview.zohoId) {
             try {
-              const { BooksClient } = await import("@/lib/integrations");
-              const zoho = new BooksClient();
-              if (await zoho.init()) {
+              // getBooks(), not `new BooksClient()` + init(). This sits INSIDE the
+              // per-preview loop, so the old form paid one IntegrationConfig read — and a
+              // token refresh whenever the token was near expiry — for every bill in the
+              // batch. getBooks is request-scoped, so the whole approve now pays once.
+              const { getBooks } = await import("@/lib/integrations");
+              const zoho = await getBooks();
+              if (zoho) {
                 const detail = await zoho.getBill(preview.zohoId);
                 lineItems = (detail.bill?.line_items || []).map((li) => ({
                   name: li.name, sku: li.sku || "", quantity: li.quantity, rate: li.rate, itemTotal: li.item_total, item_id: li.item_id,
@@ -211,18 +244,28 @@ export async function POST(req: NextRequest) {
           let itemBrand = await prisma.brand.findFirst({ where: { name: { equals: billVendorName, mode: "insensitive" } } });
           if (!itemBrand) itemBrand = await prisma.brand.create({ data: { name: billVendorName } });
 
-          // Default category fallback
-          let defaultCategory = await prisma.category.findFirst({ where: { name: "Uncategorized" } });
-          if (!defaultCategory) defaultCategory = await prisma.category.create({ data: { name: "Uncategorized", description: "Auto-created from bill import" } });
+          // Default category fallback — same shared placeholder name as the item branch above.
+          let defaultCategory = await prisma.category.findFirst({ where: { name: PLACEHOLDER_CATEGORY } });
+          if (!defaultCategory) defaultCategory = await prisma.category.create({ data: { name: PLACEHOLDER_CATEGORY, description: "Auto-created from bill import" } });
 
-          // Init Zoho client for fetching item details (category, HSN, etc.)
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          let zohoForItems: any = null;
+          // The client for fetching item details (category, HSN, tax). Same shared,
+          // request-scoped client as the getBill call above — asking twice in one request
+          // returns the same instance, so this costs nothing after the first bill.
+          //
+          // `any` is gone with it: getBooks() returns a typed BooksClient | null, and the
+          // eslint-disable that suppressed the complaint is no longer needed.
+          let zohoForItems: BooksClient | null = null;
           try {
-            const { BooksClient: ZC } = await import("@/lib/integrations");
-            const z = new ZC();
-            if (await z.init()) zohoForItems = z;
-          } catch { /* best effort */ }
+            const { getBooks } = await import("@/lib/integrations");
+            zohoForItems = await getBooks();
+          } catch (e) {
+            // Best effort — a missing item detail costs category and HSN, not the import.
+            // But a swallowed error with no log is a bug, so say what was lost.
+            log.warn("item detail client unavailable; importing without category/HSN", {
+              pullId,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
 
           for (let liIdx = 0; liIdx < lineItems.length; liIdx++) {
             const li = lineItems[liIdx];
@@ -428,9 +471,10 @@ export async function POST(req: NextRequest) {
           // Fetch invoice detail from Zoho for line items + salesperson
           if ((lineItems.length === 0 || !salesPerson) && preview.zohoId) {
             try {
-              const { BooksClient } = await import("@/lib/integrations");
-              const zoho = new BooksClient();
-              if (await zoho.init()) {
+              // Third and last per-record construction in this loop — same shared client.
+              const { getBooks } = await import("@/lib/integrations");
+              const zoho = await getBooks();
+              if (zoho) {
                 const detail = await zoho.getInvoice(preview.zohoId);
                 const inv = detail.invoice;
                 if (inv) {
@@ -486,6 +530,25 @@ export async function POST(req: NextRequest) {
       data: { status: newStatus, approvedAt: remainingPending === 0 ? new Date() : undefined },
     });
 
+    // The one durable record of what an approve actually did. Identifiers and counts only —
+    // never the records themselves. This matters most in the case where the response never
+    // arrives: if the function is killed at maxDuration the client sees a 504 with no body,
+    // and without this line there is no way afterwards to tell what got in before the kill.
+    log.info("approve finished", {
+      pullId,
+      requestedBy: user.id,
+      entityType: entityType || "all",
+      contacts: results.contacts,
+      items: results.items,
+      bills: results.bills,
+      invoices: results.invoices,
+      sizesParsed: results.sizesParsed,
+      errors: results.errors.length,
+      remainingPending,
+      status: newStatus,
+      ms: Date.now() - startedAt,
+    });
+
     return successResponse({
       action: "approved",
       entityType: entityType || "all",
@@ -494,6 +557,8 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Approval failed", 500);
+    const message = error instanceof Error ? error.message : "Approval failed";
+    log.error("approve failed", { message });
+    return errorResponse(message, 500);
   }
 }

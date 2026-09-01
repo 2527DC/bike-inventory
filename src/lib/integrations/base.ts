@@ -10,6 +10,9 @@
 import { prisma } from "@/lib/db";
 import { readJson } from "@/lib/http-json";
 import { createLogger } from "@/lib/logger";
+// Type-only: the registry describes the endpoints, it does not dispatch them. Importing the
+// key type keeps a typo in a log label a compile error rather than a mystery in a log file.
+import type { EndpointKey } from "./endpoints";
 
 const log = createLogger("integrations");
 
@@ -87,6 +90,40 @@ export interface IntegrationCustomerPayment {
   customer_name: string;
   reference_number: string;
   account_name: string;
+}
+
+/**
+ * One invoice as `GET /invoices/{id}` returns it — richer than the list shape, which is why
+ * this is separate from IntegrationInvoice.
+ *
+ * The index signature keeps every field Zoho sends reachable, but the named fields are the
+ * ones this application actually reads, and naming them is the point: callers used to take
+ * this through a variable typed `any`, and `any` hid a real defect — `inv.invoice_number`
+ * was `unknown` and `.startsWith()` on it only failed once the `any` was removed.
+ */
+export interface IntegrationInvoiceDetail {
+  invoice_id?: string;
+  invoice_number?: string;
+  customer_name?: string;
+  date?: string;
+  total?: number;
+  balance?: number;
+  status?: string;
+  salesperson_name?: string;
+  line_items?: LineItem[];
+  contact_persons?: Array<{ phone?: string; mobile?: string }>;
+  billing_address?: ZohoAddress;
+  shipping_address?: ZohoAddress;
+  [field: string]: unknown;
+}
+
+export interface ZohoAddress {
+  address?: string;
+  street2?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  phone?: string;
 }
 
 export interface LineItem {
@@ -194,10 +231,31 @@ export abstract class IntegrationClient {
     return new Promise((r) => setTimeout(r, ms));
   }
 
-  async apiCall<T>(
+  /**
+   * One HTTP call to the provider, with auth, a single 401 retry and 429 backoff.
+   *
+   * **`protected` on purpose — this is the boundary, enforced by the compiler.**
+   *
+   * Four call sites used to reach it from outside `src/lib/integrations/`: a `PUT /items/{id}`
+   * in a route handler and three invoice searches in the workshop layer. Each was a Zoho
+   * endpoint that existed in no client and appeared in no listing, which is precisely the
+   * problem the registry was written to solve — a registry anyone can bypass documents
+   * nothing. Every one of them now has a client method (`updateItem`, `searchInvoices`), so
+   * the door can be shut behind them.
+   *
+   * Adding a Zoho call therefore means adding a method here plus an entry in endpoints.ts.
+   * That is a rule a review can forget; `protected` cannot.
+   *
+   * `key` names the call from endpoints.ts. It is a LOG LABEL and nothing else — no dispatch
+   * reads it, and the URL is still built by the caller. It exists so a debug line says
+   * `bills.list` instead of an interpolated path carrying a date range and a search term,
+   * which makes one request impossible to correlate with the next.
+   */
+  protected async apiCall<T>(
     method: string,
     endpoint: string,
     body?: Record<string, unknown>,
+    key?: EndpointKey,
     _attempt = 0
   ): Promise<T> {
     if (!this.accessToken || !this.organizationId) {
@@ -218,7 +276,13 @@ export abstract class IntegrationClient {
     }
 
     const started = Date.now();
-    log.debug(`-> ${this.label} ${method} ${endpoint}`, body ? { body } : undefined);
+    // The endpoint KEY and the payload SIZE, never the payload. A body here can carry a
+    // customer's name, phone and address; CLAUDE.md's rule is to log the identifiers needed
+    // to find the record again, not the record.
+    log.debug(`-> ${this.label} ${method} ${key ?? endpoint}`, {
+      ...(key ? { endpoint } : {}),
+      ...(options.body ? { bytes: (options.body as string).length } : {}),
+    });
     const res = await fetch(url, options);
 
     // Token expired mid-request — refresh once and retry.
@@ -235,7 +299,7 @@ export abstract class IntegrationClient {
           config.clientSecret,
           config.refreshToken
         );
-        if (refreshed) return this.apiCall<T>(method, endpoint, body, _attempt + 1);
+        if (refreshed) return this.apiCall<T>(method, endpoint, body, key, _attempt + 1);
       }
       log.error(`<- ${this.label} ${endpoint} — token refresh failed, reconnect required`);
       throw new Error(`${this.label} authentication failed. Please reconnect.`);
@@ -248,7 +312,7 @@ export abstract class IntegrationClient {
           retryAfter > 0 ? retryAfter * 1000 : Math.min(5000 * Math.pow(2, _attempt), 60000);
         log.warn(`<- ${this.label} ${endpoint} 429 rate limited — retry ${_attempt + 1}/3 in ${wait}ms`);
         await this.delay(wait);
-        return this.apiCall<T>(method, endpoint, body, _attempt + 1);
+        return this.apiCall<T>(method, endpoint, body, key, _attempt + 1);
       }
       log.error(`<- ${this.label} ${endpoint} — rate limit not cleared after 3 retries`);
       throw new Error(
@@ -284,7 +348,9 @@ export abstract class IntegrationClient {
     const search = searchText ? `&search_text=${encodeURIComponent(searchText)}` : "";
     return this.apiCall<{ bills: IntegrationBill[] } & PageContext>(
       "GET",
-      `/bills?page=${page}&per_page=200${from}${to}${search}`
+      `/bills?page=${page}&per_page=200${from}${to}${search}`,
+      undefined,
+      "bills.list"
     );
   }
 
@@ -303,7 +369,9 @@ export abstract class IntegrationClient {
   async getBill(billId: string) {
     return this.apiCall<{ bill?: { line_items?: LineItem[] } & Record<string, unknown> }>(
       "GET",
-      `/bills/${billId}`
+      `/bills/${billId}`,
+      undefined,
+      "bills.get"
     );
   }
 
@@ -313,7 +381,9 @@ export abstract class IntegrationClient {
     const search = searchText ? `&search_text=${encodeURIComponent(searchText)}` : "";
     return this.apiCall<{ invoices: IntegrationInvoice[] } & PageContext>(
       "GET",
-      `/invoices?page=${page}&per_page=200${from}${to}${search}`
+      `/invoices?page=${page}&per_page=200${from}${to}${search}`,
+      undefined,
+      "invoices.list"
     );
   }
 
@@ -330,9 +400,11 @@ export abstract class IntegrationClient {
   }
 
   async getInvoice(invoiceId: string) {
-    return this.apiCall<{ invoice?: { line_items?: LineItem[] } & Record<string, unknown> }>(
+    return this.apiCall<{ invoice?: IntegrationInvoiceDetail }>(
       "GET",
-      `/invoices/${invoiceId}`
+      `/invoices/${invoiceId}`,
+      undefined,
+      "invoices.get"
     );
   }
 
@@ -341,7 +413,9 @@ export abstract class IntegrationClient {
     const to = dateTo ? `&date_end=${dateTo}` : "";
     return this.apiCall<{ customerpayments: IntegrationCustomerPayment[] } & PageContext>(
       "GET",
-      `/customerpayments?page=${page}&per_page=200${from}${to}`
+      `/customerpayments?page=${page}&per_page=200${from}${to}`,
+      undefined,
+      "customerpayments.list"
     );
   }
 
@@ -365,7 +439,9 @@ export abstract class IntegrationClient {
       : "";
     return this.apiCall<{ items: IntegrationItem[] } & PageContext>(
       "GET",
-      `/items?page=${page}&per_page=200${status}${modified}`
+      `/items?page=${page}&per_page=200${status}${modified}`,
+      undefined,
+      "items.list"
     );
   }
 

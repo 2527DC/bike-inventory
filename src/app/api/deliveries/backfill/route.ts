@@ -48,9 +48,9 @@ export async function POST(req: NextRequest) {
     // Init Zoho
     let zohoClient;
     try {
-      const { BooksClient } = await import("@/lib/integrations");
-      zohoClient = new BooksClient();
-      if (!(await zohoClient.init())) {
+      const { getBooks } = await import("@/lib/integrations");
+      zohoClient = await getBooks();
+      if (!zohoClient) {
         return errorResponse("Zoho not connected", 400);
       }
     } catch {

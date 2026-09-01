@@ -6,7 +6,7 @@ import { successResponse, errorResponse, paginatedResponse, parseSearchParams } 
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { z } from "zod";
-import { InventoryClient } from "@/lib/integrations";
+import { getInventory } from "@/lib/integrations";
 
 const createSchema = z.object({
   name: z.string().min(1, "Cycle name is required"),
@@ -118,9 +118,8 @@ export async function POST(req: NextRequest) {
     // Push to Zoho Inventory (best effort — don't fail if Zoho is down)
     let zohoItemId: string | null = null;
     try {
-      const inventory = new InventoryClient();
-      const ready = await inventory.init();
-      if (ready) {
+      const inventory = await getInventory();
+      if (inventory) {
         const condLabel = data.condition.charAt(0) + data.condition.slice(1).toLowerCase();
         const result = await inventory.createItem({
           name: `SH | ${data.name} - ${condLabel}`,

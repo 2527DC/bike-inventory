@@ -40,18 +40,15 @@ async function books(): Promise<BooksClient> {
   return client;
 }
 
-/** `/invoices?a=1&b=2` — apiCall appends organization_id itself. */
-function invoicesUrl(params: Record<string, string>): string {
-  return `/invoices?${new URLSearchParams(params).toString()}`;
-}
-
 // Search invoices by customer phone
 export async function searchInvoicesByPhone(phone: string): Promise<ServiceInvoice[]> {
   const client = await books();
-  const data = await client.apiCall<{ invoices?: ServiceInvoice[] }>(
-    "GET",
-    invoicesUrl({ phone, sort_column: "created_time", sort_order: "D", per_page: "5" })
-  );
+  const data = await client.searchInvoices<ServiceInvoice>({
+    phone,
+    sort_column: "created_time",
+    sort_order: "D",
+    per_page: "5",
+  });
   const invoices = data.invoices || [];
   log.info("invoice search by phone", { matches: invoices.length });
   return invoices;
@@ -64,10 +61,7 @@ export async function searchInvoiceByNumber(input: string): Promise<ServiceInvoi
   const trimmed = input.trim();
 
   const byNumber = async (invoice_number: string) =>
-    client.apiCall<{ invoices?: ServiceInvoice[] }>(
-      "GET",
-      invoicesUrl({ invoice_number, per_page: "1" })
-    );
+    client.searchInvoices<ServiceInvoice>({ invoice_number, per_page: "1" });
 
   // Try exact match first (for full invoice numbers like "INV/25/017898")
   const exact = await byNumber(trimmed);
@@ -91,10 +85,7 @@ export async function searchInvoiceByNumber(input: string): Promise<ServiceInvoi
   }
 
   // Final fallback: search_text for partial matching
-  const search = await client.apiCall<{ invoices?: ServiceInvoice[] }>(
-    "GET",
-    invoicesUrl({ search_text: trimmed, per_page: "5" })
-  );
+  const search = await client.searchInvoices<ServiceInvoice>({ search_text: trimmed, per_page: "5" });
   if (search.invoices?.length) {
     const match = search.invoices.find(
       (inv) => inv.invoice_number.includes(trimmed) || inv.invoice_number.includes(digits)

@@ -4,7 +4,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { BooksClient } from "@/lib/integrations";
+import { getBooks } from "@/lib/integrations";
 
 export async function PUT(
   req: NextRequest,
@@ -72,14 +72,12 @@ export async function PUT(
 
     if (product.zohoItemId) {
       try {
-        const zoho = new BooksClient();
-        const initialized = await zoho.init();
-        if (initialized) {
-          await zoho.apiCall("PUT", `/items/${product.zohoItemId}`, {
-            JSONString: JSON.stringify({
-              purchase_rate: newCostPrice,
-            }),
-          });
+        // updateItem(), not a raw apiCall. This was the only Zoho WRITE in the codebase
+        // with no client method — the one endpoint that overwrites existing Zoho data,
+        // called from inside a route handler and therefore absent from every listing.
+        const zoho = await getBooks();
+        if (zoho) {
+          await zoho.updateItem(product.zohoItemId, { purchase_rate: newCostPrice });
           zohoPushed = true;
         }
       } catch (err) {

@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { BooksClient } from "@/lib/integrations";
+import { getBooks } from "@/lib/integrations";
 
 interface ImportedItem {
   sku: string;
@@ -21,9 +21,8 @@ export async function POST() {
   try {
     const user = await requireFeature("zoho", "fetch");
 
-    const zoho = new BooksClient();
-    const ready = await zoho.init();
-    if (!ready) return errorResponse("Zoho not connected", 400);
+    const zoho = await getBooks();
+    if (!zoho) return errorResponse("Zoho not connected", 400);
 
     const log = await prisma.syncLog.create({
       data: { syncType: "clean-import", status: "running", triggeredBy: user.id },

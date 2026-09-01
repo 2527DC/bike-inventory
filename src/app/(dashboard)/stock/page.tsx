@@ -4,7 +4,7 @@ import { useDebounce } from "@/hooks/use-debounce";
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, Square, X, Cloud, Download, Package, ChevronRight, EyeOff, RotateCcw, Trash2
+import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, Square, X, Cloud, Download, Package, ChevronRight, EyeOff, RotateCcw, Trash2, Ruler
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +20,8 @@ import { apiFetch } from "@/lib/api-client";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { isPlaceholderBrand, isPlaceholderCategory } from "@/lib/import-placeholders";
+import { BICYCLE_SIZES } from "@/lib/product-size";
 
 const STOCK_COLUMNS: ExportColumn[] = [
   { header: "SKU", key: "sku" },
@@ -75,17 +77,24 @@ interface PerItemGroup {
 }
 
 type StockView = "list" | "per-item";
-type QuickFilter = "ALL" | "IN_STOCK" | "NO_STOCK" | "LOW_STOCK" | "INACTIVE";
+type QuickFilter = "ALL" | "IN_STOCK" | "NO_STOCK" | "LOW_STOCK" | "INACTIVE" | "NEEDS_DETAILS";
 
 const QUICK_CHIPS: { key: QuickFilter; label: string }[] = [
   { key: "ALL", label: "All" },
   { key: "IN_STOCK", label: "In Stock" },
   { key: "NO_STOCK", label: "No Stock" },
   { key: "LOW_STOCK", label: "Low Stock" },
+  // The fix-up queue: products the import had to invent a brand or a category for. Paired
+  // with Select + bulk assign below, this is the whole workflow for correcting an import —
+  // find the rows nobody has described, describe them in one action.
+  { key: "NEEDS_DETAILS", label: "Needs details" },
   { key: "INACTIVE", label: "Inactive" },
 ];
 
-const BICYCLE_SIZES = ['12"', '14"', '16"', '20"', '24"', '26"', '27.5"', '29"'];
+// BICYCLE_SIZES now lives in `@/lib/product-size` alongside the parse that produces them, so
+// the sizes this filter offers and the sizes an import can write are the same list by
+// construction. A parsed size that the filter could not select would be a badge with nothing
+// behind it.
 
 const log = createLogger("stock");
 
@@ -188,14 +197,22 @@ export default function StockPage() {
   // Bulk select mode
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [bulkAction, setBulkAction] = useState<"" | "brand" | "status" | "category">("");
+  const [bulkAction, setBulkAction] = useState<"" | "brand" | "status" | "category" | "bin">("");
   const [bulkBrandId, setBulkBrandId] = useState("");
   const [bulkStatus, setBulkStatus] = useState<"ACTIVE" | "INACTIVE">("INACTIVE");
   const [bulkCategoryId, setBulkCategoryId] = useState("");
+  // The shelf. Unlike brand and category this is not something an import got wrong — it is
+  // something no import could ever know, so bulk assign is the ONLY way it gets filled for a
+  // freshly imported batch. Behind BIN_TRACKING_ENABLED with the rest of the bin UI.
+  const [bulkBinId, setBulkBinId] = useState("");
   const [categories, setCategories] = useState<CategoryItem[]>([]);
 
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkMessage, setBulkMessage] = useState("");
+
+  // The one-off wheel-size backfill (Part C). Separate from bulk assign because it takes no
+  // selection and asks for no value: it reads names and fills blanks across the catalog.
+  const [sizeFillBusy, setSizeFillBusy] = useState(false);
 
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
@@ -229,21 +246,64 @@ export default function StockPage() {
       if (bulkAction === "brand" && bulkBrandId) body.brandId = bulkBrandId;
       if (bulkAction === "status") body.status = bulkStatus;
       if (bulkAction === "category" && bulkCategoryId) body.categoryId = bulkCategoryId;
+      if (bulkAction === "bin" && bulkBinId) body.binId = bulkBinId;
 
-      const res = await fetch("/api/products/bulk", {
+      // apiFetch, not `.then(r => r.json())`. A bulk assign is the one action here that
+      // silently rewrites 500 rows, and on an expired session the raw form turned a 307 to
+      // the login page into `Unexpected token '<'` — a parse error where the real answer was
+      // "you are logged out and nothing was written".
+      const data = await apiFetch<{ updated: number }>("/api/products/bulk", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      }).then((r) => r.json());
+        json: body,
+      });
 
-      if (!res.success) throw new Error(res.error || "Update failed");
-      setBulkMessage(`Updated ${res.data.updated} products`);
+      log.info("bulk assign applied", { field: bulkAction, selected: selectedIds.size, updated: data.updated });
+      setBulkMessage(`Updated ${data.updated} products`);
       exitSelectMode();
       fetchProducts(1);
     } catch (e) {
-      setBulkMessage(e instanceof Error ? e.message : "Failed");
+      const message = e instanceof Error ? e.message : "Failed";
+      log.error("bulk assign failed", { field: bulkAction, selected: selectedIds.size, message });
+      setBulkMessage(message);
     } finally {
       setBulkLoading(false);
+    }
+  }
+
+  /**
+   * Part C's backfill: read every sizeless bicycle's name and recover the wheel size from it.
+   *
+   * Person-triggered and confirmed, never automatic. It only ever fills a blank — the server
+   * repeats the "size is empty" test on the write — so pressing it twice is safe and a size
+   * somebody typed is never touched.
+   */
+  async function handleSizeBackfill() {
+    if (!confirm(
+      "Fill in missing wheel sizes?\n\n" +
+      "Reads the size from the start of each bicycle's name (26''BICYCLE… → 26\") and fills it " +
+      "in where the size is blank. Sizes already entered by hand are left alone."
+    )) return;
+
+    setSizeFillBusy(true);
+    setBulkMessage("");
+    try {
+      const data = await apiFetch<{ scanned: number; updated: number; unmatched: number; hasMore: boolean }>(
+        "/api/products/backfill-size",
+        { method: "POST" }
+      );
+      log.info("size backfill finished", data);
+      setBulkMessage(
+        `Filled ${data.updated} size${data.updated === 1 ? "" : "s"} from ${data.scanned} bicycle${data.scanned === 1 ? "" : "s"}` +
+        (data.unmatched > 0 ? ` — ${data.unmatched} had no recognisable size in the name` : "") +
+        (data.hasMore ? ". More remain, press again." : "")
+      );
+      fetchProducts(1);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Could not fill sizes";
+      log.error("size backfill failed", { message });
+      setDataError(message);
+    } finally {
+      setSizeFillBusy(false);
     }
   }
 
@@ -379,6 +439,10 @@ export default function StockPage() {
     if (quickFilter === "INACTIVE") { params.set("status", "INACTIVE"); }
     else if (quickFilter === "IN_STOCK") { params.set("status", "ACTIVE"); params.set("minStock", "1"); }
     else if (quickFilter === "NO_STOCK") { params.set("status", "ACTIVE"); params.set("maxStock", "0"); }
+    // Server-side, not a filter over the current page. The list is paginated at 100, and the
+    // rows needing attention are spread across the whole catalog — filtering what happens to
+    // be loaded would report "3 need details" out of 151 and look like good news.
+    else if (quickFilter === "NEEDS_DETAILS") { params.set("status", "ACTIVE"); params.set("needsDetails", "true"); }
     else if (quickFilter === "ALL" || quickFilter === "LOW_STOCK") { params.set("status", "ACTIVE"); }
     if (selectedBrand) params.set("brandId", selectedBrand);
     if (selectedCategory) params.set("categoryId", selectedCategory);
@@ -541,6 +605,20 @@ export default function StockPage() {
             >
               {fetchStep === "fetching" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Cloud className="h-3.5 w-3.5" />}
               {fetchStep === "fetching" ? "Fetching..." : "Fetch Stock"}
+            </button>
+          )}
+          {/* Offered only while the "Needs details" queue is on screen. It is a one-off
+              correction, not a routine action, and a button that rewrites sizes across the
+              catalog does not belong next to Export on every visit. */}
+          {canBulkEdit && !selectMode && quickFilter === "NEEDS_DETAILS" && (
+            <button
+              onClick={handleSizeBackfill}
+              disabled={sizeFillBusy}
+              title="Fill blank bicycle sizes from the product name"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 disabled:opacity-50"
+            >
+              {sizeFillBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ruler className="h-3.5 w-3.5" />}
+              {sizeFillBusy ? "Filling..." : "Fill Sizes"}
             </button>
           )}
           {canBulkEdit && !selectMode && (
@@ -808,7 +886,15 @@ export default function StockPage() {
           {QUICK_CHIPS.map((chip) => (
             <button
               key={chip.key}
-              onClick={() => setQuickFilter(chip.key)}
+              onClick={() => {
+                setQuickFilter(chip.key);
+                // "Needs details" is a question about the whole catalog, and the type filter
+                // defaults to BICYCLE — leaving it set would answer "which BICYCLES need
+                // details", quietly hiding most of the spare parts and accessories that need
+                // them just as much. Widening to All is visible in the control above and the
+                // person can narrow it again.
+                if (chip.key === "NEEDS_DETAILS") setTypeFilter("ALL");
+              }}
               className={`shrink-0 px-2.5 py-1.5 rounded-full text-xs font-medium transition-colors ${
                 quickFilter === chip.key
                   ? "bg-slate-900 text-white"
@@ -896,6 +982,22 @@ export default function StockPage() {
         </Card>
       )}
 
+      {/* What the "Needs details" queue is, and what to do with it. Said here rather than in
+          a banner: the filter returns rows that look ordinary, and without this the muted
+          brand is the only clue that anything is wrong with them. */}
+      {quickFilter === "NEEDS_DETAILS" && !loading && (
+        <p className="text-[11px] text-slate-500 mb-2 flex items-start gap-1.5">
+          <Package className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <span>
+            {total.toLocaleString("en-IN")} product{total === 1 ? "" : "s"} the Zoho import could
+            not describe — the brand or category shown in grey italics was invented, not imported.
+            {canBulkEdit
+              ? " Use Select to pick a group, then assign the real brand or category in one action."
+              : ""}
+          </span>
+        </p>
+      )}
+
       {/* Status bar */}
       <div className="flex items-center justify-between mb-2">
         <p className="text-xs text-slate-500 tabular-nums">
@@ -942,11 +1044,24 @@ export default function StockPage() {
                       <p className="text-sm font-semibold text-slate-900">{p.name}</p>
                       <div className="flex items-center gap-1 mt-0.5 flex-wrap">
                         <span className="text-xs text-slate-400 tabular-nums">{p.sku}</span>
+                        {/* A placeholder is the ABSENCE of a brand, so it must not look like
+                            one. `Imported` rendered in the same blue as `Atlas` reads as a
+                            brand name to anyone who has not been told otherwise — which is
+                            how 151 undescribed products stayed invisible. Muted and italic,
+                            the style this app already uses for missing data. */}
                         {p.brand && (
-                          <span className="text-xs font-medium text-blue-600">{p.brand.name}</span>
+                          <span className={isPlaceholderBrand(p.brand.name)
+                            ? "text-xs italic text-slate-400"
+                            : "text-xs font-medium text-blue-600"}>
+                            {p.brand.name}
+                          </span>
                         )}
                         {p.category && (
-                          <span className="text-xs text-slate-400">{p.category.name}</span>
+                          <span className={isPlaceholderCategory(p.category.name)
+                            ? "text-xs italic text-slate-400"
+                            : "text-xs text-slate-400"}>
+                            {p.category.name}
+                          </span>
                         )}
                         {p.size && (
                           <Badge variant="default" className="text-[10px] py-0 tabular-nums">{p.size}</Badge>
@@ -1070,6 +1185,19 @@ export default function StockPage() {
               >
                 Brand
               </button>
+              {/* Bin is the detail no import can supply — see the plan's Part E. Hidden with
+                  the rest of the bin UI while bin tracking is dormant; the server refuses a
+                  binId in that state too, so this is not the only gate. */}
+              {BIN_TRACKING_ENABLED && (
+                <button
+                  onClick={() => setBulkAction("bin")}
+                  className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${
+                    bulkAction === "bin" ? "bg-blue-600 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                  }`}
+                >
+                  Bin
+                </button>
+              )}
               <button
                 onClick={() => setBulkAction("status")}
                 className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${
@@ -1110,13 +1238,37 @@ export default function StockPage() {
                   className="flex-1 h-9 rounded-lg bg-slate-700 border-0 px-2 text-xs text-white focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="">Select brand...</option>
-                  {brands.filter((b) => b.name !== "Imported").map((b) => (
+                  {/* The placeholder is not a destination. Assigning products TO `Imported`
+                      is the state we are trying to get out of. */}
+                  {brands.filter((b) => !isPlaceholderBrand(b.name)).map((b) => (
                     <option key={b.id} value={b.id}>{b.name}</option>
                   ))}
                 </select>
                 <button
                   onClick={handleBulkApply}
                   disabled={!bulkBrandId || bulkLoading}
+                  className="px-4 py-2 bg-blue-600 rounded-lg text-xs font-medium disabled:opacity-50"
+                >
+                  {bulkLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Apply"}
+                </button>
+              </div>
+            )}
+
+            {BIN_TRACKING_ENABLED && bulkAction === "bin" && (
+              <div className="flex gap-2">
+                <select
+                  value={bulkBinId}
+                  onChange={(e) => setBulkBinId(e.target.value)}
+                  className="flex-1 h-9 rounded-lg bg-slate-700 border-0 px-2 text-xs text-white focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">Select bin...</option>
+                  {bins.map((b) => (
+                    <option key={b.id} value={b.id}>{b.code} — {b.name} ({b._count.products})</option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleBulkApply}
+                  disabled={!bulkBinId || bulkLoading}
                   className="px-4 py-2 bg-blue-600 rounded-lg text-xs font-medium disabled:opacity-50"
                 >
                   {bulkLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Apply"}
