@@ -1,14 +1,20 @@
 {
   "permissions": {
+    "allow": [
+      "Bash(npm:*)",
+      "Bash(npm *)",
+      "Bash(npx:*)",
+      "Bash(npx *)",
+      "PowerShell(npm:*)",
+      "PowerShell(npm *)",
+      "PowerShell(npx:*)",
+      "PowerShell(npx *)"
+    ],
     "ask": [
       "Bash(git:*)",
       "Bash(git *)",
-      "Bash(npm:*)",
-      "Bash(npm *)",
       "PowerShell(git:*)",
-      "PowerShell(git *)",
-      "PowerShell(npm:*)",
-      "PowerShell(npm *)"
+      "PowerShell(git *)"
     ]
   },
   "hooks": {

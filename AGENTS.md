@@ -46,11 +46,19 @@ checkout and nothing is lost.
 > — a heredoc, a `node -e` string — is not mistaken for one that *runs* it. That distinction
 > was learned the hard way: an earlier version denied the very edit adding this section.
 
-## git and npm commands: ALWAYS ask first
+## git commands: ALWAYS ask first
 
-Claude must never run a `git` or `npm` command on its own initiative. Every one of
-them is gated by an `ask` permission rule in `.claude/settings.json`, so a prompt
-appears with the exact command before anything runs.
+Claude must never run a `git` command on its own initiative. Every one of them is gated by
+an `ask` permission rule in `.claude/settings.json`, so a prompt appears with the exact
+command before anything runs.
+
+**npm is NOT gated** — changed 1 Sep 2026. `npm` and `npx` are on the `allow` list and run
+without a prompt. Removing the gate took TWO changes, and anyone restoring it needs both:
+the `permissions.ask` entries in `.claude/settings.json`, AND the `GATED` regex in
+`.claude/hooks/ask-git-npm.js` — the hook returns `"ask"` on its own and kept prompting
+until it was changed too.
+
+What did NOT change: a commit or push to `main` is still **denied**, not prompted.
 
 **Before proposing the command**, state in one line: what it does and what it changes.
 Then let the prompt appear.
@@ -79,4 +87,4 @@ prompt — the output lands directly in the conversation.
 
 ### Scope
 `git` — every subcommand, including read-only ones (`status`, `diff`, `log`).
-`npm` — every subcommand, including `npm run build`, `npm install`, `npx`-style scripts.
+`npm` / `npx` — **no longer gated.** They run without a prompt.
