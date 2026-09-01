@@ -19,20 +19,26 @@ import {
   LMS_SCENARIO_TYPES,
 } from "@/lib/staff-lms/constants";
 
+/**
+ * A product type row. Deliberately three fields — see the model comment in schema.prisma.
+ * No delete action exists, so nothing here describes one.
+ */
+export const productTypeSchema = z.object({
+  name: z.string().min(1, "Name is required").max(40).trim(),
+  sortOrder: z.number().int().min(0).max(9999).optional(),
+  isActive: z.boolean().optional(),
+});
+
 export const productSchema = z.object({
   sku: z.string().min(1, "SKU is required").max(50),
   name: z.string().min(1, "Name is required").max(200),
   description: z.string().optional(),
   categoryId: z.string().min(1, "Category is required"),
   brandId: z.string().min(1, "Brand is required"),
-  type: z.enum([
-    "BICYCLE",
-    "SPARE_PART",
-    "ACCESSORY",
-    "BOX_PIECE",
-    "WIP",
-    "FINISHED_GOOD",
-  ]),
+  // Was a z.enum of six fixed values. Product types are a table now, so the only thing this
+  // can check is "a non-empty id was sent" — the route confirms the row exists, because zod
+  // cannot ask the database.
+  productTypeId: z.string().min(1, "Product type is required"),
   status: z.enum(["ACTIVE", "INACTIVE", "DISCONTINUED"]).optional(),
   condition: z
     .enum([
@@ -119,7 +125,10 @@ export const stockCountSchema = z.object({
   dueDate: z.string().min(1, "Due date is required"),
   notes: z.string().optional(),
   productIds: z.array(z.string()).optional(),
-  productType: z.enum(["BICYCLE", "SPARE_PART", "ACCESSORY"]).optional(),
+  // The NAME of a ProductType, not an enum — types are rows an admin can add at runtime, so
+  // no fixed list here can stay correct. Stored on StockCount.productType (a String) as a
+  // record of what the count was scoped to.
+  productType: z.string().max(40).optional(),
 });
 
 export const stockCountUpdateSchema = z.object({

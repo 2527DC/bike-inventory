@@ -44,7 +44,17 @@ export default function NewStockAuditPage() {
   const [bins, setBins] = useState<Bin[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [assignedTo, setAssignedTo] = useState("");
+  // The type NAME, sent to POST /api/stock-counts, which matches on name (case-insensitive).
+  // Empty means every type.
   const [productType, setProductType] = useState<string>("");
+  const [productTypes, setProductTypes] = useState<Array<{ id: string; name: string; isActive: boolean }>>([]);
+
+  useEffect(() => {
+    fetch("/api/product-types")
+      .then((r) => r.json())
+      .then((res) => { if (res.success) setProductTypes(res.data); })
+      .catch(() => {});
+  }, []);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [confirmation, setConfirmation] = useState<{
@@ -207,11 +217,11 @@ export default function NewStockAuditPage() {
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-2">Product Type</label>
           <div className="flex gap-2 flex-wrap">
+            {/* From the ProductType table. The key is the NAME because that is what the API
+                filters on and what StockCount.productType records. */}
             {[
               { key: "", label: "All" },
-              { key: "BICYCLE", label: "Bicycles" },
-              { key: "SPARE_PART", label: "Spares" },
-              { key: "ACCESSORY", label: "Accessories" },
+              ...productTypes.filter((t) => t.isActive).map((t) => ({ key: t.name, label: t.name })),
             ].map((t) => (
               <button key={t.key} onClick={() => setProductType(t.key)}
                 className={`min-h-[44px] px-4 rounded-full text-xs font-medium transition-colors focus-ring ${

@@ -11,9 +11,8 @@
  * from the Product Types screen once that exists (Part B of the plan). A guess that is
  * wrong on thousands of rows is worse than a blank someone can filter and fix in bulk.
  *
- * Runs against the CURRENT schema — `Product.type` is still the `ProductType` enum, and
- * `categoryId`/`brandId` are still required, which is why both get a real default row rather
- * than null. No schema change is needed to run this.
+ * `productTypeId`, `categoryId` and `brandId` are all REQUIRED on Product, which is why each
+ * gets a real default row rather than null.
  *
  * NOT written, deliberately: no `StockLevel` rows and `currentStock: 0`.
  * `Product.currentStock` is a cached SUM of `StockLevel` (src/lib/stock-location.ts);
@@ -21,7 +20,7 @@
  * everywhere location matters. Quantities come from a stock audit, not from this file.
  */
 
-import { PrismaClient, ProductType, ProductStatus } from "@prisma/client";
+import { PrismaClient, ProductStatus } from "@prisma/client";
 import * as XLSX from "xlsx";
 import * as path from "path";
 import * as fs from "fs";
@@ -53,22 +52,43 @@ const DEFAULT_BRAND = "Unbranded";
 const FORCE_DEFAULT_BRAND = true;
 
 /**
- * ⚠️ EVERY imported product gets this type.
+ * ⚠️ EVERY imported product gets this type, by NAME.
  *
- * There is no classifier, by instruction. `Product.type` is required and its schema default
- * is `SPARE_PART`, so that is what this uses — but be clear about the consequence: after the
- * import, `/stock`'s Cycles tab is empty and all 8,175 items sit under Spares. That is the
- * expected state, not a bug, and it is corrected by re-typing in bulk once product types
- * become editable data.
+ * There is no classifier, by instruction. `Product.productTypeId` is required, so the import
+ * has to pick one — it looks this name up in the `ProductType` table and fails loudly if it
+ * is missing, rather than inventing a type nobody asked for.
+ *
+ * The consequence, stated plainly: after the import every item sits under Spares and
+ * /stock's Cycles tab is empty. That is the expected state, corrected by re-typing in bulk
+ * from /product-types.
  */
-const DEFAULT_TYPE = ProductType.SPARE_PART;
+const DEFAULT_TYPE_NAME = "Spares";
 
 /** The file has no MRP column. Selling price is the closest true value; 0 renders an empty
  *  MRP on every label and product card. */
 const MRP_FROM_SELLING = true;
 
-/** Owner's decision: import everything ACTIVE and deactivate from the product screen.
- *  The export marks 2,448 of 8,175 Inactive; that state is not carried over. */
+/**
+ * ⚠️ INACTIVE ROWS ARE SKIPPED ENTIRELY — owner's instruction, 1 Sep 2026:
+ * *"remove the inactive product or rows, don't consider those, only insert the active
+ * product."*
+ *
+ * This REVERSES an earlier decision. The plan originally said import all 8,175 as ACTIVE and
+ * deactivate later from the product screen. It does not any more: a row whose Zoho `Status`
+ * is anything but `Active` is dropped before it reaches the database, and the summary says
+ * how many.
+ *
+ * Consequence to be clear about: those SKUs will not exist here at all. If one later turns up
+ * on a bill, the bill import creates a fresh product for it rather than matching — see the
+ * bill branch of `api/zoho/pull-review/approve`. Re-running with `ONLY_ACTIVE = false` is
+ * how they would be brought in.
+ */
+const ONLY_ACTIVE = true;
+
+/** The value `Status` must hold for a row to be imported. Compared case-insensitively. */
+const ACTIVE_STATUS = "active";
+
+/** Every imported product is created ACTIVE — which, with ONLY_ACTIVE, is now a tautology. */
 const IMPORT_STATUS = ProductStatus.ACTIVE;
 
 const CHUNK = 500;
@@ -84,6 +104,7 @@ const COL = {
   brand: "Brand",
   hsn: "HSN/SAC",
   gstRate: "Intra State Tax Rate",
+  status: "Status", // read to FILTER on, never stored — see ONLY_ACTIVE
 } as const;
 
 /*
@@ -99,7 +120,8 @@ const COL = {
  *                   it. Its 32 values are a mix of wheel sizes and category words; without
  *                   a classifier there is nothing to map them onto, and `Product` has no
  *                   column that takes the raw value.
- *   Status          not carried — see IMPORT_STATUS.
+ *   Status          not stored, but READ: an inactive row is skipped outright. See
+ *                   ONLY_ACTIVE. Every product that is imported is created ACTIVE.
  */
 
 type Row = Record<string, unknown>;
@@ -166,8 +188,20 @@ async function main() {
     if (byZohoId.has(id)) { dupes++; continue; }
     byZohoId.set(id, r);
   }
-  const rows = [...byZohoId.values()].slice(0, limit);
-  console.log(`  ${byZohoId.size} unique by Item ID — ${dupes} duplicate row(s) dropped${noId ? `, ${noId} with no Item ID skipped` : ""}`);
+  const deduped = [...byZohoId.values()];
+  console.log(`  ${deduped.length} unique by Item ID — ${dupes} duplicate row(s) dropped${noId ? `, ${noId} with no Item ID skipped` : ""}`);
+
+  // ── Drop inactive rows. Before validation on purpose: a row that is not being imported
+  // must not be able to fail the whole file for a missing SKU.
+  const active = ONLY_ACTIVE
+    ? deduped.filter((r) => str(r[COL.status]).toLowerCase() === ACTIVE_STATUS)
+    : deduped;
+  if (ONLY_ACTIVE) {
+    const skipped = deduped.length - active.length;
+    console.log(`  ${active.length} active — ${skipped} inactive row(s) skipped and NOT imported`);
+  }
+
+  const rows = active.slice(0, limit);
 
   // ── Validate the whole file before writing any of it. A half-loaded catalog is worse
   // than a rejected one.
@@ -202,7 +236,7 @@ async function main() {
     console.log(`\nbrand:    ${brandNames.size} distinct; ${usingDefault} row(s) fall back to "${DEFAULT_BRAND}"`);
   }
   console.log(`category: all ${rows.length} products -> "${DEFAULT_CATEGORY}"`);
-  console.log(`type:     all ${rows.length} products -> ${DEFAULT_TYPE} (no classifier, by instruction)`);
+  console.log(`type:     all ${rows.length} products -> "${DEFAULT_TYPE_NAME}" (no classifier, by instruction)`);
 
   if (dryRun) {
     const r = rows[0];
@@ -213,7 +247,7 @@ async function main() {
       zohoItemId: str(r[COL.zohoId]),
       brand: brandOf(r),
       category: DEFAULT_CATEGORY,
-      type: DEFAULT_TYPE,
+      type: DEFAULT_TYPE_NAME,
       status: IMPORT_STATUS,
       costPrice: money(r[COL.costPrice]),
       sellingPrice: money(r[COL.sellingPrice]),
@@ -223,6 +257,19 @@ async function main() {
       currentStock: 0,
     }, null, 2));
     return;
+  }
+
+  // Required FK: resolve it before building any rows, and fail loudly rather than creating a
+  // type nobody asked for. `npm run db:seed:rbac` does not seed these; the three defaults are
+  // created with the schema change and the rest come from /product-types.
+  const productType = await prisma.productType.findFirst({
+    where: { name: { equals: DEFAULT_TYPE_NAME, mode: "insensitive" } },
+    select: { id: true, name: true },
+  });
+  if (!productType) {
+    console.error(`
+No ProductType named "${DEFAULT_TYPE_NAME}". Create it at /product-types first.`);
+    process.exit(1);
   }
 
   const category = await prisma.category.upsert({
@@ -266,7 +313,7 @@ async function main() {
       zohoItemId: str(r[COL.zohoId]),
       brandId: brandIdByName.get(brandOf(r))!,
       categoryId: category.id,
-      type: DEFAULT_TYPE,
+      productTypeId: productType.id,
       status: IMPORT_STATUS,
       costPrice: money(r[COL.costPrice]),
       sellingPrice,

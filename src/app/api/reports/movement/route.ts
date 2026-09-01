@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
+import { PRODUCT_TYPE_SELECT } from "@/lib/product-type";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
@@ -39,7 +40,7 @@ export async function GET(req: NextRequest) {
     // Single query — the redundant productIds query was a subset of this
     const allActiveProducts = await prisma.product.findMany({
       where: { status: "ACTIVE" },
-      select: { id: true, name: true, sku: true, currentStock: true, type: true, category: { select: { name: true } } },
+      select: { id: true, name: true, sku: true, currentStock: true, productType: PRODUCT_TYPE_SELECT, category: { select: { name: true } } },
     });
 
     const daysDiff = Math.max(1, Math.ceil((dateTo.getTime() - dateFrom.getTime()) / (1000 * 60 * 60 * 24)));
@@ -55,7 +56,7 @@ export async function GET(req: NextRequest) {
 
       return {
         id: p.id, name: p.name, sku: p.sku, currentStock: p.currentStock,
-        type: p.type, category: p.category?.name,
+        type: p.productType?.name ?? null, category: p.category?.name,
         inward: movement.inward, outward: movement.outward,
         monthlyOutward: Math.round(monthlyOutward * 10) / 10,
         classification,

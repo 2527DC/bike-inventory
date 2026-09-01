@@ -1,7 +1,15 @@
-// Two rules, both from AGENTS.md:
+// Two rules from AGENTS.md:
 //
-//   1. Every git / npm command needs explicit approval  -> "ask"
+//   1. Every GIT command needs explicit approval  -> "ask"
 //   2. NOTHING is ever committed or pushed to main from local -> "deny"
+//
+// NPM IS NO LONGER GATED. Owner's instruction, 1 Sep 2026: npm runs without prompting.
+// npm/npx/pnpm/yarn were removed from the match below and from permissions.ask in
+// .claude/settings.json — BOTH were needed, because this hook returns "ask" on its own and
+// would have kept prompting even with the settings entries gone.
+//
+// Rule 2 is untouched and is the one that matters: a commit or push to main is still DENIED,
+// not merely prompted, because a prompt gets approved by reflex.
 //
 // Runs as a PreToolUse hook on Bash|PowerShell. Reads the hook payload on stdin.
 
@@ -115,14 +123,14 @@ process.stdin.on("end", () => {
     }
   }
 
-  // ── Rule 1: everything else git/npm still needs approval ────────────────
+  // ── Rule 1: every other git command still needs approval ────────────────
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "ask",
         permissionDecisionReason:
-          "Project rule (AGENTS.md): git/npm commands need your explicit approval. " +
+          "Project rule (AGENTS.md): git commands need your explicit approval. " +
           "Choose No if you'd rather run it yourself — Claude will hand you the command and wait for the output.",
       },
     })
