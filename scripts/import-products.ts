@@ -68,8 +68,27 @@ const DEFAULT_TYPE_NAME = "Spares";
  *  MRP on every label and product card. */
 const MRP_FROM_SELLING = true;
 
-/** Owner's decision: import everything ACTIVE and deactivate from the product screen.
- *  The export marks 2,448 of 8,175 Inactive; that state is not carried over. */
+/**
+ * ⚠️ INACTIVE ROWS ARE SKIPPED ENTIRELY — owner's instruction, 1 Sep 2026:
+ * *"remove the inactive product or rows, don't consider those, only insert the active
+ * product."*
+ *
+ * This REVERSES an earlier decision. The plan originally said import all 8,175 as ACTIVE and
+ * deactivate later from the product screen. It does not any more: a row whose Zoho `Status`
+ * is anything but `Active` is dropped before it reaches the database, and the summary says
+ * how many.
+ *
+ * Consequence to be clear about: those SKUs will not exist here at all. If one later turns up
+ * on a bill, the bill import creates a fresh product for it rather than matching — see the
+ * bill branch of `api/zoho/pull-review/approve`. Re-running with `ONLY_ACTIVE = false` is
+ * how they would be brought in.
+ */
+const ONLY_ACTIVE = true;
+
+/** The value `Status` must hold for a row to be imported. Compared case-insensitively. */
+const ACTIVE_STATUS = "active";
+
+/** Every imported product is created ACTIVE — which, with ONLY_ACTIVE, is now a tautology. */
 const IMPORT_STATUS = ProductStatus.ACTIVE;
 
 const CHUNK = 500;
@@ -85,6 +104,7 @@ const COL = {
   brand: "Brand",
   hsn: "HSN/SAC",
   gstRate: "Intra State Tax Rate",
+  status: "Status", // read to FILTER on, never stored — see ONLY_ACTIVE
 } as const;
 
 /*
@@ -100,7 +120,8 @@ const COL = {
  *                   it. Its 32 values are a mix of wheel sizes and category words; without
  *                   a classifier there is nothing to map them onto, and `Product` has no
  *                   column that takes the raw value.
- *   Status          not carried — see IMPORT_STATUS.
+ *   Status          not stored, but READ: an inactive row is skipped outright. See
+ *                   ONLY_ACTIVE. Every product that is imported is created ACTIVE.
  */
 
 type Row = Record<string, unknown>;
@@ -167,8 +188,20 @@ async function main() {
     if (byZohoId.has(id)) { dupes++; continue; }
     byZohoId.set(id, r);
   }
-  const rows = [...byZohoId.values()].slice(0, limit);
-  console.log(`  ${byZohoId.size} unique by Item ID — ${dupes} duplicate row(s) dropped${noId ? `, ${noId} with no Item ID skipped` : ""}`);
+  const deduped = [...byZohoId.values()];
+  console.log(`  ${deduped.length} unique by Item ID — ${dupes} duplicate row(s) dropped${noId ? `, ${noId} with no Item ID skipped` : ""}`);
+
+  // ── Drop inactive rows. Before validation on purpose: a row that is not being imported
+  // must not be able to fail the whole file for a missing SKU.
+  const active = ONLY_ACTIVE
+    ? deduped.filter((r) => str(r[COL.status]).toLowerCase() === ACTIVE_STATUS)
+    : deduped;
+  if (ONLY_ACTIVE) {
+    const skipped = deduped.length - active.length;
+    console.log(`  ${active.length} active — ${skipped} inactive row(s) skipped and NOT imported`);
+  }
+
+  const rows = active.slice(0, limit);
 
   // ── Validate the whole file before writing any of it. A half-loaded catalog is worse
   // than a rejected one.

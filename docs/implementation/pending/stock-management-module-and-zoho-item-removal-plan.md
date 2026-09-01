@@ -8,7 +8,7 @@ that date. Where a decision is still open it is marked **OPEN** and says who dec
 
 ---
 
-## 0. The eight decisions already taken
+## 0. The nine decisions already taken
 
 Recorded first because the rest of the document assumes them and a later reader will
 otherwise re-open them.
@@ -22,6 +22,7 @@ otherwise re-open them.
 | 5 | How much schema may change | **Exactly one change, and only because decision #3 requires it.** Owner's instruction: do not change the schema. Then: *"I need the product type to be a dynamic creation where I must be able to create the product type from my system."* Those cannot both hold — §5.0 shows why. The second wins; the change is confined to what dynamic creation strictly needs, and every other schema edit this plan originally carried has been removed. **Parts A and C change no schema at all.** |
 | 6 | The central pull UI | **Gone.** The `/settings/integrations` pull card — the one headed *"Auto-Sync: Daily at 1 PM IST"* — and the whole `/settings/integrations/pull-review` page are deleted. §2.1 records what that does and does not include; the shared `trigger-pull` / `pull-review` / `approve` **APIs stay**, because four other screens run on them. |
 | 7 | Loading the product data | **A separate script, run last, and optional.** Owner, 1 Sep 2026: *"I don't need any data that are present in the product table… instead of seed we can have a script which inserts the data from the data file, where we can have the insertion step last or optional."* So the catalog ships **empty**. `scripts/import-products.ts` becomes **Part E** and can be run whenever the file is ready — or never. This dissolves the §15.1 blocker; see §7. |
+| 9 | Inactive rows in the export | **Skipped entirely — REVERSES decision recorded in §7.4.1.** Owner, 1 Sep 2026: *"remove the inactive product or rows, don't consider those, only insert the active product."* The earlier answer was "import all as ACTIVE and deactivate later"; it is now a filter, applied before validation. Measured: **5,738 imported, 2,437 skipped** of 8,175 unique. Those SKUs will not exist here — if one later appears on a bill, the bill import creates a fresh product rather than matching it. `ONLY_ACTIVE = false` in the script brings them in. |
 | 8 | The AI screens | **Removed, not migrated.** Owner: *"don't add any AI stock alert as of now — if there is anything like that, remove it"*, then *"remove that too, the AI insights too."* The whole `/ai` page and its three AI routes go in Part A. **One exception, with a reason — §2.2.2:** `api/ai/dashboard-insights` contains **no AI at all** (144 lines of raw SQL) and supplies the **Stock Value** and **Low Stock** tiles on two dashboards, so it is *renamed* to `api/dashboard/stats`, not deleted. |
 
 ---
@@ -607,7 +608,7 @@ The `xlsx` package already in `package.json:49` reads BIFF8 directly.
 | 3 | `Brand` | **2,598** | 123 | **`brandId`** — 5,577 rows keep their real brand; 2,598 fall back to an `Unbranded` row |
 | 4 | `Manufacturer` | 2,689 | 78 | **not imported** — dropped by instruction |
 | 5 | `Taxable` | 0 | **1** | **nothing.** Every row is `"true"`. A dead column |
-| 6 | `Status` | 0 | 2 | **not carried** — Active 5,768 / Inactive 2,448 in the file; everything imports ACTIVE |
+| 6 | `Status` | 0 | 2 | **read as a FILTER, never stored** — decision #9. Of the 8,175 unique rows, **5,738 are Active and are imported; 2,437 are Inactive and are skipped outright.** (The 5,768/2,448 split quoted earlier was measured before deduplication.) |
 | 7 | `SKU` | 0 | 8,175 | **`sku`** — `@unique`. Mostly a plain counter (`1`,`2`,`3`…); 62 are real codes (`MON-TRA-BLU`, `MAC-CIT-26-SS-ORA`) |
 | 8 | `HSN/SAC` | 234 | 168 | **`hsnCode`** — nullable, fine |
 | 9 | `Purchase Price` | 0 | 2,452 | **`costPrice`** |
@@ -668,7 +669,7 @@ editable data.
 | `condition` | no (default `NEW`) | not carried |
 | `binId`, `reorderVendorId`, `imageUrls`, `tags` | no | nullable / empty |
 
-**Excel columns deliberately NOT imported:** `Item Name` (superseded by `Product Name` on the
+**Excel columns deliberately NOT imported:** `Status` is read to filter on but never stored (decision #9); `Item Name` (superseded by `Product Name` on the
 owner's instruction — they differ on 51 rows, always as variant vs group),
 `Manufacturer` (dropped by instruction; it was only a brand fallback worth 24 rows),
 `Taxable` (constant `"true"`), `Category Name` (§7.4.3), `Status` (all rows import ACTIVE).
@@ -1492,3 +1493,55 @@ saying so rather than rendering an empty page that looks broken.
   (§15.6 — it ignores `m.parent`, so the six will appear as flat siblings there, which is
   expected), and that **Stock Management now shows in the phone's bottom bar**, which is the
   entire reason the parent was given a route.
+
+---
+
+# 19. PART E AS BUILT — the catalog is loaded, 1 Sep 2026
+
+Run, out of sequence. The plan put Part E last and optional; it went before Part D because the
+catalog was empty and every stock screen read zero, which made Part B and C impossible to
+look at.
+
+## 19.1 What went in
+
+```
+8,216 rows in the export
+8,175 unique by Item ID        (41 duplicates dropped — 37 byte-identical pairs)
+5,738 ACTIVE     -> imported
+2,437 inactive   -> skipped, decision #9
+```
+
+**5,738 created, 0 skipped as already present, 0 duplicate SKUs in the database afterwards.**
+Verified by querying, not by trusting the script's own summary.
+
+Every row landed as `Spares` / `Unbranded` / `Uncategorized`, which is the designed state:
+no classifier (decision #8's sibling — *"don't use any auto type regex"*), one default brand
+and one default category. Prices, GST rate and HSN came through intact — a spot check shows
+`HERO TANGO 20T RS C/BRK GRN`, ₹6,500, GST 5 %, HSN 871200.
+
+`StockLevel` is **0 rows** and `currentStock` is 0 on every product, deliberately — §7.3.
+
+## 19.2 What to expect on the screens
+
+- `/stock` shows 5,738 products, all with **0 stock**. The **Cycles** and **Accessories**
+  tabs are **empty**; everything is under **Spares**. That is §17.5, not a bug.
+- **Needs details** matches all 5,738, because `Unbranded` is a placeholder brand (§16.2).
+  As brands are assigned the count falls — that is the queue working.
+- The catalog carries **114 real brand names in the source file that were deliberately not
+  imported**. `zohoItemId` is stored on every row, so a later backfill can re-read the same
+  file and match on it. Re-running the import will NOT do it: `createMany({ skipDuplicates })`
+  skips rows that exist rather than updating them.
+
+## 19.3 Two oddities in the source data, imported as-is
+
+Real SKUs in the file include `..` and `0`. They are what Zoho holds, they are unique, and the
+import does not invent or normalise — a SKU is the shop's identifier and silently rewriting one
+would be worse than an ugly value. Worth knowing before someone reports them as corruption.
+
+## 19.4 The npm permission gate was removed at the same time
+
+Unrelated to the plan but recorded because it changes how every later step runs:
+`npm` and `npx` no longer prompt. It needed **two** changes, not one — the `permissions.ask`
+entries in `.claude/settings.json` AND the `GATED` regex in `.claude/hooks/ask-git-npm.js`,
+which returned `"ask"` on its own and would have kept prompting. `git` is still gated, and a
+commit or push to `main` is still **denied**. See AGENTS.md.
