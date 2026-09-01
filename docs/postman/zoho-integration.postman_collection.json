@@ -1,0 +1,1246 @@
+{
+  "info": {
+    "_postman_id": "bch-zoho-integration",
+    "name": "BCH — Zoho / Zakya integration",
+    "description": "Every Zoho endpoint this application touches, generated from the endpoint registry at\n`src/lib/integrations/endpoints.ts`. Auth is handled for you.\n\n## Set up in three steps\n\n1. **Import an environment.** There are three, one per provider — they differ only in\n   `apiBase` and which credentials they hold:\n   - `zoho-books.postman_environment.json` → `https://www.zohoapis.in/books/v3`\n   - `zakya.postman_environment.json` → `https://api.zakya.in/inventory/v1`\n   - `zoho-inventory.postman_environment.json` → `https://www.zohoapis.in/inventory/v1`\n\n   Select one in the top-right picker. **Nothing works until you do** — `{{apiBase}}` is\n   only defined in the environments.\n\n2. **Fill `clientId`, `clientSecret`** in that environment, then run `00 OAuth › 1` and\n   `00 OAuth › 2`. That stores a `refreshToken`.\n\n3. **Run `01 Organization › Organizations`.** It saves `organizationId` automatically.\n\nFrom then on every request authenticates itself.\n\n## How the auth works\n\nCollection-level auth sends `Authorization: Zoho-oauthtoken {{accessToken}}` on every\nrequest — Zoho's scheme, **not** `Bearer`.\n\nA collection pre-request script refreshes `accessToken` whenever it is missing or within\ntwo minutes of expiring, using `refreshToken`. It mirrors\n`IntegrationClient.refreshAccessToken` in `src/lib/integrations/base.ts`, including the\none thing that catches everybody: **Zoho rejects a refresh with HTTP 200 and an `error`\nkey in the body**, so status alone is not enough.\n\nYou never paste a token anywhere. Open the Postman Console (`Ctrl+Alt+C`) to watch it.\n\n## Reading the console output\n\nEvery response is inspected against the TypeScript interfaces in `base.ts` and reported:\n\n| Line | Meaning |\n|---|---|\n| `[shape] first row has N fields: ...` | everything Zoho actually sent |\n| `[ok] every field base.ts requires ... is present` | the import will work |\n| `[BREAKS APP] missing required fields: ...` | the import will produce undefined |\n| `[unused] Zoho also sends N fields the app ignores` | **data you already receive and discard** |\n| `[page] {has_more_page: true}` | `listAll*` will loop again |\n| `[rate] remaining: N` | how close you are to a 429 |\n\nThe `[unused]` line is the one to read if you are deciding what to store next.\n\n## Before you press Send\n\nThese credentials are **live**. Every POST and PUT in this collection writes to your real\nZoho organization — they are marked in their descriptions. The GETs are safe.\n\nEverything is on the **India** data centre (`accounts.zoho.in`, `zohoapis.in`). A client\ncreated on `.com` fails with `invalid_client` regardless of how right the values look.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "Authorization",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "Zoho-oauthtoken {{accessToken}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Auto-refresh the Zoho access token before every call.",
+          "// Mirrors IntegrationClient.refreshAccessToken in src/lib/integrations/base.ts.",
+          "//",
+          "// The one non-obvious thing: Zoho answers a REJECTED refresh with HTTP 200 and",
+          "// {\"error\":\"invalid_client\"} in the body. Status alone is not enough, which is exactly why",
+          "// base.ts checks `data.error` rather than `res.ok`.",
+          "",
+          "const ACCOUNTS = \"https://accounts.zoho.in/oauth/v2/token\";",
+          "const SKEW_MS = 120000; // refresh 2 min early rather than racing the expiry",
+          "",
+          "function getVar(k) {",
+          "  return pm.environment.get(k) || pm.collectionVariables.get(k) || \"\";",
+          "}",
+          "function setVar(k, v) {",
+          "  if (pm.environment.name) pm.environment.set(k, v);",
+          "  else pm.collectionVariables.set(k, v);",
+          "}",
+          "",
+          "const isOAuthCall = pm.request.url.toString().indexOf(\"accounts.zoho.in\") !== -1;",
+          "const token = getVar(\"accessToken\");",
+          "const expiresAt = Number(getVar(\"accessTokenExpiresAt\") || 0);",
+          "const stillFresh = token && Date.now() < expiresAt - SKEW_MS;",
+          "",
+          "if (isOAuthCall) {",
+          "  console.log(\"[auth] OAuth call — skipping auto-refresh\");",
+          "} else if (stillFresh) {",
+          "  const left = Math.round((expiresAt - Date.now()) / 1000);",
+          "  console.log(\"[auth] token valid for another \" + left + \"s\");",
+          "} else {",
+          "  const clientId = getVar(\"clientId\");",
+          "  const clientSecret = getVar(\"clientSecret\");",
+          "  const refreshToken = getVar(\"refreshToken\");",
+          "",
+          "  if (!clientId || !clientSecret || !refreshToken) {",
+          "    console.error(",
+          "      \"[auth] missing clientId / clientSecret / refreshToken. \" +",
+          "      \"Select an environment, fill those three, then run '00 OAuth > 2 Exchange grant token'.\"",
+          "    );",
+          "  } else {",
+          "    console.log(\"[auth] token missing or expired — refreshing\");",
+          "    pm.sendRequest({",
+          "      url: ACCOUNTS,",
+          "      method: \"POST\",",
+          "      header: { \"Content-Type\": \"application/x-www-form-urlencoded\" },",
+          "      body: {",
+          "        mode: \"urlencoded\",",
+          "        urlencoded: [",
+          "          { key: \"refresh_token\", value: refreshToken },",
+          "          { key: \"client_id\", value: clientId },",
+          "          { key: \"client_secret\", value: clientSecret },",
+          "          { key: \"grant_type\", value: \"refresh_token\" }",
+          "        ]",
+          "      }",
+          "    }, function (err, res) {",
+          "      if (err) { console.error(\"[auth] transport error: \" + err); return; }",
+          "",
+          "      let body;",
+          "      try { body = res.json(); }",
+          "      catch (e) {",
+          "        console.error(\"[auth] refresh returned non-JSON (HTTP \" + res.code + \"). \" +",
+          "                      \"Usually an HTML error page — check the accounts domain is .in not .com.\");",
+          "        return;",
+          "      }",
+          "",
+          "      // 200 + {\"error\": ...} is a REJECTION. See base.ts.",
+          "      if (body.error || !body.access_token) {",
+          "        console.error(\"[auth] refresh rejected: \" + (body.error || \"no access_token in response\"));",
+          "        console.error(\"[auth] invalid_client = wrong id/secret · invalid_code = refresh token \" +",
+          "                      \"revoked or from a different Zoho DC\");",
+          "        return;",
+          "      }",
+          "",
+          "      setVar(\"accessToken\", body.access_token);",
+          "      setVar(\"accessTokenExpiresAt\", String(Date.now() + (body.expires_in || 3600) * 1000));",
+          "      console.log(\"[auth] refreshed — valid \" + (body.expires_in || 3600) + \"s\");",
+          "    });",
+          "  }",
+          "}"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Reports what Zoho actually returned, and checks it against the shapes the app relies on.",
+          "// The field lists below are the interfaces in src/lib/integrations/base.ts.",
+          "",
+          "const REQUIRED = {",
+          "  items:            [\"item_id\", \"sku\", \"name\"],",
+          "  bills:            [\"bill_id\", \"bill_number\", \"vendor_name\", \"vendor_id\", \"date\", \"due_date\", \"total\", \"balance\", \"status\"],",
+          "  invoices:         [\"invoice_id\", \"invoice_number\", \"customer_name\", \"date\", \"total\", \"balance\", \"status\"],",
+          "  customerpayments: [\"payment_id\", \"date\", \"amount\", \"payment_mode\", \"customer_name\", \"reference_number\", \"account_name\"]",
+          "};",
+          "const OPTIONAL = {",
+          "  items:            [\"status\", \"brand\", \"manufacturer\", \"purchase_rate\", \"rate\", \"tax_percentage\",",
+          "                     \"hsn_or_sac\", \"stock_on_hand\", \"product_type\", \"item_type\", \"category_name\",",
+          "                     \"category_id\", \"group_name\"],",
+          "  bills:            [],",
+          "  invoices:         [\"customer_id\", \"phone\", \"due_date\"],",
+          "  customerpayments: []",
+          "};",
+          "const ID_FIELD = {",
+          "  items: [\"item_id\", \"itemId\"],",
+          "  bills: [\"bill_id\", \"billId\"],",
+          "  invoices: [\"invoice_id\", \"invoiceId\"],",
+          "  contacts: [\"contact_id\", \"contactId\"],",
+          "  customerpayments: [\"payment_id\", \"paymentId\"],",
+          "  organizations: [\"organization_id\", \"organizationId\"]",
+          "};",
+          "",
+          "function setVar(k, v) {",
+          "  if (pm.environment.name) pm.environment.set(k, v);",
+          "  else pm.collectionVariables.set(k, v);",
+          "}",
+          "",
+          "console.log(\"[http] \" + pm.response.code + \" \" + pm.response.status + \" in \" + pm.response.responseTime + \"ms\");",
+          "",
+          "const limit = pm.response.headers.get(\"X-Rate-Limit-Remaining\");",
+          "if (limit) console.log(\"[rate] remaining: \" + limit);",
+          "",
+          "let body = null;",
+          "try { body = pm.response.json(); } catch (e) {",
+          "  console.error(\"[shape] response is not JSON — content-type \" + pm.response.headers.get(\"Content-Type\"));",
+          "}",
+          "",
+          "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+          "",
+          "if (body) {",
+          "  // Zoho puts its own status in the body: code 0 means success even when HTTP is 200.",
+          "  if (typeof body.code !== \"undefined\" && body.code !== 0) {",
+          "    console.error(\"[zoho] code \" + body.code + \": \" + body.message);",
+          "  }",
+          "  pm.test(\"Zoho code is 0\", function () {",
+          "    pm.expect(body.code === undefined || body.code === 0, \"body.code=\" + body.code + \" \" + (body.message || \"\")).to.be.true;",
+          "  });",
+          "",
+          "  console.log(\"[shape] top-level keys: \" + Object.keys(body).join(\", \"));",
+          "  if (body.page_context) {",
+          "    console.log(\"[page] \" + JSON.stringify(body.page_context));",
+          "    if (body.page_context.has_more_page) {",
+          "      console.log(\"[page] more pages exist — the app's listAll* methods loop until this is false\");",
+          "    }",
+          "  }",
+          "",
+          "  const listKey = Object.keys(body).find(function (k) { return Array.isArray(body[k]); });",
+          "",
+          "  if (listKey) {",
+          "    const rows = body[listKey];",
+          "    console.log(\"[shape] \" + listKey + \": \" + rows.length + \" rows\");",
+          "",
+          "    if (rows.length) {",
+          "      const row = rows[0];",
+          "      const present = Object.keys(row).sort();",
+          "      console.log(\"[shape] first row has \" + present.length + \" fields: \" + present.join(\", \"));",
+          "",
+          "      const req = REQUIRED[listKey] || [];",
+          "      const missing = req.filter(function (f) { return !(f in row); });",
+          "      if (missing.length) {",
+          "        console.error(\"[BREAKS APP] \" + listKey + \" is missing required fields: \" + missing.join(\", \"));",
+          "      } else if (req.length) {",
+          "        console.log(\"[ok] every field base.ts requires for \" + listKey + \" is present\");",
+          "      }",
+          "      pm.test(\"required fields present for \" + listKey, function () {",
+          "        pm.expect(missing, \"missing: \" + missing.join(\", \")).to.be.empty;",
+          "      });",
+          "",
+          "      const known = req.concat(OPTIONAL[listKey] || []);",
+          "      if (known.length) {",
+          "        const extra = present.filter(function (f) { return known.indexOf(f) === -1; });",
+          "        if (extra.length) {",
+          "          console.log(\"[unused] Zoho also sends \" + extra.length + \" fields the app ignores:\");",
+          "          console.log(\"         \" + extra.join(\", \"));",
+          "        }",
+          "      }",
+          "",
+          "      const idSpec = ID_FIELD[listKey];",
+          "      if (idSpec && row[idSpec[0]]) {",
+          "        setVar(idSpec[1], row[idSpec[0]]);",
+          "        console.log(\"[var] \" + idSpec[1] + \" = \" + row[idSpec[0]] + \"  (later requests will use it)\");",
+          "      }",
+          "    } else {",
+          "      console.log(\"[shape] empty list — widen the date range or check organization_id\");",
+          "    }",
+          "  } else {",
+          "    // Single-object response: /bills/{id}, /invoices/{id}, /items/{id}",
+          "    const objKey = Object.keys(body).find(function (k) {",
+          "      return body[k] && typeof body[k] === \"object\" && !Array.isArray(body[k]) && k !== \"page_context\";",
+          "    });",
+          "    if (objKey) {",
+          "      const obj = body[objKey];",
+          "      console.log(\"[shape] \" + objKey + \" has \" + Object.keys(obj).length + \" fields: \" + Object.keys(obj).sort().join(\", \"));",
+          "      if (Array.isArray(obj.line_items)) {",
+          "        console.log(\"[shape] line_items: \" + obj.line_items.length + \" rows\");",
+          "        if (obj.line_items.length) {",
+          "          console.log(\"[shape] line_item fields: \" + Object.keys(obj.line_items[0]).sort().join(\", \"));",
+          "          console.log(\"[note] the app reads name, sku, item_id, quantity, rate, item_total (LineItem in base.ts)\");",
+          "        }",
+          "      }",
+          "    }",
+          "  }",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "grantToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "redirectUri",
+      "value": "http://localhost:3000/api/integrations/callback",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "accessTokenExpiresAt",
+      "value": "0",
+      "type": "string"
+    },
+    {
+      "key": "itemId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "billId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "invoiceId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "contactId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "paymentId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "00 OAuth",
+      "description": "Do this once per provider. Each of ZOHO_BOOKS / ZAKYA_POS / ZOHO_INVENTORY is a separate\nIntegrationConfig row with its OWN client id, secret and refresh token — that is why there\nis one Postman environment per provider rather than one shared set of credentials.\n\nEverything here is on accounts.zoho.in (India DC). A client created on .com will fail with\ninvalid_client no matter how correct the credentials look.",
+      "item": [
+        {
+          "name": "1 · Authorize — copy this URL into a browser",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://accounts.zoho.in/oauth/v2/auth?scope=ZohoBooks.fullaccess.all&client_id={{clientId}}&response_type=code&access_type=offline&redirect_uri={{redirectUri}}&prompt=consent",
+              "query": [
+                {
+                  "key": "scope",
+                  "value": "ZohoBooks.fullaccess.all"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{clientId}}"
+                },
+                {
+                  "key": "response_type",
+                  "value": "code"
+                },
+                {
+                  "key": "access_type",
+                  "value": "offline"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "{{redirectUri}}"
+                },
+                {
+                  "key": "prompt",
+                  "value": "consent"
+                }
+              ]
+            },
+            "description": "**Do not press Send** — this returns a login page. Copy the resolved URL from the URL bar\nand open it in a browser.\n\nAfter you approve, Zoho redirects to `redirect_uri?code=1000.xxxx`. That `code` is the\n**grant token** and it expires in about 3 minutes and works exactly once. Paste it into\nrequest 2 immediately.\n\n`access_type=offline` is what makes Zoho return a refresh_token. Without it you get an\naccess token only and the app cannot reconnect itself.\n`prompt=consent` forces the refresh token to be reissued — Zoho silently omits it on a\nrepeat authorization otherwise, which looks like a broken response.\n\n**Scopes per provider** — set `scope` to match the environment you selected:\n\n| Provider | scope |\n|---|---|\n| Zoho Books | `ZohoBooks.fullaccess.all` |\n| Zoho Inventory | `ZohoInventory.fullaccess.all` |\n| Zakya POS | `ZakyaAPI.fullaccess.all` |\n\nNarrower scopes work too and are better for a read-only look:\n`ZohoBooks.bills.READ,ZohoBooks.invoices.READ,ZohoBooks.settings.READ,ZohoBooks.contacts.READ`\n\nNote the app's own comment at `src/app/api/zoho/trigger-pull/route.ts:373` — the Inventory\ntoken lacks the bills scope, so bills are pulled through Books. If you scope Inventory\nnarrowly, expect the same.\n\n**Faster alternative — Self Client.** In the Zoho API console create a *Self Client*,\nopen the Generate Code tab, enter the scope, and it hands you a grant token with no\nredirect_uri at all. Skip straight to request 2.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "2 · Exchange grant token → refresh token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "url": {
+              "raw": "https://accounts.zoho.in/oauth/v2/token",
+              "query": []
+            },
+            "description": "Same call as `exchangeGrantToken` in `src/lib/integrations/base.ts:467`.\n\nSaves `refreshToken` and `accessToken` into the active environment. **The refresh token is\nthe valuable one** — it does not expire, and it is what goes into\n`IntegrationConfig.refreshToken` for this provider.\n\nIf the response is `{\"error\":\"invalid_code\"}` at HTTP 200, the grant token expired.\nGenerate a new one; they really do only last a few minutes.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "code",
+                  "value": "{{grantToken}}",
+                  "description": "the code= from the redirect. ~3 min life, single use."
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{clientId}}"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{clientSecret}}"
+                },
+                {
+                  "key": "grant_type",
+                  "value": "authorization_code"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "{{redirectUri}}",
+                  "description": "omit for a Self Client grant"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let body; try { body = pm.response.json(); } catch (e) { body = {}; }",
+                  "function setVar(k, v) { if (pm.environment.name) pm.environment.set(k, v); else pm.collectionVariables.set(k, v); }",
+                  "",
+                  "console.log(\"[http] \" + pm.response.code + \" — body keys: \" + Object.keys(body).join(\", \"));",
+                  "",
+                  "// Zoho returns HTTP 200 with {\"error\": \"...\"} when it rejects you.",
+                  "if (body.error) {",
+                  "  console.error(\"[auth] REJECTED: \" + body.error);",
+                  "  console.error(\"  invalid_code     grant token expired (they last ~3 min) or already used once\");",
+                  "  console.error(\"  invalid_client   client id/secret wrong, or created in a different Zoho DC\");",
+                  "  console.error(\"  invalid_redirect_uri  must match the console EXACTLY, trailing slash included\");",
+                  "}",
+                  "pm.test(\"no error in body\", function () { pm.expect(body.error, String(body.error)).to.be.undefined; });",
+                  "",
+                  "if (body.refresh_token) {",
+                  "  setVar(\"refreshToken\", body.refresh_token);",
+                  "  console.log(\"[var] refreshToken saved — this is the long-lived one. Copy it into IntegrationConfig.refreshToken.\");",
+                  "}",
+                  "if (body.access_token) {",
+                  "  setVar(\"accessToken\", body.access_token);",
+                  "  setVar(\"accessTokenExpiresAt\", String(Date.now() + (body.expires_in || 3600) * 1000));",
+                  "  console.log(\"[var] accessToken saved, expires in \" + (body.expires_in || 3600) + \"s\");",
+                  "}",
+                  "if (body.api_domain) console.log(\"[info] api_domain = \" + body.api_domain + \"  (must match {{apiBase}}'s host)\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3 · Refresh access token (manual)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "url": {
+              "raw": "https://accounts.zoho.in/oauth/v2/token",
+              "query": []
+            },
+            "description": "You should never need this — the collection pre-request script does it automatically when\nthe token is missing or within 2 minutes of expiring.\n\nRun it by hand to watch the exchange, or to confirm a refresh token still works after a\nreconnect. Note the response has **no** `refresh_token` field: a refresh returns only a new\naccess token. That is normal, not a truncated response.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "refresh_token",
+                  "value": "{{refreshToken}}"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{clientId}}"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{clientSecret}}"
+                },
+                {
+                  "key": "grant_type",
+                  "value": "refresh_token"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let body; try { body = pm.response.json(); } catch (e) { body = {}; }",
+                  "function setVar(k, v) { if (pm.environment.name) pm.environment.set(k, v); else pm.collectionVariables.set(k, v); }",
+                  "",
+                  "console.log(\"[http] \" + pm.response.code + \" — body keys: \" + Object.keys(body).join(\", \"));",
+                  "",
+                  "// Zoho returns HTTP 200 with {\"error\": \"...\"} when it rejects you.",
+                  "if (body.error) {",
+                  "  console.error(\"[auth] REJECTED: \" + body.error);",
+                  "  console.error(\"  invalid_code     grant token expired (they last ~3 min) or already used once\");",
+                  "  console.error(\"  invalid_client   client id/secret wrong, or created in a different Zoho DC\");",
+                  "  console.error(\"  invalid_redirect_uri  must match the console EXACTLY, trailing slash included\");",
+                  "}",
+                  "pm.test(\"no error in body\", function () { pm.expect(body.error, String(body.error)).to.be.undefined; });",
+                  "",
+                  "if (body.refresh_token) {",
+                  "  setVar(\"refreshToken\", body.refresh_token);",
+                  "  console.log(\"[var] refreshToken saved — this is the long-lived one. Copy it into IntegrationConfig.refreshToken.\");",
+                  "}",
+                  "if (body.access_token) {",
+                  "  setVar(\"accessToken\", body.access_token);",
+                  "  setVar(\"accessTokenExpiresAt\", String(Date.now() + (body.expires_in || 3600) * 1000));",
+                  "  console.log(\"[var] accessToken saved, expires in \" + (body.expires_in || 3600) + \"s\");",
+                  "}",
+                  "if (body.api_domain) console.log(\"[info] api_domain = \" + body.api_domain + \"  (must match {{apiBase}}'s host)\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4 · Revoke refresh token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "url": {
+              "raw": "https://accounts.zoho.in/oauth/v2/token/revoke",
+              "query": []
+            },
+            "description": "Invalidates the refresh token. Use it when a credential leaks, or to prove that the app's\n`401 → refresh once → fail with 'Please reconnect'` path behaves as designed\n(`base.ts:286-300`).\n\n**This breaks the live integration for this provider** until you redo requests 1 and 2 and\nput the new refresh token into IntegrationConfig. Do not run it against production\ncredentials casually.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "token",
+                  "value": "{{refreshToken}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "01 Organization",
+      "description": "Every API call carries `organization_id`. Get it here first — a wrong or missing one is the\nsingle most common cause of an empty list that should have rows.",
+      "item": [
+        {
+          "name": "Organizations (documented v3 path)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/organizations",
+              "query": []
+            },
+            "description": "`GET {{apiBase}}/organizations` — the path Zoho documents.\n\nSaves the first organization_id into the environment, so every other request in this\ncollection works straight after. If you have more than one org, read the console output and\nset `organizationId` by hand.\n\nRun this **before** anything else: `organization_id` is appended to every call by\n`apiCall` (`base.ts:266`), and Zoho answers a wrong one with an empty list rather than an\nerror, which reads exactly like 'no data'."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let b; try { b = pm.response.json(); } catch (e) { b = {}; }",
+                  "if (b.organizations && b.organizations.length) {",
+                  "  b.organizations.forEach(function (o) {",
+                  "    console.log('[org] ' + o.organization_id + '  ' + o.name + '  ' + (o.currency_code || '') + '  ' + (o.is_default_org ? '(default)' : ''));",
+                  "  });",
+                  "  const first = b.organizations[0];",
+                  "  if (pm.environment.name) pm.environment.set('organizationId', first.organization_id);",
+                  "  else pm.collectionVariables.set('organizationId', first.organization_id);",
+                  "  console.log('[var] organizationId = ' + first.organization_id);",
+                  "} else { console.error('[org] no organizations — the token may lack the settings scope'); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Organizations (the path the app actually builds)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://www.zohoapis.in/books/v3/../organizations",
+              "query": []
+            },
+            "description": "**Worth running once, to settle a question in the code.**\n\n`BooksClient.getOrganizations` (`books.ts:209`) passes the endpoint `\"/../organizations\"`,\nand `apiCall` concatenates it onto `https://www.zohoapis.in/books/v3`. The registry entry\ncalls the `..` deliberate: *\"organizations sits above the books/v3 segment\"*.\n\nURL normalisation resolves that to `https://www.zohoapis.in/books/organizations` —\n**without** `v3`. Compare this request's status against the one above:\n\n- both 200 → the `..` form is fine, nothing to do\n- this one 404 while the other is 200 → the app's setup call is broken, and the org-id\n  lookup on the Settings screen silently fails\n\nPostman may normalise the `..` before sending, exactly as fetch does. If so you are seeing\nthe same request the app sends, which is the point."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "02 Items — the product catalog",
+      "description": "Registry keys: `items.list` (all providers), `items.get`, `items.create`, `items.update`\n(Books), `items.create.inventory` (Inventory).\n\nOwned by `listItems` / `listAllItems` in base.ts and `BooksClient` / `InventoryClient`.",
+      "item": [
+        {
+          "name": "List items",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/items?page=1&per_page=25&status=active&organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "per_page",
+                  "value": "25"
+                },
+                {
+                  "key": "status",
+                  "value": "active"
+                },
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "Feeds the product pull. `listAllItems` loops pages until `page_context.has_more_page` is\nfalse — watch that value in the console.\n\nThe test script compares each row against `IntegrationItem` (`base.ts:41`) and prints:\n- any **required** field missing (`item_id`, `sku`, `name`) — those break the import\n- every field Zoho sends that the app currently ignores — candidates for new columns\n\n`per_page` maxes out at 200 on Zoho. Raising it past that is silently clamped."
+          },
+          "response": []
+        },
+        {
+          "name": "List items — changed since a date",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/items?last_modified_time=2026-08-01T00%3A00%3A00%2B0530&per_page=50&organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "last_modified_time",
+                  "value": "2026-08-01T00%3A00%3A00%2B0530"
+                },
+                {
+                  "key": "per_page",
+                  "value": "50"
+                },
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "The incremental pull. Cheaper than walking the whole catalog.\n\n**The `+` in the timezone offset must be percent-encoded as `%2B`.** Sent raw, Zoho reads\nit as a space and ignores the whole filter — which looks exactly like `last_modified_time`\ndoing nothing. `base.ts:436` carries the same warning and uses `encodeURIComponent`. The\nvalue here is pre-encoded; leave it that way.\n\nThe app asks for `per_page=200` (the Zoho maximum). 50 here just keeps the console readable."
+          },
+          "response": []
+        },
+        {
+          "name": "Get item",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/items/{{itemId}}?organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "`items.get` — *\"Category, HSN and tax for one item — absent from the list response\"*.\n\n`{{itemId}}` is filled in automatically by the List items request above. Run that first.\n\nThis is the call that answers your GST question: compare `hsn_or_sac`, `tax_percentage`,\n`tax_id` and `tax_name` here against what the list response carried. Anything only present\nhere is a per-item fetch the importer has to make."
+          },
+          "response": []
+        },
+        {
+          "name": "Create item — Zoho Books (JSONString wrapper)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{apiBase}}/items?organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "`BooksClient.createItem` (`books.ts:13`). **Books wraps the payload in a `JSONString`\nfield whose value is a JSON *string*** — not an object. Sending the object directly is\nrejected.\n\nCompare with the Inventory version below: same path, different envelope. The registry\nflags this explicitly as *\"a real difference between the two Zoho products, not an\ninconsistency to fix\"*.\n\n**This writes to your real Zoho org.** Delete the test item afterwards.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"JSONString\": \"{\\\"name\\\":\\\"TEST — delete me\\\",\\\"sku\\\":\\\"TEST-SKU-001\\\",\\\"rate\\\":12000,\\\"purchase_rate\\\":9000,\\\"hsn_or_sac\\\":\\\"87120010\\\",\\\"item_type\\\":\\\"inventory\\\",\\\"product_type\\\":\\\"goods\\\"}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create item — Zoho Inventory (bare object)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{apiBase}}/items?organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "`InventoryClient.createItem` (`inventory.ts:45`) — the object goes in the body directly,\nwith no `JSONString` wrapper.\n\nSelect the **Zoho Inventory** environment before sending. Under the Books environment this\nwill fail, and that failure is the demonstration.\n\n**This writes to your real Zoho org.**",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"TEST — delete me\",\n  \"sku\": \"TEST-SKU-002\",\n  \"purchase_rate\": 9000,\n  \"rate\": 12000,\n  \"item_type\": \"inventory\",\n  \"product_type\": \"goods\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update item (price push-back)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{apiBase}}/items/{{itemId}}?organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "`BooksClient.updateItem` — what the price-check screen calls to push a corrected price\nback into Zoho.\n\nThis endpoint used to be called from a route handler directly, bypassing the client. That\nis why `apiCall` is now `protected` (`base.ts:254`).\n\n**This writes to your real Zoho org.** Point `{{itemId}}` at a test item.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"JSONString\": \"{\\\"rate\\\":12500}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "03 Bills — vendor purchases",
+      "description": "Registry keys: `bills.list`, `bills.get` (all providers), `bills.create` (Books).\nFeeds the inbound and accounting imports, and the `VendorBill` table.",
+      "item": [
+        {
+          "name": "List bills — date window",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/bills?page=1&per_page=25&date_start=2026-08-01&date_end=2026-09-01&organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "per_page",
+                  "value": "25"
+                },
+                {
+                  "key": "date_start",
+                  "value": "2026-08-01"
+                },
+                {
+                  "key": "date_end",
+                  "value": "2026-09-01"
+                },
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "The Bulk Fetch tab on `/deliveries` and the bill import both come through here.\n\nThe test script checks all nine fields `IntegrationBill` declares required. Two to look at\nclosely for your own schema work:\n\n- **`total` and `balance` arrive as JSON numbers**, i.e. IEEE doubles. That is the origin\n  of the float money problem — the value is already inexact before it reaches Prisma.\n  Read them as strings if you move `VendorBill.amount` to `Decimal`.\n- **there is no tax breakdown in the list response.** `VendorBill` stores a single\n  `amount` with no subtotal/tax split, which is why per-line ITC is not possible today.\n  Check the single-bill response below for where the tax actually lives."
+          },
+          "response": []
+        },
+        {
+          "name": "List bills — search by text",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/bills?search_text=&per_page=25&organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "search_text",
+                  "value": ""
+                },
+                {
+                  "key": "per_page",
+                  "value": "25"
+                },
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "Free-text search across bill number and vendor name. Put a real bill number in\n`search_text` before sending.\n\nZoho ANDs `search_text` with `date_start`/`date_end` when both are present — a search that\nreturns nothing is often a date window problem, not a missing bill."
+          },
+          "response": []
+        },
+        {
+          "name": "Get bill (with line items)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/bills/{{billId}}?organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "`bills.get` — *\"Line items for one bill — the list response does not carry them\"*.\n\n`{{billId}}` is set by the list request above.\n\n**This is the response to study for the GST question.** The console prints every line-item\nfield. Look for `tax_percentage`, `tax_id`, `hsn_or_sac`, `item_total`, and the bill-level\n`tax_total` / `sub_total`. Those are the fields a `VendorBillItem` table would need if you\never want per-line input tax credit.\n\nThe app reads only `name`, `sku`, `item_id`, `quantity`, `rate`, `item_total` (`LineItem`,\n`base.ts:126`) — everything else Zoho sends here is currently discarded."
+          },
+          "response": []
+        },
+        {
+          "name": "Create bill (Books)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{apiBase}}/bills?organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "`BooksClient.createBill`. One of the two Zoho writes revived in the Part B refactor.\n\nNeeds a real `vendor_id` — run **05 Contacts › List vendors** first to populate\n`{{contactId}}`.\n\n**This writes to your real Zoho org.**",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"JSONString\": \"{\\\"vendor_id\\\":\\\"{{contactId}}\\\",\\\"bill_number\\\":\\\"TEST-BILL-001\\\",\\\"date\\\":\\\"2026-09-01\\\",\\\"due_date\\\":\\\"2026-10-01\\\",\\\"line_items\\\":[{\\\"name\\\":\\\"Test line\\\",\\\"rate\\\":1000,\\\"quantity\\\":1}]}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "04 Invoices — sales",
+      "description": "Registry keys: `invoices.list`, `invoices.get` (all), `invoices.search`, `invoices.create`\n(Books). Drives delivery matching, receivables, and the workshop counter lookup.",
+      "item": [
+        {
+          "name": "List invoices — date window",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/invoices?page=1&per_page=25&date_start=2026-08-01&date_end=2026-09-01&organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "per_page",
+                  "value": "25"
+                },
+                {
+                  "key": "date_start",
+                  "value": "2026-08-01"
+                },
+                {
+                  "key": "date_end",
+                  "value": "2026-09-01"
+                },
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "Feeds delivery matching and receivables.\n\n`IntegrationInvoice` marks `phone` and `customer_id` **optional** — watch the console to\nsee whether your org actually returns them on the list call. If `phone` is absent here,\nmatching an invoice to a `Customer` row (whose identity IS the phone) needs the\nsingle-invoice fetch or a contact lookup."
+          },
+          "response": []
+        },
+        {
+          "name": "Search invoices — by phone",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/invoices?phone=9999999999&per_page=10&sort_column=date&sort_order=D&organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "phone",
+                  "value": "9999999999"
+                },
+                {
+                  "key": "per_page",
+                  "value": "10"
+                },
+                {
+                  "key": "sort_column",
+                  "value": "date"
+                },
+                {
+                  "key": "sort_order",
+                  "value": "D"
+                },
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "`invoices.search` — the workshop counter lookup (`BooksClient.searchInvoices`).\n\n**Books only.** This was one of the three calls that used to reach `apiCall` directly from\nthe workshop layer before the escape hatches were closed.\n\nPut a real customer phone in. Zoho matches `phone` against the contact's number, so a\ncustomer whose invoice was raised without a phone on the contact will not be found — the\nsame failure your `Customer.phone` uniqueness is designed around."
+          },
+          "response": []
+        },
+        {
+          "name": "Search invoices — by invoice number",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/invoices?invoice_number=INV-000001&per_page=10&organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "invoice_number",
+                  "value": "INV-000001"
+                },
+                {
+                  "key": "per_page",
+                  "value": "10"
+                },
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "Same registry key, different parameter. Exact match, not a prefix search.\n\nThere is a real bug in this app's history here: `inv.invoice_number` was typed `any`, and\n`.startsWith()` on it only failed once the `any` was removed (`base.ts:96`). Worth\nconfirming what type Zoho actually sends — a numeric-looking invoice number may arrive as\na number, not a string."
+          },
+          "response": []
+        },
+        {
+          "name": "Get invoice (full detail)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/invoices/{{invoiceId}}?organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "`invoices.get`. Richer than the list shape, which is why `IntegrationInvoiceDetail`\n(`base.ts:99`) is a separate interface with an index signature.\n\nThe console prints the full field list plus `line_items`. Compare against the named fields\nthe app reads: `salesperson_name`, `contact_persons[].phone`, `billing_address`,\n`shipping_address`, `line_items`.\n\nAnything printed that is not in that list is data you are already receiving and not using."
+          },
+          "response": []
+        },
+        {
+          "name": "Create invoice (Books)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{apiBase}}/invoices?organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "`BooksClient.createInvoice` — raise an invoice in Zoho from a sale recorded here. The\nsecond of the two writes revived in Part B.\n\n**This writes to your real Zoho org**, and an invoice may not be deletable once it has a\nnumber. Use a sandbox org if you have one.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"JSONString\": \"{\\\"customer_id\\\":\\\"{{contactId}}\\\",\\\"date\\\":\\\"2026-09-01\\\",\\\"line_items\\\":[{\\\"name\\\":\\\"Test line\\\",\\\"rate\\\":1000,\\\"quantity\\\":1}]}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "05 Contacts — vendors and customers (Books only)",
+      "description": "Registry keys: `contacts.list`, `contacts.search`, `contacts.create`. **Books only** — the\nregistry marks these BOOKS_ONLY and the other two providers do not answer them.\n\nEvery `Vendor` imported from Zoho comes from here.",
+      "item": [
+        {
+          "name": "List vendors",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/contacts?contact_type=vendor&page=1&per_page=25&organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "contact_type",
+                  "value": "vendor"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "per_page",
+                  "value": "25"
+                },
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "The vendor pull. Sets `{{contactId}}` for the create-bill and create-invoice requests.\n\nFields to check against your `Vendor` table: `gst_no` → `gstin`, `cf_*` custom fields,\n`payment_terms` → `paymentTermDays`, `credit_limit` → `creditLimit`.\n\n`paymentTermDays` and the cash-discount fields (`cdTermsDays`, `cdPercentage`) are the\nones that decide CD eligibility. If Zoho carries `payment_terms` and the app is not\nreading it, that is a live divergence — the console prints the unused fields."
+          },
+          "response": []
+        },
+        {
+          "name": "Search contacts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/contacts?search_text=&contact_type=vendor&per_page=10&organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "search_text",
+                  "value": ""
+                },
+                {
+                  "key": "contact_type",
+                  "value": "vendor"
+                },
+                {
+                  "key": "per_page",
+                  "value": "10"
+                },
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "`contacts.search` — *\"Find an existing contact before creating a duplicate\"*.\n\nThis is the app's duplicate guard, and it is a search, not a constraint. Two vendors whose\nnames differ by a space will both be created. Compare with `Vendor.name @unique` in the\nschema — the database is stricter than Zoho is."
+          },
+          "response": []
+        },
+        {
+          "name": "Create contact (vendor)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{apiBase}}/contacts?organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "`BooksClient.createContact` (`books.ts:79`). Note the `JSONString` wrapper again, and that\nthe app maps `vendor.gstin` → `gst_no`.\n\n**This writes to your real Zoho org.**",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"JSONString\": \"{\\\"contact_name\\\":\\\"TEST VENDOR — delete me\\\",\\\"contact_type\\\":\\\"vendor\\\",\\\"gst_no\\\":\\\"29ABCDE1234F1Z5\\\",\\\"email\\\":\\\"test@example.com\\\"}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "06 Customer payments",
+      "description": "Registry key: `customerpayments.list` (all providers). Feeds receivables reconciliation.",
+      "item": [
+        {
+          "name": "List customer payments",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/customerpayments?page=1&per_page=25&date_start=2026-08-01&date_end=2026-09-01&organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "per_page",
+                  "value": "25"
+                },
+                {
+                  "key": "date_start",
+                  "value": "2026-08-01"
+                },
+                {
+                  "key": "date_end",
+                  "value": "2026-09-01"
+                },
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "`IntegrationCustomerPayment` (`base.ts:81`) declares **all seven** fields required —\nincluding `reference_number` and `account_name`, which Zoho leaves as empty strings on a\ncash payment. Watch whether they come back as `\"\"` or are absent entirely: the test\nscript distinguishes them, and `\"\"` vs missing is the difference between a working import\nand an undefined reaching Prisma.\n\n`amount` is a JSON number here too — the same float exposure as bills."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "09 Diagnostics",
+      "description": "Reproduce the failure modes `apiCall` handles, so you can recognise them in the app's logs.",
+      "item": [
+        {
+          "name": "401 — what an expired token looks like",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Zoho-oauthtoken 1000.deadbeefdeadbeefdeadbeefdeadbeef"
+              }
+            ],
+            "url": {
+              "raw": "{{apiBase}}/items?per_page=1&organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "per_page",
+                  "value": "1"
+                },
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "Deliberately sends a junk token with the collection auth disabled, so you can see the exact\n401 body Zoho returns.\n\nThis is the response `apiCall` reacts to at `base.ts:286` — refresh once, retry once, then\ngive up with a reconnect message. Safe to run; it changes nothing.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "console.log('[http] ' + pm.response.code + ' ' + pm.response.status);",
+                  "let b; try { b = pm.response.json(); console.log('[body] ' + JSON.stringify(b)); }",
+                  "catch (e) { console.log('[body] non-JSON: ' + pm.response.text().slice(0, 200)); }",
+                  "console.log('[note] base.ts:286 catches this, refreshes once, and retries. A second 401');",
+                  "console.log('       throws \"authentication failed. Please reconnect.\"');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Rate limit headers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/items?per_page=1&organization_id={{organizationId}}",
+              "query": [
+                {
+                  "key": "per_page",
+                  "value": "1"
+                },
+                {
+                  "key": "organization_id",
+                  "value": "{{organizationId}}"
+                }
+              ]
+            },
+            "description": "A minimal call whose only job is to print the rate-limit headers.\n\nZoho's limit is per organization per minute, so a bulk pull competing with the live app\nwill hit it. `apiCall` honours `Retry-After` when present and otherwise backs off\nexponentially, giving up after 3 attempts (`base.ts:308`)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "console.log('[http] ' + pm.response.code + ' in ' + pm.response.responseTime + 'ms');",
+                  "['X-Rate-Limit-Limit','X-Rate-Limit-Remaining','X-Rate-Limit-Reset','Retry-After'].forEach(function (h) {",
+                  "  const v = pm.response.headers.get(h);",
+                  "  if (v) console.log('[rate] ' + h + ': ' + v);",
+                  "});",
+                  "console.log('[note] on 429 base.ts:308 honours Retry-After, else backs off 5s/10s/20s, 3 tries max');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
