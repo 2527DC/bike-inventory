@@ -13,6 +13,7 @@ import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { usePermissions } from "@/lib/use-permissions";
 import { apiFetch, apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
+import { PLACEHOLDER_CATEGORY } from "@/lib/import-placeholders";
 
 const log = createLogger("categories");
 
@@ -372,12 +373,13 @@ export default function CategoriesPage() {
       {/* Why this screen exists, said once at the bottom rather than as a banner nobody
           reads twice. Uncategorized is where the Zoho import files anything it was not
           given a category for. */}
-      {!loading && categories.some((c) => c.name === "Uncategorized" && c._count.products > 0) && (
+      {!loading && categories.some((c) => c.name === PLACEHOLDER_CATEGORY && c._count.products > 0) && (
         <p className="text-[11px] text-slate-500 mt-4 flex items-start gap-1.5">
           <Package className="h-3.5 w-3.5 shrink-0 mt-0.5" />
           <span>
-            Products land in <strong>Uncategorized</strong> when a Zoho import had no category for
-            them. Merge it into a real category, or reassign them in bulk from Stock.
+            Products land in <strong>{PLACEHOLDER_CATEGORY}</strong> when a Zoho import had no
+            category for them. Merge it into a real category, or use the{" "}
+            <strong>Needs details</strong> filter on Stock to reassign them in bulk.
           </span>
         </p>
       )}

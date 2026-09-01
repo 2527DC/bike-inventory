@@ -60,6 +60,25 @@ async function buildItemPreviews(items: IntegrationItem[], pullId: string): Prom
   const unique = [...byId.values()];
   if (unique.length === 0) return 0;
 
+  // ── Part 0: what does Zoho ACTUALLY send? ────────────────────────────────────────────
+  //
+  // Every imported product carries a brand of `Imported` and a category of `Uncategorized`,
+  // and the preview built below already reads `item.brand`/`item.manufacturer` and
+  // `item.category_name`. So either the list response does not carry those fields at all, or
+  // it carries them empty — and the fix is completely different in each case (a mapping bug
+  // vs. one `getItem` call per item at approve time). Nothing downstream should be built on a
+  // guess about which.
+  //
+  // ONE item, not a loop, and `debug` so it is off in production: an item record holds no
+  // secret, but the rule is deliberate context objects, not whole bodies. Run a pull with
+  // LOG_LEVEL=0 and read the keys. `IntegrationItem` is a narrowing type, not a runtime
+  // filter, so Object.keys here shows the real Zoho payload, including fields the type omits.
+  log.debug("raw zoho item sample", {
+    pullId,
+    keys: Object.keys(unique[0]),
+    sample: unique[0],
+  });
+
   // Empty SKUs must never reach an `in` clause. Many Zoho items carry `sku: ""`, and
   // `{ sku: { in: ["", ...] } }` matches every local product with a blank SKU — which would
   // mark brand-new items as already existing and silently drop them from the review.

@@ -6,6 +6,8 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { createLogger } from "@/lib/logger";
+import { PLACEHOLDER_BRAND, PLACEHOLDER_CATEGORY } from "@/lib/import-placeholders";
+import { parseBicycleSize } from "@/lib/product-size";
 // Type-only. The clients themselves are still loaded through a dynamic import inside the
 // handler, so importing the type here adds nothing to the module graph at runtime.
 import type { BooksClient } from "@/lib/integrations";
@@ -72,12 +74,17 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── APPROVE: write to real tables ───
-    const results = { contacts: 0, items: 0, bills: 0, invoices: 0, errors: [] as string[] };
+    // `sizesParsed` counts the bicycles whose wheel size was recovered from the name. It is
+    // in the finish log rather than only the response because a 504 delivers no response.
+    const results = { contacts: 0, items: 0, bills: 0, invoices: 0, sizesParsed: 0, errors: [] as string[] };
 
-    // Mirror Zoho categories — use exact category_name from Zoho, fallback to "Uncategorized"
+    // Mirror Zoho categories — use exact category_name from Zoho, falling back to the
+    // placeholder. The name is a shared constant, not a literal: the "Needs details" filter
+    // on /stock finds these rows by comparing against the same value, and a drifted spelling
+    // would make that filter quietly return nothing.
     const categoryCache: Record<string, string> = {};
     async function resolveCategory(zohoCategoryName?: string): Promise<string> {
-      const catName = (zohoCategoryName || "").trim() || "Uncategorized";
+      const catName = (zohoCategoryName || "").trim() || PLACEHOLDER_CATEGORY;
       if (!categoryCache[catName]) {
         let cat = await prisma.category.findFirst({ where: { name: catName } });
         if (!cat) cat = await prisma.category.create({ data: { name: catName, description: `Zoho category: ${catName}` } });
@@ -85,9 +92,9 @@ export async function POST(req: NextRequest) {
       }
       return categoryCache[catName];
     }
-    let defaultBrand = await prisma.brand.findFirst({ where: { name: "Imported" } });
+    let defaultBrand = await prisma.brand.findFirst({ where: { name: PLACEHOLDER_BRAND } });
     if (!defaultBrand) {
-      defaultBrand = await prisma.brand.create({ data: { name: "Imported" } });
+      defaultBrand = await prisma.brand.create({ data: { name: PLACEHOLDER_BRAND } });
     }
 
     // Imported records are attributed to a system-role account when one exists, so the audit
@@ -145,6 +152,16 @@ export async function POST(req: NextRequest) {
 
           const itemCategoryId = await resolveCategory(String(d.categoryName || ""));
 
+          // Zoho has no size field, but for this catalog a bicycle's wheel size is the first
+          // thing in its own name (`26''BICYCLE S/S(...)`). Recover it here — the /stock card
+          // already renders the badge, it has simply never had anything to render.
+          //
+          // BICYCLE only, and only from a known wheel size. A spare part with a number in its
+          // name has no wheel size, and a leading number that is not a size this shop sells is
+          // a model number. This is a create, so there is no person-typed size to overwrite.
+          const parsedSize = autoType === "BICYCLE" ? parseBicycleSize(String(d.name)) : null;
+          if (parsedSize) results.sizesParsed++;
+
           await prisma.product.create({
             data: {
               sku,
@@ -152,6 +169,7 @@ export async function POST(req: NextRequest) {
               categoryId: itemCategoryId,
               brandId: itemBrandId,
               type: autoType,
+              size: parsedSize,
               costPrice: Number(d.costPrice || 0),
               sellingPrice: Number(d.sellingPrice || 0),
               mrp: Number(d.sellingPrice || 0),
@@ -226,9 +244,9 @@ export async function POST(req: NextRequest) {
           let itemBrand = await prisma.brand.findFirst({ where: { name: { equals: billVendorName, mode: "insensitive" } } });
           if (!itemBrand) itemBrand = await prisma.brand.create({ data: { name: billVendorName } });
 
-          // Default category fallback
-          let defaultCategory = await prisma.category.findFirst({ where: { name: "Uncategorized" } });
-          if (!defaultCategory) defaultCategory = await prisma.category.create({ data: { name: "Uncategorized", description: "Auto-created from bill import" } });
+          // Default category fallback — same shared placeholder name as the item branch above.
+          let defaultCategory = await prisma.category.findFirst({ where: { name: PLACEHOLDER_CATEGORY } });
+          if (!defaultCategory) defaultCategory = await prisma.category.create({ data: { name: PLACEHOLDER_CATEGORY, description: "Auto-created from bill import" } });
 
           // The client for fetching item details (category, HSN, tax). Same shared,
           // request-scoped client as the getBill call above — asking twice in one request
@@ -524,6 +542,7 @@ export async function POST(req: NextRequest) {
       items: results.items,
       bills: results.bills,
       invoices: results.invoices,
+      sizesParsed: results.sizesParsed,
       errors: results.errors.length,
       remainingPending,
       status: newStatus,
