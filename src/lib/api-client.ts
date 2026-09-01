@@ -35,7 +35,7 @@ export interface ApiEnvelope<T> {
   /**
    * Present only on responses built by `paginatedResponse` (src/lib/api-utils.ts). It sits
    * BESIDE `data`, not inside it, which is why `apiFetch` — which returns `data` — cannot
-   * see it. Callers that need the page block use `apiFetchPage` below.
+   * see it. Callers that need the page block use `apiFetchEnvelope` below.
    */
   pagination?: PageMeta;
 }
@@ -91,7 +91,7 @@ export async function apiFetch<T = unknown>(
  * to hand-roll `fetch` in the page and re-implement the HTML guard badly — which is the exact
  * thing CLAUDE.md bans and this module exists to prevent.
  *
- *     const { data, pagination } = await apiFetchPage<TeamUser[]>("/api/users?page=2");
+ *     const { data, pagination } = await apiFetchEnvelope<TeamUser[]>("/api/users?page=2");
  */
 export async function apiFetchEnvelope<T = unknown>(
   url: string,
