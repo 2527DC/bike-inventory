@@ -4,7 +4,7 @@ import { useDebounce } from "@/hooks/use-debounce";
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, Square, X, Cloud, Download, Package, ChevronRight, EyeOff, RotateCcw, Trash2, Ruler
+import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, Square, X, Package, ChevronRight, EyeOff, RotateCcw, Trash2
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +20,7 @@ import { apiFetch } from "@/lib/api-client";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
-import { isPlaceholderBrand, isPlaceholderCategory } from "@/lib/import-placeholders";
+import { isPlaceholderBrand } from "@/lib/import-placeholders";
 import { BICYCLE_SIZES } from "@/lib/product-size";
 
 const STOCK_COLUMNS: ExportColumn[] = [
@@ -90,17 +90,17 @@ const QUICK_CHIPS: { key: QuickFilter; label: string }[] = [
   { key: "IN_STOCK", label: "In Stock" },
   { key: "NO_STOCK", label: "No Stock" },
   { key: "LOW_STOCK", label: "Low Stock" },
-  // The fix-up queue: products the import had to invent a brand or a category for. Paired
-  // with Select + bulk assign below, this is the whole workflow for correcting an import —
-  // find the rows nobody has described, describe them in one action.
+  // The fix-up queue: products with no real brand. Paired with Select + bulk assign below,
+  // this is the whole workflow for describing an imported catalog — find the rows nobody has
+  // described, describe them in one action. Category is not part of the test; see
+  // api/products/route.ts, where including it would return every row.
   { key: "NEEDS_DETAILS", label: "Needs details" },
   { key: "INACTIVE", label: "Inactive" },
 ];
 
-// BICYCLE_SIZES now lives in `@/lib/product-size` alongside the parse that produces them, so
-// the sizes this filter offers and the sizes an import can write are the same list by
-// construction. A parsed size that the filter could not select would be a badge with nothing
-// behind it.
+// BICYCLE_SIZES lives in `@/lib/product-size`. The parse that used to produce these values
+// went with the Zoho item import; the list stays because it is what the size filter offers
+// and what a person picks from when editing a product.
 
 const log = createLogger("stock");
 
@@ -127,7 +127,7 @@ function getStockAccent(p: ProductItem) {
 
 export default function StockPage() {
   const { data: session } = useSession();
-  const { canFetch, canEdit, canDelete, canView } = usePermissions();
+  const { canEdit, canDelete, canView } = usePermissions();
   // Bulk edit writes product fields, so it is stock.edit.
   const canBulkEdit = canEdit("stock");
 
@@ -142,19 +142,6 @@ export default function StockPage() {
 
   const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [rowOutcome, setRowOutcome] = useState<{ ok: boolean; name: string; message: string } | null>(null);
-
-  const canFetchItems = canFetch("stock");
-
-  // Fetch Items from Zoho
-  const [fetchStep, setFetchStep] = useState<"idle" | "pickDate" | "fetching" | "selecting" | "importing">("idle");
-  const [itemPreviews, setItemPreviews] = useState<Array<{ id: string; zohoId: string; data: { name: string; sku: string; costPrice: number; sellingPrice: number } }>>([]);
-  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
-  const [fetchError, setFetchError] = useState("");
-  const [fetchPullId, setFetchPullId] = useState("");
-  const [fetchProgress, setFetchProgress] = useState("");
-  const [fetchDays, setFetchDays] = useState<number>(7);
-  const [fetchCustomFrom, setFetchCustomFrom] = useState("");
-  const [fetchCustomTo, setFetchCustomTo] = useState("");
 
   const [dataError, setDataError] = useState<string | null>(null);
   const [products, setProducts] = useState<ProductItem[]>([]);
@@ -220,10 +207,6 @@ export default function StockPage() {
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkMessage, setBulkMessage] = useState("");
 
-  // The one-off wheel-size backfill (Part C). Separate from bulk assign because it takes no
-  // selection and asks for no value: it reads names and fills blanks across the catalog.
-  const [sizeFillBusy, setSizeFillBusy] = useState(false);
-
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -279,149 +262,6 @@ export default function StockPage() {
       setBulkLoading(false);
     }
   }
-
-  /**
-   * Part C's backfill: read every sizeless bicycle's name and recover the wheel size from it.
-   *
-   * Person-triggered and confirmed, never automatic. It only ever fills a blank — the server
-   * repeats the "size is empty" test on the write — so pressing it twice is safe and a size
-   * somebody typed is never touched.
-   */
-  async function handleSizeBackfill() {
-    if (!confirm(
-      "Fill in missing wheel sizes?\n\n" +
-      "Reads the size from the start of each bicycle's name (26''BICYCLE… → 26\") and fills it " +
-      "in where the size is blank. Sizes already entered by hand are left alone."
-    )) return;
-
-    setSizeFillBusy(true);
-    setBulkMessage("");
-    try {
-      const data = await apiFetch<{ scanned: number; updated: number; unmatched: number; hasMore: boolean }>(
-        "/api/products/backfill-size",
-        { method: "POST" }
-      );
-      log.info("size backfill finished", data);
-      setBulkMessage(
-        `Filled ${data.updated} size${data.updated === 1 ? "" : "s"} from ${data.scanned} bicycle${data.scanned === 1 ? "" : "s"}` +
-        (data.unmatched > 0 ? ` — ${data.unmatched} had no recognisable size in the name` : "") +
-        (data.hasMore ? ". More remain, press again." : "")
-      );
-      fetchProducts(1);
-    } catch (e) {
-      const message = e instanceof Error ? e.message : "Could not fill sizes";
-      log.error("size backfill failed", { message });
-      setDataError(message);
-    } finally {
-      setSizeFillBusy(false);
-    }
-  }
-
-  const handleFetchItems = async () => {
-    setFetchStep("fetching");
-    setFetchError("");
-    setFetchProgress("Connecting to Zoho...");
-    try {
-      // Calculate fromDate based on selected days or custom date
-      let fromDate: string;
-      if (fetchDays === -1 && fetchCustomFrom) {
-        fromDate = fetchCustomFrom;
-      } else {
-        const fromDateObj = new Date();
-        fromDateObj.setDate(fromDateObj.getDate() - fetchDays);
-        fromDate = fromDateObj.toISOString().slice(0, 10);
-      }
-
-      // All four steps go through apiFetch: it logs request + response at LOG_LEVEL=0 and,
-      // crucially, refuses to parse an HTML body as JSON. The old `.then(r => r.json())`
-      // turned an expired session (307 -> /login -> 200 text/html) and a Zoho gateway
-      // timeout into the same useless `Unexpected token '<'`.
-      const initData = await apiFetch<{ pullId: string }>("/api/zoho/trigger-pull", {
-        method: "POST",
-        json: { step: "init" },
-      });
-      const pullId = initData.pullId;
-      setFetchPullId(pullId);
-
-      const label = fetchDays === -1 ? "custom range" : `last ${fetchDays} days`;
-      setFetchProgress(`Pulling items from ${label}...`);
-      const itemData = await apiFetch<{ itemsNew: number; apiCalls: number; errors?: string[] }>(
-        "/api/zoho/trigger-pull",
-        { method: "POST", json: { step: "items", pullId, fromDate } }
-      );
-
-      const found = itemData.itemsNew || 0;
-      setFetchProgress(`Found ${found} new item${found !== 1 ? "s" : ""}. Finalizing...`);
-      // Finalize is best-effort — the items are already staged, so a failure here must not
-      // lose them. It is caught, but no longer silently: apiFetch logs why it failed.
-      await apiFetch("/api/zoho/trigger-pull", {
-        method: "POST",
-        json: {
-          step: "finalize",
-          pullId,
-          itemsNew: itemData.itemsNew,
-          apiCalls: itemData.apiCalls,
-          allErrors: itemData.errors || [],
-        },
-      }).catch(() => {});
-
-      setFetchProgress("Loading preview...");
-      const previewData = await apiFetch<{
-        previews?: {
-          id: string;
-          zohoId: string;
-          entityType: string;
-          status: string;
-          data: { name: string; sku: string; costPrice: number; sellingPrice: number };
-        }[];
-      }>(`/api/zoho/pull-review?pullId=${pullId}`);
-      const items = (previewData.previews || []).filter((p: { entityType: string; status: string }) => p.entityType === "item" && p.status === "PENDING");
-      setItemPreviews(items);
-      setSelectedItems(new Set(items.map((i: { id: string }) => i.id)));
-      setFetchStep(items.length > 0 ? "selecting" : "idle");
-      if (items.length === 0) setFetchError(`No new items found (${found} from Zoho, all already in catalog)`);
-    } catch (e) {
-      setFetchError(e instanceof Error ? e.message : "Fetch failed");
-      setFetchStep("idle");
-    } finally {
-      setFetchProgress("");
-    }
-  };
-
-  const toggleItem = (id: string) => {
-    setSelectedItems(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  };
-
-  const handleImportItems = async () => {
-    if (selectedItems.size === 0) return;
-    setFetchStep("importing");
-    try {
-      const res = await fetch("/api/zoho/pull-review/approve", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pullId: fetchPullId, action: "approve",
-          entityType: "item", previewIds: Array.from(selectedItems),
-        }),
-      }).then(r => r.json());
-      if (!res.success) throw new Error(res.error || "Import failed");
-      const imported = res.data?.items || 0;
-      const errors = res.data?.errors || [];
-      setFetchStep("idle");
-      setItemPreviews([]);
-      setSelectedItems(new Set());
-      fetchProducts(1);
-      if (errors.length > 0) {
-        setFetchError(`Imported ${imported} item(s). Warnings: ${errors.join("; ")}`);
-      }
-    } catch (e) {
-      setFetchError(e instanceof Error ? e.message : "Import failed");
-      setFetchStep("selecting");
-    }
-  };
 
   function formatCurrency(amount: number) {
     return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
@@ -607,30 +447,6 @@ export default function StockPage() {
           {selectMode ? `${selectedIds.size} selected` : "Stock"}
         </h1>
         <div className="flex items-center gap-1.5">
-          {canFetchItems && !selectMode && fetchStep !== "pickDate" && (
-            <button
-              onClick={() => setFetchStep("pickDate")}
-              disabled={fetchStep === "fetching" || fetchStep === "importing"}
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-900 text-white disabled:opacity-50"
-            >
-              {fetchStep === "fetching" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Cloud className="h-3.5 w-3.5" />}
-              {fetchStep === "fetching" ? "Fetching..." : "Fetch Stock"}
-            </button>
-          )}
-          {/* Offered only while the "Needs details" queue is on screen. It is a one-off
-              correction, not a routine action, and a button that rewrites sizes across the
-              catalog does not belong next to Export on every visit. */}
-          {canBulkEdit && !selectMode && quickFilter === "NEEDS_DETAILS" && (
-            <button
-              onClick={handleSizeBackfill}
-              disabled={sizeFillBusy}
-              title="Fill blank bicycle sizes from the product name"
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 disabled:opacity-50"
-            >
-              {sizeFillBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ruler className="h-3.5 w-3.5" />}
-              {sizeFillBusy ? "Filling..." : "Fill Sizes"}
-            </button>
-          )}
           {canBulkEdit && !selectMode && (
             <button
               onClick={() => setSelectMode(true)}
@@ -663,128 +479,6 @@ export default function StockPage() {
       )}
 
       {/* Fetch Date Picker */}
-      {fetchStep === "pickDate" && (
-        <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-2">
-          <p className="text-xs font-medium text-slate-700 mb-2">Fetch stock items from Zoho within:</p>
-          <div className="flex flex-wrap gap-2 mb-3">
-            {[
-              { label: "3 days", value: 3 },
-              { label: "7 days", value: 7 },
-              { label: "14 days", value: 14 },
-              { label: "30 days", value: 30 },
-              { label: "Custom", value: -1 },
-            ].map((opt) => (
-              <button
-                key={opt.value}
-                onClick={() => setFetchDays(opt.value)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                  fetchDays === opt.value
-                    ? "bg-slate-900 text-white border-slate-900"
-                    : "bg-white text-slate-600 border-slate-300 hover:border-slate-400"
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-          {fetchDays === -1 && (
-            <div className="flex gap-2 mb-3">
-              <div>
-                <label className="text-[10px] text-slate-500 block mb-0.5">From</label>
-                <input type="date" value={fetchCustomFrom} onChange={(e) => setFetchCustomFrom(e.target.value)}
-                  className="px-2 py-1.5 text-xs border border-slate-300 rounded-lg" />
-              </div>
-              <div>
-                <label className="text-[10px] text-slate-500 block mb-0.5">To (optional)</label>
-                <input type="date" value={fetchCustomTo} onChange={(e) => setFetchCustomTo(e.target.value)}
-                  className="px-2 py-1.5 text-xs border border-slate-300 rounded-lg" />
-              </div>
-            </div>
-          )}
-          <div className="flex gap-2">
-            <button
-              onClick={handleFetchItems}
-              disabled={fetchDays === -1 && !fetchCustomFrom}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-900 text-white disabled:opacity-50"
-            >
-              <Cloud className="h-3.5 w-3.5" /> Fetch
-            </button>
-            <button
-              onClick={() => setFetchStep("idle")}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white text-slate-500 border border-slate-300"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Fetch Error */}
-      {fetchError && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-2 text-xs text-amber-700">
-          {fetchError}
-          <button onClick={() => setFetchError("")} className="ml-2 underline">dismiss</button>
-        </div>
-      )}
-
-      {/* Fetch Progress */}
-      {fetchStep === "fetching" && fetchProgress && (
-        <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg p-2.5 mb-2">
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600 shrink-0" />
-          <span className="text-xs text-blue-700 font-medium">{fetchProgress}</span>
-        </div>
-      )}
-
-      {/* Item Selection Panel */}
-      {fetchStep === "selecting" && itemPreviews.length > 0 && (
-        <Card className="mb-3 border-blue-200 bg-blue-50/50">
-          <CardContent className="p-3">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-blue-800">
-                {itemPreviews.length} new item{itemPreviews.length !== 1 ? "s" : ""} from Zoho
-              </p>
-              <div className="flex gap-2">
-                <button onClick={() => { setFetchStep("idle"); setItemPreviews([]); }}
-                  className="text-xs text-slate-500 underline">Cancel</button>
-                <button onClick={handleImportItems} disabled={selectedItems.size === 0}
-                  className="flex items-center gap-1 bg-blue-600 text-white px-3 py-1.5 rounded-md text-xs font-medium disabled:opacity-50">
-                  <Download className="h-3 w-3" /> Import {selectedItems.size}
-                </button>
-              </div>
-            </div>
-            <div className="space-y-1.5 max-h-64 overflow-y-auto">
-              {itemPreviews.map((item) => (
-                <label key={item.id}
-                  className={`flex items-start gap-2 p-2 rounded-lg cursor-pointer transition-colors ${
-                    selectedItems.has(item.id) ? "bg-blue-100 border border-blue-300" : "bg-white border border-slate-200"
-                  }`}>
-                  <input type="checkbox" checked={selectedItems.has(item.id)}
-                    onChange={() => toggleItem(item.id)} className="mt-0.5 rounded" />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-medium text-slate-900">{item.data.name}</span>
-                    </div>
-                    <p className="text-[10px] text-slate-600">{item.data.sku || "No SKU"}</p>
-                    <div className="flex gap-3 mt-0.5">
-                      <span className="text-[10px] text-slate-500">Cost: {formatCurrency(item.data.costPrice)}</span>
-                      <span className="text-[10px] text-slate-500">Sell: {formatCurrency(item.data.sellingPrice)}</span>
-                    </div>
-                  </div>
-                </label>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Importing indicator */}
-      {fetchStep === "importing" && (
-        <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
-          <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-          <span className="text-xs text-blue-700 font-medium">Importing items into catalog...</span>
-        </div>
-      )}
-
       {/* Data Load Error */}
       {dataError && (
         <ErrorBanner
@@ -1076,12 +770,12 @@ export default function StockPage() {
                             {p.brand.name}
                           </span>
                         )}
+                        {/* Category is NOT styled as a placeholder any more. Every imported
+                            product starts `Uncategorized`, so grey italic would be every card
+                            on the screen — a signal that fires always is not a signal. Brand
+                            above still is, because a real one is the exception worth seeing. */}
                         {p.category && (
-                          <span className={isPlaceholderCategory(p.category.name)
-                            ? "text-xs italic text-slate-400"
-                            : "text-xs text-slate-400"}>
-                            {p.category.name}
-                          </span>
+                          <span className="text-xs text-slate-400">{p.category.name}</span>
                         )}
                         {p.size && (
                           <Badge variant="default" className="text-[10px] py-0 tabular-nums">{p.size}</Badge>

@@ -1,7 +1,6 @@
 export const dynamic = "force-dynamic";
-// 60, not 30. Headroom, NOT the fix — the fix is that `items` and `contacts` no longer do one
-// database round trip per record (see buildItemPreviews below). Raising this alone would only
-// move the cliff from ~400 items to ~800.
+// 60, not 30. Headroom for the bill and invoice steps, which fetch a page at a time and then
+// write their previews in a fixed number of queries rather than one round trip per record.
 export const maxDuration = 60;
 
 import { NextRequest } from "next/server";
@@ -13,146 +12,22 @@ import {
   getInventory,
   getZakya,
   type IntegrationClient,
-  type IntegrationItem,
 } from "@/lib/integrations";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("zoho:trigger-pull");
 
-// A single `IN (...)` with several thousand values produces a very large query. Chunk the
-// lookup and merge the results.
-const LOOKUP_CHUNK = 1000;
-
 /*
- * 3-SOURCE MANUAL PULL (step-by-step):
+ * MANUAL PULL (step-by-step):
  * ─────────────────────────
- * Items:     Zoho Inventory (fallback Books)
- * Contacts:  Zoho Books
  * Bills:     Zoho Books (fallback Zakya POS)
  * Invoices:  Zakya POS (fallback Books)
+ *
+ * ITEMS and CONTACTS are gone. Products no longer come from Zoho at all — the catalog is
+ * loaded by scripts/import-products.ts — and contacts had no caller once the central pull
+ * card was removed. Vendors still arrive from Zoho: the BILL branch of pull-review/approve
+ * find-or-creates one from the bill's vendor name.
  */
-
-/**
- * Turn a batch of Zoho items into ZohoPullPreview rows, in a fixed number of queries.
- *
- * Replaces a per-item loop that ran two `product.findFirst` calls plus a `create` for EVERY
- * record. Each of those crosses Mumbai (`vercel.json` "regions": ["bom1"]) to Singapore
- * (`DATABASE_URL` ap-southeast-1) at roughly 40 ms, sequentially, so a ~400-item catalog spent
- * ~32 s on latency alone and the function died at `maxDuration` — the 504 users were seeing.
- * `bills` and `invoices` in this same file were already written this way; `items` and
- * `contacts` were simply never converted.
- *
- * Called from BOTH item sources on purpose. The ZOHO_INVENTORY path and the ZOHO_BOOKS
- * fallback ran equivalent loops, and fixing only the first would ship a fallback that still
- * times out — while testing green on any environment where Inventory is connected, which is
- * exactly where it would be tested.
- *
- * Returns the number of previews written.
- */
-async function buildItemPreviews(items: IntegrationItem[], pullId: string): Promise<number> {
-  // Zoho can return the same item_id on more than one page. ZohoPullPreview has NO unique
-  // constraint on zohoId, so `createMany({ skipDuplicates })` cannot help — dedupe here or
-  // the review screen lists the same product twice.
-  const byId = new Map<string, IntegrationItem>();
-  for (const item of items) {
-    if (item.item_id) byId.set(item.item_id, item);
-  }
-  const unique = [...byId.values()];
-  if (unique.length === 0) return 0;
-
-  // ── Part 0: what does Zoho ACTUALLY send? ────────────────────────────────────────────
-  //
-  // Every imported product carries a brand of `Imported` and a category of `Uncategorized`,
-  // and the preview built below already reads `item.brand`/`item.manufacturer` and
-  // `item.category_name`. So either the list response does not carry those fields at all, or
-  // it carries them empty — and the fix is completely different in each case (a mapping bug
-  // vs. one `getItem` call per item at approve time). Nothing downstream should be built on a
-  // guess about which.
-  //
-  // ONE item, not a loop, and `debug` so it is off in production: an item record holds no
-  // secret, but the rule is deliberate context objects, not whole bodies. Run a pull with
-  // LOG_LEVEL=0 and read the keys. `IntegrationItem` is a narrowing type, not a runtime
-  // filter, so Object.keys here shows the real Zoho payload, including fields the type omits.
-  log.debug("raw zoho item sample", {
-    pullId,
-    keys: Object.keys(unique[0]),
-    sample: unique[0],
-  });
-
-  // Empty SKUs must never reach an `in` clause. Many Zoho items carry `sku: ""`, and
-  // `{ sku: { in: ["", ...] } }` matches every local product with a blank SKU — which would
-  // mark brand-new items as already existing and silently drop them from the review.
-  const skus = [...new Set(unique.map((i) => i.sku).filter((s): s is string => !!s && s.trim() !== ""))];
-  const ids = [...new Set(unique.map((i) => i.item_id).filter((s): s is string => !!s))];
-
-  const knownSkus = new Set<string>();
-  const knownIds = new Set<string>();
-  const absorb = (rows: Array<{ sku: string | null; zohoItemId: string | null }>) => {
-    for (const r of rows) {
-      if (r.sku) knownSkus.add(r.sku);
-      if (r.zohoItemId) knownIds.add(r.zohoItemId);
-    }
-  };
-
-  for (let i = 0; i < skus.length; i += LOOKUP_CHUNK) {
-    absorb(
-      await prisma.product.findMany({
-        where: { sku: { in: skus.slice(i, i + LOOKUP_CHUNK) } },
-        select: { sku: true, zohoItemId: true },
-      })
-    );
-  }
-  for (let i = 0; i < ids.length; i += LOOKUP_CHUNK) {
-    absorb(
-      await prisma.product.findMany({
-        where: { zohoItemId: { in: ids.slice(i, i + LOOKUP_CHUNK) } },
-        select: { sku: true, zohoItemId: true },
-      })
-    );
-  }
-
-  // Existing items are FROZEN — Zoho never modifies an item already in the app (brand,
-  // category, pricing, SKU, name and stock all stay as edited). Only brand-new items are
-  // pulled in for review. This is the set-based form of the `continue` the old loop used; it
-  // is a deliberate business rule, not an optimisation, and must survive any rewrite.
-  const fresh = unique.filter((item) => {
-    if (item.sku && knownSkus.has(item.sku)) return false;
-    if (item.item_id && knownIds.has(item.item_id)) return false;
-    return true;
-  });
-
-  log.debug("items batched", {
-    pullId,
-    received: items.length,
-    unique: unique.length,
-    frozen: unique.length - fresh.length,
-    new: fresh.length,
-  });
-
-  if (fresh.length === 0) return 0;
-
-  await prisma.zohoPullPreview.createMany({
-    data: fresh.map((item) => ({
-      pullId,
-      entityType: "item",
-      zohoId: item.item_id,
-      data: {
-        name: item.name,
-        sku: item.sku || "",
-        costPrice: Number(item.purchase_rate || 0),
-        sellingPrice: Number(item.rate || 0),
-        gstRate: Number(item.tax_percentage || 18),
-        hsnCode: String(item.hsn_or_sac || ""),
-        stockOnHand: Number(item.stock_on_hand || 0),
-        productType: String(item.product_type || item.item_type || ""),
-        brand: String(item.brand || item.manufacturer || "").trim(),
-        categoryName: String(item.category_name || ""),
-      },
-    })),
-  });
-
-  return fresh.length;
-}
 
 export async function POST(req: NextRequest) {
   // Captured for the catch. A 500 has to name WHICH step failed — init, items, bills and
@@ -163,7 +38,7 @@ export async function POST(req: NextRequest) {
   try {
     await requireFeature("zoho", "fetch");
     const body = await req.json();
-    const { step, pullId: existingPullId, fullImport, fromDate, searchText } = body as { step: string; pullId?: string; fullImport?: boolean; fromDate?: string; searchText?: string };
+    const { step, pullId: existingPullId, fromDate, searchText } = body as { step: string; pullId?: string; fromDate?: string; searchText?: string };
     ctx.step = step;
     ctx.pullId = existingPullId;
 
@@ -221,142 +96,9 @@ export async function POST(req: NextRequest) {
     if (!existingPullId) return errorResponse("pullId required", 400);
 
     // Default last sync — 7 days ago
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const defaultLastSync = sevenDaysAgo.toISOString().slice(0, 10);
     const todayStr = new Date().toISOString().slice(0, 10);
 
     // ─── ITEMS: via Zoho Inventory (fallback Books) ───
-    if (step === "items") {
-      let itemsNew = 0;
-      let apiCalls = 0;
-      const errors: string[] = [];
-      let source = "none";
-
-      try {
-        // Try Inventory first
-        const inventory = await getInventory();
-
-        if (inventory) {
-          source = "inventory";
-          const invConfig = await prisma.integrationConfig.findUnique({ where: { provider: "ZOHO_INVENTORY" } });
-          const lastSync = fromDate || invConfig?.lastSyncAt?.toISOString().slice(0, 10) || defaultLastSync;
-          const allItems = await inventory.listAllItems("active", fullImport ? undefined : lastSync);
-          apiCalls += Math.ceil(allItems.length / 200) || 1;
-          const items = allItems.filter(item => Number(item.stock_on_hand || 0) > 0);
-
-          itemsNew += await buildItemPreviews(items, existingPullId);
-        } else {
-          // Fallback to Books
-          const zoho = await getBooks();
-          if (zoho) {
-            source = "books";
-            const booksConfig = await prisma.integrationConfig.findUnique({ where: { provider: "ZOHO_BOOKS" } });
-            const lastSync = fromDate || booksConfig?.lastSyncAt?.toISOString().slice(0, 10) || defaultLastSync;
-            const allItems = await zoho.listAllItems("active", fullImport ? undefined : lastSync);
-            apiCalls += Math.ceil(allItems.length / 200) || 1;
-            const items = allItems.filter(item => Number(item.stock_on_hand || 0) > 0);
-
-            // Same helper as the Inventory path above. These two loops were byte-for-byte
-            // equivalent apart from a redundant `as Record<string, unknown>` cast — every
-            // field it reached for is already on IntegrationItem.
-            itemsNew += await buildItemPreviews(items, existingPullId);
-          } else {
-            errors.push("Items: no source connected");
-          }
-        }
-      } catch (e) {
-        log.error("items step failed", { pullId: existingPullId, source, itemsNew, message: e instanceof Error ? e.message : "Unknown" });
-        errors.push(`Items: ${e instanceof Error ? e.message : "Unknown"}`);
-      }
-
-      log.info("items step finished", { pullId: existingPullId, source, itemsNew, apiCalls, errors: errors.length });
-      return successResponse({ step: "items", source, itemsNew, apiCalls, errors });
-    }
-
-    // ─── CONTACTS: via Zoho Books ───
-    if (step === "contacts") {
-      let contactsNew = 0;
-      let apiCalls = 0;
-      const errors: string[] = [];
-
-      try {
-        const zoho = await getBooks();
-        if (!zoho) {
-          return successResponse({ step: "contacts", source: "skipped", contactsNew: 0, apiCalls: 0, errors: ["Books not connected"] });
-        }
-
-        const booksConfig = await prisma.integrationConfig.findUnique({ where: { provider: "ZOHO_BOOKS" } });
-        const lastSync = booksConfig?.lastSyncAt?.toISOString().slice(0, 10) || defaultLastSync;
-        const contacts = await zoho.listAllContacts(lastSync);
-        apiCalls += Math.ceil(contacts.length / 200) || 1;
-        const vendors = contacts.filter((c) => c.contact_type === "vendor");
-
-        // Same defect and same fix as `items` above — one `vendor.findFirst` plus one
-        // `create` per contact became two queries total. No vendor pull is failing today
-        // (contact counts are far smaller than item counts), so this is the pre-emptive half.
-        //
-        // Zoho can repeat a contact across pages; dedupe by contact_id before writing,
-        // because ZohoPullPreview has no unique constraint on zohoId.
-        const byId = new Map<string, (typeof vendors)[number]>();
-        for (const contact of vendors) {
-          if (contact.contact_id) byId.set(contact.contact_id, contact);
-        }
-        const uniqueVendors = [...byId.values()];
-
-        // The old check was `findFirst({ name: { equals, mode: "insensitive" } })` — matching
-        // is case-INSENSITIVE and must stay that way, or "Naren" and "NAREN" both look new
-        // and the review lists the vendor twice.
-        //
-        // Deliberately reading ALL vendor names in one query rather than an `in` clause:
-        // Prisma's `mode: "insensitive"` is not dependable on `in`, and Vendor is a small
-        // table by nature (one row today; tens to hundreds at most) selecting a single
-        // column. Comparing on a lowercased key in memory is exact, and it is one round trip
-        // instead of one per contact — which is the whole point of this change.
-        const knownNames = new Set(
-          (await prisma.vendor.findMany({ select: { name: true } })).map((v) => v.name.trim().toLowerCase())
-        );
-
-        const freshVendors = uniqueVendors.filter(
-          (c) => !knownNames.has(String(c.contact_name || "").trim().toLowerCase())
-        );
-
-        log.debug("contacts batched", {
-          pullId: existingPullId,
-          received: contacts.length,
-          vendors: vendors.length,
-          unique: uniqueVendors.length,
-          existing: uniqueVendors.length - freshVendors.length,
-          new: freshVendors.length,
-        });
-
-        if (freshVendors.length > 0) {
-          await prisma.zohoPullPreview.createMany({
-            data: freshVendors.map((contact) => ({
-              pullId: existingPullId,
-              entityType: "contact",
-              zohoId: contact.contact_id,
-              data: {
-                name: contact.contact_name,
-                gstin: contact.gst_no || "",
-                email: contact.email || "",
-                phone: contact.phone || "",
-                city: contact.billing_address?.city || "",
-                state: contact.billing_address?.state || "",
-              },
-            })),
-          });
-          contactsNew = freshVendors.length;
-        }
-      } catch (e) {
-        log.error("contacts step failed", { pullId: existingPullId, contactsNew, message: e instanceof Error ? e.message : "Unknown" });
-        errors.push(`Contacts: ${e instanceof Error ? e.message : "Unknown"}`);
-      }
-
-      log.info("contacts step finished", { pullId: existingPullId, contactsNew, apiCalls, errors: errors.length });
-      return successResponse({ step: "contacts", source: "books", contactsNew, apiCalls, errors });
-    }
-
     // ─── BILLS: via Zoho Inventory (fallback Zakya → Books) ───
     if (step === "bills") {
       let billsNew = 0;
@@ -384,6 +126,7 @@ export async function POST(req: NextRequest) {
           }
 
           if (!client) {
+              log.warn("bills step skipped — no source connected", { pullId: existingPullId });
             return successResponse({ step: "bills", source: "skipped", billsNew: 0, apiCalls: 0, errors: ["No source connected for bills"] });
           }
 
@@ -457,6 +200,7 @@ export async function POST(req: NextRequest) {
         errors.push(`Bills: ${e instanceof Error ? e.message : "Unknown"}`);
       }
 
+      log.info("bills step finished", { pullId: existingPullId, source, billsNew, apiCalls, errors: errors.length });
       return successResponse({ step: "bills", source, billsNew, apiCalls, errors });
     }
 
@@ -478,7 +222,8 @@ export async function POST(req: NextRequest) {
         }
 
         if (!client) {
-          return successResponse({ step: "invoices", source: "skipped", invoicesNew: 0, apiCalls: 0, errors: ["No source connected"] });
+            log.warn("invoices step skipped — no source connected", { pullId: existingPullId });
+            return successResponse({ step: "invoices", source: "skipped", invoicesNew: 0, apiCalls: 0, errors: ["No source connected"] });
         }
 
         const invoicesFromDate = fromDate || todayStr;
@@ -531,11 +276,15 @@ export async function POST(req: NextRequest) {
         errors.push(`Invoices: ${e instanceof Error ? e.message : "Unknown"}`);
       }
 
+      log.info("invoices step finished", { pullId: existingPullId, source, invoicesNew, apiCalls, errors: errors.length });
       return successResponse({ step: "invoices", source, invoicesNew, apiCalls, errors });
     }
 
     // ─── FINALIZE ───
     if (step === "finalize") {
+      // itemsNew and contactsNew are always 0 now — no step produces them. The two columns
+      // stay on ZohoPullLog because the schema is deliberately untouched on this branch, and
+      // a zero is honest: that pull genuinely imported no items and no contacts.
       const { itemsNew = 0, contactsNew = 0, billsNew = 0, invoicesNew = 0, apiCalls = 0, allErrors = [] } = body as {
         itemsNew?: number; contactsNew?: number; billsNew?: number; invoicesNew?: number;
         apiCalls?: number; allErrors?: string[];
@@ -578,6 +327,14 @@ export async function POST(req: NextRequest) {
       await prisma.integrationConfig.update({ where: { provider: "ZAKYA_POS" }, data: { lastSyncAt: new Date() } }).catch(() => {});
       await prisma.integrationConfig.update({ where: { provider: "ZOHO_INVENTORY" }, data: { lastSyncAt: new Date() } }).catch(() => {});
 
+      log.info("pull finalized", {
+        pullId: existingPullId,
+        status: totalNew > 0 ? "PENDING_REVIEW" : "NO_NEW_DATA",
+        billsNew,
+        invoicesNew,
+        apiCallsUsed: apiCalls,
+        errors: allErrors.length,
+      });
       return successResponse({
         pullId: existingPullId,
         status: totalNew > 0 ? "PENDING_REVIEW" : "NO_NEW_DATA",

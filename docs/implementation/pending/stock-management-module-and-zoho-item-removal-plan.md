@@ -1,6 +1,6 @@
 # Stock Management module tree, product types as data, the end of the Zoho item import, and a customer list
 
-Status: pending — approved in outline 1 Sep 2026, eight decisions taken (§0), reviewed against the code (§15). Not started. One gate before commit 2: the §4.2 row count. Product data load is Part E — optional and last.
+Status: in-progress — 1 Sep 2026. **Part A is built** (see §16 for what shipped and how it differed). Parts B, C, D not started; Part E optional and last. One gate before commit 2: the §4.2 row count.
 Branch: **`refactor/stock-management-module`** — create it with exactly this name, off `main`.
 
 Prepared 1 Sep 2026. Every line number, route and constraint below was read off the tree on
@@ -1179,3 +1179,132 @@ numbers shift.** Locate by symbol name — `fetchStep`, `buildItemPreviews`, `PL
 — not by line, and re-read the file before editing.
 
 
+
+---
+
+# 16. PART A AS BUILT — 1 Sep 2026
+
+Part A shipped. This section records where it **differed from the plan above**, because three
+of the differences came from reading the running code and one from calling Zoho's live API,
+and the plan's own text is wrong without them.
+
+## 16.1 The correction that matters most: bill import still creates products
+
+**Consequence 1 said "products can no longer be created from Zoho, at all."** That was wrong,
+and it was caught mid-implementation rather than after.
+
+`pull-review/approve` has a **bill** branch — kept by decision #1 — that calls
+`prisma.product.create` when a bill line names a SKU the catalog does not hold. It is gated on
+`source !== "accounting"`, and the two callers split exactly:
+
+| Caller | `source` | Creates products? |
+|---|---|---|
+| `/bills` | `accounting` | no — financial only |
+| `/inbound` | `inventory` | **yes** |
+
+**Owner's decision, with that in front of them:** keep it. *"Remove the product creation by
+Zoho item or stock fetch; when a bill is imported, if the product doesn't exist let it create
+the product — keep that logic."* An inbound shipment must be able to receive something the
+catalog has not met yet.
+
+So the true statement is: **the Zoho ITEM pull is gone; `/inbound`'s bill import remains a
+product-creation path.** Products it creates carry the vendor's name as brand and Zoho's
+category or the `Uncategorized` placeholder.
+
+Three things survive that the plan had marked for deletion, purely because this branch needs
+them:
+
+- `src/lib/import-placeholders.ts` — the bill branch reads `PLACEHOLDER_CATEGORY`
+- `BooksClient.getItem` and its `items.get` registry entry — `approve:208` calls it for one
+  product at a time, to get category/HSN/tax when creating from a bill line
+- the `/stock` "Needs details" queue and placeholder styling — still fed by this path
+
+## 16.2 The "Needs details" filter changed shape rather than going
+
+Decided after measuring the consequence: with the catalog import putting **every** product in
+`Uncategorized`, testing the category name would return all 8,175 rows, and a filter that
+matches everything distinguishes nothing.
+
+- **Brand only.** `api/products/route.ts` now tests brand against
+  `PLACEHOLDER_BRAND_NAMES_LOWER` and no longer tests category. The comment there says why,
+  and says not to add it back.
+- **Three names, one definition.** `isPlaceholderBrand` recognises `Imported` (the old item
+  import), `Unbranded` (`scripts/import-products.ts`) and `General` (hand-created rows). The
+  list used to be inline in `api/stock-counts/[id]`; it now lives in one place so the display
+  test, the filter and the stock-count overwrite rule cannot drift apart.
+- **Category is no longer styled as a placeholder** on the /stock card — grey italic on every
+  row is not a signal.
+
+## 16.3 The AI removal, and the route that was not AI
+
+Decision #8 widened to the whole `/ai` surface. Deleted: `low-stock-alerts`,
+`demand-forecast`, `reorder-suggestions`, `(dashboard)/ai/page.tsx`, the **Smart Insights**
+card and the **AI Insights** tile.
+
+**`dashboard-insights` was renamed, not deleted** — §2.2.2. It contains no AI at all (144
+lines of raw SQL) and is the source of the **Stock Value** and **Low Stock** tiles on two
+dashboards. It is now `src/app/api/dashboard/stats/route.ts` with its three callers repointed.
+`src/app/api/ai/` no longer exists.
+
+Removing the tile left the Operations grid with three cards in a `lg:grid-cols-4`, a hole at
+both breakpoints; it is `grid-cols-3` now, matching the file's other three-tile grids.
+
+## 16.4 ⚠️ §7.4 is WRONG about Zoho — corrected against the live API
+
+The plan says Zoho has no categories or brands API and that they are free-text strings on an
+item. **Both claims are false.** Probed against the live org on 1 Sep 2026 with a throwaway
+script (since deleted), using the credentials in `integration_config`:
+
+| Endpoint | Zoho Inventory | Zakya POS | Zoho Books |
+|---|---|---|---|
+| `/categories` | **200 — 33 rows** | **200 — 33** | 401 not authorized |
+| `/brands` | **200 — 151 rows** | **200 — 151** | 401 not authorized |
+| `/manufacturers` | 200 — 83 | 200 — 83 | 200 — 83 |
+
+`/items?per_page=1` returned 200 on all three as an auth control, so the Books 401 is a
+product-level limitation, not a token problem. The published docs simply do not list these.
+
+**Categories are a real tree** — `category_id`, `parent_category_id`, `depth`, `sibling_order`,
+`has_active_items` — and it maps 1:1 onto this app's `Category.parentId`/`children`:
+
+```
+24 · 26 · 27.5 · 29 · 700C   are PARENTS
+  24 SS, 24 MS               are their CHILDREN
+Accessories · SPARES · TOYS · E CYCLE · BIKE · GOGGLES · MINI CAR · TRI CYCLE   are roots
+```
+
+`MS`/`SS` are not a naming quirk; they are child categories under a wheel-size parent. There
+is also a junk row, `qazsws`, someone typed by accident.
+
+**And Inventory's `/items` DOES return `category_id` and `category_name`; Books' does not.**
+That is the direct evidence for Part 0 of the superseded data-quality plan: the placeholders
+fired on the Books fallback path, which sends no category — not because of a mapping bug.
+
+**Owner's decision after seeing this:** carry on as planned. The catalog import stays
+`Unbranded`/`Uncategorized`; a category and brand sync is a **separate follow-up plan**, not
+part of this branch. Worth knowing when it is written: the 151 brands contain obvious typo
+duplicates (`RALEIGH`/`RALEIGY`/`RALIEGH`, `NINETY ONE`/`NINETYONE`/`NNETYONE`) and entries
+that are vendors rather than brands (`SANGAM HARDWARE`, `JAI MATAJI HARDWARE`), so syncing all
+151 as-is would import that mess.
+
+## 16.5 Observability regression, caught by lint and fixed
+
+Every `log.*` call in `trigger-pull` lived inside the `items` and `contacts` steps. Deleting
+them left the file with a `createLogger` it never used and the surviving bill and invoice
+steps completely silent — a CLAUDE.md violation the typecheck could not see.
+
+`log.info` on the bills, invoices and finalize outcomes, and `log.warn` when a step is skipped
+for want of a connected source. Identifiers only (`pullId`, counts, `errors.length`), never
+payloads.
+
+## 16.6 What was verified, and what was not
+
+- **`npx tsc --noEmit`: clean.** The only errors were stale `.next/types/validator.ts` entries
+  for deleted routes, which regenerate.
+- **`npx eslint` on the 26 changed files: 0 errors.** Two warnings remain in `stock/page.tsx`
+  (`session` unused, one `no-unused-expressions`) and **both pre-date this branch** — verified
+  by stashing and re-linting, which showed three such warnings before and two after.
+- **`npm run build` was NOT run** — per the owner's instruction that builds happen only when
+  needed, and the plan's §12 puts the meaningful one after commit 2.
+- **No screen has been opened in a browser.** §15.3 applies to Part B, but the /stock page
+  lost its fetch wizard and gained a price line here, and neither has been looked at.

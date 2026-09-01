@@ -6,8 +6,7 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { createLogger } from "@/lib/logger";
-import { PLACEHOLDER_BRAND, PLACEHOLDER_CATEGORY } from "@/lib/import-placeholders";
-import { parseBicycleSize } from "@/lib/product-size";
+import { PLACEHOLDER_CATEGORY } from "@/lib/import-placeholders";
 // Type-only. The clients themselves are still loaded through a dynamic import inside the
 // handler, so importing the type here adds nothing to the module graph at runtime.
 import type { BooksClient } from "@/lib/integrations";
@@ -74,28 +73,14 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── APPROVE: write to real tables ───
-    // `sizesParsed` counts the bicycles whose wheel size was recovered from the name. It is
-    // in the finish log rather than only the response because a 504 delivers no response.
-    const results = { contacts: 0, items: 0, bills: 0, invoices: 0, sizesParsed: 0, errors: [] as string[] };
-
-    // Mirror Zoho categories — use exact category_name from Zoho, falling back to the
-    // placeholder. The name is a shared constant, not a literal: the "Needs details" filter
-    // on /stock finds these rows by comparing against the same value, and a drifted spelling
-    // would make that filter quietly return nothing.
-    const categoryCache: Record<string, string> = {};
-    async function resolveCategory(zohoCategoryName?: string): Promise<string> {
-      const catName = (zohoCategoryName || "").trim() || PLACEHOLDER_CATEGORY;
-      if (!categoryCache[catName]) {
-        let cat = await prisma.category.findFirst({ where: { name: catName } });
-        if (!cat) cat = await prisma.category.create({ data: { name: catName, description: `Zoho category: ${catName}` } });
-        categoryCache[catName] = cat.id;
-      }
-      return categoryCache[catName];
-    }
-    let defaultBrand = await prisma.brand.findFirst({ where: { name: PLACEHOLDER_BRAND } });
-    if (!defaultBrand) {
-      defaultBrand = await prisma.brand.create({ data: { name: PLACEHOLDER_BRAND } });
-    }
+    // `contacts` and `items` are always 0 — those two branches were deleted with the Zoho
+    // item import. The keys stay because four screens read this response shape, and a 0 is
+    // the honest answer rather than a missing field they would have to guard against.
+    //
+    // Products ARE still created here, by the BILL branch, when a bill line names a SKU the
+    // catalog does not have. That is deliberate and was decided explicitly: an inbound
+    // shipment must be able to receive something the catalog has not met yet.
+    const results = { contacts: 0, items: 0, bills: 0, invoices: 0, errors: [] as string[] };
 
     // Imported records are attributed to a system-role account when one exists, so the audit
     // trail doesn't credit whoever happened to click Approve.
@@ -108,79 +93,7 @@ export async function POST(req: NextRequest) {
     for (const preview of previews) {
       const d = preview.data as Record<string, unknown>;
       try {
-        if (preview.entityType === "contact") {
-          const code = String(d.name || "")
-            .replace(/[^a-zA-Z0-9]/g, "")
-            .substring(0, 6)
-            .toUpperCase() + String(Date.now()).slice(-4);
-
-          await prisma.vendor.create({
-            data: {
-              name: String(d.name),
-              code,
-              gstin: String(d.gstin || "") || null,
-              email: String(d.email || "") || null,
-              phone: String(d.phone || "") || null,
-              city: String(d.city || "") || null,
-              state: String(d.state || "") || null,
-            },
-          });
-          results.contacts++;
-        } else if (preview.entityType === "item") {
-          const sku = (String(d.sku || "") || `ZOHO-${String(Date.now()).slice(-6)}`).substring(0, 50);
-
-          // Double-check dedup
-          const exists = await prisma.product.findFirst({ where: { sku } });
-          if (exists) continue;
-
-          // Resolve brand from Zoho data (free — comes from list API)
-          let itemBrandId = defaultBrand.id;
-          const zohoBrand = String(d.brand || "").trim();
-          if (zohoBrand) {
-            let brand = await prisma.brand.findFirst({ where: { name: { equals: zohoBrand, mode: "insensitive" } } });
-            if (!brand) {
-              brand = await prisma.brand.create({ data: { name: zohoBrand } });
-            }
-            itemBrandId = brand.id;
-          }
-
-          // Auto-classify product type from name
-          const pName = String(d.name).toLowerCase();
-          const autoType = /\bcycl|bicycl|bike\b/.test(pName) ? "BICYCLE"
-            : /\btube|tyre|tire|brake|chain|spoke|pedal|gear|rim|handle|seat|mudguard|bell|lock|pump|light|carrier|stand|fork|derailleur|shifter|cassette|crank\b/.test(pName) ? "SPARE_PART"
-            : "ACCESSORY";
-
-          const itemCategoryId = await resolveCategory(String(d.categoryName || ""));
-
-          // Zoho has no size field, but for this catalog a bicycle's wheel size is the first
-          // thing in its own name (`26''BICYCLE S/S(...)`). Recover it here — the /stock card
-          // already renders the badge, it has simply never had anything to render.
-          //
-          // BICYCLE only, and only from a known wheel size. A spare part with a number in its
-          // name has no wheel size, and a leading number that is not a size this shop sells is
-          // a model number. This is a create, so there is no person-typed size to overwrite.
-          const parsedSize = autoType === "BICYCLE" ? parseBicycleSize(String(d.name)) : null;
-          if (parsedSize) results.sizesParsed++;
-
-          await prisma.product.create({
-            data: {
-              sku,
-              name: String(d.name),
-              categoryId: itemCategoryId,
-              brandId: itemBrandId,
-              type: autoType,
-              size: parsedSize,
-              costPrice: Number(d.costPrice || 0),
-              sellingPrice: Number(d.sellingPrice || 0),
-              mrp: Number(d.sellingPrice || 0),
-              gstRate: Number(d.gstRate || 18),
-              hsnCode: String(d.hsnCode || ""),
-              currentStock: 0, // App manages its own stock
-              zohoItemId: preview.zohoId || null,
-            },
-          });
-          results.items++;
-        } else if (preview.entityType === "bill") {
+        if (preview.entityType === "bill") {
           // Fetch line items from Zoho if not in preview data
           let lineItems = (d.lineItems as Array<{ name: string; sku: string; quantity: number; rate: number; itemTotal: number }>) || [];
           if (lineItems.length === 0 && preview.zohoId) {
@@ -542,7 +455,6 @@ export async function POST(req: NextRequest) {
       items: results.items,
       bills: results.bills,
       invoices: results.invoices,
-      sizesParsed: results.sizesParsed,
       errors: results.errors.length,
       remainingPending,
       status: newStatus,

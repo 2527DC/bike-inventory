@@ -3,9 +3,9 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import {
-  ArrowLeft, Cloud, CheckCircle2, XCircle,
-  Package, Users, Loader2, Clock,
-  RefreshCw, FileText, ShoppingCart, ChevronDown, ChevronUp,
+  ArrowLeft, CheckCircle2, XCircle,
+  Loader2, Clock,
+  ChevronDown, ChevronUp,
   BookOpen, Store, Boxes,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -41,31 +41,12 @@ interface SyncLogEntry {
   completedAt?: string;
 }
 
-const PULL_STEPS = [
-  { key: "init", label: "Connecting", icon: Cloud, apiStep: "init" },
-  { key: "items", label: "Items", icon: Package, apiStep: "items" },
-  { key: "contacts", label: "Vendors", icon: Users, apiStep: "contacts" },
-  { key: "bills", label: "Bills", icon: FileText, apiStep: "bills" },
-  { key: "invoices", label: "Invoices", icon: ShoppingCart, apiStep: "invoices" },
-  { key: "finalize", label: "Saving", icon: CheckCircle2, apiStep: "finalize" },
-];
-
 export default function ZohoSettingsPage() {
   const [status, setStatus] = useState<ZohoStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [logs, setLogs] = useState<SyncLogEntry[]>([]);
   const [error, setError] = useState("");
-
-  // Pull state
-  const [pulling, setPulling] = useState(false);
-  const [currentStepIdx, setCurrentStepIdx] = useState(-1);
-  const [stepMessage, setStepMessage] = useState("");
-  const [pullDone, setPullDone] = useState(false);
-  const [pullError, setPullError] = useState<string | null>(null);
-  const [pullCounts, setPullCounts] = useState({ itemsNew: 0, contactsNew: 0, billsNew: 0, invoicesNew: 0 });
-  const [pullErrors, setPullErrors] = useState<string[]>([]);
-  const [fullImport, setFullImport] = useState(false);
 
   // Setup form (Books)
   const [clientId, setClientId] = useState("");
@@ -289,114 +270,6 @@ export default function ZohoSettingsPage() {
       setInvForm((f) => ({ ...f, grantToken: "" }));
     } catch { /* ignore */ }
   }
-
-  async function callStep(step: string, pullId: string, extras?: Record<string, unknown>) {
-    const res = await fetch("/api/zoho/trigger-pull", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ step, pullId, ...extras }),
-    });
-    const data = await res.json();
-    if (!data.success) throw new Error(data.error || `Step ${step} failed`);
-    return data.data;
-  }
-
-  async function handleTriggerPull() {
-    if (!confirm("Pull new data from Zoho into preview for review?")) return;
-
-    setPulling(true);
-    setPullDone(false);
-    setPullError(null);
-    setPullCounts({ itemsNew: 0, contactsNew: 0, billsNew: 0, invoicesNew: 0 });
-    setPullErrors([]);
-
-    try {
-      // Step 0: Init
-      setCurrentStepIdx(0);
-      setStepMessage("Connecting to Zoho...");
-      const initResult = await callStep("init", "");
-      const pullId = initResult.pullId;
-
-      // Step 1: Items
-      setCurrentStepIdx(1);
-      setStepMessage(fullImport ? "Fetching ALL items (full import)..." : "Fetching items...");
-      const itemsResult = await callStep("items", pullId, fullImport ? { fullImport: true } : undefined);
-      const counts = { itemsNew: itemsResult.itemsNew || 0, contactsNew: 0, billsNew: 0, invoicesNew: 0 };
-      const allErrors: string[] = [...(itemsResult.errors || [])];
-      let totalApiCalls = itemsResult.apiCalls || 0;
-      setPullCounts({ ...counts });
-      setStepMessage(`${counts.itemsNew} new items found`);
-
-      // Step 2: Contacts
-      setCurrentStepIdx(2);
-      setStepMessage("Fetching vendors...");
-      const contactsResult = await callStep("contacts", pullId);
-      counts.contactsNew = contactsResult.contactsNew || 0;
-      allErrors.push(...(contactsResult.errors || []));
-      totalApiCalls += contactsResult.apiCalls || 0;
-      setPullCounts({ ...counts });
-      setStepMessage(`${counts.contactsNew} new vendors found`);
-
-      // Step 3: Bills
-      setCurrentStepIdx(3);
-      setStepMessage("Fetching bills...");
-      const billsResult = await callStep("bills", pullId);
-      counts.billsNew = billsResult.billsNew || 0;
-      allErrors.push(...(billsResult.errors || []));
-      totalApiCalls += billsResult.apiCalls || 0;
-      setPullCounts({ ...counts });
-      setStepMessage(`${counts.billsNew} new bills found`);
-
-      // Step 4: Invoices
-      setCurrentStepIdx(4);
-      setStepMessage("Fetching invoices...");
-      const invoicesResult = await callStep("invoices", pullId);
-      counts.invoicesNew = invoicesResult.invoicesNew || 0;
-      allErrors.push(...(invoicesResult.errors || []));
-      totalApiCalls += invoicesResult.apiCalls || 0;
-      setPullCounts({ ...counts });
-      setStepMessage(`${counts.invoicesNew} new invoices found`);
-
-      // Step 5: Finalize
-      setCurrentStepIdx(5);
-      setStepMessage("Saving pull log...");
-      await callStep("finalize", pullId, {
-        itemsNew: counts.itemsNew,
-        contactsNew: counts.contactsNew,
-        billsNew: counts.billsNew,
-        invoicesNew: counts.invoicesNew,
-        apiCalls: totalApiCalls,
-        allErrors,
-      });
-
-      // Done!
-      setPullCounts(counts);
-      setPullErrors(allErrors);
-      setPullDone(true);
-      const total = counts.itemsNew + counts.contactsNew + counts.billsNew + counts.invoicesNew;
-      setStepMessage(total > 0 ? "Pull complete! Review the data." : "No new data — everything synced!");
-      setCurrentStepIdx(6); // All done
-      fetchLogs();
-    } catch (e) {
-      setPullError(e instanceof Error ? e.message : "Something went wrong");
-    } finally {
-      setPulling(false);
-    }
-  }
-
-  function dismissPull() {
-    setPullDone(false);
-    setPullError(null);
-    setCurrentStepIdx(-1);
-    setStepMessage("");
-    setPullCounts({ itemsNew: 0, contactsNew: 0, billsNew: 0, invoicesNew: 0 });
-    setPullErrors([]);
-  }
-
-
-  const showPullUI = pulling || pullDone || pullError;
-  const progress = currentStepIdx >= 0 ? Math.min(Math.round(((pullDone ? 6 : currentStepIdx) / 6) * 100), 100) : 0;
-  const totalNew = pullCounts.itemsNew + pullCounts.contactsNew + pullCounts.billsNew + pullCounts.invoicesNew;
 
   // Helper to render a connect form
   function renderConnectForm(
@@ -667,163 +540,13 @@ export default function ZohoSettingsPage() {
             </Card>
           </div>
 
-          {/* Books-specific sections (Pull, Import, History) — only when Books is connected */}
+          {/* Books-specific sections — only when Books is connected. The manual pull card
+              that used to live here is gone: it advertised an "Auto-Sync: Daily at 1 PM IST"
+              that has not existed since the cron removal, and each of bills and invoices is
+              now pulled from the screen that owns it (/inbound, /bills, /receivables,
+              /deliveries), each with its own inline review. */}
           {status?.connected && (
             <>
-          {/* Pull from Zoho */}
-          <Card className="mb-4 border-blue-200 bg-blue-50">
-            <CardContent className="p-3">
-              <div className="flex items-center gap-2 mb-1">
-                <Clock className="h-4 w-4 text-blue-600" />
-                <p className="text-sm font-semibold text-blue-900">Auto-Sync: Daily at 1 PM IST</p>
-              </div>
-              <p className="text-[11px] text-blue-700 mb-3">
-                Pulls new vendors, items, bills, and invoices. All data goes to preview for approval first.
-              </p>
-
-              {/* Progress UI */}
-              {showPullUI && (
-                <div className="bg-white rounded-lg border border-blue-200 p-3 mb-3">
-                  {/* Header */}
-                  <div className="flex items-center gap-2 mb-2">
-                    {pullError ? (
-                      <XCircle className="h-4 w-4 text-red-500 shrink-0" />
-                    ) : pullDone ? (
-                      <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
-                    ) : (
-                      <Loader2 className="h-4 w-4 text-blue-500 animate-spin shrink-0" />
-                    )}
-                    <p className="text-xs font-medium text-slate-700 flex-1">
-                      {pullError || stepMessage}
-                    </p>
-                    {!pullError && (
-                      <span className="text-xs font-bold text-blue-600 tabular-nums">{progress}%</span>
-                    )}
-                  </div>
-
-                  {/* Progress bar */}
-                  {!pullError && (
-                    <div className="w-full bg-slate-100 rounded-full h-2 mb-3 overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all duration-500 ease-out ${
-                          pullDone ? "bg-green-500" : "bg-blue-500"
-                        }`}
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
-                  )}
-
-                  {/* Step indicators */}
-                  <div className="grid grid-cols-6 gap-1">
-                    {PULL_STEPS.map((s, idx) => {
-                      const Icon = s.icon;
-                      const isDone = pullDone || idx < currentStepIdx;
-                      const isActive = !pullDone && !pullError && idx === currentStepIdx;
-                      return (
-                        <div key={s.key} className="flex flex-col items-center">
-                          <div className={`w-7 h-7 rounded-full flex items-center justify-center mb-0.5 transition-colors ${
-                            isDone ? "bg-green-100" : isActive ? "bg-blue-100" : "bg-slate-100"
-                          }`}>
-                            {isDone ? (
-                              <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
-                            ) : isActive ? (
-                              <Loader2 className="h-3 w-3 text-blue-600 animate-spin" />
-                            ) : (
-                              <Icon className="h-3 w-3 text-slate-300" />
-                            )}
-                          </div>
-                          <span className={`text-[11px] text-center leading-tight ${
-                            isDone ? "text-green-600 font-medium" : isActive ? "text-blue-600 font-medium" : "text-slate-400"
-                          }`}>{s.label}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Results grid */}
-                  {pullDone && totalNew > 0 && (
-                    <div className="mt-3 grid grid-cols-4 gap-2">
-                      {[
-                        { label: "Items", count: pullCounts.itemsNew, icon: Package },
-                        { label: "Vendors", count: pullCounts.contactsNew, icon: Users },
-                        { label: "Bills", count: pullCounts.billsNew, icon: FileText },
-                        { label: "Invoices", count: pullCounts.invoicesNew, icon: ShoppingCart },
-                      ].map((r) => {
-                        const RIcon = r.icon;
-                        return (
-                          <div key={r.label} className="text-center p-1.5 rounded-lg bg-green-50 border border-green-100">
-                            <RIcon className="h-3.5 w-3.5 text-green-600 mx-auto mb-0.5" />
-                            <p className="text-sm font-bold text-green-800 tabular-nums">{r.count}</p>
-                            <p className="text-[11px] text-green-600">{r.label}</p>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* Errors */}
-                  {pullErrors.length > 0 && (
-                    <details className="mt-2">
-                      <summary className="text-[11px] text-orange-600 cursor-pointer">{pullErrors.length} warning(s)</summary>
-                      <div className="mt-1 space-y-0.5">
-                        {pullErrors.map((e, i) => (
-                          <p key={i} className="text-[11px] text-orange-500">{e}</p>
-                        ))}
-                      </div>
-                    </details>
-                  )}
-
-                  {/* Actions */}
-                  {(pullDone || pullError) && !pulling && (
-                    <div className="mt-3 flex gap-2">
-                      <button onClick={dismissPull}
-                        className="flex-1 min-h-[48px] text-sm text-slate-600 rounded-lg border border-slate-200 hover:bg-slate-50 focus-ring">
-                        Dismiss
-                      </button>
-                      {pullDone && totalNew > 0 && (
-                        <Link href="/settings/integrations/pull-review"
-                          className="flex-1 min-h-[48px] flex items-center justify-center text-sm text-center text-white bg-green-600 rounded-lg font-medium hover:bg-green-700 focus-ring">
-                          Review & Approve
-                        </Link>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Full import toggle */}
-              <label className="flex items-center gap-2 mb-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={fullImport}
-                  onChange={(e) => setFullImport(e.target.checked)}
-                  disabled={pulling}
-                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                />
-                <span className="text-xs text-slate-600 tabular-nums">
-                  Full import (all items, ~27 API calls for 5000+ items)
-                </span>
-              </label>
-
-              {/* Action buttons */}
-              <div className="flex gap-2">
-                <button
-                  onClick={handleTriggerPull}
-                  disabled={pulling}
-                  className="flex-1 min-h-[48px] flex items-center justify-center gap-1.5 bg-green-600 text-white px-3 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 transition-colors focus-ring"
-                >
-                  {pulling ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                  {pulling ? "Pulling..." : fullImport ? "Full Import" : "Pull Now"}
-                </button>
-                <Link href="/settings/integrations/pull-review"
-                  className="flex-1 min-h-[48px] flex items-center justify-center gap-1.5 border border-slate-200 text-slate-700 px-3 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors focus-ring">
-                  <CheckCircle2 className="h-4 w-4" /> Review Pulls
-                </Link>
-              </div>
-            </CardContent>
-          </Card>
-
-
           {/* Sync History */}
           {logs.length > 0 && (
             <div>

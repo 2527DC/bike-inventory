@@ -49,7 +49,7 @@ export default function DesktopDashboard() {
 
     Promise.all([
       safeFetch("/api/accounts/summary"),
-      safeFetch("/api/ai/dashboard-insights"),
+      safeFetch("/api/dashboard/stats"),
       safeFetch(`/api/inventory/inwards?dateFrom=${today}&limit=1`),
       safeFetch(`/api/inventory/outwards?dateFrom=${today}&limit=1`),
       safeFetch("/api/health/summary"),

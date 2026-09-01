@@ -371,15 +371,17 @@ export default function CategoriesPage() {
       )}
 
       {/* Why this screen exists, said once at the bottom rather than as a banner nobody
-          reads twice. Uncategorized is where the Zoho import files anything it was not
-          given a category for. */}
+          reads twice.
+          Reworded now that Uncategorized is the whole catalog's starting state rather than an
+          import's failure: `scripts/import-products.ts` files every product there by design,
+          so "the import had no category for them" is no longer the story and a conditional
+          banner would show permanently. */}
       {!loading && categories.some((c) => c.name === PLACEHOLDER_CATEGORY && c._count.products > 0) && (
         <p className="text-[11px] text-slate-500 mt-4 flex items-start gap-1.5">
           <Package className="h-3.5 w-3.5 shrink-0 mt-0.5" />
           <span>
-            Products land in <strong>{PLACEHOLDER_CATEGORY}</strong> when a Zoho import had no
-            category for them. Merge it into a real category, or use the{" "}
-            <strong>Needs details</strong> filter on Stock to reassign them in bulk.
+            <strong>{PLACEHOLDER_CATEGORY}</strong> is where every imported product starts.
+            Build the categories you want here, then reassign products in bulk from Stock.
           </span>
         </p>
       )}

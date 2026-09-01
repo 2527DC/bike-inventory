@@ -34,28 +34,11 @@ export const PROVIDER_LABELS: Record<ProviderKey, string> = {
 };
 
 // ─── Shared response shapes ──────────────────────────────────────────────────
-// These were declared inline and identically in more than one client. `IntegrationItem` in
-// particular was `ZohoInventoryItem` in one file and an anonymous inline type with exactly
-// the same 16 fields in another.
-
-export type IntegrationItem = {
-  item_id: string;
-  sku: string;
-  name: string;
-  status?: string;
-  brand?: string;
-  manufacturer?: string;
-  purchase_rate?: number;
-  rate?: number;
-  tax_percentage?: number;
-  hsn_or_sac?: string;
-  stock_on_hand?: number;
-  product_type?: string;
-  item_type?: string;
-  category_name?: string;
-  category_id?: string;
-  group_name?: string;
-};
+// Declared inline and identically in more than one client before this.
+//
+// `IntegrationItem` used to live here too. It went with the Zoho item pull: the only readers
+// were listItems/listAllItems, and `BooksClient.getItem` — which survives, because the bill
+// import still calls it for one product at a time — returns Record<string, unknown>.
 
 export interface IntegrationBill {
   bill_id: string;
@@ -425,32 +408,6 @@ export abstract class IntegrationClient {
     for (;;) {
       const data = await this.listCustomerPayments(page, dateFrom, dateTo);
       all.push(...(data.customerpayments || []));
-      if (!data.page_context?.has_more_page) break;
-      page++;
-    }
-    return all;
-  }
-
-  async listItems(page = 1, statusFilter?: string, lastModifiedTime?: string) {
-    const status = statusFilter ? `&status=${statusFilter}` : "";
-    // Zoho expects ISO 8601 with timezone, and + must be URL-encoded as %2B.
-    const modified = lastModifiedTime
-      ? `&last_modified_time=${encodeURIComponent(lastModifiedTime + "T00:00:00+0530")}`
-      : "";
-    return this.apiCall<{ items: IntegrationItem[] } & PageContext>(
-      "GET",
-      `/items?page=${page}&per_page=200${status}${modified}`,
-      undefined,
-      "items.list"
-    );
-  }
-
-  async listAllItems(statusFilter?: string, lastModifiedTime?: string) {
-    const all: IntegrationItem[] = [];
-    let page = 1;
-    for (;;) {
-      const data = await this.listItems(page, statusFilter, lastModifiedTime);
-      all.push(...(data.items || []));
       if (!data.page_context?.has_more_page) break;
       page++;
     }
