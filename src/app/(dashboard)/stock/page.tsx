@@ -44,6 +44,12 @@ interface ProductItem {
   status: string;
   currentStock: number;
   reorderLevel: number;
+  sellingPrice: number;
+  mrp: number;
+  /** Omitted by the API for anyone without `cost_price.view` — see
+   *  api/products/route.ts:100, where the select reads `costPrice: isAdmin`.
+   *  Optional here because it genuinely is absent, not zero. */
+  costPrice?: number;
   category: { name: string } | null;
   brand: { id: string; name: string } | null;
   bin: { code: string; location: string } | null;
@@ -121,9 +127,13 @@ function getStockAccent(p: ProductItem) {
 
 export default function StockPage() {
   const { data: session } = useSession();
-  const { canFetch, canEdit, canDelete } = usePermissions();
+  const { canFetch, canEdit, canDelete, canView } = usePermissions();
   // Bulk edit writes product fields, so it is stock.edit.
   const canBulkEdit = canEdit("stock");
+
+  // Cost price is its own module, not an admin flag — CLAUDE.md. This only hides the label;
+  // the API already withholds the field itself, which is the gate that matters.
+  const showCost = canView("cost_price");
 
   // Deactivate / restore are edits — the row survives with all its history.
   // Delete permanently removes it, and only when nothing references it.
@@ -1041,7 +1051,17 @@ export default function StockPage() {
                       </div>
                     )}
                     <div className="flex-1 min-w-0 mr-3">
-                      <p className="text-sm font-semibold text-slate-900">{p.name}</p>
+                      {/* Zoho names run long — "DODGE THUNDER BAY DD NON IBC FRONT SUS CKD"
+                          is typical of the 8,175-item catalog. Unclamped they wrapped to four
+                          lines and pushed the stock figure off the card on a phone.
+                          `break-words` so an unbroken token cannot overflow the row either;
+                          `title` so the full name is still reachable on hover. */}
+                      <p
+                        className="text-sm font-semibold text-slate-900 line-clamp-2 break-words"
+                        title={p.name}
+                      >
+                        {p.name}
+                      </p>
                       <div className="flex items-center gap-1 mt-0.5 flex-wrap">
                         <span className="text-xs text-slate-400 tabular-nums">{p.sku}</span>
                         {/* A placeholder is the ABSENCE of a brand, so it must not look like
@@ -1065,6 +1085,26 @@ export default function StockPage() {
                         )}
                         {p.size && (
                           <Badge variant="default" className="text-[10px] py-0 tabular-nums">{p.size}</Badge>
+                        )}
+                      </div>
+                      {/* Price. Selling price is safe for everyone — it is what a customer is
+                          quoted. Cost price is NOT: it is gated by the `cost_price` module,
+                          and `api/products/route.ts:100` already omits the field entirely for
+                          anyone without that grant, so this renders nothing rather than
+                          "₹0" for them. Same pattern as stock/by-brand and stock/[id]. */}
+                      <div className="flex items-baseline gap-2 mt-1">
+                        <span className="text-sm font-semibold text-slate-900 tabular-nums">
+                          {formatCurrency(p.sellingPrice)}
+                        </span>
+                        {p.mrp > 0 && p.mrp !== p.sellingPrice && (
+                          <span className="text-[11px] text-slate-400 line-through tabular-nums">
+                            {formatCurrency(p.mrp)}
+                          </span>
+                        )}
+                        {showCost && (p.costPrice ?? 0) > 0 && (
+                          <span className="text-[11px] text-slate-500 tabular-nums">
+                            cost {formatCurrency(p.costPrice ?? 0)}
+                          </span>
                         )}
                       </div>
                       {p.bin && (

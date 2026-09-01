@@ -53,3 +53,8 @@ next-env.d.ts
 /.swarm/
 /.claude/projects/
 /.claude/settings.local.json
+
+# Import source data — supplier cost prices, not project source.
+# `prisma/data/Item.xls` is 2.2 MB of purchase and selling prices for 8,175 SKUs.
+# It feeds scripts/import-products.ts and must not enter git history.
+/prisma/data/
