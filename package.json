@@ -13,6 +13,7 @@
     "db:seed": "prisma db seed",
     "db:seed:rbac": "ts-node --project prisma/tsconfig.json prisma/seed-rbac.ts",
     "db:seed:stores": "ts-node --project prisma/tsconfig.json prisma/seed-stores.ts",
+    "db:wipe:products": "ts-node --project prisma/tsconfig.json prisma/wipe-products.ts",
     "import:products": "ts-node --project scripts/tsconfig.json scripts/import-products.ts",
     "db:studio": "prisma studio"
   },

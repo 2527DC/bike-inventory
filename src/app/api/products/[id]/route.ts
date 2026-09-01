@@ -25,6 +25,7 @@ export async function GET(
         category: true,
         brand: true,
         bin: true,
+        productType: true,
         serialItems: { orderBy: { createdAt: "desc" }, take: 20 },
         transactions: {
           orderBy: { createdAt: "desc" },
@@ -38,12 +39,16 @@ export async function GET(
       return errorResponse("Product not found", 404);
     }
 
+    // `type` is the type NAME, kept alongside the relation so the screens that still read
+    // `product.type` keep rendering — see src/lib/product-type.ts for why the alias exists.
+    const shaped = { ...product, type: product.productType?.name ?? null };
+
     // Strip cost price for non-admin users
     if (!isAdmin) {
-      return successResponse({ ...product, costPrice: undefined });
+      return successResponse({ ...shaped, costPrice: undefined });
     }
 
-    return successResponse(product);
+    return successResponse(shaped);
   } catch (error) {
     if (error instanceof AuthError) {
       return errorResponse(error.message, error.status);
@@ -98,7 +103,9 @@ export async function PATCH(
     // Deactivate lives here rather than on DELETE deliberately. DELETE used to set
     // status INACTIVE and answer "Product deactivated" — a verb that said one thing and did
     // another. Nobody noticed because no screen called it. Each verb now does what it says.
-    const { type, status } = body as { type?: string; status?: string };
+    // `productTypeId` is a ProductType row id. `type` is still accepted as the type NAME so
+    // an older screen keeps working; it is resolved to an id below.
+    const { productTypeId, type, status } = body as { productTypeId?: string; type?: string; status?: string };
 
     if (status !== undefined) {
       // INACTIVE hides the product from pickers and the default list while keeping every
@@ -133,15 +140,28 @@ export async function PATCH(
       });
     }
 
-    const VALID_TYPES = ["BICYCLE", "SPARE_PART", "ACCESSORY", "BOX_PIECE", "WIP", "FINISHED_GOOD"];
-    if (!type || !VALID_TYPES.includes(type)) {
-      return errorResponse("Invalid product type", 400);
+    // Was a hardcoded VALID_TYPES array. Types are rows now, so the list lives in the
+    // database and the check is a lookup — which is the whole point of the change.
+    const target = productTypeId
+      ? await prisma.productType.findUnique({ where: { id: productTypeId }, select: { id: true } })
+      : type
+        ? await prisma.productType.findFirst({
+            where: { name: { equals: type, mode: "insensitive" } },
+            select: { id: true },
+          })
+        : null;
+
+    if (!target) {
+      return errorResponse(
+        productTypeId || type ? "Unknown product type" : "productTypeId is required",
+        400
+      );
     }
 
     const product = await prisma.product.update({
       where: { id },
-      data: { type: type as never },
-      include: { category: true, brand: true, bin: true },
+      data: { productTypeId: target.id },
+      include: { category: true, brand: true, bin: true, productType: true },
     });
 
     return successResponse(product);

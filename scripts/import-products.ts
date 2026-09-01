@@ -11,9 +11,8 @@
  * from the Product Types screen once that exists (Part B of the plan). A guess that is
  * wrong on thousands of rows is worse than a blank someone can filter and fix in bulk.
  *
- * Runs against the CURRENT schema — `Product.type` is still the `ProductType` enum, and
- * `categoryId`/`brandId` are still required, which is why both get a real default row rather
- * than null. No schema change is needed to run this.
+ * `productTypeId`, `categoryId` and `brandId` are all REQUIRED on Product, which is why each
+ * gets a real default row rather than null.
  *
  * NOT written, deliberately: no `StockLevel` rows and `currentStock: 0`.
  * `Product.currentStock` is a cached SUM of `StockLevel` (src/lib/stock-location.ts);
@@ -21,7 +20,7 @@
  * everywhere location matters. Quantities come from a stock audit, not from this file.
  */
 
-import { PrismaClient, ProductType, ProductStatus } from "@prisma/client";
+import { PrismaClient, ProductStatus } from "@prisma/client";
 import * as XLSX from "xlsx";
 import * as path from "path";
 import * as fs from "fs";
@@ -53,15 +52,17 @@ const DEFAULT_BRAND = "Unbranded";
 const FORCE_DEFAULT_BRAND = true;
 
 /**
- * ⚠️ EVERY imported product gets this type.
+ * ⚠️ EVERY imported product gets this type, by NAME.
  *
- * There is no classifier, by instruction. `Product.type` is required and its schema default
- * is `SPARE_PART`, so that is what this uses — but be clear about the consequence: after the
- * import, `/stock`'s Cycles tab is empty and all 8,175 items sit under Spares. That is the
- * expected state, not a bug, and it is corrected by re-typing in bulk once product types
- * become editable data.
+ * There is no classifier, by instruction. `Product.productTypeId` is required, so the import
+ * has to pick one — it looks this name up in the `ProductType` table and fails loudly if it
+ * is missing, rather than inventing a type nobody asked for.
+ *
+ * The consequence, stated plainly: after the import every item sits under Spares and
+ * /stock's Cycles tab is empty. That is the expected state, corrected by re-typing in bulk
+ * from /product-types.
  */
-const DEFAULT_TYPE = ProductType.SPARE_PART;
+const DEFAULT_TYPE_NAME = "Spares";
 
 /** The file has no MRP column. Selling price is the closest true value; 0 renders an empty
  *  MRP on every label and product card. */
@@ -202,7 +203,7 @@ async function main() {
     console.log(`\nbrand:    ${brandNames.size} distinct; ${usingDefault} row(s) fall back to "${DEFAULT_BRAND}"`);
   }
   console.log(`category: all ${rows.length} products -> "${DEFAULT_CATEGORY}"`);
-  console.log(`type:     all ${rows.length} products -> ${DEFAULT_TYPE} (no classifier, by instruction)`);
+  console.log(`type:     all ${rows.length} products -> "${DEFAULT_TYPE_NAME}" (no classifier, by instruction)`);
 
   if (dryRun) {
     const r = rows[0];
@@ -213,7 +214,7 @@ async function main() {
       zohoItemId: str(r[COL.zohoId]),
       brand: brandOf(r),
       category: DEFAULT_CATEGORY,
-      type: DEFAULT_TYPE,
+      type: DEFAULT_TYPE_NAME,
       status: IMPORT_STATUS,
       costPrice: money(r[COL.costPrice]),
       sellingPrice: money(r[COL.sellingPrice]),
@@ -223,6 +224,19 @@ async function main() {
       currentStock: 0,
     }, null, 2));
     return;
+  }
+
+  // Required FK: resolve it before building any rows, and fail loudly rather than creating a
+  // type nobody asked for. `npm run db:seed:rbac` does not seed these; the three defaults are
+  // created with the schema change and the rest come from /product-types.
+  const productType = await prisma.productType.findFirst({
+    where: { name: { equals: DEFAULT_TYPE_NAME, mode: "insensitive" } },
+    select: { id: true, name: true },
+  });
+  if (!productType) {
+    console.error(`
+No ProductType named "${DEFAULT_TYPE_NAME}". Create it at /product-types first.`);
+    process.exit(1);
   }
 
   const category = await prisma.category.upsert({
@@ -266,7 +280,7 @@ async function main() {
       zohoItemId: str(r[COL.zohoId]),
       brandId: brandIdByName.get(brandOf(r))!,
       categoryId: category.id,
-      type: DEFAULT_TYPE,
+      productTypeId: productType.id,
       status: IMPORT_STATUS,
       costPrice: money(r[COL.costPrice]),
       sellingPrice,

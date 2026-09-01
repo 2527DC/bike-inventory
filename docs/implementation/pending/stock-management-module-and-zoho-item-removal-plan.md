@@ -1,6 +1,6 @@
 # Stock Management module tree, product types as data, the end of the Zoho item import, and a customer list
 
-Status: in-progress — 1 Sep 2026. **Part A is built** (see §16 for what shipped and how it differed). Parts B, C, D not started; Part E optional and last. One gate before commit 2: the §4.2 row count.
+Status: in-progress — 1 Sep 2026. **Parts A and B are built** (§16 and §17 record what shipped and how each differed). Parts C and D not started; Part E optional and last.
 Branch: **`refactor/stock-management-module`** — create it with exactly this name, off `main`.
 
 Prepared 1 Sep 2026. Every line number, route and constraint below was read off the tree on
@@ -17,7 +17,7 @@ otherwise re-open them.
 |---|---|---|
 | 1 | How far does the Zoho removal go? | **Items/products only.** Bills and invoices stay — `/inbound`, `/bills`, `/receivables` and `/deliveries` depend on them, and the whole `ZohoPullPreview` → `approve` machinery stays alive for both. (Contacts later went too, as a consequence of decision #6 — but for its own reason, and without losing vendors: §2.1.3.) |
 | 2 | The products already imported from Zoho | **Wipe and re-seed.** See §4.2 — this is the most destructive step in the plan and it does not only delete products. |
-| 3 | Product Type | **A plain model with a `name`, plus list / create / edit.** Explicitly *not* Part A of `product-type-and-brand-lead-time-plan.md` — no `code`/`name` split, no `tracksSize`, no classifier migration. §5 says how the two `type === "BICYCLE"` branches are handled without those. |
+| 3 | Product Type | **A plain model with a `name`, plus list / create / edit.** Explicitly *not* the elaborate version once proposed in `product-type-and-brand-lead-time-plan.md` (since deleted) — no `code`/`name` split, no `tracksSize`, no classifier migration. §5 says how the two `type === "BICYCLE"` branches are handled without those. |
 | 4 | Mobile bottom nav | **Stock Management gets a hub page** at `/stock-management`. A parent with a route stays a bottom-nav tab, so nesting the six children costs nothing on the phone. |
 | 5 | How much schema may change | **Exactly one change, and only because decision #3 requires it.** Owner's instruction: do not change the schema. Then: *"I need the product type to be a dynamic creation where I must be able to create the product type from my system."* Those cannot both hold — §5.0 shows why. The second wins; the change is confined to what dynamic creation strictly needs, and every other schema edit this plan originally carried has been removed. **Parts A and C change no schema at all.** |
 | 6 | The central pull UI | **Gone.** The `/settings/integrations` pull card — the one headed *"Auto-Sync: Daily at 1 PM IST"* — and the whole `/settings/integrations/pull-review` page are deleted. §2.1 records what that does and does not include; the shared `trigger-pull` / `pull-review` / `approve` **APIs stay**, because four other screens run on them. |
@@ -292,7 +292,7 @@ exercise these paths. If it does, the collection is regenerated rather than the 
 
 ## 4.1 Docs affected
 
-`docs/implementation/pending/imported-product-data-quality-plan.md` is entirely about
+`imported-product-data-quality-plan.md` (**since deleted outright** rather than superseded — the owner removed it, which settles this section) was entirely about
 repairing this import. Its "What remains" list — run the Part 0 measurement, then Part B,
 then fix `autoType` — describes work that cannot exist after this branch.
 
@@ -1308,3 +1308,121 @@ payloads.
   needed, and the plan's §12 puts the meaningful one after commit 2.
 - **No screen has been opened in a browser.** §15.3 applies to Part B, but the /stock page
   lost its fetch wizard and gained a price line here, and neither has been looked at.
+
+---
+
+# 17. PART B AS BUILT — 1 Sep 2026
+
+Built. Where it differed from the plan, and the two problems found on the way.
+
+## 17.1 The §4.2 gate came back clean
+
+Counted before the wipe: **59 products, and all ten child tables at ZERO** — no stock
+movements, no audit lines, no serials, no open purchase-order / transfer / inbound lines. The
+wipe therefore cost 59 rows and nothing else, which is the only reason it was safe to run.
+
+`prisma/wipe-products.ts` keeps that check permanently: it counts the seven child tables and
+**refuses without `--force`** if any hold rows. Anyone re-running this against a database with
+real history gets stopped rather than surprised.
+
+## 17.2 `db push` — a wrong turn worth recording
+
+The first push failed `P1001` on `DIRECT_URL` (`…pooler.supabase.com:5432`). Read as "the
+session pooler is unreachable", `DIRECT_URL` was repointed at the **6543 transaction pooler**.
+That was wrong, twice over:
+
+- `prisma db push` **hangs** through a transaction pooler. It takes a session-scoped advisory
+  lock; the pooler multiplexes sessions, so the lock never resolves. It ran 5+ minutes and
+  applied **nothing** — confirmed by querying `information_schema` afterwards.
+- `PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK=true` did not help; it hung at the same point.
+- `prisma migrate diff` failed outright `P1001` on 6543 — the **schema engine** cannot reach
+  the pooler at all, even though the query **client** can, which is why the wipe had worked.
+
+The actual diagnosis: a **TCP test showed BOTH 5432 and 6543 reachable**, and a `select 1`
+over 5432 succeeded. The original failure was transient. `.env` restored from backup, push
+ran in **7.25 s**.
+
+**The lesson, for the next person:** `DIRECT_URL` must never be a transaction pooler, and a
+one-off `P1001` against Supabase is worth retrying before it is worth diagnosing.
+
+## 17.3 The schema change, verified rather than assumed
+
+```
+Product.type          dropped        enum ProductType     dropped
+Product.productTypeId added          ProductType table    created
+@@index([productTypeId])   and   @@index([status, productTypeId])   replace the two on `type`
+```
+
+One ordering constraint that a hand-written migration would have to respect and `db push`
+handled: **in PostgreSQL a table and a type share one namespace**, and the new table has the
+same name as the enum it replaces. The enum must go before the table is created.
+
+Seeded three types — **Cycles (10), Spares (20), Accessories (30)**. `BOX_PIECE`, `WIP` and
+`FINISHED_GOOD` were **not** recreated: all three held zero products and always did.
+
+## 17.4 §15.2 was right — and §15.3 nearly bit
+
+The compiler found the call sites §5.2 had missed, as predicted. But two of them were the
+*silent* kind:
+
+**(a) `api/stock-counts/route.ts`** filtered products with `where: { type: productType }`.
+That **typechecked** — the conditional spread widens the object — while Prisma would have
+thrown at runtime against a table with no `type` column. Found by reading, not by tooling.
+
+**(b) Five routes returned `productType` but no `type`.** ESLint caught it only indirectly, as
+an unused `withTypeName` import. Any screen reading `p.type` from `/reorder`,
+`/api/products/stale`, `/api/serials/[id]` or either stock-count endpoint would have rendered
+`undefined` — `stock-audit/brand-count:585` calls `p.type.replace(...)` and would have thrown.
+
+**The mitigation is `src/lib/product-type.ts`.** Every list endpoint returns BOTH:
+
+```
+productType: { id, name }   the truth — for filtering, writing, linking
+type: string | null         the NAME — so the 17 screens that declare their own
+                            `interface { type: string }` keep rendering
+```
+
+The alias is a **migration aid, not a fixture**. When the last screen reads
+`productType.name`, delete `withTypeName` and the `type` key with it. A visible side effect:
+cards that showed `SPARE_PART` now show `Spares`, which is an improvement.
+
+## 17.5 Decisions taken while building
+
+- **`/stock`'s type tabs default to `All`** (§15.5), and are built from the table. The tab
+  grid sizes itself to however many active types exist.
+- **The size badge on `/stock/[id]` now renders whenever `size` is set**, replacing
+  `type === "BICYCLE"`. That was a name comparison that would break the moment a type was
+  renamed — the class of bug CLAUDE.md bans for roles.
+- **`product_types` is seeded as a ROOT module now**, not held back for Part C. The screen is
+  unreachable without it. Part C re-parents it under `stock_management` by adding `parentKey`;
+  the seeder upserts `parentId` every run, so that move needs no migration.
+- **No delete action, anywhere.** Not on the module, not in the API, not on the screen.
+  `Product.productTypeId` is required with a RESTRICT foreign key, so a type in use cannot be
+  removed — and one that is not still breaks saved reports. `isActive: false` is the answer,
+  and the screen says so at the bottom rather than leaving people hunting for a delete button.
+- **Bill-created products get the first active type by `sortOrder`.** A bill line carries a
+  name, a rate and maybe an HSN code — nothing that says what kind of thing it is. Guessing
+  from the name is the classifier that was removed for being wrong 89 times in 132. If no
+  active type exists the import refuses that bill and says why, rather than inventing one.
+
+## 17.6 Verified
+
+- **`npx tsc --noEmit`: clean.**
+- **`npm run build`: PASSED** (exit 0). `/product-types`, `/api/product-types` and
+  `/api/dashboard/stats` are all in the output; `api/ai/` is not.
+- **`npx eslint` on the changed files: 0 errors.** Four warnings remain, all confirmed
+  pre-existing in `HEAD` (`session` unused ×2, one `no-unused-expressions`, `estimatedItems`).
+- **`npm run db:seed:rbac`: 47 modules, 177 permissions.** Two numbers worth reading —
+  **`1 stale permission removed`** is `stock.fetch` from Part A, and ADMIN's **`3 new`** are
+  `product_types.view/create/edit`.
+
+## 17.7 NOT verified — the part that matters
+
+**No screen has been opened in a browser.** §15.3 says plainly that the build passing is not
+evidence these work, and Part B is exactly the change that section was written about.
+
+Still to check by hand: `/product-types` (create, rename, retire, restore, duplicate-name
+refusal), `/stock` (tabs from the table, default All, price line, name clamp), `/stock/[id]`
+(type picker, size badge), `/stock-audit/new` (type filter), `/stock-audit/brand-count`
+(the `p.type.replace` line), `/reorder`, and `/` plus `/desktop` for the Stock Value and Low
+Stock tiles after the `api/dashboard/stats` rename.

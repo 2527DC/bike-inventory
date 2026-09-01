@@ -32,11 +32,16 @@ interface Transaction {
   user: { name: string };
 }
 
+interface ProductTypeOption { id: string; name: string; isActive: boolean; }
+
 interface ProductDetail {
   id: string;
   sku: string;
   name: string;
+  /** The type NAME, for display. See src/lib/product-type.ts. */
   type: string;
+  /** The ProductType row id — what the picker and PATCH use. */
+  productTypeId?: string;
   status: string;
   condition: string;
   currentStock: number;
@@ -93,7 +98,17 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [editData, setEditData] = useState<Record<string, unknown>>({ name: "", color: "", size: "", sellingPrice: 0, mrp: 0, reorderLevel: 0, brandId: "", binId: "", type: "" });
+  const [editData, setEditData] = useState<Record<string, unknown>>({ name: "", color: "", size: "", sellingPrice: 0, mrp: 0, reorderLevel: 0, brandId: "", binId: "", productTypeId: "" });
+  const [productTypes, setProductTypes] = useState<ProductTypeOption[]>([]);
+
+  // The type list, for the picker below. Types are rows now, so the options cannot be a
+  // literal in this file.
+  useEffect(() => {
+    fetch("/api/product-types")
+      .then((r) => r.json())
+      .then((res) => { if (res.success) setProductTypes(res.data); })
+      .catch(() => {});
+  }, []);
   const [brands, setBrands] = useState<{ id: string; name: string }[]>([]);
   const [bins, setBins] = useState<{ id: string; code: string; name: string; location: string }[]>([]);
 
@@ -144,7 +159,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
       reorderLevel: product!.reorderLevel,
       brandId: product!.brandId || "",
       binId: product!.binId || "",
-      type: product!.type || "",
+      productTypeId: product!.productTypeId || "",
     });
     setEditing(true);
   }
@@ -171,7 +186,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
         res = await fetch(`/api/products/${id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: editData.type }),
+          body: JSON.stringify({ productTypeId: editData.productTypeId }),
         });
       }
       const data = await res.json();
@@ -246,23 +261,24 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
             {/* Type selector — visible to ALL users */}
             <div>
               <label className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">Item Type</label>
+              {/* Options come from the ProductType table. A retired type is still offered
+                  when THIS product already holds it — otherwise editing anything else about
+                  the product would silently switch its type to whatever sat first. */}
               <div className="grid grid-cols-3 gap-1.5 mt-1">
-                {([
-                  { key: "BICYCLE", label: "Cycle" },
-                  { key: "SPARE_PART", label: "Spare" },
-                  { key: "ACCESSORY", label: "Accessory" },
-                ] as const).map((t) => (
+                {productTypes
+                  .filter((t) => t.isActive || t.id === product?.productTypeId)
+                  .map((t) => (
                   <button
-                    key={t.key}
+                    key={t.id}
                     type="button"
-                    onClick={() => setEditData({ ...editData, type: t.key })}
+                    onClick={() => setEditData({ ...editData, productTypeId: t.id })}
                     className={`py-2 rounded-lg text-xs font-semibold border transition-colors ${
-                      editData.type === t.key
+                      editData.productTypeId === t.id
                         ? "bg-blue-600 text-white border-blue-600"
                         : "bg-white text-slate-600 border-slate-200 hover:border-slate-400"
                     }`}
                   >
-                    {t.label}
+                    {t.name}
                   </button>
                 ))}
               </div>
@@ -333,10 +349,14 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
       )}
 
       {/* Identity badges */}
-      {(product.brand || (product.type === "BICYCLE" && product.size) || product.condition !== "NEW") && (
+      {/* Size shows whenever there IS one. It used to be gated on `type === "BICYCLE"`, a
+          name comparison that broke the moment someone renamed the type or added "E-Bike" —
+          the same class of bug CLAUDE.md bans for roles. A product either has a size or it
+          does not, and nullability already says which. */}
+      {(product.brand || product.size || product.condition !== "NEW") && (
         <div className="flex flex-wrap gap-2 mb-3">
           {product.brand && <Badge variant="default" className="font-semibold">{product.brand.name}</Badge>}
-          {product.type === "BICYCLE" && product.size && <Badge variant="default">{product.size}</Badge>}
+          {product.size && <Badge variant="default">{product.size}</Badge>}
           {product.condition !== "NEW" && <Badge variant="warning">{product.condition.replace("_", " ")}</Badge>}
         </div>
       )}

@@ -104,6 +104,27 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     actions: ["view", "create", "edit", "delete"],
   },
   {
+    // Added with Part B, which turned `ProductType` from a Prisma enum into a table. The
+    // screen it points at cannot be reached without this row, so it ships with the feature
+    // rather than waiting for Part C.
+    //
+    // A ROOT for now. Part C re-parents it under `stock_management` by adding `parentKey`;
+    // the seeder upserts `parentId` on every run, so that move needs no data migration — the
+    // same mechanism that moved `zoho` under `settings`.
+    //
+    // No `delete` action, and that is deliberate: `Product.productTypeId` is required with a
+    // RESTRICT foreign key, so a type in use cannot be removed and one that is not still
+    // breaks saved reports. `isActive: false` is how a type leaves the pickers.
+    key: "product_types",
+    label: "Product Types",
+    description: "The product type list — the tabs on Stock and what every product is filed under",
+    icon: "Tag",
+    route: "/product-types",
+    group: "Operations",
+    sortOrder: 101, // stock is 100; 101-109 is free
+    actions: ["view", "create", "edit"],
+  },
+  {
     key: "inbound",
     label: "Inbound Tracking",
     description: "Incoming shipments, receiving, putaway",

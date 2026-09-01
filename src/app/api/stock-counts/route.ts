@@ -111,7 +111,12 @@ export async function POST(req: NextRequest) {
       const allProducts = await prisma.product.findMany({
         where: {
           status: "ACTIVE",
-          ...(productType ? { type: productType } : {}),
+          // Match the type by NAME. This used to read `{ type: productType }` against the
+          // old enum column; after that column went the spread kept it compiling while Prisma
+          // would have thrown at runtime on an unknown argument.
+          ...(productType
+            ? { productType: { name: { equals: productType, mode: "insensitive" as const } } }
+            : {}),
           ...(BIN_TRACKING_ENABLED && !isBaseline && binId ? { binId } : {}),
           ...(BIN_TRACKING_ENABLED && !isBaseline && binIds ? { binId: { in: binIds } } : {}),
         },

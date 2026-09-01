@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
+import { PRODUCT_TYPE_SELECT, withTypeName } from "@/lib/product-type";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
@@ -31,7 +32,7 @@ export async function GET(req: NextRequest) {
         name: true,
         currentStock: true,
         reorderLevel: true,
-        type: true,
+        productType: PRODUCT_TYPE_SELECT,
         bin: { select: { code: true, location: true } },
         category: { select: { name: true } },
         brand: { select: { name: true } },
@@ -40,7 +41,7 @@ export async function GET(req: NextRequest) {
       orderBy: { name: "asc" },
     });
 
-    return successResponse(products);
+    return successResponse(products.map(withTypeName));
   } catch (error) {
     if (error instanceof AuthError) {
       return errorResponse(error.message, error.status);

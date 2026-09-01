@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
+import { PRODUCT_TYPE_SELECT, withTypeName } from "@/lib/product-type";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
@@ -31,7 +32,7 @@ export async function GET(req: NextRequest) {
     let products = await prisma.product.findMany({
       where,
       select: {
-        id: true, sku: true, name: true, type: true,
+        id: true, sku: true, name: true, productType: PRODUCT_TYPE_SELECT,
         currentStock: true, reorderLevel: true, reorderQty: true,
         costPrice: true,
         category: { select: { id: true, name: true } },
@@ -49,6 +50,11 @@ export async function GET(req: NextRequest) {
     if (filter === "low") {
       products = products.filter((p) => p.reorderLevel > 0 && p.currentStock <= p.reorderLevel);
     }
+
+    // The flat `type` name, added after filtering and before grouping so every product in
+    // every group carries it — /reorder declares its own `interface { type: string }` and
+    // would otherwise render undefined with a green build.
+    products = products.map(withTypeName);
 
     // Group products (handle null brand/category/vendor)
     const groups: Record<string, { id: string; name: string; whatsappNumber?: string | null; phone?: string | null; products: typeof products }> = {};

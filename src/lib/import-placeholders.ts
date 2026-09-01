@@ -16,10 +16,11 @@
  * Deliberately dependency-free: imported by both API routes and client components, so it
  * must not pull in prisma or anything server-only. Same rule as `inventory-config.ts`.
  *
- * The root cause is Part D of `docs/implementation/completed/imported-product-data-quality-plan.md`
- * — making the two columns nullable so absence can be recorded honestly. That is a schema
- * change touching every screen that assumes a brand and a category exist, and it is
- * deliberately not done here. Until it is, these are the marker.
+ * The root cause is that `Product.brandId` and `Product.categoryId` are non-null on a model
+ * where both facts are routinely unknown, so an import cannot record absence and has to write
+ * something. Making them nullable is a schema change touching every screen that assumes a
+ * brand and a category exist, and it is deliberately not done here. Until it is, these are
+ * the marker.
  */
 export const PLACEHOLDER_BRAND = "Imported";
 export const PLACEHOLDER_CATEGORY = "Uncategorized";

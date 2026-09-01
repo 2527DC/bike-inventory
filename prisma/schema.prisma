@@ -218,13 +218,29 @@ enum ProductCondition {
   DAMAGED
 }
 
-enum ProductType {
-  BICYCLE
-  SPARE_PART
-  ACCESSORY
-  BOX_PIECE
-  WIP
-  FINISHED_GOOD
+// Product types are DATA, not an enum.
+//
+// They were an enum of six fixed values, three of which never held a product. Adding a type
+// -- "E-Bike", "Tricycle" -- meant editing this file and redeploying, which is exactly what
+// the owner asked to stop doing. An enum value is part of the PostgreSQL type; there is no
+// runtime path to a new one. See section 5.0 of the Stock Management plan for the two
+// schema-free alternatives that were considered and why each fails.
+//
+// Deliberately minimal: a name, an order and an active flag. No code/name split and no
+// tracksSize -- the size badge on /stock renders whenever `Product.size` is set, which
+// carries the same information without a second column to keep in step.
+model ProductType {
+  id        String  @id @default(cuid())
+  name      String  @unique // "Cycles", "Spares" -- free text, renameable
+  sortOrder Int     @default(0) // tab order on /stock
+  isActive  Boolean @default(true) // retire without deleting
+
+  products Product[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive, sortOrder])
 }
 
 // ─── Store hierarchy ─────────────────────────────────────────────────────────
@@ -450,8 +466,12 @@ model Product {
   category    Category         @relation(fields: [categoryId], references: [id])
   brandId     String
   brand       Brand            @relation(fields: [brandId], references: [id])
-  type        ProductType      @default(SPARE_PART)
-  status      ProductStatus    @default(ACTIVE)
+  // Was `type ProductType` (an enum). Required, and deletion of a type in use is RESTRICTED
+  // by this FK rather than cascading -- orphaning products to tidy a picker would be worse
+  // than refusing. Retire a type with `isActive: false` instead.
+  productTypeId String
+  productType   ProductType      @relation(fields: [productTypeId], references: [id])
+  status        ProductStatus    @default(ACTIVE)
   condition   ProductCondition @default(NEW)
 
   // Pricing
@@ -503,8 +523,8 @@ model Product {
   @@index([categoryId])
   @@index([brandId])
   @@index([reorderVendorId])
-  @@index([type])
-  @@index([status, type])
+  @@index([productTypeId])
+  @@index([status, productTypeId])
   @@index([status, categoryId])
   @@index([status, brandId])
   @@index([status, currentStock])

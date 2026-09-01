@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
+import { PRODUCT_TYPE_SELECT } from "@/lib/product-type";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
@@ -16,7 +17,7 @@ export async function GET(req: NextRequest) {
       where: { status: "ACTIVE" },
       select: {
         id: true, sku: true,
-        categoryId: true, brandId: true, type: true,
+        categoryId: true, brandId: true, productTypeId: true, productType: PRODUCT_TYPE_SELECT,
         currentStock: true, costPrice: true, sellingPrice: true, mrp: true,
         category: { select: { name: true } },
         brand: { select: { name: true } },
@@ -98,8 +99,11 @@ export async function GET(req: NextRequest) {
         key = p.brandId;
         name = p.brand?.name || "Unknown";
       } else if (groupBy === "type") {
-        key = p.type;
-        name = p.type.replace(/_/g, " ");
+        // Group on the id, label with the name. Grouping on the name would silently merge two
+        // types if someone renamed one to match another, and would re-key every group the
+        // moment a type is renamed.
+        key = p.productTypeId;
+        name = p.productType?.name || "Unknown";
       } else {
         key = p.categoryId;
         name = p.category?.name || "Unknown";
