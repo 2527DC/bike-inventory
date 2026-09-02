@@ -169,8 +169,12 @@ All are documented in `middleware.ts`.
 | Package | Why it must stay |
 |---|---|
 | `react-dom` | React/Next runtime peer |
-| `@capacitor/core`, `@capacitor/android` | consumed by the native Android build, not by JS imports |
-| `@capacitor/cli` | type-only import in `capacitor.config.ts` |
+
+> **`@capacitor/core`, `@capacitor/android` and `@capacitor/cli` used to be listed here** as
+> *"consumed by the native Android build"*. That stopped being true on 2 Sep 2026, when
+> `android/` and `capacitor.config.ts` were deleted and native moved to a separate Expo app.
+> All three packages were uninstalled. Nothing in `src/` ever imported them, so the removal
+> could not affect the web build.
 
 ---
 

@@ -2,9 +2,14 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowLeft, Save, RotateCcw, MessageCircle } from "lucide-react";
+import { ArrowLeft, Save, RotateCcw, MessageCircle, AlertCircle } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { SkeletonList } from "@/components/ui/skeleton";
+import { apiFetch, apiTry } from "@/lib/api-client";
+import { usePermissions } from "@/lib/use-permissions";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("whatsapp:templates");
 
 const PLACEHOLDERS: Record<string, string[]> = {
   scheduled: ["{{customerName}}", "{{productName}}", "{{deliveryDate}}"],
@@ -59,33 +64,51 @@ export default function WhatsAppTemplatesPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"scheduled" | "dispatched" | "delivered">("dispatched");
 
+  // Cosmetic only. PUT /api/alerts/config re-checks whatsapp_templates.edit on the field itself
+  // — the client is never the gate.
+  const { can, loading: permsLoading } = usePermissions();
+  const canEdit = can("whatsapp_templates", "edit");
+
+  // apiTry, not `fetch().then(r => r.json())`. An expired session is answered 307 -> /login,
+  // which returns HTML with status 200, so the raw form reports `Unexpected token '<'` instead
+  // of "your session expired". CLAUDE.md bans it; api-client.ts checks content-type first.
   useEffect(() => {
-    fetch("/api/whatsapp-templates")
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success) setTemplates(res.data);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    void (async () => {
+      const { data, error: err } = await apiTry<Record<string, string>>("/api/whatsapp-templates");
+      if (err) {
+        log.error("failed to load templates", { error: err });
+        setError(err);
+      } else if (data) {
+        log.debug("templates loaded", { types: Object.keys(data).length });
+        setTemplates(data);
+      }
+      setLoading(false);
+    })();
   }, []);
 
   const handleSave = async () => {
     setSaving(true);
+    setError(null);
     try {
-      const res = await fetch("/api/alerts/config", {
+      await apiFetch("/api/alerts/config", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ whatsappTemplates: templates }),
+        json: { whatsappTemplates: templates },
       });
-      const data = await res.json();
-      if (data.success) {
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
-      }
-    } catch { /* */ }
-    finally { setSaving(false); }
+      log.info("templates saved", { types: Object.keys(templates) });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      // Never a bare catch. Swallowing this made a failed save look identical to a successful
+      // one — the button simply never turned green and nothing said why.
+      const msg = e instanceof Error ? e.message : "Failed to save templates";
+      log.error("failed to save templates", { error: msg });
+      setError(msg);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleReset = (type: string) => {
@@ -119,6 +142,15 @@ export default function WhatsAppTemplatesPage() {
           <p className="text-xs text-slate-500">Customize delivery messages sent to customers</p>
         </div>
       </div>
+
+      {error && (
+        <Card className="mb-3 bg-red-50 border-red-200">
+          <CardContent className="p-3 flex items-start gap-2">
+            <AlertCircle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
+            <p className="text-[11px] text-red-800">{error}</p>
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="mb-3 bg-green-50 border-green-200">
         <CardContent className="p-3">
@@ -158,6 +190,7 @@ export default function WhatsAppTemplatesPage() {
           id="template-editor"
           value={templates[activeTab] || ""}
           onChange={(e) => setTemplates((prev) => ({ ...prev, [activeTab]: e.target.value }))}
+          readOnly={!permsLoading && !canEdit}
           rows={12}
           className="w-full border border-slate-200 rounded-lg p-3 text-xs text-slate-800 font-mono resize-none focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
           placeholder={`Enter ${activeTab} message template...`}
@@ -171,11 +204,17 @@ export default function WhatsAppTemplatesPage() {
       </button>
 
       {/* Save */}
-      <button onClick={handleSave} disabled={saving}
+      <button onClick={handleSave} disabled={saving || permsLoading || !canEdit}
+        title={!permsLoading && !canEdit ? "You do not have permission to edit templates" : undefined}
         className="w-full flex items-center justify-center gap-2 min-h-[48px] bg-green-600 text-white py-3 rounded-lg text-sm font-medium disabled:opacity-50 focus-ring">
         <Save className="h-4 w-4" />
         {saving ? "Saving..." : saved ? "Saved!" : "Save All Templates"}
       </button>
+      {!permsLoading && !canEdit && (
+        <p className="mt-2 text-center text-[11px] text-slate-500">
+          Read-only — you do not hold WhatsApp Templates edit.
+        </p>
+      )}
     </div>
   );
 }
