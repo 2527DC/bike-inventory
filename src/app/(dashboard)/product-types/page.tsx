@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { DesktopTable, type Column } from "@/components/desktop-table";
 import { usePermissions } from "@/lib/use-permissions";
 import { apiFetch, apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
@@ -108,10 +109,100 @@ export default function ProductTypesPage() {
     await patch(t.id, { name });
   }
 
+  /** Rename / retire / restore, shared by the table and the cards so they cannot drift. */
+  function RowActions({ t }: { t: ProductType }) {
+    if (!mayEdit || editingId === t.id) return null;
+    return (
+      <button
+        onClick={() => patch(t.id, { isActive: !t.isActive })}
+        disabled={busyId === t.id}
+        className={`min-h-[36px] px-2.5 rounded-lg text-xs font-medium disabled:opacity-50 focus-ring ${
+          t.isActive
+            ? "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            : "bg-green-600 text-white hover:bg-green-700"
+        }`}
+      >
+        {busyId === t.id
+          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          : t.isActive ? "Retire" : "Restore"}
+      </button>
+    );
+  }
+
+  /** The inline rename input, or the name as a button that starts one. */
+  function NameCell({ t }: { t: ProductType }) {
+    if (editingId === t.id) {
+      return (
+        <div className="flex gap-1.5 items-center">
+          <Input
+            autoFocus
+            value={editName}
+            onChange={(e) => setEditName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveRename(t);
+              if (e.key === "Escape") setEditingId(null);
+            }}
+            maxLength={40}
+            className="h-9"
+          />
+          <button
+            onClick={() => saveRename(t)}
+            className="p-1.5 rounded-lg text-green-600 hover:bg-green-50 focus-ring"
+            aria-label="Save name"
+          >
+            <Check className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => setEditingId(null)}
+            className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 focus-ring"
+            aria-label="Cancel"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      );
+    }
+    return (
+      <button
+        onClick={() => { if (mayEdit) { setEditingId(t.id); setEditName(t.name); } }}
+        disabled={!mayEdit}
+        className="text-left disabled:cursor-default focus-ring rounded font-semibold text-slate-900"
+      >
+        {t.name}
+      </button>
+    );
+  }
+
+  const columns: Column<ProductType>[] = [
+    { header: "Type", cell: (t) => <NameCell t={t} /> },
+    {
+      header: "Products",
+      className: "text-right tabular-nums text-slate-500 w-28",
+      cell: (t) => t._count.products,
+    },
+    {
+      header: "Status",
+      className: "w-28",
+      cell: (t) =>
+        t.isActive
+          ? <Badge variant="success" className="text-[10px]">Active</Badge>
+          : <Badge variant="default" className="text-[10px]">Retired</Badge>,
+    },
+    {
+      header: "",
+      className: "w-28 text-right",
+      cell: (t) => <RowActions t={t} />,
+    },
+  ];
+
   return (
-    <div className="p-4 pb-24 max-w-2xl mx-auto">
+    // No wrapper of its own. (dashboard)/layout.tsx already applies the page padding and
+    // max width; `p-4 pb-24 max-w-2xl mx-auto` here double-padded the screen and pinned it
+    // to a phone-width column on a monitor, which is what made this screen look broken on
+    // desktop while every sibling looked fine.
+    <div>
       <div className="flex items-center gap-2 mb-1">
-        <Link href="/stock" className="p-1 -ml-1 rounded-lg hover:bg-slate-100 focus-ring">
+        <Link href="/stock-management" className="p-1 -ml-1 rounded-lg hover:bg-slate-100 focus-ring">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
         <h1 className="text-lg font-bold text-slate-900">Product Types</h1>
@@ -159,74 +250,38 @@ export default function ProductTypesPage() {
           </p>
         </div>
       ) : (
-        <div className="space-y-1.5">
-          {types.map((t) => (
-            <Card key={t.id} className={t.isActive ? "" : "opacity-60"}>
-              <CardContent className="p-3 flex items-center gap-3">
-                <div className="flex-1 min-w-0">
-                  {editingId === t.id ? (
-                    <div className="flex gap-1.5 items-center">
-                      <Input
-                        autoFocus
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") saveRename(t);
-                          if (e.key === "Escape") setEditingId(null);
-                        }}
-                        maxLength={40}
-                        className="h-9"
-                      />
-                      <button
-                        onClick={() => saveRename(t)}
-                        className="p-1.5 rounded-lg text-green-600 hover:bg-green-50 focus-ring"
-                        aria-label="Save name"
-                      >
-                        <Check className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => setEditingId(null)}
-                        className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 focus-ring"
-                        aria-label="Cancel"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => { if (mayEdit) { setEditingId(t.id); setEditName(t.name); } }}
-                      disabled={!mayEdit}
-                      className="text-left disabled:cursor-default focus-ring rounded"
-                    >
-                      <p className="text-sm font-semibold text-slate-900">{t.name}</p>
+        <>
+          {/* Desktop: the same table every other master-data screen uses (/vendors,
+              /customers). Mobile keeps the cards below — a four-column table on a 375px
+              screen is a horizontal scroll nobody wins. */}
+          <DesktopTable
+            className="hidden lg:block"
+            columns={columns}
+            rows={types}
+            rowKey={(t) => t.id}
+          />
+
+          <div className="space-y-1.5 lg:hidden">
+            {types.map((t) => (
+              <Card key={t.id} className={t.isActive ? "" : "opacity-60"}>
+                <CardContent className="p-3 flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <NameCell t={t} />
+                    {editingId !== t.id && (
                       <p className="text-[11px] text-slate-400 tabular-nums">
                         {t._count.products} product{t._count.products === 1 ? "" : "s"}
                       </p>
-                    </button>
-                  )}
-                </div>
+                    )}
+                  </div>
 
-                {!t.isActive && <Badge variant="default" className="text-[10px]">Retired</Badge>}
+                  {!t.isActive && <Badge variant="default" className="text-[10px]">Retired</Badge>}
 
-                {mayEdit && editingId !== t.id && (
-                  <button
-                    onClick={() => patch(t.id, { isActive: !t.isActive })}
-                    disabled={busyId === t.id}
-                    className={`min-h-[36px] px-2.5 rounded-lg text-xs font-medium disabled:opacity-50 focus-ring ${
-                      t.isActive
-                        ? "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                        : "bg-green-600 text-white hover:bg-green-700"
-                    }`}
-                  >
-                    {busyId === t.id
-                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      : t.isActive ? "Retire" : "Restore"}
-                  </button>
-                )}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+                  <RowActions t={t} />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </>
       )}
 
       {/* Said once, at the bottom. A type in use cannot be deleted — the foreign key is

@@ -1,6 +1,6 @@
 # Stock Management module tree, product types as data, the end of the Zoho item import, and a customer list
 
-Status: in-progress — 1 Sep 2026. **Parts A and B are built** (§16 and §17 record what shipped and how each differed). Parts C and D not started; Part E optional and last.
+Status: completed — 2 Sep 2026, all five parts shipped on `refactor/stock-management-module`: the Zoho item import and the AI screens are gone (A), `ProductType` is a table with its own screen (B), Stock Management is a parent module with six children plus a hub page (C), `/customers` lists the customer table with outstanding balances (D), and the catalog is loaded from the owner's export (E). `npm run build` passes. §16–§20 record what shipped and how each part differed; **the §13 browser checklist has not been walked** — see §17.7, §18.5 and §20.5.
 Branch: **`refactor/stock-management-module`** — create it with exactly this name, off `main`.
 
 Prepared 1 Sep 2026. Every line number, route and constraint below was read off the tree on

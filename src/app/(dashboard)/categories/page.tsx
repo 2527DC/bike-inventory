@@ -207,7 +207,8 @@ export default function CategoriesPage() {
   return (
     <div>
       <div className="flex items-center gap-2 mb-4">
-        <Link href="/more" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring">
+        {/* Back to the parent hub, not /more — Categories is a Stock Management child now. */}
+        <Link href="/stock-management" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
         <div className="flex-1">

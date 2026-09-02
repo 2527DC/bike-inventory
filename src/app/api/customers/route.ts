@@ -5,6 +5,9 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, paginatedResponse, parseSearchParams } from "@/lib/api-utils";
 import { customerSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("customers:api");
 
 export async function GET(req: NextRequest) {
   try {
@@ -71,7 +74,9 @@ export async function GET(req: NextRequest) {
     return paginatedResponse(shaped, total, page, limit);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed to fetch customers", 500);
+    const msg = error instanceof Error ? error.message : "Failed to fetch customers";
+    log.error("customer list failed", { message: msg });
+    return errorResponse(msg, 500);
   }
 }
 
@@ -87,7 +92,15 @@ export async function POST(req: NextRequest) {
     const existing = await prisma.customer.findUnique({ where: { phone: data.phone } });
 
     if (existing) {
-      return successResponse(existing);
+      // Answering 200 with the existing row is deliberate and must stay: both callers that
+      // predate the customer list — /receivables/new and the Zoho invoice import — rely on
+      // "create or find" and only read `.data.id`.
+      //
+      // `alreadyExisted` is additive, so neither of them notices, and it lets a form that
+      // really is creating a customer say "that number belongs to Ravi Kumar" instead of
+      // reporting a save it did not perform.
+      log.info("customer create matched existing phone", { customerId: existing.id });
+      return successResponse({ ...existing, alreadyExisted: true });
     }
 
     const customer = await prisma.customer.create({
@@ -101,9 +114,12 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    log.info("customer created", { customerId: customer.id, type: customer.type });
     return successResponse(customer, 201);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed to create customer", 400);
+    const msg = error instanceof Error ? error.message : "Failed to create customer";
+    log.error("customer create failed", { message: msg });
+    return errorResponse(msg, 400);
   }
 }
