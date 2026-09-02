@@ -11,7 +11,7 @@ import { moduleIcon } from "@/lib/module-icons";
  *
  * ─── WHY THIS PAGE EXISTS AT ALL ─────────────────────────────────────────────────────────
  *
- * `stock_management` is a container: its six children are where the work happens. It could
+ * `stock_management` is a container: its children are where the work happens. It could
  * have been a routeless parent like `store_management` — except `bottom-nav.tsx` filters the
  * phone's tab bar to `!m.parent`, so a routeless parent would have dropped Stock, Inbound and
  * Deliveries off the bottom bar entirely and left a stock user looking at Second-Hand,
@@ -35,17 +35,20 @@ export default function StockManagementPage() {
     .sort((a, b) => a.sortOrder - b.sortOrder);
 
   return (
-    <div className="p-4 pb-24 max-w-2xl mx-auto">
+    // No wrapper of its own — (dashboard)/layout.tsx already provides the padding and max
+    // width. `p-4 pb-24 max-w-2xl mx-auto` here double-padded the page and pinned it to a
+    // phone-width column on a monitor; the card grid below handles the wide case instead.
+    <div>
       <div className="flex items-center gap-2 mb-1">
         <Boxes className="h-5 w-5 text-slate-700" />
         <h1 className="text-lg font-bold text-slate-900">Stock Management</h1>
       </div>
       <p className="text-[11px] text-slate-500 mb-4 ml-7">
-        Stock, product types, audits, inbound, dispatch and transfers.
+        Stock, product types, categories, audits, inbound, dispatch and transfers.
       </p>
 
       {loading ? (
-        <div className="space-y-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-1.5">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="h-16 rounded-xl bg-slate-100 animate-pulse" />
           ))}
@@ -62,7 +65,9 @@ export default function StockManagementPage() {
           </p>
         </div>
       ) : (
-        <div className="space-y-1.5">
+        // A GRID, not a column. Seven nav cards stacked down a 1280px page is mostly empty
+        // space; the hub exists to be scanned in one glance.
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-1.5">
           {children.map((m) => {
             const Icon = moduleIcon(m.icon);
             return (

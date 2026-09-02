@@ -61,6 +61,11 @@ export async function PUT(
     if (!existing) return errorResponse("Not found", 404);
 
     // Update individual line item delivery + add stock + auto-create delivery for pre-booked
+    //
+    // inbound.delivered is deliberately NOT wired here, although the notifications plan (§F.3)
+    // lists this file. This handler never writes InboundShipment.status — it marks ONE line item
+    // delivered and adds its stock; the shipment stays IN_TRANSIT / PARTIALLY_DELIVERED until
+    // someone marks it DELIVERED through [id]/status, which is the only site that fires.
     if (body.lineItemId && body.deliveredQty !== undefined) {
       const lineItem = await prisma.inboundLineItem.findUnique({
         where: { id: body.lineItemId },

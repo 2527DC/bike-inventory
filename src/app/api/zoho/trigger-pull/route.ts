@@ -3,10 +3,12 @@ export const dynamic = "force-dynamic";
 // write their previews in a fixed number of queries rather than one round trip per record.
 export const maxDuration = 60;
 
-import { NextRequest } from "next/server";
+import { NextRequest, after } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, failure } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { usersWithPermission } from "@/lib/rbac";
+import { notify } from "@/lib/notify";
 import {
   getBooks,
   getInventory,
@@ -36,7 +38,9 @@ export async function POST(req: NextRequest) {
   const ctx: { step?: string; pullId?: string } = {};
 
   try {
-    await requireFeature("zoho", "fetch");
+    // The user is kept: both Zoho notifications below name the person who pressed the button
+    // in their body and leave them out of the recipients.
+    const user = await requireFeature("zoho", "fetch");
     const body = await req.json();
     const { step, pullId: existingPullId, fromDate, searchText } = body as { step: string; pullId?: string; fromDate?: string; searchText?: string };
     ctx.step = step;
@@ -58,7 +62,7 @@ export async function POST(req: NextRequest) {
       });
       if (runningSync) return errorResponse("Sync already in progress", 409);
 
-      await prisma.syncLog.create({
+      const syncLog = await prisma.syncLog.create({
         data: { syncType: "cron-pull", status: "running", triggeredBy: "manual" },
       });
 
@@ -83,6 +87,40 @@ export async function POST(req: NextRequest) {
       }
 
       const pullId = `pull-${Date.now()}`;
+
+      // zoho.pull_started (§F.4): tell everyone ELSE who can pull that a sync is running — it
+      // is also why they will get a 409 if they start their own. The SyncLog row above is
+      // committed (no transaction here) and the source check has passed, so this is a real pull.
+      // §F.0: after() sends once the response has gone out so the init step is not slowed.
+      const actorId = user.id;
+      const actorName = user.name;
+      after(async () => {
+        try {
+          const recipients = (await usersWithPermission("zoho", "fetch")).filter((uid) => uid !== actorId);
+          if (recipients.length === 0) {
+            log.debug("pull started but nobody else holds zoho.fetch", { pullId });
+            return;
+          }
+          await notify("zoho.pull_started", {
+            recipients,
+            title: "Zoho pull started",
+            body: `${actorName} started a bills & invoices pull (bills from Zoho Books, invoices from Zakya POS)`,
+            refId: syncLog.id,
+            link: "/settings/integrations",
+            data: {
+              pullId,
+              books: booksReady ? "connected" : "skipped",
+              pos: posReady ? "connected" : "skipped",
+            },
+          });
+        } catch (err) {
+          log.error("zoho.pull_started notification failed", {
+            pullId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      });
+
       return successResponse({
         pullId, step: "init", message: "Ready",
         sources: {
@@ -308,17 +346,64 @@ export async function POST(req: NextRequest) {
         where: { status: "running", syncType: "cron-pull" },
         orderBy: { startedAt: "desc" },
       });
+      // Hoisted so the SyncLog row and the notification below cannot disagree about the outcome.
+      const pullStatus = allErrors.length > 0 ? "partial" : "success";
       if (syncLog) {
         await prisma.syncLog.update({
           where: { id: syncLog.id },
           data: {
-            status: allErrors.length > 0 ? "partial" : "success",
+            status: pullStatus,
             totalItems: totalNew,
             synced: totalNew,
             failed: allErrors.length,
             errors: allErrors.length > 0 ? JSON.stringify(allErrors.slice(0, 20)) : null,
             completedAt: new Date(),
           },
+        });
+      }
+
+      // zoho.pull_finished (§F.4): the outcome, clean or partial, to everyone else who can pull.
+      // Email defaults ON for this event — it is the one most likely to report something broken
+      // while nobody is watching. §F.0: the SyncLog update above has committed; after() sends
+      // once the response has gone out.
+      {
+        const actorId = user.id;
+        const finishedPullId: string = existingPullId;
+        const syncLogId = syncLog?.id;
+        const errorCount = allErrors.length;
+        const firstError = allErrors[0];
+        after(async () => {
+          try {
+            const recipients = (await usersWithPermission("zoho", "fetch")).filter((uid) => uid !== actorId);
+            if (recipients.length === 0) {
+              log.debug("pull finished but nobody else holds zoho.fetch", { pullId: finishedPullId });
+              return;
+            }
+            const counts = `${billsNew} new bill${billsNew === 1 ? "" : "s"}, ${invoicesNew} new invoice${invoicesNew === 1 ? "" : "s"}`;
+            const text =
+              pullStatus === "partial"
+                ? `${counts}. ${errorCount} error${errorCount === 1 ? "" : "s"} — first: ${firstError}`
+                : `${counts}. No errors.`;
+            await notify("zoho.pull_finished", {
+              recipients,
+              title: `Zoho pull ${pullStatus}`,
+              body: text,
+              refId: syncLogId ?? finishedPullId,
+              link: "/settings/integrations",
+              data: {
+                pullId: finishedPullId,
+                status: pullStatus,
+                billsNew: String(billsNew),
+                invoicesNew: String(invoicesNew),
+                errors: String(errorCount),
+              },
+            });
+          } catch (err) {
+            log.error("zoho.pull_finished notification failed", {
+              pullId: finishedPullId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
         });
       }
 

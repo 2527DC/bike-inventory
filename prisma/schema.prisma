@@ -407,6 +407,12 @@ model User {
   lmsAchievements      LmsUserAchievement[]   @relation("LmsUserAchievementUser")
   lmsActivityLogs      LmsActivityLog[]       @relation("LmsActivityLogUser")
 
+  // Notifications. Both cascade: a device token is a credential for this person's screen and
+  // a preference is about this person alone — neither has meaning once the user is gone.
+  // The delivery log (NotificationOutbox) deliberately has NO relation here, so it survives.
+  pushDevices             PushDevice[]
+  notificationPreferences NotificationPreference[]
+
   @@index([roleId])
 }
 
@@ -1023,6 +1029,190 @@ model StorageConfig {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ─── Notifications ─────────────────────────────────────────────────────────────
+//
+// Push (FCM, to the browser PWA and to the separate Expo app) and email (SMTP), raised by
+// real events rather than a scheduler — this app has no cron, and nothing here depends on
+// one. Plan: docs/implementation/pending/notifications-and-settings-rbac-plan.md, Part B.
+//
+// Five tables. Config is a singleton like StorageConfig. PushDevice is the token registry.
+// NotificationEventSetting is the admin's per-event on/off; NotificationPreference is each
+// user's own opt-out. NotificationOutbox is the delivery log.
+
+// One row, configured from Settings -> Notifications, so a credential change needs no
+// redeploy. Mirrors StorageConfig deliberately: secrets in plaintext (the accepted trade-off
+// recorded above IntegrationConfig), `*Connected` set ONLY by a real round-trip test and never
+// by saving the form, and the API masks `smtpPassword` and `fcmServiceAccount` on read.
+//
+// `emailProvider` / `pushProvider` are plain Strings, not enums, for the reason written above
+// both config tables: adding a provider should be a row, not a migration. Validated with zod
+// in the route. Valid values today: emailProvider SMTP | GMAIL_OAUTH | SES; pushProvider FCM.
+// Only SMTP and FCM are implemented — the others are declared so they can be rows later.
+model NotificationConfig {
+  id String @id @default("singleton")
+
+  // ── Email ──
+  emailProvider String  @default("SMTP")
+  smtpHost      String?
+  smtpPort      Int?
+  smtpSecure    Boolean @default(false) // true = 465 implicit TLS, false = 587 STARTTLS
+  smtpUser      String?
+  smtpPassword  String? // Gmail App Password. NEVER returned to the browser, never logged.
+  fromName      String?
+  fromEmail     String?
+  emailEnabled  Boolean @default(false) // the master switch an admin flips
+  // Set only by a real 250 from the SMTP server on a test send. Saving the form never sets it.
+  emailConnected     Boolean   @default(false)
+  emailLastTestedAt  DateTime?
+  emailLastTestError String?   @db.Text
+
+  // ── Push ──
+  pushProvider      String  @default("FCM")
+  fcmProjectId      String?
+  fcmServiceAccount String? @db.Text // the service-account JSON, verbatim. NEVER returned.
+  // The Firebase WEB SDK config — the four values initializeApp() needs before getToken() can
+  // mint a browser token. None is secret: every Firebase web app ships them in its bundle.
+  // Returned to any signed-in browser by GET /api/notifications/push-config.
+  fcmWebApiKey         String?
+  fcmMessagingSenderId String? // the project NUMBER, e.g. "123456789012"
+  fcmWebAppId          String? // "1:123456789012:web:abcdef…"
+  fcmVapidKey          String? // web push key pair — PUBLIC half only; the private half is Firebase's
+  pushEnabled       Boolean @default(false)
+  // Set only by messages:send returning a message name on a test push. Saving never sets it.
+  pushConnected     Boolean   @default(false)
+  pushLastTestedAt  DateTime?
+  pushLastTestError String?   @db.Text
+
+  // Who last saved. Deliberately NOT a relation: this row must outlive any user, and a
+  // SetNull FK would need an index for a value nothing ever joins on. Nullable because the
+  // row may be created empty before anyone has saved.
+  updatedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("notification_config")
+}
+
+// Two values because FCM v1 takes a different config block per platform (`webpush` vs
+// `android`), and that is the ONLY thing the sender branches on. WEB = the PWA service
+// worker; ANDROID = the separate Expo app. Both are FCM tokens sent through one call.
+//
+// iOS is OUT OF SCOPE (owner, 2 Sep 2026). Adding it later is one value here plus one `apns`
+// block in the sender. Do not add it speculatively.
+enum PushPlatform {
+  WEB
+  ANDROID
+}
+
+// One row per registered device. `token` is the FCM registration token and is the natural
+// key: FCM reissues tokens, it never duplicates them, so re-registering the same device is an
+// upsert on `token`, not a second row. Browser tokens come from the Firebase SDK's
+// getToken({ vapidKey }); Expo tokens from getDevicePushTokenAsync() — a native FCM token,
+// NOT an Expo push token.
+//
+// Cascade: a device token is a credential for the user's screen. Deleting the user must not
+// leave a token that can still be pushed to.
+model PushDevice {
+  id         String       @id @default(cuid())
+  userId     String
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token      String       @unique
+  platform   PushPlatform
+  userAgent  String? // browser UA or Expo device description; display and debugging only
+  lastSeenAt DateTime     @default(now())
+  createdAt  DateTime     @default(now())
+
+  @@index([userId])
+  @@map("push_devices")
+}
+
+// Global, admin-controlled: is this event allowed to send on each channel at all. One row per
+// event key; an ABSENT row means "use the code default" for that event, which is why the
+// column defaults here are not the whole story — see src/lib/notify/events.ts.
+//
+// Email defaults off and push defaults on because email is the scarce channel: a free Gmail
+// account sends ~500/day, and one event to 40 staff is 8% of that. Push is free.
+model NotificationEventSetting {
+  eventKey     String   @id
+  pushEnabled  Boolean  @default(true)
+  emailEnabled Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("notification_event_settings")
+}
+
+// Per-user opt-out. Written from the SESSION's userId, never from the request body —
+// accepting a body userId would let any user mute any other user. Gated on authentication
+// alone, not on any settings permission: a mechanic silences their own phone without holding
+// a settings grant, the same way Staff LMS `view` lets a learner record their own progress.
+//
+// No separate @@index([userId]): the composite unique is already a userId-leading btree.
+model NotificationPreference {
+  id       String  @id @default(cuid())
+  userId   String
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  eventKey String
+  push     Boolean @default(true)
+  email    Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, eventKey])
+  @@map("notification_preferences")
+}
+
+enum NotificationChannel {
+  PUSH
+  EMAIL
+}
+
+enum NotificationStatus {
+  SENT
+  FAILED
+  SKIPPED
+}
+
+// The delivery log — one row per channel per recipient per event. Unlike WhatsApp, which is
+// fire-and-forget and only records intent, FCM and SMTP both return a real outcome, so this
+// records what actually happened.
+//
+// NOT to be confused with `NotificationLog` (table notification_logs) further down, which is
+// the SERVICE module's record of WhatsApp messages a human chose to send. Different table,
+// different audience, no collision — but the names are close, so each points at the other.
+//
+// Append-only and hard-delete. Nothing prunes it: there is no cron and none is being added
+// (owner, 2 Sep 2026 — accept the growth, ~200 bytes/row, ~8 MB/year at 40 staff x 20
+// events/day). No "clear older than N days" button exists yet.
+model NotificationOutbox {
+  id       String              @id @default(cuid())
+  eventKey String
+  channel  NotificationChannel
+  status   NotificationStatus
+
+  // Deliberately NOT a relation: a log must outlive the user it names, and a User FK would
+  // cascade on delete and quietly erase delivery history. Nullable, together with `target`,
+  // for exactly one case: a CHANNEL-level SKIPPED row ("FCM is not configured"), which is
+  // written once per event rather than once per recipient. A SENT or FAILED row always has both.
+  userId String?
+  // Masked at write time — "a***@gmail.com", or the last 6 characters of a device token. A
+  // full token is a credential (CLAUDE.md); six characters correlate with a PushDevice row
+  // and cannot be used to send.
+  target String?
+  // The record this was about: a productId, jobId, shipmentId or SyncLog id. Null only for a
+  // test send from the settings screen, which is about nothing.
+  refId  String?
+  error  String? @db.Text
+
+  createdAt DateTime @default(now())
+
+  @@index([eventKey, createdAt])
+  @@index([userId, createdAt])
+  @@map("notification_outbox")
 }
 
 model SyncLog {
@@ -1909,6 +2099,9 @@ model ServiceAuditLog {
   @@map("service_audit_logs")
 }
 
+// The SERVICE module's record of WhatsApp messages a human chose to send about a job. NOT the
+// delivery log for push/email — that is `NotificationOutbox` (table notification_outbox) up
+// near the config tables. Same word, different thing; each comment points at the other.
 model NotificationLog {
   id            String   @id @default(cuid())
   jobId         String

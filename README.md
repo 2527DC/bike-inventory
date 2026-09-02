@@ -32,7 +32,10 @@ The UI is branded **BCH OPS**.
 - **Zustand** — client-side permission store
 - **Tailwind CSS v4**
 - **Cloudflare R2** — media storage (single provider; the workshop's former Vercel Blob usage was migrated)
-- **Capacitor** — Android wrapper
+
+This app is a **pure PWA**. The Capacitor Android wrapper was removed on 2 Sep 2026; native
+Android lives in a separate React Native / Expo app that talks to Firebase Cloud Messaging
+directly and shares this app's API and access codes.
 
 ---
 

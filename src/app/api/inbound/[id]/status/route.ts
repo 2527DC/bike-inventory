@@ -1,10 +1,11 @@
 export const dynamic = "force-dynamic";
 
-import { NextRequest } from "next/server";
+import { NextRequest, after } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { userCan } from "@/lib/rbac";
+import { userCan, usersWithPermission } from "@/lib/rbac";
+import { notify } from "@/lib/notify";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
 import { resolveWarehouse } from "@/lib/warehouses";
 import { adjustWarehouseQty } from "@/lib/stock-location";
@@ -219,6 +220,38 @@ export async function PUT(
 
       return result;
     });
+
+    // inbound.delivered — only on the transition INTO DELIVERED. PARTIALLY_DELIVERED is a normal
+    // mid-flight state (§F.3) and an already-DELIVERED shipment was rejected above, so this is
+    // the one crossing. §F.0: the transaction has committed; after() sends once the response has
+    // gone out. Placed BEFORE the Zoho push below, which has an early return of its own.
+    if (status === "DELIVERED") {
+      const actorId = user.id;
+      const actorName = user.name;
+      after(async () => {
+        try {
+          // Whoever can approve inbound shipments (§F.5), minus the person at the goods desk.
+          const recipients = (await usersWithPermission("inbound", "approve")).filter((uid) => uid !== actorId);
+          if (recipients.length === 0) {
+            log.debug("shipment delivered but nobody to tell", { shipmentId: id });
+            return;
+          }
+          await notify("inbound.delivered", {
+            recipients,
+            title: `Shipment ${existing.shipmentNo} delivered`,
+            body: `${existing.brand.name} — bill ${existing.billNo}, ${existing.totalItems} item(s), received by ${actorName}`,
+            refId: existing.id,
+            link: `/inbound/${id}`,
+            data: { shipmentId: id, shipmentNo: existing.shipmentNo },
+          });
+        } catch (err) {
+          log.error("inbound.delivered notification failed", {
+            shipmentId: id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      });
+    }
 
     // Push purchase bill to Zoho Books on full delivery (best effort)
     if (status === "DELIVERED") {

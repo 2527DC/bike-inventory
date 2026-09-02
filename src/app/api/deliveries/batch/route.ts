@@ -1,9 +1,10 @@
 export const dynamic = "force-dynamic";
 
-import { NextRequest } from "next/server";
+import { NextRequest, after } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { maybeNotifyBelowReorder, type ReorderCrossing } from "@/lib/notify/stock";
 
 export async function PUT(req: NextRequest) {
   try {
@@ -30,6 +31,11 @@ export async function PUT(req: NextRequest) {
     if (deliveries.length === 0) {
       return errorResponse(`No deliveries in ${expectedStatus} status`, 400);
     }
+
+    // §F.0: filled INSIDE the transaction across every delivery and item, sent ONCE after it
+    // commits. A batch can touch dozens of products; sending inside would eat the 5-second
+    // transaction budget and roll back every deduction in the batch.
+    const crossings: ReorderCrossing[] = [];
 
     const result = await prisma.$transaction(async (tx) => {
       let updated = 0;
@@ -91,6 +97,13 @@ export async function PUT(req: NextRequest) {
                 data: { currentStock: product.currentStock - item.quantity },
               });
             }
+            // Both branches above moved currentStock DOWN by item.quantity — the reserved one and
+            // the direct one alike — so both can cross the reorder line. Collect only (§F.0).
+            crossings.push({
+              productId: product.id,
+              previousStock: product.currentStock,
+              newStock: product.currentStock - item.quantity,
+            });
             await tx.inventoryTransaction.create({
               data: {
                 type: "OUTWARD",
@@ -112,6 +125,10 @@ export async function PUT(req: NextRequest) {
 
       return { updated };
     });
+
+    // §F.0: committed. One helper call for the whole batch, after the response has gone out;
+    // nothing is sent if the transaction threw (e.g. insufficient stock on a later item).
+    after(() => maybeNotifyBelowReorder(crossings));
 
     return successResponse(result);
   } catch (error) {

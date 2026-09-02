@@ -30,6 +30,12 @@ export async function GET() {
 }
 
 // POST — STAFF confirm (approve) or dismiss the proposed deliveries
+//
+// service.job_ready is deliberately NOT wired here, although the notifications plan (§F.2)
+// lists this file. The only status this handler writes is READY → DELIVERED; the "READY" at
+// the top of the file is a WHERE filter, and the dismiss branch leaves status untouched. There
+// is no transition INTO READY to announce. The two real sites are jobs/update-status and
+// jobs/bulk-status.
 export async function POST(req: Request) {
   const { user: user, error: authError } = await serviceGuard("service_jobs", "edit");
   if (authError) return authError;

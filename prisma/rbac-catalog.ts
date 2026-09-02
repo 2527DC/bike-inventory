@@ -160,7 +160,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: "/inbound",
     parentKey: "stock_management",
     group: "Operations", // MUST equal the parent's — the seeder asserts it
-    sortOrder: 104,
+    sortOrder: 105,
     actions: ["view", "create", "edit", "delete", "approve", "fetch"],
   },
   {
@@ -171,7 +171,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: "/deliveries",
     parentKey: "stock_management",
     group: "Operations", // MUST equal the parent's — the seeder asserts it
-    sortOrder: 105,
+    sortOrder: 106,
     actions: ["view", "create", "edit", "delete", "approve", "fetch"],
   },
   {
@@ -182,7 +182,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: "/transfers",
     parentKey: "stock_management",
     group: "Operations", // MUST equal the parent's — the seeder asserts it
-    sortOrder: 106,
+    sortOrder: 107,
     actions: ["view", "create", "edit", "delete", "approve"],
   },
   {
@@ -193,7 +193,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: "/stock-audit",
     parentKey: "stock_management",
     group: "Operations", // MUST equal the parent's — the seeder asserts it
-    sortOrder: 103,
+    sortOrder: 104,
     actions: ["view", "create", "edit", "delete", "approve"],
   },
   {
@@ -269,13 +269,25 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     // GET /api/categories deliberately stays on `stock.view`: every product form reads it
     // for a dropdown, and re-guarding it here would empty those dropdowns for anyone who is
     // not a taxonomy admin — a silent empty list rather than an honest 403.
+    //
+    // A CHILD of `stock_management`, sitting beside Product Types (102). Categories and
+    // types are the same kind of thing — the two taxonomies every product is filed under —
+    // so they belong next to each other rather than one under Operations and one under
+    // Purchase. `group` therefore moves Purchase -> Operations: seed-rbac.ts throws if a
+    // child's group differs from its parent's, and the sidebar groups by the PARENT's
+    // group anyway, so a mismatch would only have been a lie in the data.
+    //
+    // The route moved /more/categories -> /categories to match /product-types and the rest
+    // of the tree. next.config.ts permanently redirects the old path; nothing in src/
+    // linked to it, so bookmarks were the only thing at stake.
     key: "categories",
     label: "Categories",
     description: "Product categories — the taxonomy Zoho imports into",
     icon: "Tag",
-    route: "/more/categories",
-    group: "Purchase",
-    sortOrder: 225, // between Brands (220) and Vendor / Ops Issues (230)
+    route: "/categories",
+    parentKey: "stock_management",
+    group: "Operations", // MUST equal the parent's — the seeder asserts it
+    sortOrder: 103, // beside Product Types (102); stock_audit and below shifted up one
     actions: CRUD,
   },
   {
@@ -375,32 +387,36 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     actions: ["view"],
   },
   {
+    // ── THE WAY IN IS THE CUSTOMER LIST, NOT THE INVOICE LIST ────────────────────────────
+    //
+    // This module pointed at `/receivables` for as long as it existed, and there was a
+    // second module `customer_list` -> `/customers` hanging off it as a child. That was
+    // backwards twice over:
+    //
+    //   1. A child is COLLAPSED in the sidebar until you click its parent's chevron, and
+    //      `bottom-nav.tsx` filters the phone's tab bar to `!m.parent` — so the one screen
+    //      that simply lists customers was the single hardest thing in the app to find.
+    //   2. Receivables are a view OF a customer. Landing on a flat list of invoices and
+    //      working backwards to who owes them is the wrong way round.
+    //
+    // So `customer_list` is gone (its route would now duplicate this one) and this module
+    // owns `/customers`. Receivables are reached per customer, from the row, at
+    // /customers/[id]/receivables.
+    //
+    // `/receivables` ITSELF IS NOT DELETED and must not be. It still holds the aging
+    // buckets and the Zoho invoice import, and four screens link to it — the dashboard
+    // (twice), /accounts and the delivery payment warning. It simply has no nav entry now.
+    //
+    // Still five actions, and `create`/`edit` are the ones the list screen's add/edit sheet
+    // checks. There is no separate grant for the list: one question, one answer.
     key: "customers",
-    label: "Customers & Receivables",
+    label: "Customers",
     description: "Customer master, invoices and receivables",
-    icon: "HandCoins",
-    route: "/receivables",
+    icon: "Users",
+    route: "/customers",
     group: "Accounts",
     sortOrder: 320,
     actions: ["view", "create", "edit", "delete", "fetch"],
-  },
-  {
-    // The list screen the parent has always implied but never had. `/receivables` KEEPS its
-    // route — people have it bookmarked and nothing is gained by moving it.
-    //
-    // `view` only, and deliberately so: creating and editing a customer check the PARENT's
-    // `customers.create` / `customers.edit`, which is what POST /api/customers and
-    // PATCH /api/customers/[id] already guard on. A `customer_list.create` would be a second
-    // grant for the same action, and then neither answers "who may add a customer".
-    key: "customer_list",
-    label: "Customers",
-    description: "The customer master — names, phones, type and outstanding balance",
-    icon: "Users",
-    route: "/customers",
-    parentKey: "customers",
-    group: "Accounts", // MUST equal the parent's — the seeder asserts it
-    sortOrder: 321,
-    actions: ["view"],
   },
 
   // ── Brand Ledger (supplier reconciliation) ────────────────────────────────
@@ -590,21 +606,54 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     label: "Storage",
     description: "Where uploaded photos and videos are stored — S3 or the server filesystem",
     icon: "HardDrive",
-    route: "/settings/storage",
+    // ROUTELESS ON PURPOSE. The page still exists at /settings/storage and is still reachable
+    // — the Settings index links to it with a hardcoded href. What `route: null` removes is the
+    // SIDEBAR ENTRY: app-sidebar.tsx:101 and more/page.tsx:68 both `continue` on a routeless
+    // child. That is the whole point of the Settings tree: one entry in the sidebar, and the
+    // index page as the only way in. api/modules/route.ts ignores `route` entirely, so this
+    // still renders as an indented card in Roles & Permissions.
+    route: null,
     group: "Admin",
     sortOrder: 521,
     actions: ["view", "edit", "approve"],
     parentKey: "settings",
   },
   {
+    // NEW child, added with the notifications work. `view`/`edit` only — no `approve`:
+    // settings_storage has one because repointing every photo in the company is a different
+    // decision from fixing a typo, whereas flipping `pushEnabled` is instantly reversible.
+    // If the master send-switch ever deserves a second pair of eyes, adding `approve` here is
+    // a one-line change — which is the point of keeping these as modules rather than as
+    // section-scoped actions on `settings`.
+    key: "settings_notifications",
+    label: "Notifications",
+    description: "Email and push delivery — providers, credentials and per-event switches",
+    icon: "Bell",
+    route: null,
+    group: "Admin", // MUST equal the parent's — the seeder asserts it
+    sortOrder: 523,
+    actions: ["view", "edit"],
+    parentKey: "settings",
+  },
+  {
+    // RE-PARENTED under settings and routeless, 2 Sep 2026. THE KEY DOES NOT CHANGE.
+    // Renaming it to `settings_whatsapp` would read better and would be a bug: seed-rbac.ts
+    // deletes any module missing from this catalog, and Permission.module / RolePermission
+    // both cascade — so every existing whatsapp_templates.* grant would vanish silently,
+    // with ADMIN unaffected so it would look fine to whoever tested it. Same argument as the
+    // note above the `zoho` entry.
+    //
+    // 530 -> 524 keeps it inside the Settings band. 523/524 are the last free slots before
+    // store_management at 540; see the band note at the top of this file.
     key: "whatsapp_templates",
     label: "WhatsApp Templates",
     description: "Customer messaging templates",
     icon: "MessageSquare",
-    route: "/more/whatsapp-templates",
-    group: "Admin",
-    sortOrder: 530,
+    route: null,
+    group: "Admin", // MUST equal the parent's — the seeder asserts it
+    sortOrder: 524,
     actions: ["view", "edit"],
+    parentKey: "settings",
   },
 
   // ── Store Management ──────────────────────────────────────────────────────
@@ -667,7 +716,10 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     label: "Integrations",
     description: "Zoho Books, Zakya POS and Zoho Inventory connections",
     icon: "Cloud",
-    route: "/settings/integrations",
+    // Routeless — same reasoning as settings_storage above. `parentKey` is KEPT: as a routeless
+    // CHILD it stays indented under Settings in the admin grid, where a routeless root would
+    // render flush-left. All 12 `zoho` guard sites are untouched; only the nav entry goes.
+    route: null,
     group: "Admin",
     sortOrder: 522,
     actions: ["view", "edit", "approve", "fetch"],
