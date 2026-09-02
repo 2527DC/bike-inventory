@@ -1545,3 +1545,60 @@ Unrelated to the plan but recorded because it changes how every later step runs:
 entries in `.claude/settings.json` AND the `GATED` regex in `.claude/hooks/ask-git-npm.js`,
 which returned `"ask"` on its own and would have kept prompting. `git` is still gated, and a
 commit or push to `main` is still **denied**. See AGENTS.md.
+
+---
+
+# 20. PART D AS BUILT — 1 Sep 2026
+
+The last part. One route extended, one page, one catalog entry, no schema change.
+
+## 20.1 What the API gained
+
+`GET /api/customers` was already paginated, searchable and guarded — only three things were
+missing:
+
+- **`whatsapp` and `address`** were on the model but not in the `select`. Both belong next to
+  a phone number.
+- **`?type=`** filter (WALK_IN / REGULAR / DEALER).
+- **`outstanding`** per customer — `SUM(amount - paidAmount)` over invoices not yet `PAID`.
+
+**The outstanding sum is ONE `groupBy` for the page, never one query per row.** The obvious
+implementation is an aggregate inside a `map`, and this codebase has already paid for that:
+the Zoho import ran two queries per record across Mumbai→Singapore and died at `maxDuration`.
+`CustomerInvoice` already carries `@@index([customerId])` and `@@index([status])`, so no
+schema change was needed.
+
+## 20.2 The screen
+
+`/customers` — a list, not cards, because the useful thing is comparing one number across
+many rows. Server-side search on name and phone (filtering one loaded page in the browser
+would silently miss everyone else), type chips, and pagination at 50.
+
+`phone` is rendered as a `tel:` link. It is `@unique` on the model and, per CLAUDE.md, the
+row both the counter and the workshop resolve to — it is the customer's identity, not a
+detail. A zero outstanding is shown muted rather than hidden: "nothing owed" is an answer.
+
+## 20.3 A bug found on the way
+
+`src/lib/api-client.ts` documented a function called **`apiFetchPage`** in two comments. **No
+such export exists** — it is `apiFetchEnvelope`. Anyone following the comment would have hit
+a compile error and had to go read the file. Both comments corrected.
+
+This mattered here: `apiFetch` returns `.data` and **discards `pagination`**, so a naive
+`apiFetch` would have left the page count silently at the row count of page one.
+
+## 20.4 Module placement
+
+`customer_list` is a child of `customers`, `view` only. `/receivables` keeps its route —
+people have it bookmarked. Create and edit check the **parent's** `customers.create` /
+`customers.edit`, which is what `POST /api/customers` and `PATCH /api/customers/[id]` already
+guard on; a `customer_list.create` would be a second grant for the same action and then
+neither answers "who may add a customer".
+
+Seeded: **49 modules (34 root, 15 child), 179 permissions**, ADMIN +1.
+
+## 20.5 Verified
+
+`tsc` clean. `eslint` on the changed files reported nothing at all. Seed applied.
+
+**Still not opened in a browser** — see §21.

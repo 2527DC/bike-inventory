@@ -384,6 +384,24 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     sortOrder: 320,
     actions: ["view", "create", "edit", "delete", "fetch"],
   },
+  {
+    // The list screen the parent has always implied but never had. `/receivables` KEEPS its
+    // route — people have it bookmarked and nothing is gained by moving it.
+    //
+    // `view` only, and deliberately so: creating and editing a customer check the PARENT's
+    // `customers.create` / `customers.edit`, which is what POST /api/customers and
+    // PATCH /api/customers/[id] already guard on. A `customer_list.create` would be a second
+    // grant for the same action, and then neither answers "who may add a customer".
+    key: "customer_list",
+    label: "Customers",
+    description: "The customer master — names, phones, type and outstanding balance",
+    icon: "Users",
+    route: "/customers",
+    parentKey: "customers",
+    group: "Accounts", // MUST equal the parent's — the seeder asserts it
+    sortOrder: 321,
+    actions: ["view"],
+  },
 
   // ── Brand Ledger (supplier reconciliation) ────────────────────────────────
   // Split into two modules on purpose. The ledger is a record; the claim register is a set of

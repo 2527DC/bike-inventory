@@ -10,8 +10,12 @@ export async function GET(req: NextRequest) {
   try {
     await requireFeature("customers", "view");
     const { page, limit, skip, search } = parseSearchParams(req.url);
+    // WALK_IN | REGULAR | DEALER. Not validated against the enum here — an unknown value
+    // simply matches nothing, which is the honest answer for a bad query string.
+    const type = req.nextUrl.searchParams.get("type") || undefined;
 
     const where = {
+      ...(type && { type: type as never }),
       ...(search && {
         OR: [
           { name: { contains: search, mode: "insensitive" as const } },
@@ -25,6 +29,9 @@ export async function GET(req: NextRequest) {
         where,
         select: {
           id: true, name: true, phone: true, email: true,
+          // whatsapp and address were on the model but not returned. Both are things a
+          // person needs to see next to a phone number.
+          whatsapp: true, address: true,
           type: true, isActive: true, createdAt: true,
           _count: { select: { invoices: true, payments: true } },
         },
@@ -35,7 +42,33 @@ export async function GET(req: NextRequest) {
       prisma.customer.count({ where }),
     ]);
 
-    return paginatedResponse(customers, total, page, limit);
+    // ── Outstanding, in ONE query for the page — never one sum per row.
+    //
+    // The obvious implementation is a per-customer aggregate inside a map. Do not write that.
+    // This codebase has already paid for it: the Zoho import ran two queries per record
+    // across Mumbai→Singapore and died at maxDuration. The list is paginated, so a single
+    // groupBy over the page ids costs one round trip regardless of page size.
+    //
+    // CustomerInvoice already carries @@index([customerId]) and @@index([status]).
+    const ids = customers.map((c) => c.id);
+    const owed = ids.length
+      ? await prisma.customerInvoice.groupBy({
+          by: ["customerId"],
+          where: { customerId: { in: ids }, status: { not: "PAID" } },
+          _sum: { amount: true, paidAmount: true },
+        })
+      : [];
+
+    const outstandingById = new Map(
+      owed.map((o) => [o.customerId, (o._sum.amount ?? 0) - (o._sum.paidAmount ?? 0)])
+    );
+
+    const shaped = customers.map((c) => ({
+      ...c,
+      outstanding: outstandingById.get(c.id) ?? 0,
+    }));
+
+    return paginatedResponse(shaped, total, page, limit);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
     return errorResponse(error instanceof Error ? error.message : "Failed to fetch customers", 500);
