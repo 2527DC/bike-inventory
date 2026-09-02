@@ -43,6 +43,7 @@ import {
   Trophy,
   Swords,
   HardDrive,
+  Bell,
   type LucideIcon,
 } from "lucide-react";
 
@@ -81,6 +82,7 @@ const ICONS: Record<string, LucideIcon> = {
   Trophy,
   Swords,
   HardDrive,
+  Bell,
   Boxes,
 };
 

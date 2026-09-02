@@ -1,10 +1,11 @@
 export const dynamic = "force-dynamic";
 
-import { NextRequest } from "next/server";
+import { NextRequest, after } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, paginatedResponse, parseSearchParams } from "@/lib/api-utils";
 import { outwardSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { maybeNotifyBelowReorder, type ReorderCrossing } from "@/lib/notify/stock";
 
 export async function GET(req: NextRequest) {
   try {
@@ -50,6 +51,10 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const data = outwardSchema.parse(body);
 
+    // §F.0: filled INSIDE the transaction, sent AFTER it commits. notify() does SMTP/FCM I/O
+    // that would blow the transaction's 5-second budget and roll the stock write back.
+    const crossings: ReorderCrossing[] = [];
+
     const result = await prisma.$transaction(async (tx) => {
       // Read product inside transaction to prevent race conditions
       const product = await tx.product.findUnique({
@@ -71,6 +76,7 @@ export async function POST(req: NextRequest) {
         where: { id: data.productId },
         data: { currentStock: newStock },
       });
+      crossings.push({ productId: data.productId, previousStock, newStock }); // collect only (§F.0)
 
       // Build notes with bin info
       const binNote = body.binId ? `[Bin: ${body.binId}]` : "";
@@ -112,6 +118,10 @@ export async function POST(req: NextRequest) {
 
       return transaction;
     });
+
+    // §F.0: the transaction has committed. after() runs this once the response has gone out, so
+    // the sale is not slowed by SMTP/FCM, and nothing is sent if the transaction threw above.
+    after(() => maybeNotifyBelowReorder(crossings));
 
     return successResponse(result, 201);
   } catch (error) {

@@ -1,10 +1,11 @@
 export const dynamic = "force-dynamic";
 
-import { NextRequest } from "next/server";
+import { NextRequest, after } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { deliveryUpdateSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { maybeNotifyBelowReorder, type ReorderCrossing } from "@/lib/notify/stock";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -52,6 +53,11 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     const preCheck = await prisma.delivery.findUnique({ where: { id } });
     if (!preCheck) return errorResponse("Delivery not found", 404);
+
+    // §F.0: filled INSIDE the transaction (only the DELIVERED / WALK_OUT deduction below moves
+    // currentStock down), sent AFTER it commits. Reservation and release touch reservedStock
+    // only and cannot cross the reorder line.
+    const crossings: ReorderCrossing[] = [];
 
     const result = await prisma.$transaction(async (tx) => {
       // Re-read inside transaction to prevent race conditions
@@ -225,6 +231,13 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
                 });
               }
 
+              // Both branches above moved currentStock DOWN by item.quantity — reserved or direct
+              // walk-out alike — so both can cross the reorder line. Collect only (§F.0).
+              crossings.push({
+                productId: product.id,
+                previousStock: product.currentStock,
+                newStock: product.currentStock - item.quantity,
+              });
               await tx.inventoryTransaction.create({
                 data: {
                   type: "OUTWARD",
@@ -269,6 +282,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         include: { verifiedBy: { select: { name: true } } },
       });
     });
+
+    // §F.0: committed. Sent after the response has gone out; empty unless this PUT deducted
+    // stock, and nothing is sent if the transaction threw.
+    after(() => maybeNotifyBelowReorder(crossings));
 
     return successResponse(result);
   } catch (error) {

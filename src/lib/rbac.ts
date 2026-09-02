@@ -213,3 +213,43 @@ export async function userCan(
   const access = await getAccess(userId);
   return access.permissions[moduleKey]?.[action] === true;
 }
+
+/**
+ * The reverse question: which ACTIVE users hold `action` on `moduleKey`?
+ *
+ * getAccess and userCan are forward-only — given a user, what can they do. Notifications need
+ * the other direction ("everyone who can approve inbound", "everyone holding zoho.fetch") so a
+ * recipient list follows the grant at send time instead of drifting in a stored list somewhere.
+ * Same walk as getAccess, run from the other end: users -> role -> role_permissions ->
+ * permission -> module.
+ *
+ * Deliberately NOT cache()-wrapped. React's cache dedupes per request, which is right for a
+ * permission check made several times in one request and wrong for a recipient list read once,
+ * after the response, when a notification is sent. Filtered to active users, active roles and
+ * active modules — a deactivated account keeps its role row and would otherwise keep receiving.
+ *
+ * Callers remove the ACTOR themselves; this function does not know who triggered the event.
+ */
+export async function usersWithPermission(
+  moduleKey: string,
+  action: PermAction
+): Promise<string[]> {
+  const users = await prisma.user.findMany({
+    where: {
+      isActive: true,
+      role: {
+        isActive: true,
+        permissions: {
+          some: {
+            permission: {
+              action,
+              module: { key: moduleKey, isActive: true },
+            },
+          },
+        },
+      },
+    },
+    select: { id: true },
+  });
+  return users.map((u) => u.id);
+}

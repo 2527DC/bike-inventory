@@ -1,7 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { prisma } from "@/lib/db";
 import { serviceGuard } from "@/lib/services/guard";
 import { STATUS_FLOW } from "@/lib/services/constants";
+import { notify } from "@/lib/notify";
+import { usersWithPermission } from "@/lib/rbac";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("services:bulk-status");
 
 export async function POST(req: NextRequest) {
   // service_jobs.APPROVE, not edit. Changing the status of MANY jobs at once is a
@@ -23,7 +28,17 @@ export async function POST(req: NextRequest) {
   // Fetch all jobs
   const jobs = await prisma.serviceJob.findMany({
     where: { id: { in: jobIds } },
-    select: { id: true, status: true, tokenNumber: true },
+    // mechanicId, bike and customer are read here only to word the READY notification below;
+    // the transition logic uses id, status and tokenNumber as before.
+    select: {
+      id: true,
+      status: true,
+      tokenNumber: true,
+      mechanicId: true,
+      bikeType: true,
+      bikeColor: true,
+      customer: { select: { name: true } },
+    },
   });
 
   // Validate each transition
@@ -70,6 +85,60 @@ export async function POST(req: NextRequest) {
       };
     }),
   });
+
+  // service.job_ready — once PER JOB that moved into READY, never once per batch (§F.2).
+  // §F.0: the updateMany and the audit rows above have committed; after() runs once the
+  // response has gone out. Recipients are resolved once for the batch, the mechanic per job.
+  if (newStatus === "READY") {
+    const actorId = user.id;
+    const readyJobs = jobs
+      .filter((j) => valid.includes(j.id) && j.status !== "READY")
+      .map((j) => ({
+        id: j.id,
+        tokenNumber: j.tokenNumber,
+        customerName: j.customer.name,
+        bike: [j.bikeColor, j.bikeType].filter(Boolean).join(" "),
+        mechanicId: j.mechanicId,
+      }));
+
+    if (readyJobs.length > 0) {
+      after(async () => {
+        try {
+          const mechanicIds = [...new Set(readyJobs.map((j) => j.mechanicId).filter((m): m is string => !!m))];
+          const [approvers, activeMechanics] = await Promise.all([
+            usersWithPermission("service_jobs", "approve"),
+            mechanicIds.length > 0
+              ? prisma.user.findMany({ where: { id: { in: mechanicIds }, isActive: true }, select: { id: true } })
+              : Promise.resolve([] as { id: string }[]),
+          ]);
+          const activeMechanicIds = new Set(activeMechanics.map((u) => u.id));
+
+          let sent = 0;
+          for (const j of readyJobs) {
+            const mechanic = j.mechanicId && activeMechanicIds.has(j.mechanicId) ? [j.mechanicId] : [];
+            const recipients = [...new Set([...approvers, ...mechanic])].filter((uid) => uid !== actorId);
+            if (recipients.length === 0) continue;
+            await notify("service.job_ready", {
+              recipients,
+              title: `Job ${j.tokenNumber} is ready`,
+              body: `${j.customerName} — ${j.bike}`,
+              refId: j.id,
+              // No per-job page exists; the counter queue lists READY jobs at the top.
+              link: "/services/counter/queue",
+              data: { jobId: j.id, tokenNumber: j.tokenNumber },
+            });
+            sent++;
+          }
+          log.info("job_ready notifications sent", { jobs: readyJobs.length, sent });
+        } catch (err) {
+          log.error("job_ready bulk notification failed", {
+            jobIds: readyJobs.map((j) => j.id),
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      });
+    }
+  }
 
   return NextResponse.json({
     updated: valid.length,

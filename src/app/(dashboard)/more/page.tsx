@@ -6,6 +6,7 @@ import { User, LogOut, ChevronRight, ChevronDown, RefreshCw } from "lucide-react
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { NotificationPreferences } from "@/components/notification-preferences";
 import { usePermissions } from "@/lib/use-permissions";
 import { moduleIcon } from "@/lib/module-icons";
 
@@ -59,6 +60,9 @@ export default function MorePage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Personal notification mutes. Plain JSX OUTSIDE the modules loop below: this surface has no module and no permission, so the permission-driven menu could never show it (plan E.2) */}
+      <NotificationPreferences />
 
       {/* Grouped Menu — built from the modules this user can view */}
       <div className="space-y-2">

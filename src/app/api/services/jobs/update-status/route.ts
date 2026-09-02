@@ -1,7 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { prisma } from "@/lib/db";
 import { serviceGuard } from "@/lib/services/guard";
 import { STATUS_FLOW } from "@/lib/services/constants";
+import { notify } from "@/lib/notify";
+import { usersWithPermission } from "@/lib/rbac";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("services:update-status");
 
 export async function POST(req: NextRequest) {
   const { user: user, error: authError } = await serviceGuard("service_jobs", "edit");
@@ -139,6 +144,54 @@ export async function POST(req: NextRequest) {
       userRole: user.roleName,
     },
   });
+
+  // service.job_ready — only on the transition INTO READY. STATUS_FLOW has no READY → READY
+  // edge, but the check is explicit so a future flow change cannot start double-paging.
+  // §F.0: both writes above have committed; after() runs once the response has gone out, so the
+  // mechanic's tap is not held up by SMTP/FCM and nothing fires if either write threw.
+  if (newStatus === "READY" && job.status !== "READY") {
+    const actorId = user.id;
+    const ready = {
+      id: job.id,
+      tokenNumber: job.tokenNumber,
+      customerName: updated.customer.name,
+      bike: [job.bikeColor, job.bikeType].filter(Boolean).join(" "),
+      mechanicId: job.mechanicId,
+    };
+    after(async () => {
+      try {
+        // Whoever can approve workshop jobs (§F.5), plus the assigned mechanic if still active,
+        // minus the person who pressed the button — they are looking at the job.
+        const [approvers, mechanic] = await Promise.all([
+          usersWithPermission("service_jobs", "approve"),
+          ready.mechanicId
+            ? prisma.user.findFirst({ where: { id: ready.mechanicId, isActive: true }, select: { id: true } })
+            : null,
+        ]);
+        const recipients = [...new Set([...approvers, ...(mechanic ? [mechanic.id] : [])])].filter(
+          (uid) => uid !== actorId
+        );
+        if (recipients.length === 0) {
+          log.debug("job ready but nobody to tell", { jobId: ready.id });
+          return;
+        }
+        await notify("service.job_ready", {
+          recipients,
+          title: `Job ${ready.tokenNumber} is ready`,
+          body: `${ready.customerName} — ${ready.bike}`,
+          refId: ready.id,
+          // No per-job page exists; the counter queue lists READY jobs at the top.
+          link: "/services/counter/queue",
+          data: { jobId: ready.id, tokenNumber: ready.tokenNumber },
+        });
+      } catch (err) {
+        log.error("job_ready notification failed", {
+          jobId: ready.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+  }
 
   return NextResponse.json({ job: updated });
 }

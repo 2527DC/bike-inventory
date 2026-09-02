@@ -8,6 +8,9 @@ Branch: **`feat/notifications-and-settings-rbac`** — create it with exactly th
   collides.** Its `settings_ai` child module is the same shape this plan adopts. See §9.
 - `docs/agents/database-architect.md`, `docs/agents/integration-architect.md` — consulted for
   Part B and Part D; the deviations from each are named where they occur.
+- **`docs/notifications-guide.md`** — the staff-facing runbook written after the build: the
+  cautions (https push links, App Passwords, the Gmail cap, tokens as credentials, §F.0), how to
+  turn each channel on, who receives what, and where to look when nothing arrives.
 
 > **Revision, 2 Sep 2026.** Part A originally collapsed `settings_storage` and
 > `whatsapp_templates` into section-scoped actions on one `settings` module
@@ -58,6 +61,7 @@ only way in. Every module key, every action and every guard is left exactly as i
 | D14 | **The `firebase` npm package is approved** for the web client | It is the only way a browser obtains an *FCM token*; raw `PushManager.subscribe()` yields a W3C subscription that `messages:send` cannot address. Phase 5 is no longer dependency-free. See §D.2. |
 | D15 | **Bulk stock writers do not fire `stock.below_reorder`** | `stock-reset` and stock-count approval would cross hundreds of products below the line in one request, and there is no batching or rate cap in this plan. See §F.1. |
 | D16 | **The Zoho pull announces the request, not only the failure** | One event became two: `zoho.pull_started` and `zoho.pull_finished`. See §F.4. |
+| D17 | **Ship the system installed but SWITCHED OFF.** No Gmail account and no Firebase project are integrated now; both master switches stay off and "the usage of it will be implemented later." | `notify()` short-circuits on the master switches (one SKIPPED row per channel, no recipient/device queries), so the outbox stays quiet until a channel is turned on. The runbook for turning either channel on later is `docs/notifications-guide.md`. Q14 stays open until email is actually wanted. |
 
 ### 2.1 Why AWS was rejected, recorded so it is not re-proposed
 
@@ -343,8 +347,13 @@ model NotificationConfig {
   pushEnabled       Boolean @default(false)
   pushConnected     Boolean @default(false)
 
-  lastTestAt      DateTime?
-  updatedById     String?
+  // As built (Phase 2, 2 Sep): NOT one shared `lastTestAt`. Email and push are tested
+  // independently, so each channel carries its own pair, mirroring StorageConfig exactly:
+  //   emailLastTestedAt DateTime?   emailLastTestError String? @db.Text
+  //   pushLastTestedAt  DateTime?   pushLastTestError  String? @db.Text
+  // A single timestamp could not say which channel it described.
+  updatedById     String?                    // plain String, NOT a relation — see schema comment
+  createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   @@map("notification_config")
@@ -993,6 +1002,68 @@ it, is in §11.1. Read that before working through these.
 **The order of Phases 4 and 5 depends on Q14** — see the note on Phase 4. The two channels are
 independent of each other; only their order relative to one another is in question.
 
+> **Status, 2 Sep 2026 (evening) — Phases 2–8 are BUILT, the schema is in the database, and
+> the system ships SWITCHED OFF (D17).** Written in one pass by five parallel agents plus the
+> lead, each on a disjoint file set, against the contracts in `src/lib/notify/types.ts` and
+> `src/lib/notify/events.ts`. `prisma migrate diff` previewed the push on an idle machine —
+> 5 `CREATE TABLE`, 3 `CREATE TYPE`, 5 indexes, 2 FK `ALTER`s on the new tables, **nothing on an
+> existing table** — then `db push` applied it in 5.7 s. `tsc --noEmit` exits 0 on the whole
+> tree. **Owner's decision:** no Gmail account and no Firebase project are integrated now; both
+> master switches stay off; the runbook for turning either on later is
+> **`docs/notifications-guide.md`** (cautions, setup steps, troubleshooting, the outbox query).
+> **Still owed:** the §11 browser pass (steps 4–12 have never been opened in a browser) and the
+> commit. **Q14 stays open** until email is actually wanted.
+>
+> **What building it corrected in the plan** — each is now true in the code, and the section it
+> touches has NOT been rewritten; read this list alongside it:
+> - **§B** — `NotificationConfig` gained `fcmMessagingSenderId` and `fcmWebAppId`: Firebase's
+>   `initializeApp()` needs both before `getToken()` can run. The draft carried only the API key,
+>   project id and VAPID key. Also per-channel `*LastTestedAt` / `*LastTestError` (see the note in
+>   the model block). `NotificationConfigView.updatedAt` is `string | null` — null before the
+>   first save.
+> - **§F.1** — `deliveries/batch:91` and `deliveries/[id]:224` are **not** reversals. Both are the
+>   non-reserved downward deduction (`currentStock - quantity`), so both collect a crossing. The
+>   real reservation release only touches `reservedStock` and is untouched.
+> - **§F.2** — `services/checkoff/route.ts` never transitions INTO `READY` (it moves READY →
+>   DELIVERED; line 12 was a `where` filter), so it has **no** call site — two sites, not three.
+>   There is no `/services/jobs/[id]` page; the link goes to `/services/counter/queue`. Recipients
+>   are `service_jobs.approve` holders plus the job's own mechanic, minus the actor.
+> - **§F.3** — `inbound/[id]/route.ts` never writes `InboundShipment.status`; only
+>   `inbound/[id]/status` transitions into `DELIVERED` — one site, not two. The call sits before
+>   that route's Zoho bill-push block, which has an early `return` that would otherwise skip it.
+> - **§F.4** — `trigger-pull` pushes *"already imported"* bills into `errors`, so
+>   `zoho.pull_finished` will read **partial** on most real pulls. Pre-existing semantics,
+>   unchanged. Since email defaults **on** for this event, expect mail on most pulls; revisit
+>   either the default or the error classification once real usage is seen. A pull rejected with
+>   400 ("no sources connected") is not announced.
+> - **§F.5** — recipients as built: `stock.below_reorder` → `reorder.edit`;
+>   `service.job_ready` → `service_jobs.approve` + mechanic; `inbound.delivered` →
+>   `inbound.approve`; both Zoho events → `zoho.fetch`. Actor removed at every site.
+> - **§F.0 mechanism** — post-commit calls are wrapped in `after()` from `next/server`
+>   (confirmed in Next 16.2.3: stable since 15.1, runs after the response, even if the handler
+>   threw), so the user's request is not slowed by SMTP/FCM either.
+> - **§D.2** — with a hand-written `sw.js`, Firebase's `onMessage` **never fires** (the SDK
+>   returns early unless `event.data.isFirebaseMessaging`, a flag only its own
+>   `firebase-messaging-sw.js` sets). So `sw.js` shows every push, foreground or not, and there is
+>   deliberately no foreground handler. `fcm_options.link` **must be https**: in dev
+>   (`NEXTAUTH_URL` is http) it is omitted and the SW opens `data.link` instead. Production must
+>   have an https `NEXTAUTH_URL`. `getToken` is marked deprecated in firebase 12.18 in favour of
+>   FID-based registration; it works and is what the plan specifies.
+> - **§C** — the sender adds `requireTLS` when not using implicit TLS (so the App Password never
+>   crosses the wire in clear because of a wrong port), 15/10/30 s timeouts (nodemailer's
+>   defaults outlive a serverless function), and treats an empty `accepted` list as a failure.
+>   The password is scrubbed from every error string in raw, `base64(pw)` and
+>   `base64("\0user\0pw")` forms — nodemailer's error `command` carries the AUTH bytes.
+> - **§E.1** — "no registered devices" on a test push does **not** write to the singleton: nothing
+>   was sent, so FCM's state is unknown and an already-proven configuration must not be un-proved.
+>   The provider fields accept only `SMTP` / `FCM` at the API — a saved row must not name a
+>   sender that does not exist. The page is 869 lines; splitting into `_components/` is a
+>   follow-up.
+> - **Logging** — `redact()` in the logger masks any key containing `token`; every log line uses
+>   `tail` for the last six characters of a device token.
+> - **Icon** — `module-icons.ts` did not map `"Bell"`; added, or the Settings card would have
+>   rendered the `Package` fallback.
+
 **Nothing is committed to `main`.** Branch `feat/notifications-and-settings-rbac` off `main`
 first; every phase is a commit on it.
 
@@ -1182,7 +1253,9 @@ changes an action union any more.
 ## 10. Files touched
 
 **Schema and seed**
-- `prisma/schema.prisma` — 5 models, 4 enums, 2 relations on `User`
+- `prisma/schema.prisma` — 5 models, **3** enums (`PushPlatform`, `NotificationChannel`,
+  `NotificationStatus` — an earlier draft said four), 2 relations on `User`, plus a
+  cross-reference comment on the pre-existing `NotificationLog` (Q10)
 - `prisma/rbac-catalog.ts` — 4 `route` values nulled, 1 `parentKey` added, 1 new module. **No
   action-union change, no module deleted.**
 - ~~`prisma/migrate-settings-permissions.ts`~~ — **not needed.** See §A4.

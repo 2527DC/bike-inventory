@@ -40,6 +40,13 @@ const ENTRIES: Entry[] = [
     module: "zoho",
   },
   {
+    href: "/settings/notifications",
+    title: "Notifications",
+    description: "Email and push delivery — providers, credentials and per-event switches",
+    icon: "Bell",
+    module: "settings_notifications",
+  },
+  {
     href: "/more/alerts",
     title: "Alerts",
     description: "Who gets notified, and the numbers alerts are sent to",
