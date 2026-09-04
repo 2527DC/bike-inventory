@@ -118,8 +118,8 @@ model Thing {
 - [ ] The real-world uniqueness rule is a constraint, not a comment
 - [ ] RBAC module + `requireFeature` guard identified, if it is a feature
 - [ ] No dependency on anything running on a schedule — this app has no cron
-- [ ] Said whether `prisma db push` and an RBAC re-seed are needed
+- [ ] Said whether a migration and an RBAC re-seed are needed, and whether the migration SQL needs hand-editing
 
-Then stop. **Do not run `prisma db push`, `prisma generate`, `npm` or `git`** — print the
+Then stop. **Do not run `prisma migrate dev`, `prisma db push`, `prisma generate`, `npm` or `git`** — print the
 commands for the user (AGENTS.md gates git/npm; `prisma generate` fails with `EPERM` while
 the dev server is running).

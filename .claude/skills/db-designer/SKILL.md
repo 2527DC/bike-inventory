@@ -6,8 +6,9 @@ allowed-tools: Read, Grep, Glob, Bash, Write, Edit
 
 # DB Designer
 
-Schema work on `prisma/schema.prisma` — 92 models, PostgreSQL on Supabase, Prisma with
-`db push` (no migrations folder).
+Schema work on `prisma/schema.prisma` — PostgreSQL on Supabase, Prisma Migrate
+(`prisma/migrations/`, applied to production by `migrate deploy` from the Vercel build).
+`db push` is banned — CLAUDE.md, "Database changes go through Prisma Migrate".
 
 **Think, don't pattern-match.** A schema is a set of claims about a business. Your job is
 to check the claims against how the business actually runs, not to apply a checklist of
@@ -100,7 +101,7 @@ Lead with the answer. Then the evidence. No preamble, no restating the request.
 - <question that genuinely changes the schema>
 
 ### Commands needed
-db push: yes/no · re-seed RBAC: yes/no · TypeScript call sites to update: <n>
+migration needed: yes/no (name it; say if the SQL needs hand-editing for a rename, backfill or NOT NULL) · re-seed RBAC: yes/no · TypeScript call sites to update: <n>
 ```
 
 Never manufacture findings. "Nothing wrong here" in one line is a good outcome. Never say a
@@ -113,8 +114,9 @@ change is safe without having grepped for every reader of the thing you changed.
 - [ ] Every new FK has an index
 - [ ] Every money column is `Decimal`
 - [ ] `onDelete` explicit on every new relation
-- [ ] Said plainly whether `prisma db push` is needed
+- [ ] Said plainly whether a migration is needed, and whether its SQL must be hand-edited
+- [ ] Said whether the previous deployment survives the migration (additive) or it must be split across two releases
 
-**Never run `prisma db push`, `prisma generate`, `npm` or `git` yourself.** `npm` and `git`
+**Never run `prisma migrate dev`, `prisma db push`, `prisma generate`, `npm` or `git` yourself.** `npm` and `git`
 are gated by an ask-rule (AGENTS.md), and `prisma generate` fails with `EPERM` while the dev
 server holds the query engine. Print the command and let the user run it.
