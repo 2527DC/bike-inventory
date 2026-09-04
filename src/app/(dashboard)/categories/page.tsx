@@ -36,7 +36,6 @@ interface CategoryItem {
   id: string;
   name: string;
   description: string | null;
-  movingLevel: string;
   reorderLevel: number;
   parent: { id: string; name: string } | null;
   _count: { products: number; children: number };
@@ -48,8 +47,6 @@ interface DeleteOutcome {
   name: string;
   message: string;
 }
-
-const MOVING_LEVELS = ["FAST", "NORMAL", "SLOW"] as const;
 
 export default function CategoriesPage() {
   const { canView, canCreate, canEdit, canDelete, loading: permsLoading } = usePermissions();
@@ -63,7 +60,6 @@ export default function CategoriesPage() {
   // Inline edit — one row at a time. `draft` holds only what is being changed.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
-  const [draftLevel, setDraftLevel] = useState<string>("NORMAL");
 
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
@@ -92,28 +88,25 @@ export default function CategoriesPage() {
   function startEdit(c: CategoryItem) {
     setEditingId(c.id);
     setDraftName(c.name);
-    setDraftLevel(c.movingLevel);
   }
 
   function cancelEdit() {
     setEditingId(null);
     setDraftName("");
-    setDraftLevel("NORMAL");
   }
 
   async function saveEdit(c: CategoryItem) {
     if (!draftName.trim()) return setError("A category needs a name");
+    // Name is the only editable field now that movingLevel is gone. An unchanged save would
+    // send {} and the API answers 400 "Nothing to update", so close the row instead.
+    if (draftName.trim() === c.name) return cancelEdit();
 
     setBusy(c.id);
     setError(null);
     try {
-      // Sends only what changed — the API takes every field as optional for this reason.
       await apiFetch(`/api/categories/${c.id}`, {
         method: "PATCH",
-        json: {
-          ...(draftName.trim() !== c.name ? { name: draftName.trim() } : {}),
-          ...(draftLevel !== c.movingLevel ? { movingLevel: draftLevel } : {}),
-        },
+        json: { name: draftName.trim() },
       });
       log.info("category saved", { categoryId: c.id });
       cancelEdit();
@@ -273,16 +266,6 @@ export default function CategoriesPage() {
                         aria-label="Category name"
                         autoFocus
                       />
-                      <select
-                        value={draftLevel}
-                        onChange={(e) => setDraftLevel(e.target.value)}
-                        aria-label="Moving level"
-                        className="min-h-[40px] rounded-lg border border-slate-300 bg-white px-2 text-sm focus-ring"
-                      >
-                        {MOVING_LEVELS.map((l) => (
-                          <option key={l} value={l}>{l}</option>
-                        ))}
-                      </select>
                       <div className="flex gap-1.5">
                         <Button size="sm" onClick={() => void saveEdit(c)} disabled={busy === c.id}>
                           <Check className="h-3.5 w-3.5" />
@@ -301,9 +284,6 @@ export default function CategoriesPage() {
                           <Badge variant="info" className="text-[10px] tabular-nums">
                             {c._count.products} product{c._count.products === 1 ? "" : "s"}
                           </Badge>
-                          {c.movingLevel !== "NORMAL" && (
-                            <Badge variant="default" className="text-[10px]">{c.movingLevel}</Badge>
-                          )}
                           {c._count.children > 0 && (
                             <Badge variant="default" className="text-[10px] tabular-nums">
                               {c._count.children} sub

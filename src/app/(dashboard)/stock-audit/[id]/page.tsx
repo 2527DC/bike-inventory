@@ -30,7 +30,6 @@ interface StockCountItemData {
     name: string;
     sku: string;
     currentStock: number;
-    type: string;
     size: string | null;
     category: { name: string } | null;
     brand: { name: string } | null;

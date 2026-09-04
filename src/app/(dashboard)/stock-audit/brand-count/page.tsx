@@ -16,12 +16,12 @@ interface Brand { id: string; name: string; _count: { products: number } }
 interface BinOption { id: string; code: string; name: string; location: string }
 interface CategoryOption { id: string; name: string }
 interface ProductItem {
-  id: string; sku: string; name: string; type: string; size: string | null;
+  id: string; sku: string; name: string; size: string | null;
   currentStock: number; reorderLevel: number; reorderQty: number;
   category: { name: string } | null; brand: { name: string } | null;
 }
 interface SearchResult {
-  id: string; sku: string; name: string; type: string;
+  id: string; sku: string; name: string;
   currentStock: number; reorderLevel: number;
   category: { name: string } | null; brand: { name: string } | null;
 }
@@ -216,7 +216,7 @@ export default function BrandCountPage() {
     const alreadyInList = !!products.find((p) => p.id === result.id);
     if (!alreadyInList) {
       const newProduct: ProductItem = {
-        id: result.id, sku: result.sku, name: result.name, type: result.type,
+        id: result.id, sku: result.sku, name: result.name,
         size: null, currentStock: result.currentStock, reorderLevel: result.reorderLevel,
         reorderQty: 0, category: result.category, brand: result.brand,
       };
@@ -581,9 +581,6 @@ export default function BrandCountPage() {
                                       {p.size && (
                                         <Badge className="text-[9px] px-1 py-0 bg-slate-100 text-slate-600">{p.size}</Badge>
                                       )}
-                                      <Badge className="text-[9px] px-1 py-0 bg-blue-50 text-blue-600">
-                                        {p.type.replace("_", " ")}
-                                      </Badge>
                                     </div>
 
                                     {/* Brand & Category change chips */}

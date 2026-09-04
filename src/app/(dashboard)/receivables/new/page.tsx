@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Plus } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,43 +22,12 @@ export default function NewInvoicePage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
-  // Inline new customer form
-  const [showNewCustomer, setShowNewCustomer] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [newPhone, setNewPhone] = useState("");
-  const [creatingCustomer, setCreatingCustomer] = useState(false);
-
   useEffect(() => {
     fetch("/api/customers?limit=100")
       .then((r) => r.json())
       .then((res) => { if (res.success) setCustomers(res.data); })
       .catch(() => {});
   }, []);
-
-  async function handleCreateCustomer() {
-    if (!newName.trim()) return;
-    setCreatingCustomer(true);
-    setError("");
-    try {
-      const res = await fetch("/api/customers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newName.trim(), phone: newPhone.trim() || undefined }),
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || "Failed to create customer");
-      const created = data.data as CustomerOption;
-      setCustomers((prev) => [...prev, created]);
-      setCustomerId(created.id);
-      setShowNewCustomer(false);
-      setNewName("");
-      setNewPhone("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create customer");
-    } finally {
-      setCreatingCustomer(false);
-    }
-  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -110,16 +79,7 @@ export default function NewInvoicePage() {
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Customer Dropdown */}
         <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className="block text-sm font-medium text-slate-700">Customer *</label>
-            <button
-              type="button"
-              onClick={() => setShowNewCustomer(!showNewCustomer)}
-              className="text-xs text-green-700 font-medium flex items-center gap-1 rounded-lg px-2 py-1 -mr-2 min-h-[44px] hover:bg-slate-100 focus-ring"
-            >
-              <Plus className="h-3 w-3" /> New Customer
-            </button>
-          </div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Customer *</label>
           <select
             value={customerId}
             onChange={(e) => setCustomerId(e.target.value)}
@@ -134,51 +94,11 @@ export default function NewInvoicePage() {
           </select>
         </div>
 
-        {/* Inline New Customer Form */}
-        {showNewCustomer && (
-          <div className="border border-slate-200 bg-slate-50 rounded-xl p-3 space-y-2 shadow-sm">
-            <p className="text-xs font-medium text-slate-700">Quick Add Customer</p>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Customer Name *</label>
-              <Input
-                className="min-h-[44px]"
-                placeholder="Customer name"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Phone</label>
-              <Input
-                className="min-h-[44px] tabular-nums"
-                type="tel"
-                inputMode="tel"
-                placeholder="Phone (optional)"
-                value={newPhone}
-                onChange={(e) => setNewPhone(e.target.value)}
-              />
-            </div>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                size="sm"
-                onClick={handleCreateCustomer}
-                disabled={!newName.trim() || creatingCustomer}
-                className="bg-green-600 hover:bg-green-700 text-white"
-              >
-                {creatingCustomer ? "Creating..." : "Add"}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setShowNewCustomer(false)}
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
+        {/* Customers are not created here. A customer row appears when a Zoho invoice is
+            imported or a service job is opened — both resolve on phone, which is the identity. */}
+        <p className="-mt-2 text-xs text-slate-500">
+          Customer not listed? Import their Zoho invoice or open a service job.
+        </p>
 
         {/* Invoice No */}
         <div>

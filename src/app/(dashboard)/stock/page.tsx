@@ -26,7 +26,6 @@ import { BICYCLE_SIZES } from "@/lib/product-size";
 const STOCK_COLUMNS: ExportColumn[] = [
   { header: "SKU", key: "sku" },
   { header: "Product Name", key: "name" },
-  { header: "Type", key: "type" },
   { header: "Category", key: "category.name" },
   { header: "Brand", key: "brand.name" },
   { header: "Size", key: "size" },
@@ -39,7 +38,6 @@ interface ProductItem {
   id: string;
   sku: string;
   name: string;
-  type: string;
   size: string | null;
   status: string;
   currentStock: number;
@@ -58,7 +56,6 @@ interface ProductItem {
 interface BrandItem { id: string; name: string; _count: { products: number }; }
 interface BinItem { id: string; code: string; name: string; location: string; _count: { products: number }; }
 interface CategoryItem { id: string; name: string; _count: { products: number }; }
-interface ProductTypeItem { id: string; name: string; isActive: boolean; _count: { products: number }; }
 
 interface PerItemBin {
   binId: string | null;
@@ -151,11 +148,6 @@ export default function StockPage() {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search);
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("ALL");
-  // "ALL", or a ProductType id. Defaults to ALL, not to a type: product types are data now,
-  // so there is no value that is guaranteed to exist — and defaulting to one silently hides
-  // most of the catalog behind a choice the person did not make.
-  const [typeFilter, setTypeFilter] = useState<string>("ALL");
-  const [productTypes, setProductTypes] = useState<ProductTypeItem[]>([]);
   const [showFilters, setShowFilters] = useState(false);
   const [selectedBrand, setSelectedBrand] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
@@ -278,12 +270,10 @@ export default function StockPage() {
       fetch("/api/brands").then((r) => r.json()),
       fetch("/api/bins").then((r) => r.json()),
       fetch("/api/categories").then((r) => r.json()),
-      fetch("/api/product-types").then((r) => r.json()),
-    ]).then(([brandsRes, binsRes, catsRes, typesRes]) => {
+    ]).then(([brandsRes, binsRes, catsRes]) => {
       if (brandsRes.success) setBrands(brandsRes.data);
       if (binsRes.success) setBins(binsRes.data);
       if (catsRes.success) setCategories(catsRes.data);
-      if (typesRes.success) setProductTypes(typesRes.data);
     }).catch(() => {});
   }, []);
 
@@ -292,7 +282,6 @@ export default function StockPage() {
   const buildParams = useCallback((pageNum: number) => {
     const params = new URLSearchParams({ limit: String(PAGE_SIZE), page: String(pageNum), sortBy: "currentStock", sortOrder: "desc" });
     if (debouncedSearch) params.set("search", debouncedSearch);
-    if (typeFilter !== "ALL") params.set("productTypeId", typeFilter);
     if (quickFilter === "INACTIVE") { params.set("status", "INACTIVE"); }
     else if (quickFilter === "IN_STOCK") { params.set("status", "ACTIVE"); params.set("minStock", "1"); }
     else if (quickFilter === "NO_STOCK") { params.set("status", "ACTIVE"); params.set("maxStock", "0"); }
@@ -306,7 +295,7 @@ export default function StockPage() {
     if (selectedSize) params.set("size", selectedSize);
     if (selectedBin) params.set("binId", selectedBin);
     return params;
-  }, [debouncedSearch, quickFilter, typeFilter, selectedBrand, selectedCategory, selectedSize, selectedBin]);
+  }, [debouncedSearch, quickFilter, selectedBrand, selectedCategory, selectedSize, selectedBin]);
 
   const fetchProducts = useCallback((pageNum: number, append = false, silent = false) => {
     if (!silent) { if (append) setLoadingMore(true); else setLoading(true); }
@@ -496,31 +485,6 @@ export default function StockPage() {
         />
       )}
 
-      {/* Type Tabs — from the ProductType table, not a hardcoded list. Retired types are
-          hidden here but still render on the products that hold them. `All` comes first so
-          the default tab is the leftmost one, and the grid sizes itself to what exists. */}
-      <div
-        className="grid gap-1 mb-3 bg-slate-100 rounded-xl p-1"
-        style={{ gridTemplateColumns: `repeat(${productTypes.filter((t) => t.isActive).length + 1}, minmax(0, 1fr))` }}
-      >
-        {([
-          { key: "ALL", label: "All" },
-          ...productTypes.filter((t) => t.isActive).map((t) => ({ key: t.id, label: t.name })),
-        ]).map((t) => (
-          <button
-            key={t.key}
-            onClick={() => { setTypeFilter(t.key); setPage(1); }}
-            className={`py-2 rounded-lg text-xs font-semibold transition-colors ${
-              typeFilter === t.key
-                ? "bg-white text-slate-900 shadow-sm"
-                : "text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
       {/* View Tabs */}
       <div className="flex gap-2 mb-3">
         <button
@@ -600,14 +564,7 @@ export default function StockPage() {
           {QUICK_CHIPS.map((chip) => (
             <button
               key={chip.key}
-              onClick={() => {
-                setQuickFilter(chip.key);
-                // "Needs details" is a question about the whole catalog. If a type tab is
-                // selected, leaving it set would answer "which CYCLES need details", quietly
-                // hiding everything else that needs them just as much. Widening to All is
-                // visible in the control above and the person can narrow it again.
-                if (chip.key === "NEEDS_DETAILS") setTypeFilter("ALL");
-              }}
+              onClick={() => setQuickFilter(chip.key)}
               className={`shrink-0 px-2.5 py-1.5 rounded-full text-xs font-medium transition-colors ${
                 quickFilter === chip.key
                   ? "bg-slate-900 text-white"

@@ -33,7 +33,6 @@ function fmt(amount: number) {
 const TABS = [
   { key: "category", label: "By Category" },
   { key: "brand", label: "By Brand" },
-  { key: "type", label: "By Type" },
 ];
 
 export default function StockValuePage() {

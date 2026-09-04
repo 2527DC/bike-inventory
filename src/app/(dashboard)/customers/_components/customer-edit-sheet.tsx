@@ -20,9 +20,9 @@ export interface CustomerDraft {
   type: string;
 }
 
-interface CustomerFormSheetProps {
-  /** null = create a new customer; a draft = edit that one. */
-  editing: CustomerDraft | null;
+interface CustomerEditSheetProps {
+  /** The customer being edited. Never null — the parent only mounts this with a row. */
+  editing: CustomerDraft;
   open: boolean;
   onClose: () => void;
   /** Called after a successful save, so the list can reload. */
@@ -41,13 +41,16 @@ function normalisePhone(raw: string) {
 }
 
 /**
- * Create and edit a customer.
+ * Edit a customer.
  *
- * ─── ONE SHEET FOR BOTH ──────────────────────────────────────────────────────────────────
+ * ─── EDIT ONLY, BY DESIGN ────────────────────────────────────────────────────────────────
  *
- * Add and edit differ by which endpoint they call and nothing else — same fields, same
- * rules, same validation. Two components would have been two places to fix the next time a
- * field is added, and they would have drifted.
+ * There is no "add customer" any more. A customer row appears when a Zoho invoice is
+ * imported or a service job is opened; both resolve on `phone`, which is the identity. A
+ * hand-typed customer was a second way to create the same person under a mistyped number.
+ *
+ * `POST /api/customers` still exists and is still create-or-find — the Zoho invoice import
+ * depends on it. What is gone is the UI that let a person call it.
  *
  * ─── BOTTOM SHEET ON A PHONE, DIALOG ON A DESKTOP ────────────────────────────────────────
  *
@@ -58,12 +61,10 @@ function normalisePhone(raw: string) {
  * ─── PHONE IS THE IDENTITY, SO THE COLLISION IS THE INTERESTING CASE ─────────────────────
  *
  * `Customer.phone` is `@unique`; it is what the counter and the workshop both resolve to.
- * POST answers 200 with the EXISTING row when the number is taken (two callers depend on
- * that "create or find" behaviour), so a create that silently succeeded would be reported
- * here as a save that never happened. `alreadyExisted` on the response is what lets this
- * form tell the truth instead. PUT answers 409 by name for the same collision.
+ * Changing a number to one that is already taken answers 409 by name, which is surfaced in
+ * the error banner rather than swallowed.
  */
-export function CustomerFormSheet({ editing, open, onClose, onSaved }: CustomerFormSheetProps) {
+export function CustomerEditSheet({ editing, open, onClose, onSaved }: CustomerEditSheetProps) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [whatsapp, setWhatsapp] = useState("");
@@ -82,12 +83,12 @@ export function CustomerFormSheet({ editing, open, onClose, onSaved }: CustomerF
   // draft the user already walked away from.
   useEffect(() => {
     if (!open) return;
-    setName(editing?.name ?? "");
-    setPhone(editing?.phone ?? "");
-    setWhatsapp(editing?.whatsapp ?? "");
-    setEmail(editing?.email ?? "");
-    setAddress(editing?.address ?? "");
-    setType(editing?.type ?? "WALK_IN");
+    setName(editing.name);
+    setPhone(editing.phone);
+    setWhatsapp(editing.whatsapp ?? "");
+    setEmail(editing.email ?? "");
+    setAddress(editing.address ?? "");
+    setType(editing.type);
     setError(null);
   }, [open, editing]);
 
@@ -135,34 +136,14 @@ export function CustomerFormSheet({ editing, open, onClose, onSaved }: CustomerF
     };
 
     try {
-      if (editing) {
-        await apiFetch(`/api/customers/${editing.id}`, { method: "PUT", json: payload });
-        log.info("customer saved", { customerId: editing.id });
-        onSaved(`${payload.name} updated`);
-      } else {
-        const created = await apiFetch<{ id: string; name: string; alreadyExisted?: boolean }>(
-          "/api/customers",
-          { method: "POST", json: payload }
-        );
-
-        // 200 + alreadyExisted means the phone was taken. Nothing was created, so say so
-        // and leave the sheet open on the number that caused it.
-        if (created.alreadyExisted) {
-          log.warn("create hit an existing phone", { customerId: created.id });
-          setError(
-            `${created.name} already uses ${cleanPhone}. Phone numbers identify a customer, so close this and edit that record instead.`
-          );
-          return;
-        }
-
-        log.info("customer created", { customerId: created.id });
-        onSaved(`${payload.name} added`);
-      }
+      await apiFetch(`/api/customers/${editing.id}`, { method: "PUT", json: payload });
+      log.info("customer saved", { customerId: editing.id });
+      onSaved(`${payload.name} updated`);
       onClose();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Could not save the customer";
       setError(msg);
-      log.error("customer save failed", { customerId: editing?.id, message: msg });
+      log.error("customer save failed", { customerId: editing.id, message: msg });
     } finally {
       setSaving(false);
     }
@@ -179,15 +160,13 @@ export function CustomerFormSheet({ editing, open, onClose, onSaved }: CustomerF
         ref={panelRef}
         role="dialog"
         aria-modal="true"
-        aria-label={editing ? "Edit customer" : "Add customer"}
+        aria-label="Edit customer"
         className="bg-white w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl max-h-[88vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between p-4 border-b border-slate-100 shrink-0">
           <div className="pr-3">
-            <h2 className="text-base font-bold text-slate-900">
-              {editing ? "Edit customer" : "Add customer"}
-            </h2>
+            <h2 className="text-base font-bold text-slate-900">Edit customer</h2>
             <p className="text-xs text-slate-500 mt-0.5">
               The phone number is the customer&apos;s identity — the counter and the workshop
               both resolve to it.

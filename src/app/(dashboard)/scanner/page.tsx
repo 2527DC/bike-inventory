@@ -16,7 +16,7 @@ interface SerialResult {
   receivedAt: string;
   soldAt: string | null;
   customerName: string | null;
-  product: { name: string; sku: string; type: string; sellingPrice: number; mrp: number };
+  product: { name: string; sku: string; sellingPrice: number; mrp: number };
   bin: { code: string; location: string } | null;
 }
 
@@ -24,7 +24,6 @@ interface ProductResult {
   id: string;
   sku: string;
   name: string;
-  type: string;
   currentStock: number;
   sellingPrice: number;
   mrp: number;
@@ -220,7 +219,7 @@ export default function ScannerPage() {
                       <div className="flex items-start justify-between mb-1">
                         <div className="flex-1 min-w-0 mr-2">
                           <p className="text-sm font-medium text-slate-900">{p.name}</p>
-                          <p className="text-xs text-slate-500">{p.sku} | {p.type}</p>
+                          <p className="text-xs text-slate-500">{p.sku}</p>
                         </div>
                         <Badge variant={p.currentStock > 0 ? "success" : "danger"}>
                           {p.currentStock > 0 ? `${p.currentStock} in stock` : "Out of stock"}
@@ -249,7 +248,7 @@ export default function ScannerPage() {
                       <div className="flex-1 min-w-0 mr-2">
                         <p className="text-lg font-mono font-bold text-slate-900 tabular-nums break-all">{s.serialCode}</p>
                         <p className="text-sm text-slate-700">{s.product.name}</p>
-                        <p className="text-xs text-slate-500">{s.product.sku} | {s.product.type}</p>
+                        <p className="text-xs text-slate-500">{s.product.sku}</p>
                       </div>
                       <Badge variant={s.status === "IN_STOCK" ? "success" : s.status === "SOLD" ? "info" : s.status === "DAMAGED" ? "danger" : "warning"}>
                         {s.status.replace(/_/g, " ")}
