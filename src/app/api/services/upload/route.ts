@@ -94,8 +94,16 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// GET — return proxy URLs for job photos
+// GET — return proxy URLs for job photos.
+//
+// Guarded, unlike before: the POST above has always required service_jobs.edit while this read
+// had nothing, so any signed-in user could enumerate job ids and pull the photo index for any
+// job. The images themselves were never exposed (api/services/upload/photo checks
+// service_jobs.view), but the existence and count of a job's photos were.
 export async function GET(req: NextRequest) {
+  const { error } = await serviceGuard("service_jobs", "view");
+  if (error) return error;
+
   const jobId = req.nextUrl.searchParams.get("jobId");
   const photoType = req.nextUrl.searchParams.get("type") || "inward";
   if (!jobId) {

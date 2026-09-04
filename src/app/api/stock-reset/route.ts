@@ -7,7 +7,11 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 export async function POST(req: NextRequest) {
   try {
-    await requireFeature("stock_audit", "create");
+    // approve, NOT create: this zeroes currentStock and reservedStock on EVERY active product.
+    // `create` is the grant a junior counter needs to START a stock count; `approve` is the
+    // supervisory action on this module. The confirm string below is a typo guard, not a
+    // permission check.
+    await requireFeature("stock_audit", "approve");
     const body = await req.json();
     const { location, confirm } = body as { location?: string; confirm?: string };
 

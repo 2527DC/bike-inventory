@@ -1,44 +1,50 @@
-"use client";
+// The login screen.
+//
+// A SERVER component, deliberately, and this is the whole reason for the file split.
+//
+// THE BUG THIS FIXES
+// ------------------
+// `/login` is excluded from the middleware matcher (src/middleware.ts) so that someone with
+// no session can reach it — that exclusion is correct and must stay. But it also means
+// `withAuth` never runs here, and the page itself used to be a client component that never
+// asked whether anyone was already signed in. So a signed-in user could open /login, see the
+// form, and sign in again as somebody else.
+//
+// On a shared counter phone that is not cosmetic: the session swaps under the previous user
+// without them signing out, and the push device row registered to them stays behind (see
+// docs/code-review-2026-09-02.md §5.5), so notifications for the previous user keep arriving
+// on a device now held by someone else.
+//
+// Checking here rather than in middleware keeps the matcher exclusion honest: the page stays
+// reachable without a session, and only the redirect is conditional.
+//
+// `getCurrentUser()` rather than `getServerSession()` on purpose — it re-reads the row, so a
+// DEACTIVATED account holding a still-valid cookie is treated as signed out and stays on this
+// page. Redirecting it to "/" instead would bounce it into a dashboard it cannot use.
 
-import { useState } from "react";
-import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
-import { LogIn } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth-helpers";
+import { LoginForm } from "./login-form";
 
-export default function LoginPage() {
-  const [accessCode, setAccessCode] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const router = useRouter();
+export const dynamic = "force-dynamic";
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!accessCode.trim()) {
-      setError("Please enter your access code");
-      return;
-    }
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ callbackUrl?: string }>;
+}) {
+  const user = await getCurrentUser();
+  const { callbackUrl } = await searchParams;
 
-    setLoading(true);
-    setError("");
+  // Only ever redirect to a path on this origin. A `callbackUrl` arrives from the middleware
+  // as a query parameter, so an absolute URL there would be an open redirect — hand someone a
+  // /login?callbackUrl=https://… link and a signed-in click lands them off-site.
+  const safeTarget =
+    callbackUrl && callbackUrl.startsWith("/") && !callbackUrl.startsWith("//")
+      ? callbackUrl
+      : "/";
 
-    // Cast the result: next-auth v4's signIn overloads resolve to `never` under this
-    // project's "bundler" module resolution, so the returned shape has to be stated here.
-    const result = (await signIn("credentials", {
-      accessCode: accessCode.trim(),
-      redirect: false,
-    })) as { error?: string; ok?: boolean } | undefined;
-
-    if (result?.error) {
-      setError("Invalid access code. Please try again.");
-      setLoading(false);
-    } else {
-      router.push("/");
-      router.refresh();
-      setLoading(false);
-    }
-  }
+  if (user) redirect(safeTarget);
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 px-4">
@@ -52,44 +58,7 @@ export default function LoginPage() {
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <Input
-              type="text"
-              placeholder="Access Code"
-              value={accessCode}
-              onChange={(e) => {
-                setAccessCode(e.target.value.toUpperCase());
-                setError("");
-              }}
-              className="h-12 text-center text-lg tracking-widest uppercase"
-              autoFocus
-              autoComplete="off"
-            />
-            {error && (
-              <p className="mt-2 text-sm text-red-600 text-center">{error}</p>
-            )}
-          </div>
-
-          <Button
-            type="submit"
-            size="lg"
-            disabled={loading}
-            className="w-full h-12"
-          >
-            {loading ? (
-              <span className="flex items-center gap-2">
-                <span className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                Signing in...
-              </span>
-            ) : (
-              <span className="flex items-center gap-2">
-                <LogIn className="h-4 w-4" />
-                Sign In
-              </span>
-            )}
-          </Button>
-        </form>
+        <LoginForm redirectTo={safeTarget} />
 
         <p className="mt-6 text-xs text-slate-400 text-center">
           Contact admin if you don&apos;t have an access code

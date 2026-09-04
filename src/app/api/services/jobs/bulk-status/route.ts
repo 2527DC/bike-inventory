@@ -1,3 +1,8 @@
+export const runtime = "nodejs";
+// nodejs, explicitly: this route reaches SMTP (a raw socket on 587) and the FCM JWT signer
+// (node crypto) through notify(). Neither works on the edge runtime, and the failure there
+// is not self-explanatory. Node is the default today; this stops a later change from
+// silently breaking sends. See the notifications plan, Part C and D.1.
 import { NextRequest, NextResponse, after } from "next/server";
 import { prisma } from "@/lib/db";
 import { serviceGuard } from "@/lib/services/guard";

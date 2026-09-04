@@ -2,8 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { serviceGuard } from "@/lib/services/guard";
 
-// GET — fetch all price items (any logged-in user)
+// GET — fetch all price items.
+//
+// This was the one handler in api/services/* with no serviceGuard: the comment said "any
+// logged-in user", which middleware enforces, so the full labour and parts price list was
+// readable by anyone signed in — a stock clerk, a mechanic, anyone. Its own POST and DELETE
+// were correctly gated on service_prices.create / .delete all along.
 export async function GET() {
+  const { error } = await serviceGuard("service_prices", "view");
+  if (error) return error;
+
   const prices = await prisma.priceItem.findMany({
     where: { active: true },
     orderBy: [{ category: "asc" }, { name: "asc" }],

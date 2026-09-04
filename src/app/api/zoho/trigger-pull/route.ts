@@ -1,4 +1,9 @@
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+// nodejs, explicitly: this route reaches SMTP (a raw socket on 587) and the FCM JWT signer
+// (node crypto) through notify(). Neither works on the edge runtime, and the failure there
+// is not self-explanatory. Node is the default today; this stops a later change from
+// silently breaking sends. See the notifications plan, Part C and D.1.
 // 60, not 30. Headroom for the bill and invoice steps, which fetch a page at a time and then
 // write their previews in a fixed number of queries rather than one round trip per record.
 export const maxDuration = 60;
@@ -374,9 +379,17 @@ export async function POST(req: NextRequest) {
         const firstError = allErrors[0];
         after(async () => {
           try {
-            const recipients = (await usersWithPermission("zoho", "fetch")).filter((uid) => uid !== actorId);
+            // The OUTCOME event, unlike pull_started, falls back to including the actor.
+            // zoho.fetch is a narrow grant — quite possibly ADMIN alone — so excluding the
+            // person who pressed Pull could leave nobody at all, and this is the one event
+            // that defaults email ON precisely because it reports something already broken.
+            // Firing for nobody would also write no outbox row, so there would be no trace
+            // that it tried. pull_started keeps the exclusion: that one is pure courtesy.
+            const holders = await usersWithPermission("zoho", "fetch");
+            const others = holders.filter((uid) => uid !== actorId);
+            const recipients = others.length > 0 ? others : holders;
             if (recipients.length === 0) {
-              log.debug("pull finished but nobody else holds zoho.fetch", { pullId: finishedPullId });
+              log.warn("pull finished but nobody holds zoho.fetch", { pullId: finishedPullId });
               return;
             }
             const counts = `${billsNew} new bill${billsNew === 1 ? "" : "s"}, ${invoicesNew} new invoice${invoicesNew === 1 ? "" : "s"}`;
