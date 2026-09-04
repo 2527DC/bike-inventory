@@ -138,6 +138,42 @@ Anything that used to run on a schedule is now a button behind `requireFeature`:
 to trigger it, raise it rather than reintroducing a scheduler. See
 `docs/implementation/completed/cron-removal-plan.md` for what was removed and what was knowingly given up.
 
+## Database changes go through Prisma Migrate
+
+Decided 2 Sep 2026, the day before production. `prisma db push` was fine while the database
+was disposable; from go-live it is **banned**. The one-time baseline and the full reasoning
+are in `docs/implementation/pending/prisma-migrations-adoption-plan.md`. **Until that plan's
+§3 baseline is marked done, no schema command of any kind runs against production.**
+
+1. **A schema change is two things committed together:** the edit to `prisma/schema.prisma`
+   and the folder `prisma/migrations/<timestamp>_<name>/` that `npx prisma migrate dev --name <name>`
+   wrote for it. One without the other is a bug; CI fails the PR.
+2. **`migrate dev` runs on localhost only.** It creates a shadow database and can reset the
+   target. `.env` must point at `localhost` when it runs.
+3. **Read the SQL before committing.** `DROP`, `ALTER COLUMN … TYPE`, or `SET NOT NULL` on a
+   populated table means hand-editing the file: rename instead of drop-and-create; add
+   nullable, backfill, then set not null.
+4. **Production is written by `prisma migrate deploy` from the Vercel build and by nothing
+   else.** Not `db push`, not `migrate dev`, not the Supabase SQL editor. The build runs
+   migrate → generate → build, so a failed migration is a failed build and no deploy.
+5. **Never, against any URL that is not localhost:** `db push`, `migrate dev`,
+   `migrate reset`, `--force-reset`, `--accept-data-loss`.
+6. **Never edit a merged migration.** Add a new one.
+7. **Additive first.** The migration runs minutes before the new code goes live, so the old
+   code must survive the new schema. Drop or rename a column only in the release *after* the
+   code stopped using it.
+8. **`DIRECT_URL` is the 5432 session pooler, never 6543.** Migrate takes a session lock; a
+   transaction pooler never releases it (stock-management plan §17.2).
+9. **Snapshot before merging any PR that contains a migration:** `npm run db:snapshot`.
+   Prisma has no down migrations. The snapshot is the rollback.
+10. **Local and test databases are restores of a production snapshot**
+    (`npm run db:restore:local -- backups/<file>`), which nulls the stored Zoho, storage and
+    SMTP credentials and deletes push devices. Refresh before designing a schema change or
+    reproducing a bug. A decision about production is made on production's shape, not on
+    seed data. `backups/` is gitignored and never leaves the machine.
+11. **RBAC catalog changes are data, not migrations.** After the deploy the owner runs
+    `npm run db:seed:rbac`, as today.
+
 ## The service / workshop module
 
 `/services/*` is the former standalone `bch-service` app, merged in. Its own auth layer

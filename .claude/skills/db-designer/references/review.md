@@ -42,8 +42,9 @@ Report exact call sites. "Several places use this" is not a review.
 ## Severity ladder — highest first
 
 **Destructive to existing rows.** A dropped column, a narrowed type, or a new NOT NULL with
-no default on a populated table. There are no migrations in this project (`db push`), so
-there is **no rollback**. This is the highest-severity thing you can find; say it first and
+no default on a populated table. Prisma has no down migrations, so the only rollback is a
+snapshot taken before the merge (CLAUDE.md, "Database changes go through Prisma Migrate");
+say whether the generated SQL must be hand-edited into a rename or a backfill instead. This is the highest-severity thing you can find; say it first and
 say it plainly.
 
 **Wrong money type.** A new `Float` on a currency column. Reject it.
@@ -96,7 +97,7 @@ Before proposing one:
 - <only ones where different answers give different schema>
 
 ### Commands
-db push: yes/no · prisma generate: yes/no (stop the dev server first — EPERM)
+migration: yes/no (hand-edit needed? previous deploy survives it?) · prisma generate: yes/no (stop the dev server first — EPERM)
 RBAC re-seed: yes/no · TypeScript call sites: <n>
 ```
 
