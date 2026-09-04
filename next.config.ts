@@ -2,7 +2,15 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  turbopack: {},
+
+  // Pin the workspace root. Without this, Next infers it from the nearest lockfile and picks
+  // F:\bharath  Cycle\package-lock.json — the PARENT folder, which holds six sibling projects
+  // (bch-service, bch-service-app, bch-store-analytics, bike-inventory, Buildline, personal)
+  // and four node_modules trees. Turbopack then resolves and watches all of it on every
+  // compile. Pinning it to this directory is the single biggest dev-speed win here.
+  turbopack: {
+    root: __dirname,
+  },
   compress: true,
   experimental: {
     optimizePackageImports: ["lucide-react", "date-fns"],
