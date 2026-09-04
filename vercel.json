@@ -1,5 +1,6 @@
 {
   "regions": [
     "bom1"
-  ]
+  ],
+  "buildCommand": "node scripts/vercel-build.mjs"
 }
