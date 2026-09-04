@@ -1,7 +1,7 @@
 # Unified plan — purchasing loop, PO email, deliveries fetch, stock transfers, stock audit, inbound receiving, activity log and the post-go-live removals
 
 Status: pending
-Branch: **`chore/mig1-additive-schema-and-helpers`** — phase P1; one branch and one PR per phase in the order of §3, each cut from `main` after the previous phase merged. Update this line to the current phase's branch as work moves.
+Branch: **`chore/mig1-additive-schema-and-helpers`** — phase P1; one branch and one PR per phase in the order of §3, each cut from the **reference branch `feat/notifications-and-settings-rbac`** (owner, 4 Sep — NOT `main`; local `main` is stale) after the previous phase merged. Update this line to the current phase's branch as work moves.
 
 Written 4 Sep 2026. Merges and **replaces** two plans written the same day:
 `0409-purchasing-deliveries-transfers-plan.md` (PLAN-1: §A–§G) and
@@ -9,6 +9,84 @@ Written 4 Sep 2026. Merges and **replaces** two plans written the same day:
 below was re-verified against the working tree on 4 Sep 2026; where a source plan cited a
 model's leading comment instead of its declaration the number here is the declaration.
 Plan files are named `ddmm-<name>-plan.md` from now on.
+
+---
+
+## 0. Requirements
+
+Written 4 Sep 2026 with the owner. **Every phase in §3 names the requirement it satisfies; every
+requirement below names the phases that deliver it.** If a phase traces to no requirement it is
+scope creep and comes out. If a requirement is dropped, the phases in its row go with it.
+
+### 0.1 Bugs — a module is unusable until these are fixed
+
+| # | Requirement | Phases |
+|---|---|---|
+| **R1** | **`/deliveries` can fetch and import Zoho invoices.** A disconnected or token-refused Zoho says so, instead of reporting "no new invoices". A failed attempt is retryable immediately (no 2-minute wedge). "3 days" means 3 **IST** days. Custom range has a **To** date. **The fetch and import UI is INLINE on the page, laid out like `/stock` — no popup modal** (owner, 4 Sep). | P4 |
+| **R2** | **An assigned stock audit opens and is scoped to a store or one warehouse**, instead of a free-text location plus a product type. The assignee can Start even when they also hold approve. | P6 |
+| **R3** | **Inbound receiving works per line, and "Report Issue" actually creates something.** The issue is written to the **vendor issues data and appears on `/vendor-issues`** (owner, 4 Sep). The Cycles/Spares/Accessories category is saved on the shipment row, not in one phone's `localStorage`. | P7 |
+| **R12** | **APPROVED TO BUILD (owner, 4 Sep: "update the plan to fix the bug").** **Stock stops silently inflating.** A sale must survive the next receipt, audit or transfer. Today the outward path updates only the cached total and never the warehouse ledger, so `recomputeCurrentStock` puts the sold units back. Deduction is **store-scoped** — a delivery names a store, never a warehouse. | P1b |
+
+### 0.2 Removals — built, and not wanted
+
+| # | Requirement | Phases |
+|---|---|---|
+| **R4** | **Remove `ProductType`, the category fast/normal/slow field, and manual customer creation.** Customers arrive from a Zoho invoice import or a service job. **Owner, 4 Sep: this goes FIRST, before every other phase.** | P2 → P3 |
+
+### 0.3 The purchasing loop
+
+| # | Requirement | Phases |
+|---|---|---|
+| **R5** | **One-tap reorder level on `/stock`** — set reorder level, reorder qty and optionally the vendor from a sheet on the row, without opening the product. | P8 |
+| **R8** | **A purchase order cannot be raised twice for the same thing.** Sequential PO numbers with no race, a real state machine, a 409 naming the existing PO, and approval by whoever holds the permission (self-approval allowed and logged). | P9 |
+| **R6** | **The PO vendor is derived from the product and shown read-only** — product's reorder vendor, else the brand's primary vendor, else the brand's only vendor. Mixed vendors in one selection produce one PO per vendor. | P10 |
+| **R7** | **The vendor's colour-coded availability sheet decides what can be ordered.** **No AI and no API key** (owner decision, 4 Sep — see §6): a row's fill colour is a stored property of the `.xlsx` and is read deterministically with `exceljs`. The app never interprets a colour; the user labels each colour once (Available / Not available / Ignore) and the legend is remembered per brand. AI remains only for PDF/image sheets. | P11 |
+| **R9** | **An approved PO is emailed to the vendor with the PO PDF attached**, over the Gmail App Password already in Settings › Notifications. No Google Cloud project, no OAuth, no AI. "Mark sent" is kept for WhatsApp and other channels. | P12 |
+
+### 0.4 Stock transfers
+
+| # | Requirement | Phases |
+|---|---|---|
+| **R10** | **Transfers have a header lane, an in-transit state, and a mandatory document** — a tax invoice between stores with different GSTINs, a delivery challan within one store. Stock leaves on dispatch and arrives on receipt, with shortfalls recorded. | P13 → P14 → P15 |
+
+### 0.5 Cross-cutting
+
+| # | Requirement | Phases |
+|---|---|---|
+| **R11** | **An activity log records who / module / from → to / when** for every business action, readable as a feed on the correct IST day. | P1 (table + helper), P5 (feed) |
+| **R13** | **BUILT 4 Sep, ahead of the phases (see Clarifications part C).** **Schema changes are safe and repeatable** — one additive migration, `prisma migrate deploy` inside the Vercel build, and a guard that makes `migrate dev` against anything but localhost impossible. | P1 |
+
+### 0.6 Execution order (owner, 4 Sep — removals first)
+
+Phase IDs are stable and referenced throughout this file; only the **order** below changed.
+
+```
+R4  P2   screens stop reading type / movingLevel / customer quick-add   (no schema)
+R4  P3   drop ProductType + movingLevel                                 (MIG-1b)
+R13 P1   MIG-1a, ActivityLog, counter, helpers, build wiring            (MIG-1a)
+R12 P1b  stock ledger integrity — outward writes StockLevel
+R1  P4   Zoho fetch window + inline deliveries panel
+R2  P6   stock audit scope and assignee
+R3  P7   inbound per-line receiving, category, Report Issue
+R11 P5   activity feed
+R5  P8   one-tap reorder + search fix
+R8  P9   PO state machine, numbers, duplicates, approval
+R6  P10  vendor derived from product
+R7  P11  colour-coded availability sheet
+R9  P12  PO email with PDF
+R10 P13  stores: GSTIN + state code
+R10 P14  transfer lane, in-transit flow                                 (MIG-2)
+R10 P15  transfer documents
+```
+
+**Why P2 and P3 moved to the front:** the owner asked for the removals first, and they are the only
+phases with no dependency on anything else. P3 carries MIG-1b, which becomes the first migration
+folder after `0_init`; MIG-1a (P1) then applies on top. The two are independent DDL, so the order
+between them is free — what is *not* free is P2 before P3, because a screen still reading
+`product.type` after the column is dropped throws (`brand-count/page.tsx:584`).
+
+**Unchanged dependencies:** P1 → P1b, P5, P6, P9. P3 → P6, P8. P8 + P9 → P10 → P11. P9 → P12.
+P13 → P14 → P15 (promote P14 and P15 together). P4, P5, P6, P7 remain pairwise independent.
 
 ---
 
@@ -58,10 +136,10 @@ nothing reads, and `IN_TRANSIT`/`RECEIVED` already in `status-colors.ts`.
 | D9 | ~~Migration reaches production by hand~~ **Superseded 4 Sep (review, Q8):** `main` auto-deploys on merge, so the migrate step goes **into the Vercel build** in P1 | §4 |
 | O8 | (4 Sep review) **BCC/ invoices are imported and tagged by store** | `Store.invoicePrefix`, `Delivery.storeId` in MIG-1a; store chip on `/deliveries` (P4) |
 | O9 | (4 Sep review) **BCH buys for both stores** | PO header = primary store; no `PurchaseOrder.storeId` |
-| O10 | (4 Sep review) **Receiving may go to either the floor or the godown, chosen at receiving** | pickers show both kinds, labelled, godown preselected (P13) |
+| O10 | (4 Sep review) **Receiving may go to either the floor or the godown, chosen at receiving** | ~~kind labels~~ **superseded 4 Sep:** pickers list the store’s warehouses by name; no `kind` exists |
 | O11 | (4 Sep review) Vercel: **auto-deploys on merge; put migrate in the build** | `scripts/vercel-build.mjs` + `vercel.json` `buildCommand` in P1 |
 | O1 | **Every store has its own GSTIN**; stores are dynamic rows | `Store.gstin`; transfer document derived from GSTIN inequality, never names |
-| O2 | **Both the shop floor and the godown hold stock** | a FLOOR warehouse beside the GODOWN under each store (`Warehouse.kind`) |
+| O2 | **Both the shop floor and the godown hold stock** | ~~a FLOOR warehouse via `Warehouse.kind`~~ **superseded 4 Sep:** a store already holds many warehouses; add one named "BCH Floor" on `/stores` when wanted. No enum, no column, no seeding |
 | O3 | Brand-sheet availability = **row background fill colour** | P11 parser reads `cell.fill` |
 | O4 | PO header uses the **primary store's** details; no Company settings page | `loadCompanyIdentity()` = active store with lowest `sortOrder` + email settings |
 | O5 | BCC/ invoices in the Zoho fetch: owner asked for a recommendation | §7 P4 "BCC invoices" — decide at P0 |
@@ -93,6 +171,7 @@ before the PR. Bugs first, removals second, features third, transfers last.
 |---|---|---|---|---|---|---|---|
 | P0 | — | Commit/merge `feat/notifications-and-settings-rbac`; production `migrate status` shows `0_init` and nothing pending; `.env` → localhost; local = scrubbed production dump; decide the two P0 questions | both | — | 0 | — | `npx prisma migrate status` on production: `0_init` applied |
 | P1 | `chore/mig1-additive-schema-and-helpers` | MIG-1a (every additive column for P4–P15, `ActivityLog` replacing `OpsActivityLog`, `counter`, StockCount FKs + backfill); `src/lib/activity-log.ts`; `src/lib/sequence.ts`; delete `api/ops-activity-logs`; `scripts/vercel-build.mjs` + `vercel.json` `buildCommand` (O11); `scripts/db/assert-localhost.mjs` | PLAN-2 Part 0/1, PLAN-1 M1–M3a | MIG-1a | S | P0 | `tsc` green after `prisma generate` with no app file edited except the delete |
+| P1b | `fix/stock-ledger-integrity` | **NEW 4 Sep (owner).** Outward stops writing `Product.currentStock` directly; every stock movement goes through `StockLevel`. Delivery deduction is **store-scoped** | owner, 4 Sep | none | S (~6) | P1 | sell 5, then receive a shipment of the same product -> the 5 stay sold |
 | P2 | `chore/remove-type-ui-moving-level-customer-add` | Screens stop reading `product.type`, `movingLevel`, and the customer quick-add | PLAN-2 Parts 5 (screens), 6, 7 | none | M (11) | none | `/stock` no type tabs, `/customers` no Add, `/categories` edit = name only |
 | P3 | `chore/drop-product-type-and-moving-level` | Schema drops + MIG-1b; delete product-type routes/page/lib; every API reader; catalog; import script | PLAN-2 Parts 5 (API), 6 | MIG-1b | L by count (~23 mechanical deletions) | P1, P2 | proof greps clean; bill import creates a product with brand + category |
 | P4 | `fix/zoho-fetch-window-and-deliveries-panel` | Deliveries fetch root causes; shared IST date window; merged `trigger-pull`; `skipped` shape; approve invoice branch; permission gating; `apiFetch timeoutMs`; deliveries modal → inline panel; inbound/bills/receivables panel fixes | PLAN-1 §F, PLAN-2 Part 4 + zoho activity row | none | M (14) | P1, P3 | Zoho disconnected → 409 sentence, immediate retry works; "3 days" on 4 Sep = 2–4 Sep |
@@ -104,21 +183,25 @@ before the PR. Bugs first, removals second, features third, transfers last.
 | P10 | `feat/po-vendor-resolution` | `resolveVendors`, `/reorder` groups + v2 handoff, `prepare`, read-only vendor sections, vendor-scoped search, `vendors/[id]/brands` | PLAN-1 §B | none | M (10) | P8, P9 | two vendors selected → two read-only sections; unresolved item blocks |
 | P11 | `feat/brand-stock-colour-availability` | `exceljs` parser with `rowColor`, legend card + route, `getVendorAvailability`, badges, `generate-po` exclusions | PLAN-1 §C | none | M (12) | P10 | colour-coded `.xlsx` → legend → confirm → unavailable excluded |
 | P12 | `feat/po-send-to-vendor` | Mailer attachments, PDF renderer, `/pdf`, `/send`, `/mark-sent`, `notifications/status`, bottom sheet | PLAN-1 §E | none | M (14) | P9 | send to own address → PDF attached, status flips only after SMTP accepts |
-| P13 | `feat/stores-gstin-and-floor-warehouses` | `Store.gstin/stateCode` UI, floor + godown per store, seed, legacy `/api/transfers` removal | PLAN-1 §G (stores) | none | M (11) | P1, P6 | `db:seed:stores` adds `BCH_FLOOR`/`BCC_FLOOR`; EOD summary still lists transfers |
+| P13 | `feat/stores-gstin` | `Store.gstin/stateCode` UI, `clearWarehouseCache()` on warehouse create, legacy `/api/transfers` removal. **No floor/godown — rescoped 4 Sep** | PLAN-1 §G (stores) | none | S (~5) | P1 | `/stores` saves GSTIN; a warehouse added to a store appears in the pickers same session |
 | P14 | `feat/transfer-in-transit-flow` | MIG-2; header lane, derived type/doc, approve = check only, dispatch/receive/cancel, detail page, list filters | PLAN-1 §G (flow) | MIG-2 | M (15) | P13 | legacy APPROVED read RECEIVED; dispatch −qty; receive with shortfall |
 | P15 | `feat/transfer-documents` | `transfers/` upload prefix + PDF, document route, dispatch gate, Document card | PLAN-1 §G (documents) | none | S (6) | P14 | floor → godown says delivery challan; BCH → BCC says tax invoice; dispatch 400 until the right document |
 
-**Dependencies.** P1 → all. P2 needs nothing and may precede P1. P2 → P3 (a screen reading
+**Dependencies.** P2 needs nothing and runs first. P1 → P1b, P5, P6, P9. P2 → P3 (a screen reading
 `type` after the drop throws: `brand-count`). P3 → P6, P8. **P4, P5, P6, P7 are pairwise
 independent** (single-hunk overlaps only: `dashboard/page.tsx` P5/P6, `categories/[id]/route.ts`
 P5/P7); bug-first order is P4, P6, P7, P5. P8 and P9 are independent of each other and of P4–P7.
 P10 needs P8 + P9; P11 needs P10; **P12 needs only P9** — pull it ahead if emailing the PO
-matters more than vendor derivation. P13 needs P6 (verify-only rule live before floor rows
-exist); P14 needs P13; P15 needs P14. **Promote P14 and P15 together** — between them,
-inter-store transfers dispatch without a tax-invoice gate. Because the build applies each PR's
-migration before its code goes live (O11), **P1, P2 and P3 each deploy themselves in order**;
-P1 must merge before P3 (MIG-1b drops what P1's schema still declares), and P2 before P3 (a
-screen still reading `type` after the drop throws).
+matters more than vendor derivation. P13 needs only P1 (its dependency on P6 was about floor rows,
+which no longer exist); P14 needs P13; P15 needs P14. **Promote P14 and P15 together** — between them,
+inter-store transfers dispatch without a tax-invoice gate. **Order changed 4 Sep (owner: removals first) — see §0.6.**
+The old "P1 must merge before P3" no longer applies and is withdrawn: its reason was that P1's
+`schema.prisma` still declares `ProductType`, so a MIG-1b that had already dropped the table would
+make P1's next `migrate dev` try to re-create it. That is only true when branches are cut in
+parallel from a stale base. Each phase branch is cut from the reference branch **after the previous
+phase merged** (§3 "Done" step 1), so P1's branch already carries P3's removal and the diff is
+clean. P2 before P3 still holds absolutely (a screen still reading `type` after the drop throws:
+`brand-count/page.tsx:584`).
 
 **Shared-file sequences** (each phase finishes both plans' work on the file):
 `products/search` P3→P8→P10→P11 · `products/[id]` P3→P8 · `api/reorder` P3→P8→P10 ·
@@ -129,7 +212,7 @@ screen still reading `type` after the drop throws).
 `zoho-import-flow`, `inbound/page.tsx` P4 only · `rbac-catalog.ts` P3 only.
 
 **"Done" for every phase**
-1. Branch cut from `main` with the table's name; the `Branch:` line above updated.
+1. Branch cut from the reference branch with the table's name; the `Branch:` line above updated.
 2. Dev server stopped → `npx prisma generate` (schema phases) → `npx tsc --noEmit` green →
    `npm run lint` clean (unused imports are the tell: `Plus`, `PRODUCT_TYPE_SELECT`, `Truck`).
 3. Dev server up on localhost; walk the phase's browser check at 375 px and desktop; every new
@@ -147,7 +230,7 @@ Vercel build applies each PR's folder before its code goes live (O11 — P1 buil
 adoption plan §4), so nothing is applied by hand; a snapshot precedes every merge that carries a
 folder. Three folders: MIG-1a (P1), MIG-1b (P3), MIG-2 (P14).
 
-### MIG-1a — P1, `mig1_additive_activity_counter_scope_transfers_po_send`
+### MIG-1a — P1, folder `add_activity_log_counter_and_scope_columns`
 
 - `ActivityLog` (+4 indexes; **no FK to `User`** — `userId String` + `userName String` snapshot,
   the same "a log outlives its user" policy as `PurchaseOrderSend.sentById` and
@@ -169,16 +252,18 @@ folder. Three folders: MIG-1a (P1), MIG-1b (P3), MIG-2 (P14).
   Rows whose `location` is not a warehouse code (the bin-tracking branch wrote values like
   `"BCH-GF"`, see the model comment at `schema.prisma:679` and `stock-counts/route.ts:95-97`)
   are left with **both FKs null = "legacy audit, no location"** — an explicit third state
-  (§5.1), never mistaken for "whole store". `location` and `productType` **stay** for now
-  (dropped in MIG-1b / MIG-2).
+  (§5.1), never mistaken for "whole store". `location` **stays** for now (dropped in MIG-2).
+  `productType` is already gone: MIG-1b (P3) now runs BEFORE this folder under the §0.6 order.
 - `InboundShipment.categoryId` + index + FK Restrict; `Category.inboundShipments`.
 - `Store.gstin`, `Store.stateCode`, `Store.invoicePrefix String? @unique` ("BCH/", "BCC/");
   `Delivery.storeId String?` + FK Restrict + `@@index([storeId])` (O8). No `PurchaseOrder.storeId` (O9).
 - `IntegrationConfig.lastAuthErrorAt DateTime?` — set when a token refresh is refused
   (`base.ts:196-199`), so `/settings/integrations` can stop showing a green badge for a dead
   connection (P4).
-- `WarehouseKind { GODOWN FLOOR }`; `Warehouse.kind` default GODOWN (fresh `CREATE TYPE`, so the
-  default is legal in the same transaction).
+- ~~`WarehouseKind { GODOWN FLOOR }`; `Warehouse.kind`~~ **REMOVED 4 Sep (owner).** There are only
+  two scopes, store and warehouse, and `Warehouse.storeId` (`schema.prisma:289`) already lets a store
+  hold any number of warehouses — `/stores` already creates them (`stores/page.tsx:104` →
+  `POST /api/warehouses`). A "floor" is just a warehouse named "BCH Floor". No enum, no column.
 - `BrandStockAvailability { AVAILABLE UNAVAILABLE UNKNOWN }`; `BrandStockItem.availability`
   default UNKNOWN, `rowColor String?`; `BrandStockUpload.colorLegend Json?`, `legendConfirmedAt`.
 - `PurchaseOrderSendStatus { PENDING SENT FAILED }`, `PurchaseOrderSendChannel { EMAIL WHATSAPP MANUAL }`;
@@ -207,7 +292,7 @@ that**: there is no `Record<TransferOrderStatus, …>` anywhere in `src/` (`stat
 three filters — and both are extended in P1 so the list page cannot meet an unknown status.
 `reports/daily` and the activity feed keep counting APPROVED until P14.
 
-### MIG-1b — P3, `mig1b_drop_product_type_and_moving_level`
+### MIG-1b — P3, folder `drop_product_type_and_moving_level` (runs FIRST under §0.6)
 
 Names from `prisma/migrations/0_init/migration.sql:1964,1967,2624`; FK before table:
 ```sql
@@ -222,7 +307,7 @@ Pre-merge check on local (populated `ProductType` rows, products pointing at the
 `SELECT "location", count(*) FROM "StockCount" WHERE "location" IS NOT NULL AND upper("location") NOT IN (SELECT code FROM "Warehouse") GROUP BY 1;`
 → no rows (an unresolvable code becomes an unscoped, verify-only audit).
 
-### MIG-2 — P14, `--create-only`, hand-written, `transfer_backfill_and_drop_stock_count_location`
+### MIG-2 — P14, `--create-only`, hand-written, folder `backfill_transfer_lanes_and_drop_stock_count_location`
 
 ```sql
 -- header lane from each order's earliest item
@@ -302,10 +387,10 @@ script) is **superseded** by the self-seeding signature above. Mark that plan an
   the sidebar shows "Product Types" → 404).
 - After P4 promote: on `/team/permissions` grant **Settings › Integrations: fetch + approve** to
   every role that had **Deliveries: fetch**, or their Fetch button vanishes.
-- After P13 promote: `npm run db:seed:stores` (FLOOR rows, idempotent on `code`); then on
-  `/stores` enter the **GSTIN and state code for every store** — P14 refuses an inter-store
-  transfer while either is missing (§10 BL11); then a per-warehouse audit of each floor to
-  establish its opening stock (§10 Q4).
+- After P13 promote: on `/stores` enter the **GSTIN and state code for every store** — P14 refuses
+  an inter-store transfer while either is missing (§10 BL11). No `db:seed:stores` run and no floor
+  audit: floor warehouses were dropped 4 Sep. If the owner later adds a warehouse to a store, its
+  opening stock is established by a per-warehouse audit (§5.1).
 
 **How a migration reaches production (O11, replaces the hand-apply runbook).** P1 adds
 `scripts/vercel-build.mjs` — `prisma migrate deploy` → `prisma generate` → `next build`, with
@@ -331,8 +416,8 @@ carries a migration folder (P1, P3, P14):
 
 ### 5.1 Whole-store audits are verify-only; three scope states, not two
 PLAN-2 resolved "correct stock" on a whole-store audit to "the store's single active warehouse,
-else 400". After O2 every store has a FLOOR and a GODOWN, so no store has a single warehouse
-again. From P6: a whole-store count yields one number per product while `StockLevel` is per
+else 400". A store may hold any number of warehouses (`Warehouse.storeId`), so "the store's single
+active warehouse" is not a rule that can be relied on. From P6: a whole-store count yields one number per product while `StockLevel` is per
 warehouse; any split of the variance invents a location. Corrections require a per-warehouse
 audit — also how the owner populates a new floor warehouse.
 
@@ -347,9 +432,9 @@ set, `warehouseId` null = whole store (verify only); **both null = legacy audit 
 store" chip on `/stock-audit/new` carries "Verify only — to correct stock, audit one warehouse";
 `/stock-audit/[id]` hides the "correct stock levels" checkbox unless `warehouseId` is set; the
 API refuses with "This audit covers the whole store. Approve as verify-only, or raise one audit
-per warehouse (floor or godown) to correct stock." Once `Warehouse.kind` exists the picker labels
-chips Floor / Godown (`use-sites.ts:22` `StoreOption.warehouses` gains `kind`). Say in P6's PR
-that this lands before P13 gives stores a second warehouse, or it reads as a regression.
+per warehouse to correct stock." The picker lists the store’s warehouses by NAME (no `kind` — see
+MIG-1a). Say in P6's PR that this lands before any store gains a second warehouse, or it reads as
+a regression.
 
 ### 5.2 One Zoho pull response shape (bills and invoices)
 ```ts
@@ -461,8 +546,9 @@ in the browser, never `fetch().then(r => r.json())`; routes that reach SMTP/FCM 
 1. Commit the dirty tree onto `feat/notifications-and-settings-rbac` (25 modified files: the
    `runtime = "nodejs"` headers incl. `trigger-pull` and `inbound/[id]/status`, `validations.ts`,
    `CLAUDE.md`, `middleware.ts`, `sw.js`, `login/page.tsx` + untracked `login-form.tsx`, docs) and
-   merge it to `main` by PR. Every phase branch is cut from `main` afterwards; "head of that
-   branch" and "main after merge" are the same code, and a clean base means P7 deletes
+   push it and open a PR **the owner merges on GitHub** (Claude never merges locally). Every phase
+   branch is cut from the **reference branch `feat/notifications-and-settings-rbac`**, which the
+   owner names; local `main` is stale and is never used as a base. A clean base means P7 deletes
    `inbound/[id]/status/route.ts` without an uncommitted edit on it.
 2. Production: `npx prisma migrate status` shows `0_init` applied, nothing pending (adoption plan
    §3; resolve its Q1 first — §10 BL3). Local = scrubbed production dump with `ProductType` rows
@@ -522,6 +608,102 @@ model ActivityLog {
   wiring on a **preview** deployment first (a branch push): the preview build must run the
   three steps against the preview's `DIRECT_URL` and pass with "No pending migrations".
 - Verify: open `/stock`, `/transfers`, `/purchase-orders`, `/stock-audit` — nothing changed.
+
+### P1b — stock ledger integrity: a sale must survive the next receipt (R12)
+
+**The bug, in the owner's words:** "You sell 3 tyres. Stock goes 10 to 7. Correct. Next week a
+shipment of that same tyre arrives. The moment you receive it, the 3 you sold come back. Stock
+shows 15 when it should show 12."
+
+**Root cause.** `Product.currentStock` is documented as a cache, not a source of truth —
+`schema.prisma:542`: *"StockLevel is the truth for how much, where. Product.currentStock is the
+cached SUM of these rows."* Receiving, audits and transfers honour that: they write `StockLevel`
+and let `recomputeCurrentStock` (`stock-location.ts:20-28`) rebuild the total. **The outward paths
+do not.** They write `currentStock` directly and never touch `StockLevel`, so the next call to
+`recomputeCurrentStock` — triggered by any receipt, applied audit or transfer — rebuilds the total
+from a ledger that was never told about the sale, and the sold units reappear.
+
+Grepping `deliveries/[id]/route.ts` for `stockLevel|adjustWarehouseQty|setWarehouseQty` returns
+**0 hits**. Only five files in `src/` call those helpers at all.
+
+**Every site that writes `currentStock` without a ledger row** (verified 4 Sep):
+
+| File | Lines | What it is | This phase |
+|---|---|---|---|
+| `deliveries/[id]/route.ts` | 223, 235 | a delivery marked DELIVERED / WALK_OUT | **fix** |
+| `deliveries/batch/route.ts` | 91, 102 | the same, in bulk | **fix** |
+| `inventory/outwards/route.ts` | 82 | manual outward | **fix** |
+| `inbound/[id]/route.ts` | 239 | undoing a receipt | **fix** |
+| `stock-reset/route.ts` | 43 | zeroing stock | **fix** |
+| `inventory/cleanup/route.ts` | 32 | increment | **fix** |
+| `stock-counts/[id]/route.ts` | 244, 276, 358 | applied audit writes globally | **P6 fixes this one** — not here |
+
+The `binId` branches in `inbound/[id]/route.ts:134` and `inbound/[id]/status/route.ts:159` also
+write `currentStock` directly, but `BIN_TRACKING_ENABLED = false` (`lib/inventory-config.ts:10`),
+so that path is dead. Left compiling, not extended.
+
+**Deduction is STORE-scoped (owner, explicit):** "we must not have the stock reduction on delivery
+respected to the warehouse, we must have respected to the store scope." A delivery names a
+**store** and nothing else. No screen and no request body mentions a warehouse.
+
+But the units must still land in `StockLevel` rows, because that is the only place stock exists
+(`@@unique([productId, warehouseId])`, `schema.prisma:557`). So the store is the interface and the
+warehouses are the implementation.
+
+**Changes (~6 files, no migration of its own — needs only `Delivery.storeId` from MIG-1a):**
+
+- **`src/lib/stock-location.ts`** — new `deductFromStore(tx, productId, storeId, qty)`:
+  1. load the store's **active** warehouses ordered by `sortOrder`;
+  2. sum their `StockLevel.quantity` and **refuse if the store total is short** — a readable error
+     naming the product and the shortfall;
+  3. otherwise take the quantity across them in `sortOrder` order, cascading to the next when one
+     cannot cover it, each through `adjustWarehouseQty`.
+
+  **Step 2 is not optional.** `adjustWarehouseQty` clamps at zero (`stock-location.ts:38`,
+  `Math.max(0, ...)`), so deducting 3 from a warehouse holding 0 silently does nothing — which
+  would lose the sale exactly as today, in a new costume. Today every store has one warehouse, so
+  this resolves to a single write; the cascade exists so that adding a second warehouse to a store
+  (which `/stores` already allows) does not quietly reintroduce the bug.
+- **`deliveries/[id]/route.ts:214-236`** and **`deliveries/batch/route.ts:85-103`** — call
+  `deductFromStore` instead of writing `currentStock`. Store from `Delivery.storeId` (MIG-1a, set
+  from the invoice prefix by `storeIdForInvoice()` in P4); no prefix match falls back to the
+  primary store (active, lowest `sortOrder`) with a `log.warn`. The idempotency guard stays as it
+  is (`:193-196`, an existing OUTWARD `InventoryTransaction` on the invoice number) — it already
+  works and is not part of this bug.
+- **`inventory/outwards/route.ts:80-83`** — same call. **`outwardSchema` (`validations.ts:77-82`)
+  carries no store or warehouse field at all** and gains an optional `storeId`, defaulting to the
+  primary store.
+- **`inbound/[id]/route.ts:239`** — undoing a receipt deducts from the warehouse the receipt went
+  into, via `adjustWarehouseQty`, not from the total.
+- **`stock-reset/route.ts:43`** — zero the `StockLevel` rows as well as the cache, or the next
+  recompute undoes the reset.
+- **`inventory/cleanup/route.ts:32`** — route the increment through the helper.
+
+`reservedStock` stays a product-level number: `recomputeCurrentStock` does not touch it, so
+reservations are unaffected by this change.
+
+**Proof grep for the PR:** `rg -n "currentStock:" src --glob "!**/stock-location.ts"` returns only
+`select:`/filter uses, never a write. That grep is the phase's real acceptance test — a green build
+proves nothing here.
+
+**Verify:**
+- Product with 10 in BCH Warehouse. Sell 3 on a `BCH/` invoice, mark DELIVERED → `/stock` shows 7
+  **and** `StockLevel` for BCH Warehouse shows 7.
+- Then receive a shipment of 5 of that product → `/stock` shows **12**, not 15. *This is the bug;
+  run it before and after so the PR can show both numbers.*
+- Approve a stock audit, then a transfer, on the same product → still 12.
+- A `BCC/` invoice deducts from BCC Store, not BCH.
+- Sell more than the store holds → refused with the product name and the shortfall; no partial
+  deduction is left behind.
+- `/api/inventory/outwards` with no `storeId` → deducts from the primary store.
+- Undo an inbound receipt → both the warehouse row and the total fall.
+
+**Say in the PR:** this is a live data-integrity fix, not a refactor. Before it, every sale was
+reversed by the next stock movement of that product, so no `/stock` number, no low-stock badge and
+no audit variance could be trusted. R5 (P8 reorder), R2 (P6 audits) and R6/R7/R8/R9 (P9-P12
+purchasing) all read this number — they cannot be meaningfully verified until this lands, which is
+why it runs immediately after P1 rather than after P13 as §10 Q3 originally scheduled.
+
 
 ### P2 — screens stop reading `type`, `movingLevel`, customer quick-add (no schema)
 Deployable on the old schema; may precede P1. A green build proves nothing here — open each.
@@ -779,7 +961,7 @@ fetch. One "Zoho pulled 2026-09-02 → 2026-09-04" row in the log.
   the Complete `confirm()` with an inline error when `remaining > 0`. Raw `fetch` (L115, 132, 140,
   195, 226, 253, 273, 304, 314) → `apiFetch`/`apiTry`; `createLogger("stock-audit:detail")`.
 - `stock-audit/new/page.tsx`: `useStores()`; two-step picker **store chips → "Whole store"
-  (verify-only caption) | one chip per `store.warehouses`** (labelled by `kind` once P13 lands);
+  (verify-only caption) | one chip per `store.warehouses`** (labelled by warehouse NAME);
   auto-title `Stock Count - <warehouse ?? store>`; body `{ title, dueDate, notes, assignedToId,
   storeId, warehouseId? }`.
 - `stock-audit/page.tsx:51-55` → `apiTry`, scope under the title; `[id]/review/page.tsx:26` drop
@@ -1139,40 +1321,35 @@ spots a duplicate.
   Mark sent via WhatsApp → SENT_TO_VENDOR with `sentVia WHATSAPP`; `view`-only role → `/pdf` works,
   send hidden and 403; DRAFT/PENDING_APPROVAL → 409; sheet fits 360 px, keyboard does not hide Send.
 
-### P13 — stores: GSTIN, floor + godown, legacy transfers route
+### P13 — stores: GSTIN + state code, legacy transfers route
+**Rescoped 4 Sep (owner): no floor/godown work.** There are exactly two scopes, store and
+warehouse. `Warehouse.storeId` (`schema.prisma:289`) already allows any number of warehouses per
+store, and `/stores` already creates them (`stores/page.tsx:104` -> `POST /api/warehouses`,
+`api/warehouses/route.ts:55`). A "floor" is a warehouse the owner adds and names. So this phase
+drops `Warehouse.kind`, the `<CODE>_FLOOR` seeding, and every kind-label in the pickers.
+Size falls from M (11) to **S (~5)**.
 - `storeSchema` (`validations.ts:823`) + `POST|PUT /api/stores`: `gstin` (the Vendor regex at
-  `validations.ts:270`, `.or(z.literal(""))`), `stateCode` (`/^\d{2}$/`, "29" for Karnataka);
-  `POST` also creates `<CODE>_FLOOR` (kind FLOOR) and `<CODE>_WAREHOUSE` (kind GODOWN) — today
-  `stores/route.ts:74-82` creates no warehouse. `GET /api/warehouses|stores` return `gstin`,
-  `stateCode`, `kind` (printed on every invoice; not sensitive; both routes stay `requireAuth`).
-- `src/lib/warehouses.ts` `WarehouseRef` select (L31) gains `kind` and `store { gstin, stateCode }`
-  (one query, so P14's policy derivation does not run a second); **`clearWarehouseCache()` is
-  called after `POST /api/stores` creates its two warehouses** — the module-level cache at
+  `validations.ts:270`, `.or(z.literal(""))`), `stateCode` (`/^d{2}$/`, "29" for Karnataka).
+  `GET /api/warehouses|stores` return `gstin`, `stateCode` (printed on every invoice; not
+  sensitive; both routes stay `requireAuth`).
+- `src/lib/warehouses.ts` `WarehouseRef` select (L31) gains `store { gstin, stateCode }` - one
+  query, so P14's document derivation does not run a second.
+- **`clearWarehouseCache()` after `POST /api/warehouses`** - the module-level cache at
   `warehouses.ts:24` is deliberately never invalidated ("a warehouse created mid-request is not a
-  case worth designing for"), and P13 makes exactly that case real. `use-sites.ts:22`
-  `StoreOption.warehouses` **and** the flat `WarehouseOption` (L9-16) gain `kind`.
-- **Floor rows in the receiving pickers (O10, decided 4 Sep: either, chosen at receiving).** Two
-  pickers consume the flat `useWarehouses()` list and will offer the floor the moment the seed
-  runs: the inbound receiving warehouse select (`inbound/[id]/page.tsx:80,126,677`, which today
-  defaults to `warehouses[0].id`) and the brand-count wizard (`stock-audit/brand-count/page.tsx:13,41`).
-  Both keep showing every active warehouse, **labelled by kind and grouped by store**
-  ("BCH Store · Godown", "BCH Store · Floor"), with the **shipment's store godown preselected**
-  rather than `warehouses[0]` — receiving onto the floor is a deliberate choice, never the
-  accident of list order. The receipt line names the destination ("Received ×N into BCH Store ·
-  Floor"). Nothing else changes: a floor receipt is a normal `adjustWarehouseQty` on that row.
-- `prisma/seed-stores.ts`: `{ code: "<STORE>_FLOOR", name: "<Store> Floor", kind: "FLOOR",
-  sortOrder: 5 }` per store; idempotent on `code`; `update` still omits `isActive`. Floor stock
-  starts at zero; the owner moves stock in with a transfer or a per-warehouse audit (§5.1).
+  case worth designing for"). The moment the owner can add a warehouse to an existing store from
+  `/stores`, that case is real. This is the one cache bug this phase must fix.
 - `/stores` page: GSTIN (uppercase, 15 chars) + state code in the store draft; GSTIN under the
-  address line; warehouses show their kind. Pickers (`/stock-audit/new`, `/transfers/new`) label
-  chips "BCH Store · Floor" / "BCH Store · Godown".
-- Dashboard EOD summary (`(dashboard)/page.tsx:134`) → `/api/transfer-orders?dateFrom=…`, uses
+  address line. Warehouse rows already render; nothing to relabel.
+- **Not done here:** `prisma/seed-stores.ts` is unchanged (still one warehouse per store); the
+  receiving picker and brand-count wizard are unchanged (they list active warehouses by name and
+  that is now correct); BL14/O10's kind-filtering is void.
+- Dashboard EOD summary (`(dashboard)/page.tsx:134`) -> `/api/transfer-orders?dateFrom=...`, uses
   `orderNo`; `api/reports/daily/route.ts:38` counts `status IN [APPROVED, IN_TRANSIT, RECEIVED]` by
   `reviewedAt`; then **delete `src/app/api/transfers/**`** (bin-only, status encoded in `notes`;
   nothing else calls it).
-- Verify: `db:seed:stores` adds `BCH_FLOOR`/`BCC_FLOOR`; creating a store on `/stores` creates two
-  warehouses; `/stores` saves and shows GSTIN/state; EOD summary still lists today's transfers;
-  `/reports/daily` count sane.
+- Verify: `/stores` saves and shows GSTIN + state code; adding a warehouse to an existing store on
+  `/stores` makes it appear in the audit and receiving pickers **in the same session** (the cache
+  fix); EOD summary still lists today's transfers; `/reports/daily` count sane.
 
 ### P14 — transfer lane, derived type, in-transit flow (MIG-2)
 **Type and required document are derived at create time, stored, never chosen:**
@@ -1488,3 +1665,349 @@ review of MIG-1a/1b/MIG-2; prior sessions were treated as hypotheses. Roughly 22
 
 **Status line stays `pending`** until the owner says to start P1; then it becomes
 `Status: in-progress — <date>, P1 …` and the `Branch:` line names the branch in play.
+
+---
+
+## Clarifications — 4 Sep 2026 (session 2, owner review)
+
+Method: `clarify-plan`, second pass. The 4 Sep review section above was treated as a hypothesis and
+re-checked on disk; its code claims held (spot-checks below). What changed is the **environment and
+two owner decisions**, both of which cut scope.
+
+### Reference branch and git workflow (owner, explicit)
+
+- **The reference branch is `feat/notifications-and-settings-rbac`** — the branch this plan lives
+  on. Every phase branch is cut from it. `main` is NOT the base.
+- **Local `main` is stale** (never pulled from origin). Any measurement against it is void. The
+  first pass reported "the branch is 49 commits ahead of main and main has no prisma/migrations"
+  as a finding — that is an artefact of the stale local ref and is **withdrawn**.
+- **Claude never merges locally.** The owner pushes, opens the PR, and merges it on GitHub.
+- **Before creating any branch, Claude asks the owner which branch to use as reference** and checks
+  it out first.
+- BL2 is closed as written: the tree is clean (HEAD `5a040b7`).
+
+### There is no production deployment (owner, explicit) — this voids a layer of the plan
+
+The app has not been released. Work is local first, then the cloud test project.
+
+| Plan item | Status |
+|---|---|
+| §1 "the owner walked the app the day after go-live (3 Sep)" | **wrong** — there was no go-live |
+| D3, §8 "deploy gap", "merge after closing time" | **void** — nothing is serving |
+| §4 step 4 "MIG-1b's drops mean old code 500s during the P3 build" | **void** — no users |
+| §4 "snapshot before merging any migration", BL5 | **downgraded** — no production data to lose |
+| BL3 "which Supabase project is production?" | **ANSWERED: none exists.** Supabase is the cloud TEST db |
+| BL6 "local = scrubbed production dump" | **void** — local is reset from `0_init` + seed |
+| §10 Q3 "sales erased in production today" | a real defect, but it corrupts test data, not the shop's |
+
+**BL1 is closed:** `.env` now reads `localhost:5432/bch` for both `DATABASE_URL` and `DIRECT_URL`
+(verified 4 Sep). The local database is reset from `0_init` and re-seeded.
+
+### Two scopes only: store and warehouse (owner, explicit) — `Warehouse.kind` removed
+
+> "there is only two scopes, store and warehouse, where per store you can already have more than
+> one warehouse"
+
+Verified: `Warehouse.storeId` (`schema.prisma:289`) already permits any number of warehouses per
+store, and `/stores` **already creates them** — `stores/page.tsx:104` posts to
+`POST /api/warehouses` (`api/warehouses/route.ts:55`). A grep of the whole schema for
+`kind|FLOOR|GODOWN` returns 3 hits, all unrelated (`EvidenceKind`, `DiscountKind`, a vendor index);
+"godown" appears once as plain English in a doc comment. **A "floor" is just a warehouse the owner
+adds and names.**
+
+Removed: `WarehouseKind { GODOWN FLOOR }` and `Warehouse.kind` from MIG-1a; the `<CODE>_FLOOR`
+seeding and every kind-label from P13; BL14 and Q9/O10 (nothing to filter). P13 falls from M (11)
+to S (~5). O2 stands as a business fact — it just needs no schema change to express.
+
+### Delivery stock deduction is STORE-scoped (owner, explicit)
+
+> "we must not have the stock reduction on delivery respected to the warehouse, we must have
+> respected to the store scope"
+
+The delivery route never names, shows or asks for a warehouse. It takes a **store** (from the
+invoice prefix — `storeIdForInvoice()`, already built in P4 for O8) and deducts at store scope.
+Internally the units must still land in `StockLevel` rows, because that is the only place stock
+exists (`@@unique([productId, warehouseId])`, `schema.prisma:557`).
+**Assumption in force unless the owner says otherwise:** deduct across the store's active
+warehouses in `Warehouse.sortOrder` order, cascading to the next when one cannot cover it. Today
+every store has one warehouse, so this is a single write.
+
+### NEW PHASE P1b — stock ledger integrity (promoted from §10 Q3)
+
+`Product.currentStock` is documented as a **cache**: `schema.prisma:542` — "StockLevel is the truth
+for how much, where. Product.currentStock is the cached SUM of these rows." Half the code honours
+that; half does not.
+
+**Verified 4 Sep — seven routes write `currentStock` directly and never touch `StockLevel`:**
+`deliveries/[id]/route.ts:223,235` · `deliveries/batch/route.ts:91,102` ·
+`inventory/outwards/route.ts:82` · `inventory/cleanup/route.ts:32` · `stock-reset/route.ts:43` ·
+`inbound/[id]/route.ts:239` (receipt reversal) · `stock-counts/[id]/route.ts:244,276,358` (P6 fixes
+that one). Grepping `deliveries/[id]/route.ts` for `stockLevel|adjustWarehouseQty|setWarehouseQty`
+returns **0 hits**. Only five files in `src/` call those helpers at all.
+
+So a sale edits the cache but writes no ledger row; the next receipt, audit or transfer calls
+`recomputeCurrentStock` (`stock-location.ts:20-28`), which rebuilds the cache from the ledger — and
+the sale disappears. **The deduction is real, but survives only until the next stock movement.**
+
+The `binId` branches in the inbound routes also write `currentStock` directly, but
+`BIN_TRACKING_ENABLED = false` (`lib/inventory-config.ts:10`), so that path is dead.
+
+**Scope (~6 files, no migration of its own):**
+
+1. `lib/stock-location.ts` — new `deductFromStore(tx, productId, storeId, qty)`: check the store's
+   total across its warehouses **first**, then take the quantity in `sortOrder` order via
+   `adjustWarehouseQty`. The total check is mandatory: `adjustWarehouseQty` clamps at zero
+   (`stock-location.ts:38`, `Math.max(0, ...)`), so a naive per-warehouse deduct would silently
+   absorb the shortfall and lose the sale exactly as today.
+2. `deliveries/[id]/route.ts:214-236` and `deliveries/batch/route.ts:85-103` — call it instead of
+   writing `currentStock`. Store from `Delivery.storeId` (MIG-1a); no prefix match falls back to
+   the primary store.
+3. `inventory/outwards/route.ts:80-83` — same. **`outwardSchema` (`validations.ts:77-82`) carries no
+   store or warehouse field at all** and needs one, defaulting to the primary store.
+4. `inbound/[id]/route.ts:239` (undo a receipt) — deduct from the warehouse the receipt went into.
+5. `stock-reset/route.ts:43` — zero the `StockLevel` rows, not only the cache.
+6. Proof grep for the PR: no `currentStock:` write anywhere outside `stock-location.ts`.
+
+`reservedStock` stays product-level — `recomputeCurrentStock` does not touch it.
+
+**Why after P1, not after P13 as §10 Q3 said:** the fix needs only `Delivery.storeId`, which MIG-1a
+adds. It never needed floor warehouses, and those no longer exist. With the database being reset
+now there is nothing to reconcile — every row is right from the first one. Left until later, nobody
+can tell whether `currentStock` or `StockLevel` is the true number, because the drift leaves no
+trace. **P6, P8, P9, P10 and P12 all read this number**; verifying them against a lying value
+verifies nothing.
+
+### Spot-checks that re-confirmed the first pass
+
+`stock-counts/[id]/route.ts:187-194` (global `currentStock` write when the location does not
+resolve) · `inbound/[id]/status/route.ts:236` `after()` vs `:261` inline `createBill` ·
+`trigger-pull/route.ts:267-270` (no client, so HTTP 200 with `invoicesNew: 0`) and `:142`
+(`todayStr` = server UTC date) · `import-zoho/route.ts:16` (`requireFeature("deliveries","fetch")`
+on a route that writes Delivery rows). All CONFIRMED. Every file the plan creates is still absent
+(18/18); every file it deletes still exists; package versions unchanged, `exceljs` still absent.
+
+### Answers (owner, 4 Sep 2026, session 2)
+
+- **Reference branch** — `feat/notifications-and-settings-rbac`; never `main`; never merge locally;
+  ask before creating a branch.
+- **Production** — none exists; local first, then test.
+- **Local database** — reset fresh from `0_init` and re-seed.
+- **Scopes** — store and warehouse only; a store already holds many warehouses; no `Warehouse.kind`.
+- **Delivery deduction** — store scope, never warehouse.
+- **BL15** — folded into **P8**: `PUT /api/products/[id]` gates `costPrice` on
+  `userCan("cost_price","view")`, stripping the field or 403 if it was sent.
+- Still open: Q5 (sample vendor `.xlsx` before P11), BL7/Q7 (Zoho localhost redirect URI before P4),
+  BL8 (Gmail App Password before P12), BL9 (vendor data before P10), BL12 (non-admin test role).
+
+**Status line stays `pending`** until the owner says to start.
+
+## Clarifications — 4 Sep 2026 (session 2, part B: requirement decisions)
+
+Five decisions taken with the owner after §0 was written. Each names the requirement it changes.
+
+### R1 — the deliveries fetch/import UI is inline, laid out like `/stock`
+
+> "i thik u have missed the ui of import where i dont need as the popup model make the ui like
+> /stock the fetch and import"
+
+Verified: it **is** a modal today — `zoho-import-flow.tsx:6` imports `BottomSheetModal`, `:54`
+holds `sheetOpen`, `:354` `handleOpenSheet`, and the banners at `:434`/`:445` are suppressed while
+the sheet is open. P4 already replaced it with an inline panel; the owner's instruction pins the
+**pattern**: follow `/stock`, which uses an inline expanding panel and an inline bulk-action bar
+(`stock/page.tsx:159` `showFilters`, `:202` `bulkAction`) rather than a dialog.
+
+So P4's `zoho-fetch-panel.tsx` is: a header trigger that expands a `bg-slate-50` panel **in the
+page flow**, chips for 3/7/14/30/Custom, From/To inputs, Fetch/Cancel, then the results as a normal
+`Card` with checkboxes and an `Import N` button. No `BottomSheetModal`, no overlay, no focus trap —
+the page scrolls behind nothing. Delete `bottom-sheet-modal.tsx`'s use here entirely.
+**Applies to all four fetch screens** (`/deliveries`, `/inbound`, `/bills`, `/receivables`) so they
+look the same.
+
+### R4 — removals go first (execution order changed)
+
+> "i think first we need to remove teh product type removeal we can remove the thing at the first"
+
+§0.6 now runs **P2 → P3 → P1 → P1b → …**. Phase IDs are unchanged so every existing cross-reference
+still resolves. MIG-1b (P3) becomes the first migration folder after `0_init`, MIG-1a (P1) applies
+on top; they are independent DDL so the order between them is free. P2 must still precede P3.
+
+### R3 — an inbound issue is a vendor issue
+
+> "on creating an issue fro the inbound screen respected to the item the repost must be added in
+> the vendor issues data"
+
+Confirmed as already specified in P7 and now stated as the requirement: `POST /api/inbound/[id]/issues`
+writes a real `VendorIssue` row (`issueSource: VENDOR`, `billId`, `createdById`, `issueNo` from
+`nextSequence(tx, "ISS-YYYYMM", 4)`) so it appears on `/vendor-issues` like any other. The three
+reasons it fails today are unchanged: the button is gated on `inbound.edit` while the endpoint
+needs `vendor_issues.create`, and a shipment with no Zoho bill sends no `vendorId` and 400s.
+Vendor resolution: `vendorBill.vendorId`, else a Vendor matched on the brand name
+(case-insensitive), else create one.
+
+### R7 — the availability sheet is read WITHOUT AI
+
+> "give me suggestion which is better should i use ai or can it be done without ai"
+
+**Decision: no AI.** A row's fill colour is a stored property of the `.xlsx` (the file is a zip of
+XML; a filled row literally carries `fgColor rgb="FF00B050"`). Reading it is a lookup, not a
+judgement — deterministic, offline, instant, free.
+
+AI would be strictly worse here, not merely unnecessary: the colour is not in the sheet's *text*,
+so an AI path would have to render the sheet to an image and ask a model which rows "look green" —
+slower, paid per upload, and non-deterministic against a value the file states as fact.
+
+**Why a new dependency is needed:** the current parser is SheetJS (`xlsx@0.18.5`,
+`excel-parser.ts:1`), the community build, which does not expose fill colours. `exceljs` reads
+`cell.fill` directly. That is the whole reason `exceljs` is added in P11.
+
+**AI stays exactly where it is:** `parsePdfWithAI` (`lib/pdf-parser.ts:1`, `new Anthropic()`),
+used only by `brand-stock/upload/route.ts:39` for PDF and image sheets. `ANTHROPIC_API_KEY` is
+needed for that path and no other.
+
+**How it works end to end:** exceljs reads each row's fill and groups rows by colour → the app
+shows one card per distinct colour (swatch, row count, three sample product names) with three
+44 px buttons, Available / Not available / Ignore → the user labels each colour once → the legend
+is stored on the upload (`colorLegend`, `legendConfirmedAt`) and pre-filled on the brand's next
+upload → rows labelled Not available are unselected and excluded from the generated PO.
+**The app never interprets a colour itself.**
+
+**The one failure mode, handled:** if the vendor's colours come from a *conditional formatting
+rule* rather than a painted fill, the file stores the rule and `cell.fill` is empty for every row.
+Detected by "zero distinct fills on an `.xlsx`" → the legend card says so, reports
+`conditionalFormattingCount`, and offers a manual Available / Not available toggle per row. The
+vendor can also be asked to save once with Paste Special → Values and formats. Evaluating
+conditional-formatting rules in code stays out of scope. **§10 Q5 still stands: one real vendor
+sheet is needed before P11 starts**, only to find out which of the two cases this is.
+
+### R9 — PO email unchanged
+
+Gmail App Password over SMTP, PO PDF attached, no API key and no AI (§6). BL8 stands: the App
+Password must exist in Settings › Notifications before P12 can be verified.
+
+### BL7 / Q7 CLOSED — Zoho is testable locally
+
+> "Zoho on localhost in the local databse oit has the itigration data"
+
+Verified 4 Sep: the local server's **`bch-local`** database holds three connected providers —
+`ZOHO_BOOKS`, `ZAKYA_POS`, `ZOHO_INVENTORY`, all `isConnected = true`, organisation
+"Bharath Cycle Hub", with client id, client secret and refresh token present. (`bch` itself had
+zero rows; the credentials were in the other local database.) Access tokens expired 1 Sep, which is
+harmless — the client refreshes from the refresh token on first use.
+
+`scripts/db/restore-integrations.mjs` (new, `npm run db:restore:integrations`) copies those rows
+from `bch-local` into whatever `DATABASE_URL` points at, so a `migrate reset` no longer costs a
+re-connect. It is a **script, not a seed**, deliberately: `integration_config` stores
+`clientSecret`, `refreshToken` and `accessToken` in plaintext (`schema.prisma:988-1003`), and a
+seed file lives in git — a committed seed would put live Zoho credentials into the repository
+history permanently. The script reads database-to-database at run time, writes nothing to disk,
+prints no secret value, and refuses any target that is not localhost.
+
+**So P4 no longer needs a Zoho console change.** BL7 option (a) is moot and Q7 is answered: P4 is
+verified against the real Zoho API from localhost.
+
+## Clarifications — 4 Sep 2026 (session 2, part C: migration naming, build wiring, db:push)
+
+### Migration naming — the practice, and the names this plan uses
+
+**Decision taken by Claude at the owner's request ("take ur desison respected to migration with
+best prctice").** The rules, in order of importance:
+
+1. **Ordering comes from the timestamp, never the name.** Prisma prefixes every folder with a UTC
+   timestamp (`20260904103012_`) and applies them in that order. A name that encodes sequence adds
+   nothing and can only ever contradict the timestamp.
+2. **Name the migration after the CHANGE, never after its position in a plan.** Plans get
+   reordered — this one just did, when the owner moved the removals to the front — but a merged
+   migration is permanent. `mig1a` / `mig1b` encoded a plan position and became wrong within a day
+   of being written. That is the whole argument.
+3. **`snake_case`, verb first, object second:** `add_activity_log`, `drop_product_type`,
+   `backfill_transfer_lanes`. Readable in `ls`, greppable, and it tells a reviewer what the SQL
+   should contain before they open it.
+4. **One migration is one coherent change, named for it.** If the name needs an "and" three times,
+   the migration is doing too much and probably should not be one folder.
+5. **Never rename or edit a merged migration.** Prisma records a checksum of the SQL in
+   `_prisma_migrations` and refuses a folder whose contents changed. A rename after merge is a
+   failed deploy. Renaming is free only *before* the folder exists — which is the case here: only
+   `0_init` exists today.
+
+**The names, therefore:**
+
+| Was (plan shorthand) | Folder name | Phase |
+|---|---|---|
+| MIG-1b | `drop_product_type_and_moving_level` | P3 (runs first under §0.6) |
+| MIG-1a | `add_activity_log_counter_and_scope_columns` | P1 |
+| MIG-2 | `backfill_transfer_lanes_and_drop_stock_count_location` | P14 |
+
+**MIG-1a / MIG-1b / MIG-2 stay as prose labels in this document** — they are useful shorthand in
+sentences like "MIG-1a is additive". They are not folder names.
+
+### R13 — the Vercel build wiring is BUILT (not deferred to P1)
+
+> "create it where i will use test in versel so that i can check how ci works in versel"
+
+Built 4 Sep, ahead of P1, so the owner can watch a preview deploy run migrations against the
+Supabase **test** project before any phase work depends on it:
+
+- **`scripts/vercel-build.mjs`** — `prisma migrate deploy` → `prisma generate` → `next build`,
+  each with `stdio: "inherit"`, aborting on the first non-zero exit and printing the elapsed time
+  per step. A failed migration is a **failed build**: nothing deploys and the previous deployment
+  keeps serving. Prisma prints each applied folder itself, so the build log is the audit trail.
+  `spawnSync(..., { shell: true })` so it also runs from Windows locally.
+- **`vercel.json`** — `"buildCommand": "node scripts/vercel-build.mjs"` beside the existing
+  `"regions": ["bom1"]`.
+- `migrate deploy` reads **`DIRECT_URL`** automatically through `directUrl` in the datasource block
+  (`schema.prisma:5-9`), which is already set. Migrate takes a session lock; the 6543 transaction
+  pooler never releases it, so `DIRECT_URL` must stay the **5432 session pooler** in the Vercel
+  environment variables.
+- `migrate deploy` is the only Prisma command permitted against a non-local database: it never
+  creates a shadow database, never resets, and applies only committed folders.
+
+**P1's scope shrinks accordingly** — it no longer builds this wiring, only the schema, the
+`ActivityLog` table, `counter`, and the helpers.
+
+**Before the first preview deploy, check in Vercel → Settings → Environment Variables:**
+`DATABASE_URL` (6543 pooler, `pgbouncer=true`) and `DIRECT_URL` (5432 session pooler) both point at
+the **test** project. The first preview build should report "No pending migrations to apply",
+because the test project was baselined to `0_init` on 2 Sep — that no-op is the proof the wiring
+works, before any real migration rides on it.
+
+### `db:push` removed, and `db:migrate` now guards itself
+
+- **`db:push` is gone from `package.json`.** CLAUDE.md has banned `prisma db push` since migrations
+  were adopted on 2 Sep; leaving the script in place kept the banned command one habit away.
+- **`scripts/db/assert-localhost.mjs`** (new) reads `.env`, prints the **hostnames only** — never a
+  URL — and exits 1 unless both `DATABASE_URL` and `DIRECT_URL` are `localhost` / `127.0.0.1`.
+- **`"db:migrate": "node scripts/db/assert-localhost.mjs && prisma migrate dev"`** — the check runs
+  itself, every time, instead of relying on remembering. `.env` has pointed at both localhost and
+  the Supabase pooler within the same week, which is exactly the accident this prevents.
+- **`"db:migrate:status": "prisma migrate status"`** added — read-only, safe against any
+  environment, and the first thing to run when a deploy looks wrong.
+- Verified both directions: with `.env` on localhost it passes and prints
+  `DATABASE_URL -> localhost`; against a Supabase URL it exits 1 with the reason and no credential
+  in the output.
+
+**These three items were built ahead of the phases** because every phase from P3 onward runs
+`migrate dev`, and the guard has to exist before the first one, not alongside it.
+
+## Clarifications — 4 Sep 2026 (session 2, part D: P1b store resolution)
+
+**Owner chose option B, 4 Sep.** P1b was going to depend on `Delivery.storeId`, which nothing
+populates until P4 builds `storeIdForInvoice()`. Under §0.6 P1b runs BEFORE P4, so every sale
+would have fallen back to the primary store and a **BCC sale would have deducted BCH stock** for
+the whole window between them.
+
+**P1b therefore gains store resolution and becomes self-contained (+2 files):**
+
+- `src/lib/deliveries/zoho-invoice.ts` — created HERE, not in P4. Exports
+  `storeIdForInvoice(invoiceNo, stores)`: longest matching `Store.invoicePrefix` wins, no match
+  returns null (caller falls back to the primary store with a `log.warn`). Pure and unit-testable.
+- `/stores` + `storeSchema` (`validations.ts:823`) gain the **`invoicePrefix`** field
+  (`String? @unique`, added by MIG-1a in P1) — one input, moved out of P4.
+- `deliveries/[id]` and `deliveries/batch` resolve the store from `Delivery.storeId` when set,
+  else from `storeIdForInvoice(invoiceNo)`, else the primary store.
+
+**Data step after P1b:** on `/stores`, set `invoicePrefix` to `BCH/` and `BCC/`. Until it is set,
+every sale deducts from the primary store — the same behaviour as option C, but it is one field
+away instead of a phase away.
+
+**P4 shrinks:** it no longer creates `zoho-invoice.ts` or the prefix input; it imports the helper
+and adds only `deliveryFieldsFromInvoiceDetail` and the store chip on `/deliveries`.

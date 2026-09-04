@@ -8,14 +8,15 @@
     "start": "next start",
     "lint": "eslint",
     "db:generate": "prisma generate",
-    "db:push": "prisma db push",
-    "db:migrate": "prisma migrate dev",
+    "db:migrate": "node scripts/db/assert-localhost.mjs && prisma migrate dev",
     "db:seed": "prisma db seed",
     "db:seed:rbac": "ts-node --project prisma/tsconfig.json prisma/seed-rbac.ts",
     "db:seed:stores": "ts-node --project prisma/tsconfig.json prisma/seed-stores.ts",
     "db:wipe:products": "ts-node --project prisma/tsconfig.json prisma/wipe-products.ts",
     "import:products": "ts-node --project scripts/tsconfig.json scripts/import-products.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "db:restore:integrations": "node scripts/db/restore-integrations.mjs",
+    "db:migrate:status": "prisma migrate status"
   },
   "prisma": {
     "seed": "ts-node --project prisma/tsconfig.json prisma/seed.ts"
