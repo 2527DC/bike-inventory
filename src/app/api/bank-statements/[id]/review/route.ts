@@ -4,6 +4,9 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError, getServerSession } from "@/lib/auth-helpers";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("bank-statements:review");
 
 // GET — Fetch statement transactions for review
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -117,45 +120,80 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (!txn) return errorResponse("Transaction not found", 404);
 
     if (action === "confirm_payment" && vendorId) {
-      // Create a VendorPayment record
-      const payment = await prisma.vendorPayment.create({
-        data: {
-          vendorId,
-          billId: billId || null,
-          amount: txn.amount,
-          paymentMode: txn.reference?.startsWith("UPI") ? "UPI" : txn.reference?.startsWith("NEFT") || txn.reference?.startsWith("RTGS") ? "NEFT" : "CHEQUE",
-          paymentDate: txn.date,
-          referenceNo: txn.reference || txn.description.slice(0, 50),
-          notes: `Auto-recorded from bank statement: ${txn.description}`,
-          recordedById: userId,
-        },
-      });
-
-      // Update bill paid amount if linked
-      if (billId) {
-        const bill = await prisma.vendorBill.findUnique({ where: { id: billId } });
-        if (bill) {
-          const newPaid = bill.paidAmount + txn.amount;
-          await prisma.vendorBill.update({
-            where: { id: billId },
-            data: {
-              paidAmount: newPaid,
-              status: newPaid >= bill.amount ? "PAID" : "PARTIALLY_PAID",
-            },
-          });
+      // ONE TRANSACTION, AND A BALANCE GUARD.
+      //
+      // This path used to run three plain `prisma.` statements in sequence with no check on
+      // the bill's remaining balance. Two things went wrong with that:
+      //
+      //   1. Confirming a bank match could drive `paidAmount` PAST `amount` — the state
+      //      customers/[id]/route.ts:52 describes as "neither can be trusted". The sibling
+      //      path in api/payments/route.ts:65 has always guarded this; this one did not.
+      //   2. Without a transaction, a failure between the payment insert and the bill update
+      //      left a VendorPayment row that no bill balance reflects.
+      //
+      // The epsilon matches api/payments/route.ts exactly and is deliberate: these columns are
+      // Float, so an exact-settlement comparison needs the tolerance. It disappears the day
+      // the money columns become Decimal — see docs/code-review-2026-09-02.md.
+      const payment = await prisma.$transaction(async (tx) => {
+        if (billId) {
+          const bill = await tx.vendorBill.findUnique({ where: { id: billId } });
+          if (!bill) throw new Error(`Bill not found: ${billId}`);
+          const remaining = bill.amount - bill.paidAmount;
+          if (txn.amount > remaining + 0.01) {
+            throw new Error(
+              `Bank transaction ₹${txn.amount} exceeds bill ${bill.billNo} remaining ₹${remaining.toFixed(2)}. Confirm against the right bill, or split the payment.`
+            );
+          }
         }
-      }
 
-      await prisma.bankTransaction.update({
-        where: { id: singleId },
-        data: {
-          matchStatus: "MATCHED",
-          confirmedVendorId: vendorId,
-          confirmedPaymentId: payment.id,
-          processedAt: new Date(),
-        },
+        const created = await tx.vendorPayment.create({
+          data: {
+            vendorId,
+            billId: billId || null,
+            amount: txn.amount,
+            paymentMode: txn.reference?.startsWith("UPI") ? "UPI" : txn.reference?.startsWith("NEFT") || txn.reference?.startsWith("RTGS") ? "NEFT" : "CHEQUE",
+            paymentDate: txn.date,
+            referenceNo: txn.reference || txn.description.slice(0, 50),
+            notes: `Auto-recorded from bank statement: ${txn.description}`,
+            recordedById: userId,
+          },
+        });
+
+        if (billId) {
+          // Re-read inside the transaction so the balance the guard checked is the one we add to.
+          const bill = await tx.vendorBill.findUnique({ where: { id: billId } });
+          if (bill) {
+            const newPaid = bill.paidAmount + txn.amount;
+            await tx.vendorBill.update({
+              where: { id: billId },
+              data: {
+                paidAmount: newPaid,
+                status: newPaid >= bill.amount - 0.01 ? "PAID" : "PARTIALLY_PAID",
+              },
+            });
+          }
+        }
+
+        await tx.bankTransaction.update({
+          where: { id: singleId },
+          data: {
+            matchStatus: "MATCHED",
+            confirmedVendorId: vendorId,
+            confirmedPaymentId: created.id,
+            processedAt: new Date(),
+          },
+        });
+
+        return created;
       });
 
+      log.info("bank match confirmed as payment", {
+        statementId: id,
+        txnId: singleId,
+        paymentId: payment.id,
+        vendorId,
+        billId: billId || null,
+      });
       return successResponse({ action: "payment_recorded", paymentId: payment.id });
     }
 

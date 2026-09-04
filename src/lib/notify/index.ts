@@ -197,20 +197,10 @@ export async function notify(eventKey: EventKey, input: NotifyInput): Promise<No
   }
 
   // ── 5. The outbox ──────────────────────────────────────────────────────────
-  // Written last, in one statement, and guarded separately: a logging failure must not hide
-  // the fact that sends already happened.
-  if (rows.length) {
-    try {
-      await prisma.notificationOutbox.createMany({ data: rows });
-    } catch (error) {
-      log.error("outbox write failed", {
-        eventKey,
-        refId,
-        rows: rows.length,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
+  // fanOut already flushed after each concurrency batch; this catches the channel-level rows
+  // (event disabled, opted out, no device) and anything a partial fan-out left behind. Guarded
+  // separately, because a logging failure must not hide that sends already happened.
+  await flushOutbox();
 
   log.info("notification processed", { ...outcome, refId, ms: Date.now() - started });
   return outcome;
@@ -234,6 +224,13 @@ export async function notify(eventKey: EventKey, input: NotifyInput): Promise<No
 
     type Probe = { configured: true } | { configured: false; reason: string };
 
+    // `unconfigured` is set the moment ANY send reports the channel is not configured, not just
+    // the probe. Both senders re-read NotificationConfig on every call, so an admin flipping the
+    // master switch off mid-fan-out makes every remaining send throw. Before this, those targets
+    // returned a Probe nobody looked at and produced NO row at all — no SENT, no FAILED, no
+    // SKIPPED — so recipients vanished without trace and the counts under-reported.
+    let unconfigured: string | null = null;
+
     const handle = async (t: T): Promise<Probe> => {
       try {
         const { userId, target, result } = await send(t);
@@ -245,7 +242,10 @@ export async function notify(eventKey: EventKey, input: NotifyInput): Promise<No
         }
         return { configured: true };
       } catch (error) {
-        if (error instanceof NotConfiguredError) return { configured: false, reason: error.message };
+        if (error instanceof NotConfiguredError) {
+          unconfigured ??= error.message;
+          return { configured: false, reason: error.message };
+        }
         // A sender contract violation — they should return {ok:false}, not throw. Record it
         // as FAILED against the target we can identify, and carry on with the others.
         const msg = error instanceof Error ? error.message : String(error);
@@ -263,8 +263,42 @@ export async function notify(eventKey: EventKey, input: NotifyInput): Promise<No
       return;
     }
 
+    let sentSoFar = 1;
     for (let i = 0; i < rest.length; i += SEND_CONCURRENCY) {
       await Promise.all(rest.slice(i, i + SEND_CONCURRENCY).map(handle));
+
+      // Flush what we have. The outbox used to be written in ONE createMany after every send
+      // finished, so an invocation killed mid-fan-out — 40 staff × a fresh SMTP handshake each
+      // is tens of seconds — lost every row including the SENT ones. Mail had gone out and the
+      // table said nothing happened, which is the exact question the table exists to answer.
+      await flushOutbox();
+
+      if (unconfigured) {
+        // The channel went unconfigured partway through. Every remaining target is accounted
+        // for by one row rather than N identical failures, and we stop sending.
+        const remaining = rest.length - Math.min(i + SEND_CONCURRENCY, rest.length);
+        record({
+          channel, status: "SKIPPED", userId: null, target: null,
+          error: `${unconfigured} (stopped after ${sentSoFar} of ${targets.length}; ${remaining} not attempted)`,
+        });
+        log.warn("channel became unconfigured mid-send", { eventKey, channel, reason: unconfigured, remaining });
+        return;
+      }
+      sentSoFar += Math.min(SEND_CONCURRENCY, rest.length - i);
+    }
+  }
+
+  /** Write and clear whatever outbox rows have accumulated. Never throws. */
+  async function flushOutbox(): Promise<void> {
+    if (rows.length === 0) return;
+    const batch = rows.splice(0, rows.length);
+    try {
+      await prisma.notificationOutbox.createMany({ data: batch });
+    } catch (error) {
+      log.error("outbox write failed", {
+        eventKey, refId, rows: batch.length,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 }

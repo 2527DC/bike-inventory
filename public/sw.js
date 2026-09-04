@@ -50,7 +50,12 @@ self.addEventListener("push", (event) => {
   let payload = {};
   if (event.data) {
     try {
-      payload = event.data.json();
+      // `?? {}` matters: the body "null" is VALID JSON, so json() resolves to null without
+      // throwing and the catch below never runs. Reading payload.notification off null then
+      // threw a TypeError that escaped the listener, so nothing was shown and nothing was
+      // logged — from the very DevTools Push box this handler is meant to be testable with.
+      payload = event.data.json() ?? {};
+      if (typeof payload !== "object") payload = { notification: { body: String(payload) } };
     } catch (err) {
       // Not JSON — DevTools' "Push" button and some test tools send plain text. Show it rather
       // than drop it, so a manual test still proves the handler runs.

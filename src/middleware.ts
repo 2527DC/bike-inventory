@@ -45,6 +45,21 @@ export const config = {
     // the existing Zoho pull and import routes) are ordinary authenticated routes behind
     // `requireFeature`, so they must NOT be excluded here. Do not re-add a cron prefix: it
     // would make every route beneath it public to the internet.
-    "/((?!login|fill|api/auth|api/public|api/earn-sync|api/analytics/counts|api/analytics/heartbeat|api/v1/counts|api/v1/heartbeat|_next/static|_next/image|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|json|txt|xml|html|webmanifest|js|mjs|css|map|woff|woff2|ttf)).*)",
+    // ── Customer-facing flows ────────────────────────────────────────────────
+    // `review` and `api/services/reviews` serve a customer who has no account: JobCard
+    // builds `${origin}/review/${tokenNumber}` and sends it over WhatsApp. Without these
+    // exclusions withAuth 307s the customer to /login and the page reports "Something went
+    // wrong" — the HTML-with-status-200 trap described above, from the other direction.
+    // Both are named in CLAUDE.md under "Routes that must stay public"; they were listed
+    // there and never added here, so the link has never worked for a customer.
+    //
+    // `api/services/reviews` is listed IN FULL, not as the `api/services` prefix, for the
+    // same reason the analytics paths are: a prefix would make every future workshop route
+    // public. The route handler checks the token itself.
+    //
+    // `api/services/earn-sync` is the shared-key external poller (CLAUDE.md). Only the
+    // sibling `api/earn-sync` was excluded, so the poller was being redirected to /login and
+    // reading the login page as a successful empty response.
+    "/((?!login|fill|review|api/auth|api/public|api/earn-sync|api/services/earn-sync|api/services/reviews|api/analytics/counts|api/analytics/heartbeat|api/v1/counts|api/v1/heartbeat|_next/static|_next/image|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|json|txt|xml|html|webmanifest|js|mjs|css|map|woff|woff2|ttf)).*)",
   ],
 };

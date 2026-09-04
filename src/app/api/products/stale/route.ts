@@ -66,7 +66,9 @@ export async function GET(req: NextRequest) {
 // POST: Mark selected products as INACTIVE
 export async function POST(req: NextRequest) {
   try {
-    await requireFeature("stock", "create");
+    // delete, NOT create: this sets products INACTIVE, removing them from every picker.
+    // A soft delete is still a delete.
+    await requireFeature("stock", "delete");
     const body = await req.json();
     const { productIds } = body;
 

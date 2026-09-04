@@ -156,7 +156,11 @@ export const userSchema = z.object({
   name: z.string().min(1, "Name is required"),
   email: z.string().email("Invalid email"),
   roleId: z.string().min(1, "Role is required"),
-  accessCode: z.string().min(1, "Access code is required"),
+  // The access code is the ONLY credential in this app — no username, no second factor — and
+  // /api/auth/* is excluded from the middleware, so the login endpoint is reachable from the
+  // open internet. min(1) accepted a one-character code. 8 characters is the floor, not a
+  // recommendation; see docs/code-review-2026-09-02.md for the rate limiting that is still owed.
+  accessCode: z.string().min(8, "Access code must be at least 8 characters"),
   isActive: z.boolean().optional(),
   // Where this person works. Both optional, and `null` is meaningful — it is how the client
   // clears an assignment, which `undefined` cannot express (undefined means "leave alone").

@@ -58,7 +58,9 @@ export async function GET(req: NextRequest) {
 // POST: Mark selected vendors as inactive
 export async function POST(req: NextRequest) {
   try {
-    await requireFeature("vendors", "create");
+    // delete, NOT create: deactivation removes the vendor from every picker. A soft delete is
+    // still a delete.
+    await requireFeature("vendors", "delete");
     const body = await req.json();
     const { vendorIds } = body;
 
