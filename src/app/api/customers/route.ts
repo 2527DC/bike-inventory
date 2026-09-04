@@ -92,9 +92,11 @@ export async function POST(req: NextRequest) {
     const existing = await prisma.customer.findUnique({ where: { phone: data.phone } });
 
     if (existing) {
-      // Answering 200 with the existing row is deliberate and must stay: both callers that
-      // predate the customer list — /receivables/new and the Zoho invoice import — rely on
-      // "create or find" and only read `.data.id`.
+      // Answering 200 with the existing row is deliberate and must stay: the Zoho invoice
+      // import relies on "create or find" and only reads `.data.id`. It is now the ONLY
+      // caller — the two hand-typed create paths (/customers and /receivables/new) were
+      // removed 4 Sep, because a person typing a customer was a second way to create the
+      // same human under a mistyped number. The route stays; the UI that called it is gone.
       //
       // `alreadyExisted` is additive, so neither of them notices, and it lets a form that
       // really is creating a customer say "that number belongs to Ravi Kumar" instead of

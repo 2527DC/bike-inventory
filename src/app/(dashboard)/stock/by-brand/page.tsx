@@ -23,7 +23,6 @@ interface BrandProduct {
   id: string;
   name: string;
   sku: string;
-  type: string;
   currentStock: number;
   reorderLevel: number;
   sellingPrice: number;

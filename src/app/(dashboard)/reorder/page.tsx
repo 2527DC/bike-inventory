@@ -17,7 +17,6 @@ interface ReorderProduct {
   id: string;
   sku: string;
   name: string;
-  type: string;
   currentStock: number;
   reorderLevel: number;
   reorderQty: number;

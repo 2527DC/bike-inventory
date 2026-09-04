@@ -32,16 +32,10 @@ interface Transaction {
   user: { name: string };
 }
 
-interface ProductTypeOption { id: string; name: string; isActive: boolean; }
-
 interface ProductDetail {
   id: string;
   sku: string;
   name: string;
-  /** The type NAME, for display. See src/lib/product-type.ts. */
-  type: string;
-  /** The ProductType row id — what the picker and PATCH use. */
-  productTypeId?: string;
   status: string;
   condition: string;
   currentStock: number;
@@ -92,23 +86,12 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
   // Gates the Pricing card (Cost / Selling / MRP) and nothing else on this page.
   const isAdmin = canView("cost_price");
   const canEdit = canEditCheck("stock");
-  const canEditType = true; // all authenticated users can reclassify product type
   const [product, setProduct] = useState<ProductDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [editData, setEditData] = useState<Record<string, unknown>>({ name: "", color: "", size: "", sellingPrice: 0, mrp: 0, reorderLevel: 0, brandId: "", binId: "", productTypeId: "" });
-  const [productTypes, setProductTypes] = useState<ProductTypeOption[]>([]);
-
-  // The type list, for the picker below. Types are rows now, so the options cannot be a
-  // literal in this file.
-  useEffect(() => {
-    fetch("/api/product-types")
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setProductTypes(res.data); })
-      .catch(() => {});
-  }, []);
+  const [editData, setEditData] = useState<Record<string, unknown>>({ name: "", color: "", size: "", sellingPrice: 0, mrp: 0, reorderLevel: 0, brandId: "", binId: "" });
   const [brands, setBrands] = useState<{ id: string; name: string }[]>([]);
   const [bins, setBins] = useState<{ id: string; code: string; name: string; location: string }[]>([]);
 
@@ -159,7 +142,6 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
       reorderLevel: product!.reorderLevel,
       brandId: product!.brandId || "",
       binId: product!.binId || "",
-      productTypeId: product!.productTypeId || "",
     });
     setEditing(true);
   }
@@ -168,27 +150,17 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
     setSaving(true);
     setActionError("");
     try {
-      let res;
-      if (canEdit) {
-        // Full edit — admin/purchase manager
-        // Only send non-empty fields; skip type if not set (empty string fails enum validation)
-        const payload: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(editData)) {
-          if (v !== "" && v !== undefined) payload[k] = v;
-        }
-        res = await fetch(`/api/products/${id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-      } else {
-        // Type-only reclassification — all authenticated users
-        res = await fetch(`/api/products/${id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ productTypeId: editData.productTypeId }),
-        });
+      // Only send non-empty fields. The type-only PATCH branch is gone with the type: this
+      // form is reachable only by a stock.edit holder now.
+      const payload: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(editData)) {
+        if (v !== "" && v !== undefined) payload[k] = v;
       }
+      const res = await fetch(`/api/products/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
       const data = await res.json();
       if (data.success) {
         // Always re-fetch full product so serialItems/transactions/tags are intact
@@ -239,7 +211,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
             {product.status === "ACTIVE" ? "Active" : "Inactive"}
           </button>
         )}
-        {(canEdit || canEditType) && !editing && (
+        {canEdit && !editing && (
           <button onClick={startEdit} className="p-2 rounded-lg hover:bg-slate-100">
             <Pencil className="h-4 w-4 text-slate-500" />
           </button>
@@ -257,32 +229,6 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
         <Card className="mb-4 border-blue-200 bg-blue-50">
           <CardContent className="p-3 space-y-2">
             <p className="text-xs font-semibold text-blue-800 mb-1">Edit Product</p>
-
-            {/* Type selector — visible to ALL users */}
-            <div>
-              <label className="text-[11px] text-slate-500 uppercase tracking-wide font-medium">Item Type</label>
-              {/* Options come from the ProductType table. A retired type is still offered
-                  when THIS product already holds it — otherwise editing anything else about
-                  the product would silently switch its type to whatever sat first. */}
-              <div className="grid grid-cols-3 gap-1.5 mt-1">
-                {productTypes
-                  .filter((t) => t.isActive || t.id === product?.productTypeId)
-                  .map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => setEditData({ ...editData, productTypeId: t.id })}
-                    className={`py-2 rounded-lg text-xs font-semibold border transition-colors ${
-                      editData.productTypeId === t.id
-                        ? "bg-blue-600 text-white border-blue-600"
-                        : "bg-white text-slate-600 border-slate-200 hover:border-slate-400"
-                    }`}
-                  >
-                    {t.name}
-                  </button>
-                ))}
-              </div>
-            </div>
 
             {/* Full edit fields — admins / purchase manager only */}
             {canEdit && (

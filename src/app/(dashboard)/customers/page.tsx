@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Search, Phone, MessageCircle, Users, MapPin, Plus, Pencil, IndianRupee } from "lucide-react";
+import { Search, Phone, MessageCircle, Users, MapPin, Pencil, IndianRupee } from "lucide-react";
 import { useDebounce } from "@/hooks/use-debounce";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -15,7 +15,7 @@ import { usePermissions } from "@/lib/use-permissions";
 import { apiFetchEnvelope } from "@/lib/api-client";
 import { formatINR } from "@/lib/utils";
 import { createLogger } from "@/lib/logger";
-import { CustomerFormSheet, type CustomerDraft } from "./_components/customer-form-sheet";
+import { CustomerEditSheet, type CustomerDraft } from "./_components/customer-edit-sheet";
 
 const log = createLogger("customers");
 
@@ -69,11 +69,10 @@ const badgeVariant = (t: string) =>
  * so a table on desktop and stacked cards on a phone, never tiles.
  */
 export default function CustomersPage() {
-  const { canCreate, canEdit } = usePermissions();
-  // The PARENT module's grants. There is no separate permission for the list: `customers`
-  // is one module with one answer to "who may add a customer". Cosmetic either way — POST
-  // and PUT re-check server-side, as CLAUDE.md requires.
-  const mayCreate = canCreate("customers");
+  const { canEdit } = usePermissions();
+  // Customers are no longer created by hand: a customer row appears when a Zoho invoice is
+  // imported or a service job is opened, both of which resolve on `phone`. Only editing is
+  // reachable from this screen. Cosmetic either way — PUT re-checks server-side.
   const mayEdit = canEdit("customers");
 
   const [rows, setRows] = useState<CustomerRow[]>([]);
@@ -120,11 +119,6 @@ export default function CustomersPage() {
   useEffect(() => { load(); }, [load]);
   // Any filter change invalidates the current page number.
   useEffect(() => { setPage(1); }, [debouncedSearch, type]);
-
-  function openCreate() {
-    setEditing(null);
-    setSheetOpen(true);
-  }
 
   function openEdit(c: CustomerRow) {
     setEditing({
@@ -238,7 +232,9 @@ export default function CustomersPage() {
     },
   ];
 
-  const emptyText = search || type ? "No customers match that." : "No customers yet.";
+  const emptyText = search || type
+    ? "No customers match that."
+    : "No customers yet. Customers are created when a Zoho invoice is imported or a service job is opened.";
 
   return (
     // No wrapper of its own. (dashboard)/layout.tsx already applies the page padding and
@@ -256,12 +252,6 @@ export default function CustomersPage() {
           </p>
         </div>
 
-        {mayCreate && (
-          <Button onClick={openCreate} className="min-h-[44px] shrink-0">
-            <Plus className="h-4 w-4" />
-            <span className="ml-1">Add</span>
-          </Button>
-        )}
       </div>
 
       {error && <ErrorBanner message={error} onRetry={load} onDismiss={() => setError(null)} />}
@@ -308,12 +298,6 @@ export default function CustomersPage() {
         <div className="text-center py-12">
           <Users className="h-8 w-8 text-slate-300 mx-auto mb-2" />
           <p className="text-sm text-slate-500">{emptyText}</p>
-          {mayCreate && !search && !type && (
-            <Button onClick={openCreate} className="mt-3 min-h-[44px]">
-              <Plus className="h-4 w-4" />
-              <span className="ml-1">Add the first customer</span>
-            </Button>
-          )}
         </div>
       ) : (
         <>
@@ -410,12 +394,14 @@ export default function CustomersPage() {
         </div>
       )}
 
-      <CustomerFormSheet
-        open={sheetOpen}
-        editing={editing}
-        onClose={() => setSheetOpen(false)}
-        onSaved={handleSaved}
-      />
+      {editing && (
+        <CustomerEditSheet
+          open={sheetOpen}
+          editing={editing}
+          onClose={() => setSheetOpen(false)}
+          onSaved={handleSaved}
+        />
+      )}
     </div>
   );
 }
