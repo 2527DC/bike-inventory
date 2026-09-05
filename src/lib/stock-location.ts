@@ -43,6 +43,211 @@ export async function adjustWarehouseQty(tx: Tx, productId: string, warehouseId:
   return recomputeCurrentStock(tx, productId);
 }
 
+/**
+ * Take `qty` of a product out of a STORE, spreading across that store's warehouses.
+ *
+ * ─── WHY THIS EXISTS (R12 — the bug it fixes) ─────────────────────────────────────────────
+ *
+ * Product.currentStock is a CACHE. StockLevel is the truth. Receiving, audits and transfers
+ * honour that: they write StockLevel and let recomputeCurrentStock rebuild the total. The
+ * outward paths did not — they wrote `currentStock` directly and never touched the ledger.
+ *
+ * So the next recompute, triggered by ANY later receipt, applied audit or transfer, rebuilt
+ * the total from a ledger that was never told about the sale, and the sold units came back:
+ *
+ *     10 in stock -> sell 3 -> shows 7 -> receive 5 -> shows 15, not 12.
+ *
+ * Routing every outward movement through here is what makes a sale survive.
+ *
+ * ─── WHY A STORE AND NOT A WAREHOUSE ──────────────────────────────────────────────────────
+ *
+ * A delivery names a store and nothing else — no screen and no request body mentions a
+ * warehouse (owner, 4 Sep: deduction is store-scoped). But stock only exists in StockLevel
+ * rows, which are per warehouse. So the store is the interface and its warehouses are the
+ * implementation: this walks them in `sortOrder` and cascades to the next when one cannot
+ * cover the line.
+ *
+ * ─── THE SHORTFALL CHECK IS NOT OPTIONAL ──────────────────────────────────────────────────
+ *
+ * `adjustWarehouseQty` clamps at zero. Deducting 3 from a warehouse holding 0 therefore
+ * writes 0 and reports success — which would lose the sale exactly as the original bug did,
+ * in a new costume. Summing the store first and refusing up front is what prevents that.
+ *
+ * Today every store has one warehouse, so this resolves to a single write. The cascade
+ * exists because /stores already allows a second one, and a silent partial deduction must
+ * not be the way we find that out.
+ *
+ * Throws a readable Error naming the product and the shortfall. Call it inside the caller's
+ * transaction so a refusal rolls the whole delivery back rather than leaving half a sale.
+ *
+ * @returns the product's new cached total.
+ */
+export async function deductFromStore(
+  tx: Tx,
+  productId: string,
+  storeId: string,
+  qty: number,
+  productLabel?: string
+): Promise<number> {
+  if (qty <= 0) return recomputeCurrentStock(tx, productId);
+
+  // Active only, in picker order. An inactive warehouse is one nobody is putting stock into
+  // or taking it out of, so draining it as a side effect of a sale would be a surprise.
+  const warehouses = await tx.warehouse.findMany({
+    where: { storeId, isActive: true },
+    select: { id: true },
+    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+  });
+
+  if (warehouses.length === 0) {
+    throw new Error(
+      `Cannot deduct ${qty} of ${productLabel ?? productId}: this store has no active warehouse to take stock from.`
+    );
+  }
+
+  return deductAcrossWarehouses(
+    tx,
+    productId,
+    warehouses.map((w) => w.id),
+    qty,
+    productLabel,
+    "at this store"
+  );
+}
+
+/**
+ * Take `qty` out of wherever the product actually is, across every warehouse holding it.
+ *
+ * For REVERSALS, not sales. Undoing an inbound receipt has to put the ledger back, but the
+ * warehouse the receipt went into is not recorded anywhere: `inbound/[id]/route.ts` takes it
+ * from the request body at receive time and `InboundLineItem` has no `warehouseId` column to
+ * keep it in. Storing it would be a schema change, and P1b carries no migration.
+ *
+ * So this reverses against the rows that exist, largest holding first. With one warehouse per
+ * store — today's shape — it is exactly equivalent to reversing the original receipt. With
+ * several it is a best effort that is still strictly correct in total, because the units come
+ * out of the ledger rather than only out of the cache.
+ *
+ * ⚠ The precise fix is `InboundLineItem.warehouseId`, written at receive time and read here.
+ *   Raised for a later phase; see the P1b notes in the 0409 plan.
+ */
+export async function deductAnywhere(
+  tx: Tx,
+  productId: string,
+  qty: number,
+  productLabel?: string
+): Promise<number> {
+  if (qty <= 0) return recomputeCurrentStock(tx, productId);
+
+  const levels = await tx.stockLevel.findMany({
+    where: { productId, quantity: { gt: 0 } },
+    select: { warehouseId: true, quantity: true },
+    orderBy: { quantity: "desc" },
+  });
+
+  return deductAcrossWarehouses(
+    tx,
+    productId,
+    levels.map((l) => l.warehouseId),
+    qty,
+    productLabel,
+    "in any warehouse"
+  );
+}
+
+/**
+ * Put `qty` BACK, for a reversal that has no recorded destination.
+ *
+ * The mirror of `deductAnywhere` and subject to the same limitation: nothing records which
+ * warehouse an undone movement came out of. It goes to the warehouse that already holds the
+ * most of this product — the one it most likely left — and failing that to the primary
+ * store's first active warehouse, so the units land in the ledger rather than only in the
+ * cache. Never invents a warehouse.
+ */
+export async function addAnywhere(
+  tx: Tx,
+  productId: string,
+  qty: number
+): Promise<number> {
+  if (qty <= 0) return recomputeCurrentStock(tx, productId);
+
+  const busiest = await tx.stockLevel.findFirst({
+    where: { productId },
+    select: { warehouseId: true },
+    orderBy: { quantity: "desc" },
+  });
+
+  const warehouseId =
+    busiest?.warehouseId ??
+    (
+      await tx.warehouse.findFirst({
+        where: { isActive: true },
+        select: { id: true },
+        orderBy: [{ store: { sortOrder: "asc" } }, { sortOrder: "asc" }, { name: "asc" }],
+      })
+    )?.id;
+
+  if (!warehouseId) {
+    throw new Error(`Cannot restore ${qty} units: no active warehouse exists to put them in.`);
+  }
+
+  return adjustWarehouseQty(tx, productId, warehouseId, qty);
+}
+
+/**
+ * The shared core: take `qty` across `warehouseIds` in the order given, cascading to the next
+ * when one cannot cover it.
+ *
+ * The up-front sum is the load-bearing part. `adjustWarehouseQty` clamps at zero, so
+ * deducting 3 from a warehouse holding 0 writes 0 and reports success — a silent short
+ * deduction, which is the original bug wearing a different hat. Summing first and refusing
+ * before any write is what makes that impossible.
+ */
+async function deductAcrossWarehouses(
+  tx: Tx,
+  productId: string,
+  warehouseIds: string[],
+  qty: number,
+  productLabel: string | undefined,
+  scopeLabel: string
+): Promise<number> {
+  const label = productLabel ?? productId;
+
+  const levels = await tx.stockLevel.findMany({
+    where: { productId, warehouseId: { in: warehouseIds } },
+    select: { warehouseId: true, quantity: true },
+  });
+  const held = new Map(levels.map((l) => [l.warehouseId, l.quantity]));
+  const available = levels.reduce((sum, l) => sum + l.quantity, 0);
+
+  if (available < qty) {
+    throw new Error(
+      `Insufficient stock for ${label} ${scopeLabel}. Available: ${available}, Needed: ${qty}.`
+    );
+  }
+
+  let remaining = qty;
+  for (const warehouseId of warehouseIds) {
+    if (remaining <= 0) break;
+    const inThis = held.get(warehouseId) ?? 0;
+    if (inThis <= 0) continue;
+    const take = Math.min(inThis, remaining);
+    await adjustWarehouseQty(tx, productId, warehouseId, -take);
+    remaining -= take;
+  }
+
+  // Unreachable: the sum above already proved enough is held, and this runs inside the
+  // caller's transaction so nothing else can drain it in between. Kept as a loud failure
+  // rather than a silent short deduction if that reasoning is ever wrong.
+  if (remaining > 0) {
+    throw new Error(
+      `Could not fully deduct ${label}: ${remaining} of ${qty} left unallocated ${scopeLabel}.`
+    );
+  }
+
+  return recomputeCurrentStock(tx, productId);
+}
+
 // Set a warehouse's quantity to an absolute value (clamped >= 0), then recompute
 // currentStock. Used by stock counts. Returns the new total.
 export async function setWarehouseQty(tx: Tx, productId: string, warehouseId: string, qty: number): Promise<number> {

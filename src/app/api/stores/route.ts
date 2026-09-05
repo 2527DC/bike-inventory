@@ -40,6 +40,7 @@ export async function GET() {
         name: true,
         address: true,
         phone: true,
+        invoicePrefix: true,
         sortOrder: true,
         warehouses: {
           where: { isActive: true },
@@ -71,6 +72,21 @@ export async function POST(req: NextRequest) {
     const clash = await prisma.store.findUnique({ where: { code }, select: { name: true } });
     if (clash) return errorResponse(`Code "${code}" is already used by ${clash.name}`, 409);
 
+    // Unique in the database — name the other store rather than returning a raw P2002.
+    const prefix = data.invoicePrefix?.trim() || null;
+    if (prefix) {
+      const prefixClash = await prisma.store.findFirst({
+        where: { invoicePrefix: prefix },
+        select: { name: true },
+      });
+      if (prefixClash) {
+        return errorResponse(
+          `Invoice prefix "${prefix}" is already used by ${prefixClash.name}. Each store needs its own.`,
+          409
+        );
+      }
+    }
+
     const store = await prisma.store.create({
       data: {
         code,
@@ -78,6 +94,7 @@ export async function POST(req: NextRequest) {
         address: data.address?.trim() || null,
         phone: data.phone?.trim() || null,
         sortOrder: data.sortOrder ?? 0,
+        invoicePrefix: prefix,
       },
     });
 

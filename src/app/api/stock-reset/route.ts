@@ -37,13 +37,31 @@ export async function POST(req: NextRequest) {
       });
 
       const nonZero = products.filter((p) => p.currentStock > 0);
+      const ids = nonZero.map((p) => p.id);
+
+      // THE FIX (R12). Zeroing `currentStock` alone left every StockLevel row untouched, so
+      // the first receipt, applied audit or transfer after a reset recomputed the total from
+      // the old ledger and UNDID the reset. The ledger is the truth; it has to be zeroed too.
+      //
+      // updateMany rather than setWarehouseQty per row: this can touch thousands of products
+      // across every warehouse, and one statement is the difference between a reset that
+      // completes and one that blows the transaction budget. Both writes are absolute, so
+      // there is no per-row arithmetic to preserve.
+      const levelsReset = await tx.stockLevel.updateMany({
+        where: { productId: { in: ids }, quantity: { not: 0 } },
+        data: { quantity: 0 },
+      });
 
       await tx.product.updateMany({
-        where: { id: { in: nonZero.map((p) => p.id) } },
+        where: { id: { in: ids } },
         data: { currentStock: 0, reservedStock: 0 },
       });
 
-      return { productsReset: nonZero.length, location: location || "ALL" };
+      return {
+        productsReset: nonZero.length,
+        stockLevelRowsReset: levelsReset.count,
+        location: location || "ALL",
+      };
     });
 
     return successResponse(result);

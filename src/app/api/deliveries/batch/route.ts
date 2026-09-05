@@ -10,6 +10,8 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { maybeNotifyBelowReorder, type ReorderCrossing } from "@/lib/notify/stock";
+import { deductFromStore } from "@/lib/stock-location";
+import { resolveStoreIdOrPrimary } from "@/lib/deliveries/zoho-invoice";
 
 export async function PUT(req: NextRequest) {
   try {
@@ -42,6 +44,13 @@ export async function PUT(req: NextRequest) {
     // transaction budget and roll back every deduction in the batch.
     const crossings: ReorderCrossing[] = [];
 
+    // Loaded ONCE, outside the transaction, for the same reason the notifications are sent
+    // outside it: a batch is up to 50 deliveries, and re-reading two store rows per delivery
+    // would spend the transaction budget on a list that cannot change while it runs.
+    const stores = await prisma.store.findMany({
+      select: { id: true, invoicePrefix: true, isActive: true, sortOrder: true },
+    });
+
     const result = await prisma.$transaction(async (tx) => {
       let updated = 0;
 
@@ -65,6 +74,16 @@ export async function PUT(req: NextRequest) {
             continue;
           }
 
+          // WHICH STORE sold this (R12) — the delivery's own store when the import set it,
+          // otherwise resolved from the invoice prefix, otherwise the primary store with a
+          // logged warning. Same rule as the single-delivery route.
+          const storeId = delivery.storeId ?? resolveStoreIdOrPrimary(delivery.invoiceNo, stores);
+          if (!storeId) {
+            throw new Error(
+              `Cannot deduct stock for invoice ${delivery.invoiceNo}: no active store is configured.`
+            );
+          }
+
           // Stock deduction — prefer BCH location
           const items = (delivery.lineItems as Array<{ name: string; sku: string; quantity: number; rate: number }>) || [];
           const wasReserved = !!(delivery as unknown as { stockReservedAt: Date | null }).stockReservedAt;
@@ -80,26 +99,31 @@ export async function PUT(req: NextRequest) {
             });
             if (!product) continue;
 
-            if (wasReserved) {
-              const newStock = product.currentStock - item.quantity;
-              if (newStock < 0) {
-                throw new Error(`Insufficient stock for ${item.name} (SKU: ${item.sku}) on invoice ${delivery.invoiceNo}. Available: ${product.currentStock}, Needed: ${item.quantity}`);
-              }
-              await tx.product.update({
-                where: { id: product.id },
-                data: {
-                  currentStock: newStock,
-                  reservedStock: Math.max(0, product.reservedStock - item.quantity),
-                },
-              });
-            } else {
+            // reservedStock stays a product-level number — recomputeCurrentStock never
+            // touches it — so only the reservation check and release live here. The stock
+            // movement itself goes through the ledger.
+            if (!wasReserved) {
               const available = product.currentStock - product.reservedStock;
               if (available < item.quantity) {
                 throw new Error(`Insufficient available stock for ${item.name} (SKU: ${item.sku}) on invoice ${delivery.invoiceNo}. Available: ${available}, Needed: ${item.quantity}`);
               }
+            }
+
+            // THE FIX (R12). Was a direct `currentStock` write that left StockLevel alone,
+            // so the next receipt/audit/transfer recomputed the total from a ledger that had
+            // never heard about this sale and handed the units back.
+            await deductFromStore(
+              tx,
+              product.id,
+              storeId,
+              item.quantity,
+              `${item.name} (SKU: ${item.sku}) on invoice ${delivery.invoiceNo}`
+            );
+
+            if (wasReserved) {
               await tx.product.update({
                 where: { id: product.id },
-                data: { currentStock: product.currentStock - item.quantity },
+                data: { reservedStock: Math.max(0, product.reservedStock - item.quantity) },
               });
             }
             // Both branches above moved currentStock DOWN by item.quantity — the reserved one and

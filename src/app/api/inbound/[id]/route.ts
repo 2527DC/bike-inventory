@@ -6,7 +6,7 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
 import { resolveWarehouse } from "@/lib/warehouses";
-import { adjustWarehouseQty } from "@/lib/stock-location";
+import { adjustWarehouseQty, deductAnywhere } from "@/lib/stock-location";
 
 // GET: Shipment detail
 export async function GET(
@@ -234,10 +234,14 @@ export async function DELETE(
           const qty = li.deliveredQty ?? li.quantity;
           const product = await tx.product.findUnique({ where: { id: li.productId } });
           if (product && qty > 0) {
-            await tx.product.update({
-              where: { id: product.id },
-              data: { currentStock: Math.max(0, product.currentStock - qty) },
-            });
+            // THE FIX (R12). Was `currentStock: Math.max(0, currentStock - qty)`, which moved
+            // the cache and left StockLevel holding the units — so the next recompute undid
+            // the undo and the deleted shipment's stock came straight back.
+            //
+            // `deductAnywhere` rather than a specific warehouse because the one the receipt
+            // went into is not recorded: it arrives in the request body at receive time and
+            // InboundLineItem has no column for it. See that helper's note.
+            await deductAnywhere(tx, product.id, qty, `${li.productName} (${product.sku})`);
           }
           // Delete inventory transactions for this shipment
           await tx.inventoryTransaction.deleteMany({

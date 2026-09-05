@@ -11,6 +11,8 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { deliveryUpdateSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { maybeNotifyBelowReorder, type ReorderCrossing } from "@/lib/notify/stock";
+import { deductFromStore } from "@/lib/stock-location";
+import { resolveStoreIdOrPrimary } from "@/lib/deliveries/zoho-invoice";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -198,6 +200,24 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           });
 
           if (!alreadyDeducted) {
+            // WHICH STORE sold this (R12). Deduction is store-scoped: a delivery names a
+            // store and never a warehouse. `Delivery.storeId` is set by the import when it
+            // can be; otherwise the invoice prefix resolves it, and failing that the primary
+            // store is used and the fallback is logged rather than being invisible.
+            const storeId =
+              existing.storeId ??
+              resolveStoreIdOrPrimary(
+                existing.invoiceNo,
+                await tx.store.findMany({
+                  select: { id: true, invoicePrefix: true, isActive: true, sortOrder: true },
+                })
+              );
+            if (!storeId) {
+              throw new Error(
+                `Cannot deduct stock for invoice ${existing.invoiceNo}: no active store is configured.`
+              );
+            }
+
             const items = (existing.lineItems as Array<{ name: string; sku: string; quantity: number; rate: number }>) || [];
             for (const item of items) {
               if (!item.sku) continue;
@@ -210,29 +230,35 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
               });
               if (!product) continue;
 
+              // The reservation check stays a PRODUCT-level question, because reservedStock
+              // is a product-level number that recomputeCurrentStock never touches. Only the
+              // stock movement itself moved to the ledger.
               const wasReserved = !!existing.stockReservedAt;
-              if (wasReserved) {
-                // Stock was reserved — deduct both
-                const newStock = product.currentStock - item.quantity;
-                if (newStock < 0) {
-                  throw new Error(`Insufficient stock for ${item.name} (SKU: ${item.sku}). Available: ${product.currentStock}, Needed: ${item.quantity}`);
-                }
-                await tx.product.update({
-                  where: { id: product.id },
-                  data: {
-                    currentStock: newStock,
-                    reservedStock: Math.max(0, product.reservedStock - item.quantity),
-                  },
-                });
-              } else {
-                // Direct walk-out (no prior reservation) — check available stock
+              if (!wasReserved) {
+                // Direct walk-out: honour the reservation held for other, pending deliveries.
+                // deductFromStore knows the store's total but not what is spoken for.
                 const available = product.currentStock - product.reservedStock;
                 if (available < item.quantity) {
                   throw new Error(`Insufficient available stock for ${item.name} (SKU: ${item.sku}). Available: ${available}, Needed: ${item.quantity}`);
                 }
+              }
+
+              // THE FIX. Was `tx.product.update({ data: { currentStock: … } })`, which wrote
+              // the cache and left StockLevel untouched, so the next receipt/audit/transfer
+              // recomputed the total from a ledger that never heard about this sale and
+              // handed the units back. This writes the ledger; the cache follows from it.
+              await deductFromStore(
+                tx,
+                product.id,
+                storeId,
+                item.quantity,
+                `${item.name} (SKU: ${item.sku})`
+              );
+
+              if (wasReserved) {
                 await tx.product.update({
                   where: { id: product.id },
-                  data: { currentStock: product.currentStock - item.quantity },
+                  data: { reservedStock: Math.max(0, product.reservedStock - item.quantity) },
                 });
               }
 

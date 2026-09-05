@@ -65,6 +65,11 @@ export const outwardSchema = z.object({
   quantity: z.number().int().min(1, "Quantity must be at least 1"),
   referenceNo: z.string().optional(),
   notes: z.string().optional(),
+  // WHICH STORE the stock leaves (R12). Optional, because no caller sends it today and this
+  // route has never had a location field of any kind — the route defaults to the primary
+  // store. It is here so a caller that knows the store can say so, rather than having the
+  // deduction silently attributed to whichever store sorts first.
+  storeId: z.string().optional(),
 });
 
 export const categorySchema = z.object({
@@ -807,6 +812,18 @@ export const storeSchema = z.object({
   address: z.string().max(300).optional(),
   phone: z.string().max(30).optional(),
   sortOrder: z.number().int().min(0).optional(),
+  /**
+   * The prefix this store's sales invoices carry — "BCH/", "BCC/" (R12).
+   *
+   * `storeIdForInvoice()` matches an invoice number against these to decide which store's
+   * stock a sale comes out of. **Until it is set, every sale deducts from the primary store**,
+   * so a BCC sale would take BCH stock. Unique at the database level.
+   *
+   * Empty string is accepted and normalised to null by the route: clearing the field in the
+   * form has to mean "no prefix", not "a prefix that is the empty string", which would match
+   * every invoice.
+   */
+  invoicePrefix: z.string().max(20).optional(),
 });
 
 export const storeUpdateSchema = storeSchema.partial().extend({
