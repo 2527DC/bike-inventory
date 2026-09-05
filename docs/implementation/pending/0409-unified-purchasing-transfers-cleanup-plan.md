@@ -1,7 +1,12 @@
 # Unified plan — purchasing loop, PO email, deliveries fetch, stock transfers, stock audit, inbound receiving, activity log and the post-go-live removals
 
-Status: pending
-Branch: **`chore/mig1-additive-schema-and-helpers`** — phase P1; one branch and one PR per phase in the order of §3, each cut from the **reference branch `feat/notifications-and-settings-rbac`** (owner, 4 Sep — NOT `main`; local `main` is stale) after the previous phase merged. Update this line to the current phase's branch as work moves.
+> **To continue this work:** read **[▶ RESUME HERE](#-resume-here--the-only-place-that-holds-current-state)** below. It is the only section that holds current state — branch, database, what is done, what is next. Everything else is design or history.
+
+Status: in-progress — 4 Sep 2026, P2 + P3 done (R4 complete, on one branch); P1 next
+Branch: **`chore/remove-type-ui-moving-level-customer-add`** — carries **P2 + P3 together** (R4).
+One branch and one PR per phase in the order of §0.6, each cut from the **reference branch
+`feat/notifications-and-settings-rbac`** (owner, 4 Sep — NOT `main`; local `main` is stale) after
+the previous phase merged. Update this line as work moves. See the Progress log at the end.
 
 Written 4 Sep 2026. Merges and **replaces** two plans written the same day:
 `0409-purchasing-deliveries-transfers-plan.md` (PLAN-1: §A–§G) and
@@ -9,6 +14,123 @@ Written 4 Sep 2026. Merges and **replaces** two plans written the same day:
 below was re-verified against the working tree on 4 Sep 2026; where a source plan cited a
 model's leading comment instead of its declaration the number here is the declaration.
 Plan files are named `ddmm-<name>-plan.md` from now on.
+
+---
+
+## ▶ RESUME HERE — the only place that holds current state
+
+**Everything needed to pick this up is in this section.** Sections 1–10 are the design; the
+`Clarifications` sections at the end are decision history and explain *why*, not *where we are*.
+Update THIS section as work moves, and nowhere else.
+
+Last updated: **5 Sep 2026**, session 3.
+
+### 1. Where the code is
+
+**Branch: `chore/remove-type-ui-moving-level-customer-add`**, cut from the reference branch
+`feat/notifications-and-settings-rbac`. **Nothing on `main`.**
+
+| Commit | Contains |
+|---|---|
+| `12de6be` | R13 — `scripts/vercel-build.mjs`, `vercel.json` buildCommand, `scripts/db/assert-localhost.mjs`, `db:push` removed, `scripts/db/restore-integrations.mjs`, plan rewrite |
+| `61e03cd` | perf — `turbopack.root` pinned (unrelated to R4; separate so it can be dropped) |
+| `730ad5a` | **P2** — screens stop reading product type, `movingLevel`, customer quick-add (15 files) |
+| `1287226` | **P3** — the migration folder + 26 files; `.gitignore` gains `backups/` |
+
+### 2. ⚠ Which database — read before running any Prisma command
+
+`.env` points at **`bch-local`**, NOT `bch`. Two different databases on the same local server:
+
+| DB | products | state |
+|---|---|---|
+| `bch` | 0 | `0_init` applied, seeded, **empty** — not in use |
+| **`bch-local`** | **5,739** | the real catalogue; **baselined 4 Sep**, now carries both migrations |
+
+`bch-local` had no `_prisma_migrations`, so `migrate dev` offered to **reset and lose everything**.
+It was not reset. `migrate diff` proved the gap was 21 lines — exactly P3's change — so it was
+**baselined**: `pg_dump` -> `backups/bch-local-pre-p3-20260904-230251.dump`, then
+`migrate resolve --applied 0_init`, then the folder applied with `migrate deploy`.
+
+**`migrate dev` cannot apply a data-losing migration here** — it demands an interactive
+confirmation and the session is non-interactive. Write the folder from `migrate diff` and apply it
+with **`migrate deploy`**. This will come up again for MIG-1a and MIG-2.
+
+If the database is ever reset: `npm run db:restore:integrations` puts the Zoho credentials back
+(they live in `bch-local`; it is also their only source — do not drop that database).
+
+### 3. What is DONE
+
+**R4 is complete** (P2 + P3, merged onto one branch because they are one requirement and the
+production deploy gap that justified splitting them does not exist).
+
+- Product type removed from every screen, every API reader, validations, types, the RBAC catalog
+  and the import script; `api/product-types/`, `(dashboard)/product-types/` and
+  `lib/product-type.ts` deleted.
+- `Category.movingLevel` removed. Customer quick-add removed (`customer-form-sheet.tsx` ->
+  `customer-edit-sheet.tsx`, edit-only). `POST /api/customers` kept — the Zoho import needs it.
+- Migration `20260904173412_drop_product_type_and_moving_level` applied to `bch-local`.
+  Destroyed: 3 `ProductType` rows + the `productTypeId` column. `movingLevel` and
+  `StockCount.productType` held zero non-default values. **5,739 products intact.**
+- `npm run db:seed:rbac` run -> `1 stale removed` (`product_types`). **Re-run this wherever else
+  the app is deployed.**
+
+**R13 is complete** and shipped ahead of P1, so **P1 is smaller than §7 describes** — it no longer
+builds the Vercel wiring.
+
+Two behaviour changes for the PR body:
+1. **Non-editors lose the pencil on `/stock/[id]`** — `canEditType` was hardcoded `true`; product
+   type was the only field it unlocked, so the button now follows `canEdit("stock")`.
+2. **`products/[id]` PATCH is status-only** — a body without `status` now returns 400.
+
+### 4. What is VERIFIED, and what is not
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | **green** (61 errors -> 0) |
+| Proof greps, §7 P2 and P3 | **clean** — only explanatory comments remain |
+| `npx eslint` on every changed file | **zero issues.** 7 exist repo-wide, all pre-existing in untouched files, confirmed by linting HEAD's copy |
+| `npx prisma migrate status` | up to date, 2 migrations |
+| Product created from brand + category alone | **PASSES** — P3's acceptance criterion |
+| `npm run build` | **PASSES** (5 Sep). Full route table printed, exit 0, and **no `/product-types` route in it** |
+| Browser walk | **NOT DONE for either phase** — the one check still outstanding |
+
+One straggler found on 5 Sep and folded into `1287226`: the Stock Management hub subtitle
+(`(dashboard)/stock-management/page.tsx:47`) still read "Stock, product types, categories, …".
+P3's file list named only `rbac-catalog.ts:108`; this page hardcodes its own copy of that
+sentence, so the grep for `product-types` missed it and the grep for `product type` found it.
+Both now read "Stock, categories, audits, inbound, dispatch and transfers."
+
+### 5. NEXT STEPS, in order
+
+1. **Walk the screens.** A green build proves nothing here: `brand-count` carried a
+   `p.type.replace()` that only throws at runtime.
+   - `/stock` — no type tabs; filters and bulk bar work
+   - `/stock/[id]` — pencil only with `stock.edit`; edit form saves
+   - `/categories` — name only; an unchanged save just closes the row
+   - `/customers` — no Add; edit sheet saves; empty state explains where customers come from
+   - `/receivables/new` — no quick-add; the hint shows
+   - `/stock-audit/brand-count` — walk to the product list
+   - `/product-types` -> **404**  ·  `/reports/stock-value` -> **two** tabs
+2. **Open the PR for R4** (P2 + P3) against the reference branch. The branch is pushed; the
+   commits are `730ad5a` and `1287226`. *The owner merges on GitHub; Claude never merges
+   locally, and asks which branch to use as reference before creating one.*
+   PR body must carry: the two behaviour changes in §3, and **run `npm run db:seed:rbac`
+   after merge** or the sidebar keeps a "Product Types" entry that 404s.
+3. **Then P1** — MIG-1a, `ActivityLog`, `counter`, `src/lib/activity-log.ts`,
+   `src/lib/sequence.ts`, delete `src/app/api/ops-activity-logs/route.ts`. Migration folder name:
+   `add_activity_log_counter_and_scope_columns`.
+4. **Then P1b** — the stock ledger fix (R12), which now also carries `storeIdForInvoice()` and the
+   `/stores` `invoicePrefix` field (owner chose option B).
+
+### 6. Owner actions still outstanding
+
+- Delete the stray **93-byte** `F:\bharath  Cycle\package-lock.json` (no `package.json` beside it)
+  — it is why Next mis-detected the workspace root.
+- Dev speed: Defender exclusions, and moving `.next` (1.9 GB) off the 5400rpm HDD onto the SSD.
+- **BL12** — create a non-admin test role. Every phase's gate walk needs one; ADMIN holds every
+  permission, so testing as admin proves no gate works.
+- **Q5** a real vendor `.xlsx` before P11 · **BL8** Gmail App Password before P12 · **BL9** vendor
+  data before P10.
 
 ---
 
@@ -1578,7 +1700,9 @@ else waits on the rows above, most of them on BL1–BL4, which are half a day of
 
 ---
 
-## Clarifications — 4 Sep 2026 (review pass, verified against code)
+## Clarifications — decision history (NOT current state; see ▶ RESUME HERE at the top)
+
+### Session 1 — 4 Sep 2026, review pass verified against code
 
 Method: `clarify-plan` — every "the code does X" claim, file:line citation, route, guard, model
 field and package in §4–§10 was re-checked on disk by three independent sweeps plus a schema
@@ -1668,7 +1792,7 @@ review of MIG-1a/1b/MIG-2; prior sessions were treated as hypotheses. Roughly 22
 
 ---
 
-## Clarifications — 4 Sep 2026 (session 2, owner review)
+### Session 2a — 4 Sep 2026, owner review
 
 Method: `clarify-plan`, second pass. The 4 Sep review section above was treated as a hypothesis and
 re-checked on disk; its code claims held (spot-checks below). What changed is the **environment and
@@ -1801,7 +1925,7 @@ on a route that writes Delivery rows). All CONFIRMED. Every file the plan create
 
 **Status line stays `pending`** until the owner says to start.
 
-## Clarifications — 4 Sep 2026 (session 2, part B: requirement decisions)
+### Session 2b — 4 Sep 2026, requirement decisions
 
 Five decisions taken with the owner after §0 was written. Each names the requirement it changes.
 
@@ -1905,7 +2029,7 @@ prints no secret value, and refuses any target that is not localhost.
 **So P4 no longer needs a Zoho console change.** BL7 option (a) is moot and Q7 is answered: P4 is
 verified against the real Zoho API from localhost.
 
-## Clarifications — 4 Sep 2026 (session 2, part C: migration naming, build wiring, db:push)
+### Session 2c — 4 Sep 2026, migration naming, build wiring, db:push
 
 ### Migration naming — the practice, and the names this plan uses
 
@@ -1988,7 +2112,7 @@ works, before any real migration rides on it.
 **These three items were built ahead of the phases** because every phase from P3 onward runs
 `migrate dev`, and the guard has to exist before the first one, not alongside it.
 
-## Clarifications — 4 Sep 2026 (session 2, part D: P1b store resolution)
+### Session 2d — 4 Sep 2026, P1b store resolution
 
 **Owner chose option B, 4 Sep.** P1b was going to depend on `Delivery.storeId`, which nothing
 populates until P4 builds `storeIdForInvoice()`. Under §0.6 P1b runs BEFORE P4, so every sale
