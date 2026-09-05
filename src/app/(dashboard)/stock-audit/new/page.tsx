@@ -8,7 +8,7 @@ import { ArrowLeft, MapPin, Package } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
-import { useWarehouses } from "@/hooks/use-sites";
+import { useStores } from "@/hooks/use-sites";
 
 interface Bin {
   id: string;
@@ -28,7 +28,7 @@ interface User {
 }
 
 export default function NewStockAuditPage() {
-  const { warehouses } = useWarehouses();
+  const { stores } = useStores();
   const router = useRouter();
   const { data: session } = useSession();
   const user = session?.user as { userId?: string; role?: string } | undefined;
@@ -37,8 +37,10 @@ export default function NewStockAuditPage() {
   const [dueDate, setDueDate] = useState("");
   const [notes, setNotes] = useState("");
   const [scope, setScope] = useState<"bin" | "location" | "all">(BIN_TRACKING_ENABLED ? "bin" : "all");
-  // Location mode (bins dormant): which of the 4 locations this count is for (required).
-  const [stockLoc, setStockLoc] = useState<string>("");
+  // Scope (R2). storeId is required; warehouseId empty means the whole store, which is
+  // verify-only — see the caption in the picker and section 5.1 of the 0409 plan.
+  const [storeId, setStoreId] = useState<string>("");
+  const [warehouseId, setWarehouseId] = useState<string>("");
   const [selectedBin, setSelectedBin] = useState("");
   const [selectedLocation, setSelectedLocation] = useState("");
   const [bins, setBins] = useState<Bin[]>([]);
@@ -76,6 +78,10 @@ export default function NewStockAuditPage() {
 
   const locations = Object.keys(locationGroups).sort();
 
+  const selectedStore = stores.find((s) => s.id === storeId) ?? null;
+  const selectedWarehouse = selectedStore?.warehouses.find((w) => w.id === warehouseId) ?? null;
+  const scopeLabel = selectedWarehouse?.name ?? (selectedStore ? `${selectedStore.name} — whole store` : "");
+
   // Estimated item count for preview
   const estimatedItems = useMemo(() => {
     if (scope === "bin" && selectedBin) {
@@ -101,11 +107,17 @@ export default function NewStockAuditPage() {
     }
   }, [selectedBin, selectedLocation, scope, bins]);
 
+  // Warehouse mode: name the audit after what it actually covers.
+  useEffect(() => {
+    if (BIN_TRACKING_ENABLED) return;
+    if (scopeLabel) setTitle(`Stock Count - ${scopeLabel}`);
+  }, [scopeLabel]);
+
   const handleSubmit = async () => {
     if (!title || !dueDate) return;
     if (scope === "bin" && !selectedBin) return;
     if (scope === "location" && !selectedLocation) return;
-    if (!BIN_TRACKING_ENABLED && !stockLoc) { setError("Select a location"); return; }
+    if (!BIN_TRACKING_ENABLED && !storeId) { setError("Choose a store"); return; }
     setSubmitting(true);
     setError("");
     try {
@@ -117,7 +129,9 @@ export default function NewStockAuditPage() {
       };
 
       if (!BIN_TRACKING_ENABLED) {
-        body.location = stockLoc;
+        body.storeId = storeId;
+        // Omitted entirely for a whole-store audit — the API reads absence as "whole store".
+        if (warehouseId) body.warehouseId = warehouseId;
       } else if (scope === "bin" && selectedBin) {
         body.binId = selectedBin;
       } else if (scope === "location" && selectedLocation) {
@@ -139,7 +153,7 @@ export default function NewStockAuditPage() {
             { label: "Title", value: title },
             { label: "Assigned To", value: assignedUser?.name || "—" },
             { label: "Due Date", value: new Date(dueDate).toLocaleDateString("en-IN") },
-            { label: "Scope", value: !BIN_TRACKING_ENABLED ? (warehouses.find((w) => w.id === stockLoc)?.name ?? "All warehouses") : scope === "bin" ? `Bin: ${bins.find((b) => b.id === selectedBin)?.code || selectedBin}` : scope === "location" ? `Location: ${selectedLocation}` : "All Products" },
+            { label: "Scope", value: !BIN_TRACKING_ENABLED ? scopeLabel : scope === "bin" ? `Bin: ${bins.find((b) => b.id === selectedBin)?.code || selectedBin}` : scope === "location" ? `Location: ${selectedLocation}` : "All Products" },
           ],
           redirectTo: `/stock-audit/${data.data.id}`,
         });
@@ -181,21 +195,71 @@ export default function NewStockAuditPage() {
           </div>
         )}
 
-        {/* Location (bins dormant) — required: a count always targets one location */}
+        {/* SCOPE — two steps, store then what inside it (R2, §5.1).
+            Replaces a flat list of every warehouse in the business, which asked the person
+            raising the audit to know which building belonged to which shop. */}
         {!BIN_TRACKING_ENABLED && (
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Location *</label>
-            <div className="grid grid-cols-2 gap-2">
-              {warehouses.map((loc) => (
-                <button key={loc.id} onClick={() => setStockLoc(loc.id)}
-                  className={`min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
-                    stockLoc === loc.id ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
-                  }`}>
-                  {loc.name}
-                </button>
-              ))}
+          <>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Store *</label>
+              <div className="grid grid-cols-2 gap-2">
+                {stores.map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => { setStoreId(s.id); setWarehouseId(""); }}
+                    className={`min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
+                      storeId === s.id ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    {s.name}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+
+            {selectedStore && (
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Count *</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setWarehouseId("")}
+                    className={`min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
+                      warehouseId === "" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    Whole store
+                  </button>
+                  {/* Warehouses by NAME. A "floor" is just a warehouse named that way — there
+                      is no kind/type column, by decision (MIG-1a). */}
+                  {selectedStore.warehouses.map((w) => (
+                    <button
+                      key={w.id}
+                      onClick={() => setWarehouseId(w.id)}
+                      className={`min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
+                        warehouseId === w.id ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
+                      }`}
+                    >
+                      {w.name}
+                    </button>
+                  ))}
+                </div>
+                {/* The caption is the whole point of §5.1: a whole-store count produces one
+                    number per product while stock is held per warehouse, so the variance
+                    cannot be written back anywhere without inventing a location. */}
+                {warehouseId === "" && (
+                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1 mt-2">
+                    Verify only — to correct stock, audit one warehouse.
+                  </p>
+                )}
+                {selectedStore.warehouses.length === 0 && (
+                  <p className="text-[11px] text-slate-500 mt-2">
+                    {selectedStore.name} has no active warehouses, so only a verify-only
+                    whole-store count is possible.
+                  </p>
+                )}
+              </div>
+            )}
+          </>
         )}
 
         {/* Bin Selector */}
@@ -327,7 +391,7 @@ export default function NewStockAuditPage() {
 
         {(() => {
           const missing: string[] = [];
-          if (!BIN_TRACKING_ENABLED && !stockLoc) missing.push("location");
+          if (!BIN_TRACKING_ENABLED && !storeId) missing.push("store");
           if (scope === "bin" && !selectedBin) missing.push("bin");
           if (scope === "location" && !selectedLocation) missing.push("location");
           if (!title) missing.push("title");

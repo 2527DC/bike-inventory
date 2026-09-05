@@ -16,6 +16,7 @@ import { SkeletonDashboard } from "@/components/ui/skeleton";
 import { formatINR, formatTime } from "@/lib/utils";
 import { usePermissions } from "@/lib/use-permissions";
 import { SendScorecardButton } from "./_components/send-scorecard-button";
+import { MyStockAudits } from "./_components/my-stock-audits";
 
 
 interface CEOData {
@@ -989,6 +990,11 @@ export default function DashboardPage() {
         </p>
         <p className="text-xs font-medium text-slate-400 mt-0.5">{role?.name || "Team Member"}</p>
       </div>
+
+      {/* Above the role dashboard, deliberately: an audit assigned to you is work someone is
+          waiting on, and it used to be announced nowhere at all. Renders nothing when you
+          have none, so it costs no space on the days it has nothing to say. */}
+      {!loading && can("stock_audit", "view") && <MyStockAudits />}
 
       {!loading && pickDashboard()}
     </div>

@@ -109,12 +109,33 @@ export const binSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
+/**
+ * A stock audit's SCOPE (R2). Replaces the free-text `location` plus a product type — an
+ * assigned audit used to open on an empty page because neither told the counter where to go.
+ *
+ * Two fields, three states (§5.1):
+ *
+ *   storeId set, warehouseId null  -> the whole store. VERIFY ONLY: a whole-store count
+ *                                     yields one number per product while StockLevel is per
+ *                                     warehouse, so any split of the variance would invent a
+ *                                     location.
+ *   both set                       -> that one warehouse. Corrections allowed.
+ *   both null                      -> a legacy audit whose old `location` did not resolve.
+ *                                     Verify only. Not reachable from this schema — it exists
+ *                                     only for rows that predate MIG-1a.
+ *
+ * `storeId` is REQUIRED for a new audit. That is the point of the phase: an audit with no
+ * scope is the bug being fixed, so the API refuses to create another one.
+ */
 export const stockCountSchema = z.object({
   title: z.string().min(1, "Title is required"),
   assignedToId: z.string().optional(),
   dueDate: z.string().min(1, "Due date is required"),
   notes: z.string().optional(),
   productIds: z.array(z.string()).optional(),
+  storeId: z.string().min(1, "Choose a store"),
+  /** Omit for a whole-store (verify-only) audit. Must belong to `storeId` — the route checks. */
+  warehouseId: z.string().min(1).optional(),
 });
 
 export const stockCountUpdateSchema = z.object({

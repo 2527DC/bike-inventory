@@ -270,6 +270,38 @@ export async function getWarehouseQtyMap(productIds: string[], warehouseId: stri
   return new Map(rows.map((r) => [r.productId, r.quantity]));
 }
 
+/**
+ * Quantity across a whole STORE for many products (productId -> qty, missing = 0).
+ *
+ * The store-scoped counterpart of `getWarehouseQtyMap`, for a whole-store stock audit. Sums
+ * the store's ACTIVE warehouses — an inactive one is not somewhere anybody is counting, so
+ * including it would report stock the counter cannot physically see and manufacture a
+ * variance on every line.
+ *
+ * NOT `Product.currentStock`. That is the global cache across every store, so a BCH audit
+ * would have been handed BCH + BCC quantities and shown a variance on products that were
+ * simply sitting in the other store.
+ */
+export async function getStoreQtyMap(
+  productIds: string[],
+  storeId: string,
+  client: DbClient = prisma
+): Promise<Map<string, number>> {
+  if (productIds.length === 0) return new Map();
+  const rows = await client.stockLevel.findMany({
+    where: {
+      productId: { in: productIds },
+      warehouse: { storeId, isActive: true },
+    },
+    select: { productId: true, quantity: true },
+  });
+  const out = new Map<string, number>();
+  for (const r of rows) {
+    out.set(r.productId, (out.get(r.productId) ?? 0) + r.quantity);
+  }
+  return out;
+}
+
 // Quantity at one warehouse for a single product (0 if no row).
 export async function getWarehouseQty(productId: string, warehouseId: string, client: DbClient = prisma): Promise<number> {
   const row = await client.stockLevel.findUnique({

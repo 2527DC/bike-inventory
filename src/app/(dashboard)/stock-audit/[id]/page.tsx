@@ -17,6 +17,10 @@ import { Input } from "@/components/ui/input";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { fuzzyMatch } from "@/lib/utils";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("stock-audit:detail");
 
 interface StockCountItemData {
   id: string;
@@ -49,7 +53,12 @@ interface StockCountSummary {
   rejectionReason: string | null;
   notes: string | null;
   assignedTo: { name: string };
+  assignedToId: string;
   bin: { code: string; name: string; location: string } | null;
+  // Scope (R2). scopeLabel is built by the API so every screen words it identically;
+  // canCorrectStock is false for a whole-store or legacy audit — see section 5.1.
+  scopeLabel: string;
+  canCorrectStock: boolean;
   totalItems: number;
   countedItems: number;
   totalVariance: number;
@@ -71,13 +80,18 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
   const { id } = use(params);
   const router = useRouter();
   const { data: session } = useSession();
-  const { canApprove: canApproveCheck, canEdit } = usePermissions();
+  const { canApprove: canApproveCheck, canEdit, canDelete } = usePermissions();
   const canApprove = canApproveCheck("stock_audit");
   // NOT stock_audit.approve. "Correct stock levels" does not approve anything — it
   // OVERWRITES each product’s currentStock with the counted quantity. That is a write to
   // stock, so it is stock.edit: someone who may approve a count is not automatically someone
   // who may overwrite the books.
   const isAdmin = canEdit("stock");
+  const canDeleteAudit = canDelete("stock_audit");
+  // WHOSE audit is this. Every start/count/complete gate keys off THIS, not off a
+  // permission: the buttons used to be hidden by `!isAdmin`, so anyone holding stock.edit —
+  // the owner, typically — opened their own assigned audit and found no way to begin it.
+  const currentUserId = (session?.user as { userId?: string } | undefined)?.userId;
   const [summary, setSummary] = useState<StockCountSummary | null>(null);
   // Screenshot receipt shown when a count is completed (WhatsApp verification gate)
   const [receipt, setReceipt] = useState<{ referenceId: string; items: Array<{ label: string; value: string }> } | null>(null);
@@ -221,20 +235,25 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
     if (batch.length === 0) return;
 
     setAutoSaveStatus("saving");
-    try {
-      const res = await fetch(`/api/stock-counts/${id}/items`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: batch }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        dirtyRef.current = new Set();
-        setAutoSaveStatus("saved");
-        setTimeout(() => setAutoSaveStatus("idle"), 2000);
-        fetchSummary();
-      }
-    } catch (e) { setActionError(e instanceof Error ? e.message : "Auto-save failed"); }
+    // A FAILED AUTO-SAVE MUST BE LOUD. This was `if (data.success) { … }` with no else, so a
+    // rejected save left the indicator on "Auto-saving…" and the counter carried on believing
+    // their numbers were stored. `dirtyRef` is deliberately NOT cleared on failure, so the
+    // next tick retries the same batch.
+    const { error } = await apiTry(`/api/stock-counts/${id}/items`, {
+      method: "PUT",
+      json: { items: batch },
+      timeoutMs: 30_000,
+    });
+    if (error) {
+      log.error("auto-save failed", { countId: id, items: batch.length, message: error });
+      setAutoSaveStatus("idle");
+      setActionError(`Auto-save failed: ${error}. Your counts are not saved yet — press Save.`);
+      return;
+    }
+    dirtyRef.current = new Set();
+    setAutoSaveStatus("saved");
+    setTimeout(() => setAutoSaveStatus("idle"), 2000);
+    fetchSummary();
   };
 
   const handleManualSave = async () => {
@@ -248,35 +267,39 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
 
     if (batch.length === 0) return;
     setSaving(true);
-    try {
-      const res = await fetch(`/api/stock-counts/${id}/items`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: batch }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        dirtyRef.current = new Set();
-        setAutoSaveStatus("saved");
-        setTimeout(() => setAutoSaveStatus("idle"), 2000);
-        fetchSummary();
-        fetchItems();
-      }
-    } catch (e) { setActionError(e instanceof Error ? e.message : "Save failed"); }
-    finally { setSaving(false); }
+    setActionError("");
+    const { error } = await apiTry(`/api/stock-counts/${id}/items`, {
+      method: "PUT",
+      json: { items: batch },
+      timeoutMs: 30_000,
+    });
+    if (error) {
+      log.error("manual save failed", { countId: id, items: batch.length, message: error });
+      setActionError(error);
+    } else {
+      dirtyRef.current = new Set();
+      setAutoSaveStatus("saved");
+      setTimeout(() => setAutoSaveStatus("idle"), 2000);
+      fetchSummary();
+      fetchItems();
+    }
+    setSaving(false);
   };
 
   const handleStatusChange = async (newStatus: string, extras?: Record<string, unknown>) => {
     setActionLoading(true);
+    setActionError("");
     try {
-      const res = await fetch(`/api/stock-counts/${id}`, {
+      const { error } = await apiTry(`/api/stock-counts/${id}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus, ...extras }),
+        json: { status: newStatus, ...extras },
+        timeoutMs: 60_000,
       });
-      const data = await res.json();
-      if (!data.success) {
-        setActionError(data.error || `Failed to change status to ${newStatus}`);
+      if (error) {
+        // The API's sentence, verbatim — it is the one that explains WHY, e.g. "This audit
+        // covers the whole store. Approve as verify-only, or raise one audit per warehouse."
+        log.error("status change failed", { countId: id, newStatus, message: error });
+        setActionError(error);
       } else if (newStatus === "COMPLETED" && summary) {
         // Screenshottable receipt for the WhatsApp group to verify/approve.
         setReceipt({
@@ -300,9 +323,14 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
   const handleRefreshSystemQty = async () => {
     setRefreshing(true);
     try {
-      await fetch(`/api/stock-counts/${id}/items`, { method: "PATCH" });
-      setStaleCount(0);
-      fetchItems();
+      const { error } = await apiTry(`/api/stock-counts/${id}/items`, { method: "PATCH", timeoutMs: 30_000 });
+      if (error) {
+        log.error("refresh failed", { countId: id, message: error });
+        setActionError(error);
+      } else {
+        setStaleCount(0);
+        fetchItems();
+      }
     } catch (e) { setActionError(e instanceof Error ? e.message : "Refresh failed"); }
     finally { setRefreshing(false); }
   };
@@ -358,6 +386,9 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
   const progress = summary.totalItems > 0 ? Math.round((summary.countedItems / summary.totalItems) * 100) : 0;
   const remaining = summary.totalItems - summary.countedItems;
 
+  // Counting is the assignee's job; approving is somebody else's. Both facts, once.
+  const isAssignee = summary.assignedToId === currentUserId;
+
   return (
     <div>
       {actionError && (
@@ -377,16 +408,21 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
           <p className="text-xs text-slate-500 tabular-nums truncate">
             {summary.countNo && <span className="font-mono text-slate-400">{summary.countNo} | </span>}
             {summary.assignedTo.name} | Due: {new Date(summary.dueDate).toLocaleDateString("en-IN")}
+            {/* WHERE to count. An assigned audit used to say only who and when. */}
+            {summary.scopeLabel && ` | ${summary.scopeLabel}`}
             {summary.bin && ` | ${summary.bin.name} (${summary.bin.location})`}
           </p>
         </div>
         <Badge variant={STATUS_STYLE[summary.status] as "warning" | "info" | "success" | "danger"}>
           {summary.status === "IN_PROGRESS" ? "In Progress" : summary.status.charAt(0) + summary.status.slice(1).toLowerCase()}
         </Badge>
-        <button onClick={() => setShowDeleteConfirm(true)} disabled={deleting} aria-label="Delete stock count"
-          className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg disabled:opacity-50 focus-ring">
-          <Trash2 className="h-4 w-4" />
-        </button>
+        {/* This had NO permission gate: anyone who could open an audit could delete it. */}
+        {canDeleteAudit && (
+          <button onClick={() => setShowDeleteConfirm(true)} disabled={deleting} aria-label="Delete stock count"
+            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg disabled:opacity-50 focus-ring">
+            <Trash2 className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       {/* Baseline / Verification Banner */}
@@ -489,7 +525,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
         </Link>
       )}
 
-      {summary.status === "COMPLETED" && canApprove && (
+      {summary.status === "COMPLETED" && canApprove && !isAssignee && (
         <div className="mb-3 space-y-2">
           <div className="flex gap-2">
             <button onClick={() => handleStatusChange("APPROVED")} disabled={actionLoading}
@@ -501,7 +537,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
               <XCircle className="h-4 w-4" /> Reject
             </button>
           </div>
-          {isAdmin && (
+          {isAdmin && summary.canCorrectStock && (
             <button onClick={() => handleStatusChange("APPROVED", { applyToStock: true })} disabled={actionLoading}
               className="w-full flex items-center justify-center gap-2 border border-amber-300 bg-amber-50 text-amber-800 min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50 focus-ring">
               <ShieldCheck className="h-4 w-4" /> Approve &amp; correct stock levels
@@ -509,19 +545,20 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
           )}
           <p className="text-[11px] text-slate-500">
             <span className="font-medium">Verify only</span> records the count without changing stock (Inwards adds stock).
-            {isAdmin ? " Correct stock levels overwrites each item's stock at this location with the counted quantity — admin only." : ""}
+            {isAdmin && summary.canCorrectStock ? " Correct stock levels overwrites each item's stock at this warehouse with the counted quantity." : ""}
+            {isAdmin && !summary.canCorrectStock ? " This audit covers the whole store, so stock cannot be corrected from it — raise one audit per warehouse to do that." : ""}
           </p>
         </div>
       )}
 
-      {summary.status === "REJECTED" && !isAdmin && (
+      {summary.status === "REJECTED" && isAssignee && (
         <button onClick={() => handleStatusChange("IN_PROGRESS")} disabled={actionLoading}
           className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white min-h-[48px] rounded-lg text-sm font-medium mb-3 disabled:opacity-50 focus-ring">
           <Play className="h-4 w-4" /> {actionLoading ? "Starting..." : "Re-start Counting"}
         </button>
       )}
 
-      {summary.status === "PENDING" && !isAdmin && (
+      {summary.status === "PENDING" && isAssignee && (
         <button onClick={() => handleStatusChange("IN_PROGRESS")} disabled={actionLoading}
           className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white min-h-[48px] rounded-lg text-sm font-medium mb-3 disabled:opacity-50 focus-ring">
           <Play className="h-4 w-4" /> {actionLoading ? "Starting..." : "Start Counting"}
@@ -537,12 +574,21 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
           </button>
           <button onClick={async () => {
             if (dirtyRef.current.size > 0) await handleManualSave();
+            // INLINE, not `confirm()`. The browser dialog is unstyled, unreadable on a phone,
+            // and — because the baseline period has ended — it was asking the counter to
+            // accept a silent outcome ("their stock will remain unchanged") on rows they
+            // simply had not reached. Naming the count and pointing at the `0 ✓` pill turns
+            // it into something they can act on instead of a yes/no they will always answer
+            // yes to.
             if (remaining > 0) {
-              const msg = isBaseline
-                ? `You've counted ${summary.countedItems} item(s). The remaining ${remaining} uncounted item(s) will be set to 0 stock. Continue?`
-                : `${remaining} item(s) haven't been counted yet. Their stock will remain unchanged. Complete anyway?`;
-              if (!confirm(msg)) return;
+              setActionError(
+                isBaseline
+                  ? `${remaining} item${remaining === 1 ? "" : "s"} not counted. During the baseline period those would be recorded as 0 — press "0 ✓" on each to confirm, or count them.`
+                  : `${remaining} item${remaining === 1 ? "" : "s"} still uncounted. Use the "0 ✓" button on any shelf that is genuinely empty, then Complete.`
+              );
+              return;
             }
+            setActionError("");
             handleStatusChange("COMPLETED");
           }} disabled={actionLoading || saving}
             className="flex-1 flex items-center justify-center gap-2 bg-green-600 text-white min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50 focus-ring">
@@ -559,7 +605,11 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
       )}
 
       {/* Tabs, Search, Items — only show after counting starts */}
-      {summary.status !== "PENDING" && (<>
+      {/* Tabs, Search, Items.
+          NO LONGER hidden while PENDING. The list used to be wrapped in `status !== "PENDING"`,
+          so an assigned audit opened on a title, a due date and nothing else — the screen the
+          owner described as doing nothing when clicked. The rows render read-only until Start
+          is pressed; seeing WHAT you are about to count is the point of opening it. */}
       <div className="flex bg-slate-100 rounded-lg p-0.5 mb-2">
         {(["uncounted", "counted", "all"] as const).map((t) => {
           const count = t === "uncounted" ? tabCounts.uncounted : t === "counted" ? tabCounts.counted : tabCounts.total;
@@ -640,6 +690,20 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                     <p className="text-xs font-semibold text-slate-600 tabular-nums">{item.systemQty}</p>
                   </div>
                   <div className="flex items-center gap-0 shrink-0">
+                    {/* EXPLICIT ZERO. The baseline period has ended, so Complete needs every item
+                          counted — and "counted" means countedQty is not null. Neither "−" nor "+"
+                          can express "I looked and there are none": decrementing an uncounted row
+                          leaves it uncounted. Without this the only way to finish an audit with a
+                          genuinely empty shelf was to type 0 into the prompt. */}
+                      {!isCounted && (
+                        <button
+                          onClick={() => setCount(item.id, 0)}
+                          title="Record zero — none found"
+                          className="h-9 min-w-[44px] px-2 flex items-center justify-center rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-600 active:bg-slate-100 mr-1"
+                        >
+                          0 ✓
+                        </button>
+                      )}
                     <button onClick={() => decrement(item.id)}
                       className="h-9 w-9 flex items-center justify-center bg-slate-100 rounded-l-lg border border-slate-200 active:bg-slate-200">
                       <Minus className="h-4 w-4 text-slate-600" />
@@ -695,6 +759,20 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                       {/* Plus/Minus Counter */}
                       <div className="flex items-center gap-3">
                         <div className="flex items-center flex-1">
+                          {/* EXPLICIT ZERO. The baseline period has ended, so Complete needs every item
+                          counted — and "counted" means countedQty is not null. Neither "−" nor "+"
+                          can express "I looked and there are none": decrementing an uncounted row
+                          leaves it uncounted. Without this the only way to finish an audit with a
+                          genuinely empty shelf was to type 0 into the prompt. */}
+                      {!isCounted && (
+                        <button
+                          onClick={() => setCount(item.id, 0)}
+                          title="Record zero — none found"
+                          className="h-11 min-w-[44px] px-2 flex items-center justify-center rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-600 active:bg-slate-100 mr-1"
+                        >
+                          0 ✓
+                        </button>
+                      )}
                           <button onClick={() => decrement(item.id)}
                             className="h-10 w-12 flex items-center justify-center bg-slate-100 rounded-l-lg border border-slate-200 active:bg-slate-200">
                             <Minus className="h-5 w-5 text-slate-600" />
@@ -793,7 +871,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
         </div>
       )}
 
-      </>)}
+
 
       {/* Rejection Bottom Sheet Modal */}
       {showRejectModal && (
