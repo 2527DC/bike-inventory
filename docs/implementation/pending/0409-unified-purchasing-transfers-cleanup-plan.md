@@ -35,6 +35,7 @@ commits and pushes only.**
 | `chore/remove-type-ui-moving-level-customer-add` | `feat/notifications-and-settings-rbac` | R4 = P2 + P3 — **pushed** |
 | `feat/activity-log-counter-and-scope-columns` | the branch above | P1 — **pushed** |
 | `feat/stock-ledger-integrity` | the branch above | P1b — **pushed** |
+| `feat/zoho-fetch-window` | the branch above | P4 — **pushed** |
 
 **Branch rule confirmed by the owner, 5 Sep:** keep stacking each phase on the previous
 phase's tip, **and ask before creating each branch**. Claude cut P1 and P1b on its own
@@ -56,6 +57,8 @@ phase merged" means while the previous phase has not merged yet. Merge in branch
 | `2ccbe10` | **P1** — MIG-1a, `ActivityLog`, `counter`, `PurchaseOrderSend`, both helpers, `db:snapshot`, three Restrict-FK delete-path fixes (12 files) |
 | `a156c13` | docs — RESUME updated for P1 |
 | `be0b6e1` | **P1b** — the stock ledger fix, `deductFromStore`/`deductAnywhere`/`addAnywhere`, `storeIdForInvoice()`, `/stores` invoice prefix (13 files) |
+| `109edc4` | docs — RESUME updated for P1b |
+| `97d2759` | **P4** — Zoho window + failures visible + inline panel; `date-window.ts`, `zoho-fetch-panel.tsx`, `inbound/sequence.ts`, RBAC `fetch` cleanup (20 files) |
 
 ### 2. ⚠ Which database — read before running any Prisma command
 
@@ -173,6 +176,66 @@ a silent return of this bug is exactly the risk, and nothing currently guards it
 the cache, so the next recompute made verified stock *disappear* rather than reappear. Fixed
 the same way, and it now accepts an optional `warehouseId`.
 
+**P4 is complete** (R1 — the Zoho fetch window and the deliveries panel). No migration:
+MIG-1a already added `IntegrationConfig.lastAuthErrorAt`.
+
+All five root causes in §7 P4's table are closed:
+
+| # | Was | Now |
+|---|---|---|
+| 5 | Client did IST-local arithmetic then `toISOString()`; server used its own UTC date. "3 days" on 3 Sep at 02:00 IST fetched 30 Aug–2 Sep — an extra day at the front, today's bills missing | `src/lib/zoho/date-window.ts`, pure, `Date.UTC` only. **12 spot-checks pass**, including the plan's four. The FY floor is DERIVED, not the literal `"2026-04-01"` that goes wrong next 1 April |
+| 1 | Disconnected Zoho → HTTP 200 `invoicesNew: 0` → "No new invoices found" | **409 with a sentence.** `lastAuthErrorAt` separates "never connected" from "token refused" |
+| 2 | `init` created the `running` SyncLog row BEFORE the source check, so a refusal wedged the next attempt for 2 minutes | Source check moved first; `closeRunningSync()` on every early exit |
+| 3 | `if (previewRes.success)` with **no else** — the panel stuck in "fetching", button grey, nothing said | Every branch sets state; `apiFetch` throws, so there is no silent path |
+| 4 | Provider exception swallowed into `errors[]` beside `success: true`, which no client read | **502 `Zoho <source>: <message>`** |
+
+Also: already-imported records moved out of `errors[]` into `skipped` (§5.2) — a normal
+re-fetch no longer reports itself as a partial failure; the inbound screen renders them as a
+neutral card linking to each shipment. `zohoPullSchema` replaces the bare cast that silently
+dropped `days` and `toDate`. `apiFetch` gained `timeoutMs` + `ApiError.isTimeout`; the four
+screens use it and the hand-rolled `fetchWithTimeout` on `/inbound` is gone. Import runs in
+chunks of 25 with the un-imported rows left selected on a mid-chunk failure.
+
+**The `BCC/` skip is gone from all three routes** (O8): `trigger-pull`, `search-zoho`,
+`import-zoho`. A store name hardcoded in three filters had made a store with its own GSTIN
+invisible — its invoices never imported, so its stock never moved. Invoices now carry
+`storeId`, resolved from `Store.invoicePrefix`, and unmatched ones are counted rather than
+dropped. `deliveryFieldsFromInvoiceDetail` is shared, so the review-flow import finally gets
+the address, area, pincode and salesperson that only the single-invoice path used to read.
+
+**`pull-review/approve`:** picks the client by the preview's `provider` (a Zakya-only setup
+got no detail at all before, because only `getBooks()` was tried); the silent dedup `continue`
+became `results.skipped++` **and** marks the preview APPROVED — it used to leave it PENDING
+forever, so the pull could never leave PARTIAL. Both `IB-` allocators now use `nextSequence`.
+
+**Permissions (Option B), server and client flipped in one commit:** `search-zoho` →
+`zoho.fetch`, `import-zoho` → `zoho.approve` (it WRITES Delivery rows and was gated on a
+read-shaped grant), four screens → `canFetch("zoho")`, and the Import button gained the client
+gate it never had.
+
+**⚠ The plan expected FOUR orphaned `fetch` actions; there were SIX.** `vendors.fetch` and
+`brand_ledger.fetch` are orphaned too — proven by grep: no route guards any module `fetch`
+except `zoho`, and no client reads one. All six are removed under the plan's own rule
+("delete the action when no route guards on it"); `zoho.fetch` is the only survivor.
+**`npm run db:seed:rbac` after deploy** or the six stay grantable and keep implying access.
+
+**The panel is INLINE** (R1, "no popup modal"). `zoho-fetch-panel.tsx` is split out as a pure
+presentational picker; `zoho-import-flow.tsx` keeps the request state and renders trigger →
+panel → progress → error → summary → results as siblings. The `BottomSheetModal` wrapper,
+`sheetOpen`, `handleOpenSheet/CloseSheet` and the two-tab bar are gone from this component;
+the two tabs became one segmented toggle over a single panel.
+
+That last part removed a real defect, not just markup: each tab carried **its own copy** of
+the error banner, the progress strip and the result card, so a message could be sitting on the
+tab nobody was looking at. There is now one of each. Four near-identical progress strips
+collapsed into one, and both banners gained a **retry that re-runs the request** — they only
+offered "dismiss" before.
+
+`deliveries/page.tsx`'s header is `flex flex-wrap … gap-y-2` and that is load-bearing: the
+panel, banners and result cards are `w-full` flex items, so each wraps onto its own line under
+the title instead of being squeezed into the header row. `BottomSheetModal` itself stays — the
+page's delete and pre-book sheets still use it, as §7 P4 requires.
+
 **⚠ One limitation, deliberately not solved here.** Undoing an inbound receipt cannot deduct
 from *the warehouse the receipt went into*, as §7 P1b specifies, because nothing records it:
 `inbound/[id]/route.ts` takes the warehouse from the request body at receive time and
@@ -190,7 +253,8 @@ equivalent today, when each store has one warehouse. **The precise fix is
 | `npx eslint` on every changed file | **zero issues.** 7 exist repo-wide, all pre-existing in untouched files, confirmed by linting HEAD's copy |
 | `npx prisma migrate status` | **up to date, 3 migrations** (`0_init`, MIG-1b, MIG-1a) |
 | Product created from brand + category alone | **PASSES** — P3's acceptance criterion |
-| `npm run build` | **PASSES for R4, P1 and P1b** (5 Sep). Full route table, exit 0; **no `/product-types` and no `/api/ops-activity-logs` in it** |
+| `npm run build` | **PASSES for R4, P1, P1b and P4** (5 Sep). Full route table, exit 0; **no `/product-types` and no `/api/ops-activity-logs` in it** |
+| P4 date-window spot-checks | **12/12 PASS**, including the plan`s four and the owner`s "3 days on 4 Sep" case |
 | P1b acceptance scenario | **PASSES** — 10 → sell 3 → 7 → receive 5 → **12**; the old path reproduced alongside gives **15**. Ran against `bch-local` in a rolled-back transaction |
 | `npm run db:snapshot` | **PASSES** — ran it; `pg_restore -l` lists `ActivityLog`, `counter`, `PurchaseOrderSend`, and no `OpsActivityLog` |
 | Browser walk | **NOT DONE for any phase** — the one check still outstanding |
@@ -220,19 +284,26 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
    filter tabs, no order in them yet), `/stores`, `/warehouses`, `/categories` delete + merge,
    `/purchase-orders`, `/stock-audit`.
 2. **PRs — the owner's job, not Claude's** (owner, 5 Sep: "u dont do anything related to pr").
-   Both branches are pushed. Merge in stacking order: R4 first, then P1.
-   The R4 PR body needs the two behaviour changes in §3 and **run `npm run db:seed:rbac` after
-   merge**, or the sidebar keeps a "Product Types" entry that 404s. The P1 PR body needs the
-   three Restrict-FK delete-path fixes in §3, and `npm run db:snapshot` before merging —
-   it carries a migration and Prisma has no down migrations.
+   All FOUR branches are pushed. **Merge in stacking order: R4 → P1 → P1b → P4.**
+   - **R4** — the two behaviour changes in §3, and **run `npm run db:seed:rbac` after merge**
+     or the sidebar keeps a "Product Types" entry that 404s.
+   - **P1** — the three Restrict-FK delete-path fixes in §3, and **`npm run db:snapshot`
+     before merging**: it carries a migration and Prisma has no down migrations.
+   - **P1b** — a live data-integrity fix; the before/after numbers are in §3.
+   - **P4** — **`npm run db:seed:rbac` after merge as well**, or six dead `fetch` permissions
+     stay grantable on `/team/permissions`. Then grant **Settings › Integrations: fetch +
+     approve** to every role that had **Deliveries: fetch**, or their Fetch button vanishes.
 3. **Data step, as soon as P1b is merged:** on `/stores`, set the **invoice prefix** to `BCH/`
    and `BCC/`. **Until that is done every sale deducts from the primary store** — a BCC sale
    takes BCH stock. Two things make that impossible to miss rather than silent: the row shows
    an amber **"No invoice prefix"** badge until it is set, and `resolveStoreIdOrPrimary` logs
    a `warn` on every invoice that falls back. The input is built (P1b) — it is one field on
    the store form.
-4. **Then P4** — Zoho fetch window + inline deliveries panel. Ask which branch to base it on
-   before creating it (owner, 5 Sep).
+4. **Then P6** — stock audit scope and assignee (R2). Its schema dependency is already met:
+   MIG-1a added `StockCount.storeId`, `StockCount.warehouseId` and the indexes, so P6 writes
+   code only — no migration folder.
+   **Ask which branch to base it on before creating it** (owner, 5 Sep); the stack tip is
+   `feat/zoho-fetch-window`.
 
 ### 6. Owner actions still outstanding
 
