@@ -36,6 +36,7 @@ commits and pushes only.**
 | `feat/activity-log-counter-and-scope-columns` | the branch above | P1 — **pushed** |
 | `feat/stock-ledger-integrity` | the branch above | P1b — **pushed** |
 | `feat/zoho-fetch-window` | the branch above | P4 — **pushed** |
+| `feat/stock-audit-scope` | the branch above | P6 — **pushed** |
 
 **Branch rule confirmed by the owner, 5 Sep:** keep stacking each phase on the previous
 phase's tip, **and ask before creating each branch**. Claude cut P1 and P1b on its own
@@ -59,6 +60,8 @@ phase merged" means while the previous phase has not merged yet. Merge in branch
 | `be0b6e1` | **P1b** — the stock ledger fix, `deductFromStore`/`deductAnywhere`/`addAnywhere`, `storeIdForInvoice()`, `/stores` invoice prefix (13 files) |
 | `109edc4` | docs — RESUME updated for P1b |
 | `97d2759` | **P4** — Zoho window + failures visible + inline panel; `date-window.ts`, `zoho-fetch-panel.tsx`, `inbound/sequence.ts`, RBAC `fetch` cleanup (20 files) |
+| `38d7176` | docs — RESUME updated for P4 |
+| `c1cb3fe` | **P6** — audit scope + assignee gates, `getStoreQtyMap`, `my-stock-audits.tsx`, the global-`currentStock` fix (11 files) |
 
 ### 2. ⚠ Which database — read before running any Prisma command
 
@@ -219,6 +222,44 @@ except `zoho`, and no client reads one. All six are removed under the plan's own
 ("delete the action when no route guards on it"); `zoho.fetch` is the only survivor.
 **`npm run db:seed:rbac` after deploy** or the six stay grantable and keep implying access.
 
+**P6 is complete** (R2 — stock audit scope and assignee). No migration: MIG-1a already added
+`StockCount.storeId`/`warehouseId` and the indexes.
+
+R2's two complaints, both closed:
+
+| Was | Now |
+|---|---|
+| **"An assigned audit shows an empty page."** Two separate causes: the item list was wrapped in `status !== "PENDING"`, so a new audit opened on a title and a due date and nothing else; and Start was gated on `!isAdmin`, so anyone holding `stock.edit` — the owner — could not begin their own audit | Rows render read-only until Start. Every start/count/complete gate keys off **`isAssignee`**, not a permission. Holding `approve` no longer takes anything away; the only thing it still cannot do is approve your own count |
+| **Scoped by free-text `location` + a product type** | `storeId` + optional `warehouseId`, validated (the warehouse must belong to the store). Two-step picker: store chips → "Whole store" \| one chip per warehouse, with the verify-only caption from §5.1 |
+
+**THREE LATENT BUGS found on the way** — the first is the one §5.1 predicted:
+
+1. **`applyToStock` wrote `Product.currentStock` GLOBALLY.** It resolved its target *inside*
+   the transaction via `warehouseByCode(existing.location)` — root client, module cache,
+   free-text code — and when that returned null it set `isLocCount = false`, at which point
+   both branches overwrote the product's total across every store, while the comment directly
+   above them claimed the count "is NOT applied to stock". Resolved before the transaction
+   now, and a whole-store audit gets the §5.1 400 instead of a silent global write.
+   `applyToStock` + a nullable warehouse collapsed into ONE `correctionTarget`, so "correct
+   stock, but nowhere" stopped being a representable state.
+2. **Stale and Refresh compared against the global `currentStock`.** On a warehouse audit
+   every line looked stale as soon as any *other* warehouse moved, and Refresh then
+   overwrote `systemQty` with the cross-store sum — manufacturing a variance on every row.
+   Both now use the scoped quantity; `currentStock` survives only as the legacy fallback.
+3. **`countNo` was a read-then-write with a STRING sort** — `SC-202609-0002` outranks
+   `SC-202609-00010`. Now `nextSequence` inside the transaction, with `logActivity`.
+
+Also: `getStoreQtyMap` added beside `getWarehouseQtyMap`; the **`0 ✓` pill** on both row
+renderers (baseline has ended, so Complete needs every item counted, and neither − nor +
+can express "I looked and there are none"); Complete's `confirm()` replaced by an inline
+message that points at that pill; the delete icon **gained a permission gate — it had none**;
+`/stock-audit` moved to `apiTry` with an error banner (its `.catch(() => {})` rendered "No
+stock audits found" for an expired session); a new **`MyStockAudits`** dashboard widget
+("Your stock audits" via `?mine=1`, plus "Awaiting your approval" for approvers), which
+renders nothing when there is nothing to do; and the detail screen's auto-save now reports
+failure — it was `if (data.success)` with no else, so a rejected auto-save left the counter
+believing their numbers were stored.
+
 **The panel is INLINE** (R1, "no popup modal"). `zoho-fetch-panel.tsx` is split out as a pure
 presentational picker; `zoho-import-flow.tsx` keeps the request state and renders trigger →
 panel → progress → error → summary → results as siblings. The `BottomSheetModal` wrapper,
@@ -254,6 +295,7 @@ equivalent today, when each store has one warehouse. **The precise fix is
 | `npx prisma migrate status` | **up to date, 3 migrations** (`0_init`, MIG-1b, MIG-1a) |
 | Product created from brand + category alone | **PASSES** — P3's acceptance criterion |
 | `npm run build` | **PASSES for R4, P1, P1b and P4** (5 Sep). Full route table, exit 0; **no `/product-types` and no `/api/ops-activity-logs` in it** |
+| P6 | tsc + eslint clean; the whole-store 400 and the assignee gates are code-verified, NOT browser-walked |
 | P4 date-window spot-checks | **12/12 PASS**, including the plan`s four and the owner`s "3 days on 4 Sep" case |
 | P1b acceptance scenario | **PASSES** — 10 → sell 3 → 7 → receive 5 → **12**; the old path reproduced alongside gives **15**. Ran against `bch-local` in a rolled-back transaction |
 | `npm run db:snapshot` | **PASSES** — ran it; `pg_restore -l` lists `ActivityLog`, `counter`, `PurchaseOrderSend`, and no `OpsActivityLog` |
@@ -284,7 +326,7 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
    filter tabs, no order in them yet), `/stores`, `/warehouses`, `/categories` delete + merge,
    `/purchase-orders`, `/stock-audit`.
 2. **PRs — the owner's job, not Claude's** (owner, 5 Sep: "u dont do anything related to pr").
-   All FOUR branches are pushed. **Merge in stacking order: R4 → P1 → P1b → P4.**
+   All FIVE branches are pushed. **Merge in stacking order: R4 → P1 → P1b → P4 → P6.**
    - **R4** — the two behaviour changes in §3, and **run `npm run db:seed:rbac` after merge**
      or the sidebar keeps a "Product Types" entry that 404s.
    - **P1** — the three Restrict-FK delete-path fixes in §3, and **`npm run db:snapshot`
@@ -293,17 +335,21 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
    - **P4** — **`npm run db:seed:rbac` after merge as well**, or six dead `fetch` permissions
      stay grantable on `/team/permissions`. Then grant **Settings › Integrations: fetch +
      approve** to every role that had **Deliveries: fetch**, or their Fetch button vanishes.
+   - **P6** — say in the body that the global `currentStock` overwrite was a live
+     data-integrity bug, not a scoping choice, and that this lands **before any store gains a
+     second warehouse** or the new whole-store 400 reads as a regression. Existing audits
+     have `storeId` null and are treated as legacy: verify-only, header "Legacy audit — no
+     location". No data step.
 3. **Data step, as soon as P1b is merged:** on `/stores`, set the **invoice prefix** to `BCH/`
    and `BCC/`. **Until that is done every sale deducts from the primary store** — a BCC sale
    takes BCH stock. Two things make that impossible to miss rather than silent: the row shows
    an amber **"No invoice prefix"** badge until it is set, and `resolveStoreIdOrPrimary` logs
    a `warn` on every invoice that falls back. The input is built (P1b) — it is one field on
    the store form.
-4. **Then P6** — stock audit scope and assignee (R2). Its schema dependency is already met:
-   MIG-1a added `StockCount.storeId`, `StockCount.warehouseId` and the indexes, so P6 writes
-   code only — no migration folder.
+4. **Then P7** — inbound per-line receiving, saved category, Report Issue (R3). MIG-1a already
+   added `InboundShipment.categoryId`, so P7 writes code only — no migration folder.
    **Ask which branch to base it on before creating it** (owner, 5 Sep); the stack tip is
-   `feat/zoho-fetch-window`.
+   `feat/stock-audit-scope`.
 
 ### 6. Owner actions still outstanding
 
