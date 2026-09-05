@@ -27,8 +27,19 @@ Last updated: **5 Sep 2026**, session 3.
 
 ### 1. Where the code is
 
-**Branch: `chore/remove-type-ui-moving-level-customer-add`**, cut from the reference branch
-`feat/notifications-and-settings-rbac`. **Nothing on `main`.**
+**TWO branches, stacked. Nothing on `main`. The owner opens and merges every PR — Claude
+commits and pushes only.**
+
+| Branch | Cut from | Carries |
+|---|---|---|
+| `chore/remove-type-ui-moving-level-customer-add` | `feat/notifications-and-settings-rbac` | R4 = P2 + P3 — **pushed** |
+| `feat/activity-log-counter-and-scope-columns` | the branch above | P1 — **pushed** |
+
+**Why P1 stacks on P3 instead of being cut from the reference branch:** `bch-local` already
+has MIG-1b applied. A branch without that folder puts Prisma in drift the moment a migration
+command runs, and the fix would be resetting the one database holding the 5,739 products and
+the only copy of the Zoho credentials. Stacking is what the plan's "cut after the previous
+phase merged" means while the previous phase has not merged yet. Merge in branch order.
 
 | Commit | Contains |
 |---|---|
@@ -36,6 +47,8 @@ Last updated: **5 Sep 2026**, session 3.
 | `61e03cd` | perf — `turbopack.root` pinned (unrelated to R4; separate so it can be dropped) |
 | `730ad5a` | **P2** — screens stop reading product type, `movingLevel`, customer quick-add (15 files) |
 | `1287226` | **P3** — the migration folder + 26 files; `.gitignore` gains `backups/` |
+| `8e4e2cf` | docs — RESUME updated for P3 |
+| `2ccbe10` | **P1** — MIG-1a, `ActivityLog`, `counter`, `PurchaseOrderSend`, both helpers, `db:snapshot`, three Restrict-FK delete-path fixes (12 files) |
 
 ### 2. ⚠ Which database — read before running any Prisma command
 
@@ -77,10 +90,36 @@ production deploy gap that justified splitting them does not exist).
 **R13 is complete** and shipped ahead of P1, so **P1 is smaller than §7 describes** — it no longer
 builds the Vercel wiring.
 
-Two behaviour changes for the PR body:
+Two behaviour changes for the R4 PR body:
 1. **Non-editors lose the pencil on `/stock/[id]`** — `canEditType` was hardcoded `true`; product
    type was the only field it unlocked, so the button now follows `canEdit("stock")`.
 2. **`products/[id]` PATCH is status-only** — a body without `status` now returns 400.
+
+**P1 is complete** (MIG-1a + helpers), on its own branch.
+
+- Migration `20260905170804_add_activity_log_counter_and_scope_columns` applied to `bch-local`.
+  **Additive except one statement.** `ActivityLog` replaces `OpsActivityLog`; the `DROP TABLE`
+  is safe by measurement, not assumption — `SELECT count(*)` returned **0**, its only writer
+  (`api/ops-activity-logs/route.ts`) is deleted in the same commit, and no client called it
+  (`/activity` reads `/api/activity`). **5,739 products intact.**
+- Also created: `counter`, `PurchaseOrderSend`, five enums, the two `TransferOrderStatus`
+  values, and the nullable scope / lane / send / brand-stock columns from §4 MIG-1a.
+- Two hand-written backfills below the generated SQL, both no-ops on `bch-local` (0 rows in
+  both tables) and both written for the databases where they are not: the `StockCount.location`
+  → `warehouseId`/`storeId` resolution, and the 4→5 digit `poNumber` normalisation.
+- `src/lib/activity-log.ts` and `src/lib/sequence.ts` created. `db:snapshot` built and **proved
+  by running it** — `pg_restore -l` lists the new tables in the dump.
+- `transfers/page.tsx` status union, `StatusFilter`, badge icon and row accent extended to
+  `IN_TRANSIT`/`RECEIVED`. `status-colors.ts` already knew both.
+
+**Three latent bugs found and fixed in P1** — all the same shape: a new `Restrict` FK made a
+delete that used to return a readable sentence start failing on a raw constraint string.
+1. `api/categories/[id]/merge` deletes the source category **inside a transaction**. With
+   `InboundShipment.categoryId` Restrict it would abort the merge; it now moves shipments to
+   the target alongside the products.
+2. `api/categories/[id]` DELETE now counts `inboundShipments` as a blocker.
+3. `api/stores/[id]` DELETE now counts `deliveries` + `stockCounts`; `api/warehouses/[id]`
+   DELETE now counts `stockCounts` + both transfer-header lanes.
 
 ### 4. What is VERIFIED, and what is not
 
@@ -89,10 +128,15 @@ Two behaviour changes for the PR body:
 | `npx tsc --noEmit` | **green** (61 errors -> 0) |
 | Proof greps, §7 P2 and P3 | **clean** — only explanatory comments remain |
 | `npx eslint` on every changed file | **zero issues.** 7 exist repo-wide, all pre-existing in untouched files, confirmed by linting HEAD's copy |
-| `npx prisma migrate status` | up to date, 2 migrations |
+| `npx prisma migrate status` | **up to date, 3 migrations** (`0_init`, MIG-1b, MIG-1a) |
 | Product created from brand + category alone | **PASSES** — P3's acceptance criterion |
-| `npm run build` | **PASSES** (5 Sep). Full route table printed, exit 0, and **no `/product-types` route in it** |
-| Browser walk | **NOT DONE for either phase** — the one check still outstanding |
+| `npm run build` | **PASSES for R4** (5 Sep). Full route table printed, exit 0, and **no `/product-types` route in it** |
+| `npm run db:snapshot` | **PASSES** — ran it; `pg_restore -l` lists `ActivityLog`, `counter`, `PurchaseOrderSend`, and no `OpsActivityLog` |
+| Browser walk | **NOT DONE for any phase** — the one check still outstanding |
+
+P1 additionally: `tsc --noEmit` **green**, `eslint` on all 7 changed files **zero issues**,
+`migrate deploy` applied cleanly, and the new tables confirmed present in Postgres with the
+5,739 products untouched.
 
 One straggler found on 5 Sep and folded into `1287226`: the Stock Management hub subtitle
 (`(dashboard)/stock-management/page.tsx:47`) still read "Stock, product types, categories, …".
@@ -111,16 +155,19 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
    - `/receivables/new` — no quick-add; the hint shows
    - `/stock-audit/brand-count` — walk to the product list
    - `/product-types` -> **404**  ·  `/reports/stock-value` -> **two** tabs
-2. **Open the PR for R4** (P2 + P3) against the reference branch. The branch is pushed; the
-   commits are `730ad5a` and `1287226`. *The owner merges on GitHub; Claude never merges
-   locally, and asks which branch to use as reference before creating one.*
-   PR body must carry: the two behaviour changes in §3, and **run `npm run db:seed:rbac`
-   after merge** or the sidebar keeps a "Product Types" entry that 404s.
-3. **Then P1** — MIG-1a, `ActivityLog`, `counter`, `src/lib/activity-log.ts`,
-   `src/lib/sequence.ts`, delete `src/app/api/ops-activity-logs/route.ts`. Migration folder name:
-   `add_activity_log_counter_and_scope_columns`.
-4. **Then P1b** — the stock ledger fix (R12), which now also carries `storeIdForInvoice()` and the
-   `/stores` `invoicePrefix` field (owner chose option B).
+   Then walk P1's screens too — nothing there should have changed: `/transfers` (two new
+   filter tabs, no order in them yet), `/stores`, `/warehouses`, `/categories` delete + merge,
+   `/purchase-orders`, `/stock-audit`.
+2. **PRs — the owner's job, not Claude's** (owner, 5 Sep: "u dont do anything related to pr").
+   Both branches are pushed. Merge in stacking order: R4 first, then P1.
+   The R4 PR body needs the two behaviour changes in §3 and **run `npm run db:seed:rbac` after
+   merge**, or the sidebar keeps a "Product Types" entry that 404s. The P1 PR body needs the
+   three Restrict-FK delete-path fixes in §3, and `npm run db:snapshot` before merging —
+   it carries a migration and Prisma has no down migrations.
+3. **Then P1b** — the stock ledger fix (R12), which now also carries `storeIdForInvoice()` and
+   the `/stores` `invoicePrefix` field (owner chose option B). **Its schema dependency is
+   already met:** MIG-1a added `Store.invoicePrefix` and `Delivery.storeId`, so P1b writes
+   code only — no migration folder.
 
 ### 6. Owner actions still outstanding
 
