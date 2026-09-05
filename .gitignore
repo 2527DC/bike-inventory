@@ -58,3 +58,6 @@ next-env.d.ts
 # `prisma/data/Item.xls` is 2.2 MB of purchase and selling prices for 8,175 SKUs.
 # It feeds scripts/import-products.ts and must not enter git history.
 /prisma/data/
+
+# Database snapshots — never leave this machine
+backups/

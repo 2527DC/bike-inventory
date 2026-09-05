@@ -25,7 +25,6 @@ export async function GET(
         category: true,
         brand: true,
         bin: true,
-        productType: true,
         serialItems: { orderBy: { createdAt: "desc" }, take: 20 },
         transactions: {
           orderBy: { createdAt: "desc" },
@@ -39,9 +38,7 @@ export async function GET(
       return errorResponse("Product not found", 404);
     }
 
-    // `type` is the type NAME, kept alongside the relation so the screens that still read
-    // `product.type` keep rendering — see src/lib/product-type.ts for why the alias exists.
-    const shaped = { ...product, type: product.productType?.name ?? null };
+    const shaped = product;
 
     // Strip cost price for non-admin users
     if (!isAdmin) {
@@ -97,15 +94,15 @@ export async function PATCH(
     const { id } = await params;
     const body = await req.json();
 
-    // PATCH handles two separate jobs: reclassifying a product's type, and DEACTIVATING or
-    // RESTORING it. Both are edits to an existing row, so both sit behind stock.edit.
+    // PATCH does one job: DEACTIVATING or RESTORING a product. It sits behind stock.edit.
+    //
+    // It used to also reclassify a product's type. That half went with ProductType (P3 of
+    // the 0409 plan); a body carrying no `status` is now a 400 rather than a silent no-op.
     //
     // Deactivate lives here rather than on DELETE deliberately. DELETE used to set
     // status INACTIVE and answer "Product deactivated" — a verb that said one thing and did
     // another. Nobody noticed because no screen called it. Each verb now does what it says.
-    // `productTypeId` is a ProductType row id. `type` is still accepted as the type NAME so
-    // an older screen keeps working; it is resolved to an id below.
-    const { productTypeId, type, status } = body as { productTypeId?: string; type?: string; status?: string };
+    const { status } = body as { status?: string };
 
     if (status !== undefined) {
       // INACTIVE hides the product from pickers and the default list while keeping every
@@ -140,31 +137,10 @@ export async function PATCH(
       });
     }
 
-    // Was a hardcoded VALID_TYPES array. Types are rows now, so the list lives in the
-    // database and the check is a lookup — which is the whole point of the change.
-    const target = productTypeId
-      ? await prisma.productType.findUnique({ where: { id: productTypeId }, select: { id: true } })
-      : type
-        ? await prisma.productType.findFirst({
-            where: { name: { equals: type, mode: "insensitive" } },
-            select: { id: true },
-          })
-        : null;
-
-    if (!target) {
-      return errorResponse(
-        productTypeId || type ? "Unknown product type" : "productTypeId is required",
-        400
-      );
-    }
-
-    const product = await prisma.product.update({
-      where: { id },
-      data: { productTypeId: target.id },
-      include: { category: true, brand: true, bin: true, productType: true },
-    });
-
-    return successResponse(product);
+    // No `status` means the caller sent a body this route no longer understands — almost
+    // certainly a product-type reclassification. Fail loudly rather than answering 200 to a
+    // request that changed nothing.
+    return errorResponse("status is required (ACTIVE or INACTIVE)", 400);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
     return errorResponse(error instanceof Error ? error.message : "Failed to update type", 400);

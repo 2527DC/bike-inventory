@@ -19,14 +19,6 @@ export type ProductCondition =
   | "REFURBISHED_FAIR"
   | "DAMAGED";
 
-export type ProductType =
-  | "BICYCLE"
-  | "SPARE_PART"
-  | "ACCESSORY"
-  | "BOX_PIECE"
-  | "WIP"
-  | "FINISHED_GOOD";
-
 export type SerialStatus =
   | "IN_STOCK"
   | "SOLD"
@@ -52,7 +44,6 @@ export interface Category {
   name: string;
   description?: string;
   parentId?: string;
-  movingLevel: string;
   reorderLevel: number;
 }
 
@@ -85,7 +76,6 @@ export interface Product {
   category?: Category;
   brandId: string;
   brand?: Brand;
-  type: ProductType;
   status: ProductStatus;
   condition: ProductCondition;
   costPrice: number;

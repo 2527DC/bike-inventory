@@ -65,7 +65,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         ...(data.name !== undefined ? { name: data.name.trim() } : {}),
         ...(data.description !== undefined ? { description: data.description?.trim() || null } : {}),
         ...(data.parentId !== undefined ? { parentId: data.parentId || null } : {}),
-        ...(data.movingLevel !== undefined ? { movingLevel: data.movingLevel } : {}),
         ...(data.reorderLevel !== undefined ? { reorderLevel: data.reorderLevel } : {}),
       },
       include: { _count: { select: { products: true, children: true } } },

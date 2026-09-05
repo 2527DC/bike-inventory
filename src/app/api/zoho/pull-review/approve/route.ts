@@ -161,25 +161,6 @@ export async function POST(req: NextRequest) {
           let defaultCategory = await prisma.category.findFirst({ where: { name: PLACEHOLDER_CATEGORY } });
           if (!defaultCategory) defaultCategory = await prisma.category.create({ data: { name: PLACEHOLDER_CATEGORY, description: "Auto-created from bill import" } });
 
-          // Default product type. `Product.productTypeId` is required and a bill line carries
-          // NOTHING that says what kind of thing it is — a name, a rate and maybe an HSN code.
-          // So the row gets whichever type sorts first and is active, and a person re-types it
-          // from /stock later. Guessing from the name is exactly the classifier that was
-          // removed for being wrong 89 times in 132.
-          //
-          // If no type exists at all the import cannot proceed: creating one here would invent
-          // vocabulary behind the owner's back, and /product-types is where that decision lives.
-          const defaultType = await prisma.productType.findFirst({
-            where: { isActive: true },
-            orderBy: { sortOrder: "asc" },
-            select: { id: true },
-          });
-          if (!defaultType) {
-            results.errors.push("No active product type exists — create one at /product-types before importing bills that add products.");
-            log.error("bill import cannot create products: no ProductType rows", { pullId });
-            continue;
-          }
-
           // The client for fetching item details (category, HSN, tax). Same shared,
           // request-scoped client as the getBill call above — asking twice in one request
           // returns the same instance, so this costs nothing after the first bill.
@@ -267,7 +248,6 @@ export async function POST(req: NextRequest) {
                   currentStock: 0,
                   brandId: itemBrand.id,
                   categoryId: productCategory.id,
-                  productTypeId: defaultType.id,
                   zohoItemId: safeZohoItemId,
                 },
                 select: { id: true, currentStock: true },

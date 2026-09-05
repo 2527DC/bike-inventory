@@ -7,12 +7,12 @@
  *
  * Owner's instruction, 1 Sep 2026: *"don't use any auto type regex"*. So there is no
  * name-matching, no HSN classification and no size parsing anywhere in this file. Every
- * product lands with a single default type, in one default category, and is re-typed later
- * from the Product Types screen once that exists (Part B of the plan). A guess that is
- * wrong on thousands of rows is worse than a blank someone can filter and fix in bulk.
+ * product lands in one default category. A guess that is wrong on thousands of rows is
+ * worse than a blank someone can filter and fix in bulk.
  *
- * `productTypeId`, `categoryId` and `brandId` are all REQUIRED on Product, which is why each
- * gets a real default row rather than null.
+ * `categoryId` and `brandId` are both REQUIRED on Product, which is why each gets a real
+ * default row rather than null. (`productTypeId` was a third; it went with ProductType in
+ * P3 of the 0409 plan.)
  *
  * NOT written, deliberately: no `StockLevel` rows and `currentStock: 0`.
  * `Product.currentStock` is a cached SUM of `StockLevel` (src/lib/stock-location.ts);
@@ -50,19 +50,6 @@ const DEFAULT_CATEGORY = "Uncategorized";
  */
 const DEFAULT_BRAND = "Unbranded";
 const FORCE_DEFAULT_BRAND = true;
-
-/**
- * ⚠️ EVERY imported product gets this type, by NAME.
- *
- * There is no classifier, by instruction. `Product.productTypeId` is required, so the import
- * has to pick one — it looks this name up in the `ProductType` table and fails loudly if it
- * is missing, rather than inventing a type nobody asked for.
- *
- * The consequence, stated plainly: after the import every item sits under Spares and
- * /stock's Cycles tab is empty. That is the expected state, corrected by re-typing in bulk
- * from /product-types.
- */
-const DEFAULT_TYPE_NAME = "Spares";
 
 /** The file has no MRP column. Selling price is the closest true value; 0 renders an empty
  *  MRP on every label and product card. */
@@ -236,7 +223,6 @@ async function main() {
     console.log(`\nbrand:    ${brandNames.size} distinct; ${usingDefault} row(s) fall back to "${DEFAULT_BRAND}"`);
   }
   console.log(`category: all ${rows.length} products -> "${DEFAULT_CATEGORY}"`);
-  console.log(`type:     all ${rows.length} products -> "${DEFAULT_TYPE_NAME}" (no classifier, by instruction)`);
 
   if (dryRun) {
     const r = rows[0];
@@ -247,7 +233,6 @@ async function main() {
       zohoItemId: str(r[COL.zohoId]),
       brand: brandOf(r),
       category: DEFAULT_CATEGORY,
-      type: DEFAULT_TYPE_NAME,
       status: IMPORT_STATUS,
       costPrice: money(r[COL.costPrice]),
       sellingPrice: money(r[COL.sellingPrice]),
@@ -257,19 +242,6 @@ async function main() {
       currentStock: 0,
     }, null, 2));
     return;
-  }
-
-  // Required FK: resolve it before building any rows, and fail loudly rather than creating a
-  // type nobody asked for. `npm run db:seed:rbac` does not seed these; the three defaults are
-  // created with the schema change and the rest come from /product-types.
-  const productType = await prisma.productType.findFirst({
-    where: { name: { equals: DEFAULT_TYPE_NAME, mode: "insensitive" } },
-    select: { id: true, name: true },
-  });
-  if (!productType) {
-    console.error(`
-No ProductType named "${DEFAULT_TYPE_NAME}". Create it at /product-types first.`);
-    process.exit(1);
   }
 
   const category = await prisma.category.upsert({
@@ -313,7 +285,6 @@ No ProductType named "${DEFAULT_TYPE_NAME}". Create it at /product-types first.`
       zohoItemId: str(r[COL.zohoId]),
       brandId: brandIdByName.get(brandOf(r))!,
       categoryId: category.id,
-      productTypeId: productType.id,
       status: IMPORT_STATUS,
       costPrice: money(r[COL.costPrice]),
       sellingPrice,
