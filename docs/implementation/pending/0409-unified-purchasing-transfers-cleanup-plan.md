@@ -34,6 +34,11 @@ commits and pushes only.**
 |---|---|---|
 | `chore/remove-type-ui-moving-level-customer-add` | `feat/notifications-and-settings-rbac` | R4 = P2 + P3 — **pushed** |
 | `feat/activity-log-counter-and-scope-columns` | the branch above | P1 — **pushed** |
+| `feat/stock-ledger-integrity` | the branch above | P1b — **pushed** |
+
+**Branch rule confirmed by the owner, 5 Sep:** keep stacking each phase on the previous
+phase's tip, **and ask before creating each branch**. Claude cut P1 and P1b on its own
+judgement before being asked to stop doing that.
 
 **Why P1 stacks on P3 instead of being cut from the reference branch:** `bch-local` already
 has MIG-1b applied. A branch without that folder puts Prisma in drift the moment a migration
@@ -49,6 +54,8 @@ phase merged" means while the previous phase has not merged yet. Merge in branch
 | `1287226` | **P3** — the migration folder + 26 files; `.gitignore` gains `backups/` |
 | `8e4e2cf` | docs — RESUME updated for P3 |
 | `2ccbe10` | **P1** — MIG-1a, `ActivityLog`, `counter`, `PurchaseOrderSend`, both helpers, `db:snapshot`, three Restrict-FK delete-path fixes (12 files) |
+| `a156c13` | docs — RESUME updated for P1 |
+| `be0b6e1` | **P1b** — the stock ledger fix, `deductFromStore`/`deductAnywhere`/`addAnywhere`, `storeIdForInvoice()`, `/stores` invoice prefix (13 files) |
 
 ### 2. ⚠ Which database — read before running any Prisma command
 
@@ -121,6 +128,59 @@ delete that used to return a readable sentence start failing on a raw constraint
 3. `api/stores/[id]` DELETE now counts `deliveries` + `stockCounts`; `api/warehouses/[id]`
    DELETE now counts `stockCounts` + both transfer-header lanes.
 
+**P1b is complete** (R12 — the stock ledger fix), on its own branch. No migration: MIG-1a
+already added `Delivery.storeId` and `Store.invoicePrefix`.
+
+**Proven, not asserted.** The plan's own acceptance scenario was run against `bch-local`
+inside a transaction that rolls back, importing the real helper:
+
+```
+start                 : currentStock=10 StockLevel=10   PASS
+after selling 3       : currentStock=7  StockLevel=7    PASS   <- ledger moved, not just cache
+after receiving 5     : currentStock=12 StockLevel=12   PASS   <- THE FIX
+oversell refused      : Insufficient stock ... Available: 12, Needed: 9999.
+after refused oversell: currentStock=12 StockLevel=12   PASS   <- no partial deduction
+
+--- reproducing the OLD code path (cache-only write) ---
+old: after selling 3  : currentStock=7  StockLevel=10
+old: after receiving 5: currentStock=15 StockLevel=15   <- 15, not 12. This is R12.
+```
+
+The scaffolding was deleted afterwards; the repo has no test infrastructure and the plan did
+not ask for a committed script. **If this should become a permanent regression test, say so** —
+a silent return of this bug is exactly the risk, and nothing currently guards it.
+
+- New in `stock-location.ts`: `deductFromStore` (store-scoped, cascades across the store's
+  warehouses in `sortOrder`), `deductAnywhere` and `addAnywhere` (reversals, which have no
+  recorded warehouse), over one shared core. **The up-front sum is load-bearing**:
+  `adjustWarehouseQty` clamps at zero, so deducting 3 from a warehouse holding 0 would write 0
+  and report success — the original bug in a new costume.
+- New `src/lib/deliveries/zoho-invoice.ts`: `storeIdForInvoice()` (pure, longest-prefix wins,
+  case-insensitive) and `resolveStoreIdOrPrimary()`, which falls back to the primary store and
+  **logs a warning every time**, so a guessed attribution is visible.
+- Fixed: `deliveries/[id]`, `deliveries/batch`, `inventory/outwards` (+ optional `storeId` on
+  `outwardSchema`), `inbound/[id]` DELETE, `stock-reset` (zeroes `StockLevel` too, or the next
+  recompute undid the reset), `inventory/cleanup`.
+- `/stores` gains the **invoice prefix** field (owner's option B): `storeSchema`, both routes
+  (each naming the other store on a 409 rather than leaking a raw P2002), the form input, and
+  an amber **"No invoice prefix"** badge on any store still missing one — because a blank
+  prefix silently sends that store's sales to the primary store. `""` normalises to null; a
+  stored empty string would prefix-match every invoice. The GET `select:` had to be extended
+  too, or every row would have rendered the warning badge regardless.
+
+**One site the plan's table MISSED**, found by the phase's own proof grep:
+`inventory/inwards/verify/route.ts:38`. It is the same bug mirrored — an INWARD writing only
+the cache, so the next recompute made verified stock *disappear* rather than reappear. Fixed
+the same way, and it now accepts an optional `warehouseId`.
+
+**⚠ One limitation, deliberately not solved here.** Undoing an inbound receipt cannot deduct
+from *the warehouse the receipt went into*, as §7 P1b specifies, because nothing records it:
+`inbound/[id]/route.ts` takes the warehouse from the request body at receive time and
+`InboundLineItem` has no column for it. Storing it is a schema change and P1b carries no
+migration. `deductAnywhere` reverses against the rows that exist, largest first — exactly
+equivalent today, when each store has one warehouse. **The precise fix is
+`InboundLineItem.warehouseId`, written at receive time; it needs a migration and a phase.**
+
 ### 4. What is VERIFIED, and what is not
 
 | Check | Result |
@@ -130,7 +190,8 @@ delete that used to return a readable sentence start failing on a raw constraint
 | `npx eslint` on every changed file | **zero issues.** 7 exist repo-wide, all pre-existing in untouched files, confirmed by linting HEAD's copy |
 | `npx prisma migrate status` | **up to date, 3 migrations** (`0_init`, MIG-1b, MIG-1a) |
 | Product created from brand + category alone | **PASSES** — P3's acceptance criterion |
-| `npm run build` | **PASSES for R4** (5 Sep). Full route table printed, exit 0, and **no `/product-types` route in it** |
+| `npm run build` | **PASSES for R4, P1 and P1b** (5 Sep). Full route table, exit 0; **no `/product-types` and no `/api/ops-activity-logs` in it** |
+| P1b acceptance scenario | **PASSES** — 10 → sell 3 → 7 → receive 5 → **12**; the old path reproduced alongside gives **15**. Ran against `bch-local` in a rolled-back transaction |
 | `npm run db:snapshot` | **PASSES** — ran it; `pg_restore -l` lists `ActivityLog`, `counter`, `PurchaseOrderSend`, and no `OpsActivityLog` |
 | Browser walk | **NOT DONE for any phase** — the one check still outstanding |
 
@@ -164,10 +225,14 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
    merge**, or the sidebar keeps a "Product Types" entry that 404s. The P1 PR body needs the
    three Restrict-FK delete-path fixes in §3, and `npm run db:snapshot` before merging —
    it carries a migration and Prisma has no down migrations.
-3. **Then P1b** — the stock ledger fix (R12), which now also carries `storeIdForInvoice()` and
-   the `/stores` `invoicePrefix` field (owner chose option B). **Its schema dependency is
-   already met:** MIG-1a added `Store.invoicePrefix` and `Delivery.storeId`, so P1b writes
-   code only — no migration folder.
+3. **Data step, as soon as P1b is merged:** on `/stores`, set the **invoice prefix** to `BCH/`
+   and `BCC/`. **Until that is done every sale deducts from the primary store** — a BCC sale
+   takes BCH stock. Two things make that impossible to miss rather than silent: the row shows
+   an amber **"No invoice prefix"** badge until it is set, and `resolveStoreIdOrPrimary` logs
+   a `warn` on every invoice that falls back. The input is built (P1b) — it is one field on
+   the store form.
+4. **Then P4** — Zoho fetch window + inline deliveries panel. Ask which branch to base it on
+   before creating it (owner, 5 Sep).
 
 ### 6. Owner actions still outstanding
 
