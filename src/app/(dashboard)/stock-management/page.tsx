@@ -44,7 +44,7 @@ export default function StockManagementPage() {
         <h1 className="text-lg font-bold text-slate-900">Stock Management</h1>
       </div>
       <p className="text-[11px] text-slate-500 mb-4 ml-7">
-        Stock, product types, categories, audits, inbound, dispatch and transfers.
+        Stock, categories, audits, inbound, dispatch and transfers.
       </p>
 
       {loading ? (

@@ -6,9 +6,8 @@
  * ─── WHY THIS IS ITS OWN FILE ────────────────────────────────────────────────────────────
  *
  * It runs BEFORE the schema moves, against the OLD generated client, so it must not mention
- * `ProductType` or `productTypeId` — neither exists yet. `prisma/tsconfig.json` sets no
- * `transpileOnly`, so ts-node typechecks the whole file before executing a line: a single
- * combined wipe-and-seed referencing `prisma.productType` would fail to compile here, the
+ * NOTE: ProductType and productTypeId no longer exist — both were dropped in P3 of the
+ * 0409 plan. Any reference below is historical.
  * wipe would never run, and the `db:push` behind it would then hit a populated table and
  * demand `--accept-data-loss`. Two files avoid that entirely.
  *
@@ -17,7 +16,6 @@
  *
  * ─── WHY IT IS NEEDED AT ALL ─────────────────────────────────────────────────────────────
  *
- * `Product.productTypeId` is non-null. `db:push` cannot add a required column with no default
  * to a table that already holds rows — it refuses, or demands `--accept-data-loss`. Emptying
  * the table first turns a data-loss prompt into an ordinary ALTER.
  *

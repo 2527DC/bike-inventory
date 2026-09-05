@@ -1,7 +1,6 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
-import { PRODUCT_TYPE_SELECT, withNestedTypeName } from "@/lib/product-type";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { stockCountUpdateSchema } from "@/lib/validations";
@@ -33,7 +32,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         items: {
           include: {
             product: {
-              select: { name: true, sku: true, currentStock: true, productType: PRODUCT_TYPE_SELECT, category: { select: { name: true } }, brand: { select: { name: true } }, bin: { select: { code: true, location: true } } },
+              select: { name: true, sku: true, currentStock: true, category: { select: { name: true } }, brand: { select: { name: true } }, bin: { select: { code: true, location: true } } },
             },
           },
           orderBy: { product: { name: "asc" } },
@@ -49,7 +48,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
     return successResponse({
       ...stockCount,
-      items: stockCount.items.map(withNestedTypeName),
+      items: stockCount.items,
       countedItems,
       totalItems: stockCount.items.length,
       totalVariance,

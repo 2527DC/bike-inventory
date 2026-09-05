@@ -218,31 +218,6 @@ enum ProductCondition {
   DAMAGED
 }
 
-// Product types are DATA, not an enum.
-//
-// They were an enum of six fixed values, three of which never held a product. Adding a type
-// -- "E-Bike", "Tricycle" -- meant editing this file and redeploying, which is exactly what
-// the owner asked to stop doing. An enum value is part of the PostgreSQL type; there is no
-// runtime path to a new one. See section 5.0 of the Stock Management plan for the two
-// schema-free alternatives that were considered and why each fails.
-//
-// Deliberately minimal: a name, an order and an active flag. No code/name split and no
-// tracksSize -- the size badge on /stock renders whenever `Product.size` is set, which
-// carries the same information without a second column to keep in step.
-model ProductType {
-  id        String  @id @default(cuid())
-  name      String  @unique // "Cycles", "Spares" -- free text, renameable
-  sortOrder Int     @default(0) // tab order on /stock
-  isActive  Boolean @default(true) // retire without deleting
-
-  products Product[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([isActive, sortOrder])
-}
-
 // ─── Store hierarchy ─────────────────────────────────────────────────────────
 //
 // These two models REPLACED the StockLocation enum, which is GONE as of Phase 4 of
@@ -357,10 +332,10 @@ model User {
   uploadedStatements       BankStatement[]   @relation("StatementUploader")
 
   // Service / workshop (merged from bch-service)
-  assignedJobs       ServiceJob[]     @relation("ServiceJobMechanic")
-  createdServiceJobs ServiceJob[]     @relation("ServiceJobCreatedBy")
-  serviceReviews     Review[]         @relation("ServiceReviewMechanic")
-  assemblyLogs       AssemblyLog[]    @relation("AssemblyMechanic")
+  assignedJobs       ServiceJob[]  @relation("ServiceJobMechanic")
+  createdServiceJobs ServiceJob[]  @relation("ServiceJobCreatedBy")
+  serviceReviews     Review[]      @relation("ServiceReviewMechanic")
+  assemblyLogs       AssemblyLog[] @relation("AssemblyMechanic")
 
   // Transfer orders
   createdTransfers  TransferOrder[] @relation("TransferCreatedBy")
@@ -400,12 +375,12 @@ model User {
   //
   // All six cascade on delete, so removing a user removes their learning history with
   // them. /team deactivates rather than deletes today; a future hard delete would be quiet.
-  lmsProgress          LmsProgress?           @relation("LmsProgressUser")
-  lmsQuizAttempts      LmsQuizAttempt[]       @relation("LmsQuizAttemptUser")
+  lmsProgress           LmsProgress?           @relation("LmsProgressUser")
+  lmsQuizAttempts       LmsQuizAttempt[]       @relation("LmsQuizAttemptUser")
   lmsWeeklyTestAttempts LmsWeeklyTestAttempt[] @relation("LmsWeeklyTestAttemptUser")
-  lmsLessonProgress    LmsLessonProgress[]    @relation("LmsLessonProgressUser")
-  lmsAchievements      LmsUserAchievement[]   @relation("LmsUserAchievementUser")
-  lmsActivityLogs      LmsActivityLog[]       @relation("LmsActivityLogUser")
+  lmsLessonProgress     LmsLessonProgress[]    @relation("LmsLessonProgressUser")
+  lmsAchievements       LmsUserAchievement[]   @relation("LmsUserAchievementUser")
+  lmsActivityLogs       LmsActivityLog[]       @relation("LmsActivityLogUser")
 
   // Notifications. Both cascade: a device token is a credential for this person's screen and
   // a preference is about this person alone — neither has meaning once the user is gone.
@@ -423,7 +398,6 @@ model Category {
   parentId     String?
   parent       Category?  @relation("CategoryTree", fields: [parentId], references: [id])
   children     Category[] @relation("CategoryTree")
-  movingLevel  String     @default("NORMAL") // FAST, NORMAL, SLOW
   reorderLevel Int        @default(0)
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
@@ -472,12 +446,7 @@ model Product {
   category    Category         @relation(fields: [categoryId], references: [id])
   brandId     String
   brand       Brand            @relation(fields: [brandId], references: [id])
-  // Was `type ProductType` (an enum). Required, and deletion of a type in use is RESTRICTED
-  // by this FK rather than cascading -- orphaning products to tidy a picker would be worse
-  // than refusing. Retire a type with `isActive: false` instead.
-  productTypeId String
-  productType   ProductType      @relation(fields: [productTypeId], references: [id])
-  status        ProductStatus    @default(ACTIVE)
+  status      ProductStatus    @default(ACTIVE)
   condition   ProductCondition @default(NEW)
 
   // Pricing
@@ -529,8 +498,6 @@ model Product {
   @@index([categoryId])
   @@index([brandId])
   @@index([reorderVendorId])
-  @@index([productTypeId])
-  @@index([status, productTypeId])
   @@index([status, categoryId])
   @@index([status, brandId])
   @@index([status, currentStock])
@@ -675,7 +642,6 @@ model StockCount {
   approvedAt      DateTime?
   rejectionReason String?
   notes           String?
-  productType     String? // Filter: BICYCLE, SPARE_PART, ACCESSORY, or null=all
   location        String? // Location-level scope: "BCH-GF", "BCH-FF", etc. Null = single bin or all
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -1012,8 +978,8 @@ model IntegrationConfig {
 // deliberate, accepted trade-off, not an oversight: anyone with database read access holds
 // the AWS keys. The API never returns secretAccessKey to the browser - it masks it.
 model StorageConfig {
-  id              String    @id @default("singleton")
-  provider        String    @default("LOCAL") // LOCAL | S3
+  id              String  @id @default("singleton")
+  provider        String  @default("LOCAL") // LOCAL | S3
   bucket          String?
   region          String? // real AWS region, e.g. ap-south-1
   accessKeyId     String?
@@ -1054,24 +1020,24 @@ model NotificationConfig {
   id String @id @default("singleton")
 
   // ── Email ──
-  emailProvider String  @default("SMTP")
-  smtpHost      String?
-  smtpPort      Int?
-  smtpSecure    Boolean @default(false) // true = 465 implicit TLS, false = 587 STARTTLS
-  smtpUser      String?
-  smtpPassword  String? // Gmail App Password. NEVER returned to the browser, never logged.
-  fromName      String?
-  fromEmail     String?
-  emailEnabled  Boolean @default(false) // the master switch an admin flips
+  emailProvider      String    @default("SMTP")
+  smtpHost           String?
+  smtpPort           Int?
+  smtpSecure         Boolean   @default(false) // true = 465 implicit TLS, false = 587 STARTTLS
+  smtpUser           String?
+  smtpPassword       String? // Gmail App Password. NEVER returned to the browser, never logged.
+  fromName           String?
+  fromEmail          String?
+  emailEnabled       Boolean   @default(false) // the master switch an admin flips
   // Set only by a real 250 from the SMTP server on a test send. Saving the form never sets it.
   emailConnected     Boolean   @default(false)
   emailLastTestedAt  DateTime?
   emailLastTestError String?   @db.Text
 
   // ── Push ──
-  pushProvider      String  @default("FCM")
-  fcmProjectId      String?
-  fcmServiceAccount String? @db.Text // the service-account JSON, verbatim. NEVER returned.
+  pushProvider         String    @default("FCM")
+  fcmProjectId         String?
+  fcmServiceAccount    String?   @db.Text // the service-account JSON, verbatim. NEVER returned.
   // The Firebase WEB SDK config — the four values initializeApp() needs before getToken() can
   // mint a browser token. None is secret: every Firebase web app ships them in its bundle.
   // Returned to any signed-in browser by GET /api/notifications/push-config.
@@ -1079,11 +1045,11 @@ model NotificationConfig {
   fcmMessagingSenderId String? // the project NUMBER, e.g. "123456789012"
   fcmWebAppId          String? // "1:123456789012:web:abcdef…"
   fcmVapidKey          String? // web push key pair — PUBLIC half only; the private half is Firebase's
-  pushEnabled       Boolean @default(false)
+  pushEnabled          Boolean   @default(false)
   // Set only by messages:send returning a message name on a test push. Saving never sets it.
-  pushConnected     Boolean   @default(false)
-  pushLastTestedAt  DateTime?
-  pushLastTestError String?   @db.Text
+  pushConnected        Boolean   @default(false)
+  pushLastTestedAt     DateTime?
+  pushLastTestError    String?   @db.Text
 
   // Who last saved. Deliberately NOT a relation: this row must outlive any user, and a
   // SetNull FK would need an index for a value nothing ever joins on. Nullable because the
@@ -1567,24 +1533,24 @@ model TransferOrder {
 }
 
 model TransferOrderItem {
-  id              String         @id @default(cuid())
+  id              String        @id @default(cuid())
   transferOrderId String
-  transferOrder   TransferOrder  @relation(fields: [transferOrderId], references: [id], onDelete: Cascade)
+  transferOrder   TransferOrder @relation(fields: [transferOrderId], references: [id], onDelete: Cascade)
   productId       String
-  product         Product        @relation(fields: [productId], references: [id])
+  product         Product       @relation(fields: [productId], references: [id])
   quantity        Int
   // Bin mode (dormant): source/destination bins. Location mode (active): fromLocation/toLocation.
   fromBinId       String?
-  fromBin         Bin?           @relation("TransferFromBin", fields: [fromBinId], references: [id])
+  fromBin         Bin?          @relation("TransferFromBin", fields: [fromBinId], references: [id])
   toBinId         String?
-  toBin           Bin?           @relation("TransferToBin", fields: [toBinId], references: [id])
+  toBin           Bin?          @relation("TransferToBin", fields: [toBinId], references: [id])
   // Was fromLocation/toLocation: StockLocation?. Still nullable — bin mode leaves both
   // unset — and still Restrict, so a warehouse with transfer history cannot be deleted.
   fromWarehouseId String?
-  fromWarehouse   Warehouse?     @relation("TransferFromWarehouse", fields: [fromWarehouseId], references: [id], onDelete: Restrict)
+  fromWarehouse   Warehouse?    @relation("TransferFromWarehouse", fields: [fromWarehouseId], references: [id], onDelete: Restrict)
   toWarehouseId   String?
-  toWarehouse     Warehouse?     @relation("TransferToWarehouse", fields: [toWarehouseId], references: [id], onDelete: Restrict)
-  createdAt       DateTime       @default(now())
+  toWarehouse     Warehouse?    @relation("TransferToWarehouse", fields: [toWarehouseId], references: [id], onDelete: Restrict)
+  createdAt       DateTime      @default(now())
 
   @@index([transferOrderId])
   @@index([productId])
@@ -2595,13 +2561,13 @@ model AnalyticsDevice {
 // rows reached through NextAuth + requireFeature("staff_lms…", action).
 
 model LmsProduct {
-  id    String  @id @default(cuid())
-  name  String
-  brand String
+  id               String   @id @default(cuid())
+  name             String
+  brand            String
   // Riding style: MTB | Hybrid | Road | Kids | City | E-Cycle. NOT this repo's Category
   // (a product class: Bicycles, Spare Parts, Accessories). Orthogonal taxonomies —
   // neither substitutes for the other, which is why both of these stay plain strings.
-  category String
+  category         String
   // Display price on a learning card. Float like every other price column here; the
   // source used Decimal, which JSON-serialises as a string and forced Number() casts.
   price            Float?
@@ -2718,10 +2684,10 @@ model LmsQuiz {
 }
 
 model LmsQuizQuestion {
-  id       String @id @default(cuid())
-  quizId   String @map("quiz_id")
-  question String
-  options  Json
+  id           String  @id @default(cuid())
+  quizId       String  @map("quiz_id")
+  question     String
+  options      Json
   // NEVER include this in a learner payload — the quiz becomes beatable from devtools.
   // Grading is server-side; the key is returned only under an `edit` grant.
   correctIndex Int     @map("correct_index")
@@ -2938,10 +2904,10 @@ model LmsLesson {
 }
 
 model LmsLessonQuestion {
-  id       String @id @default(cuid())
-  lessonId String @map("lesson_id")
-  question String
-  options  Json
+  id           String  @id @default(cuid())
+  lessonId     String  @map("lesson_id")
+  question     String
+  options      Json
   // Same rule as LmsQuizQuestion.correctIndex — never in a learner payload.
   correctIndex Int     @map("correct_index")
   explanation  String?
@@ -3004,10 +2970,10 @@ model LmsWeeklyTest {
 }
 
 model LmsWeeklyTestQuestion {
-  id       String @id @default(cuid())
-  testId   String @map("test_id")
-  question String
-  options  Json
+  id           String  @id @default(cuid())
+  testId       String  @map("test_id")
+  question     String
+  options      Json
   // Same rule again — never in a learner payload.
   correctIndex Int     @map("correct_index")
   explanation  String?

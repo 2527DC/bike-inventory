@@ -1,7 +1,6 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
-import { PRODUCT_TYPE_SELECT, withTypeName } from "@/lib/product-type";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
@@ -25,7 +24,7 @@ export async function GET(req: NextRequest) {
         ],
       },
       include: {
-        product: { select: { name: true, sku: true, productType: PRODUCT_TYPE_SELECT, sellingPrice: true, mrp: true } },
+        product: { select: { name: true, sku: true, sellingPrice: true, mrp: true } },
         bin: { select: { code: true, location: true } },
       },
       take: 20,
@@ -44,7 +43,6 @@ export async function GET(req: NextRequest) {
         id: true,
         sku: true,
         name: true,
-        productType: PRODUCT_TYPE_SELECT,
         currentStock: true,
         sellingPrice: true,
         mrp: true,
@@ -54,7 +52,7 @@ export async function GET(req: NextRequest) {
       orderBy: { name: "asc" },
     });
 
-    return successResponse({ serials, products: products.map(withTypeName) });
+    return successResponse({ serials, products });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
     return errorResponse(error instanceof Error ? error.message : "Failed to search", 500);

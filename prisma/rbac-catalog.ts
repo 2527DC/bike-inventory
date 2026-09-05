@@ -105,7 +105,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
   {
     key: "stock_management",
     label: "Stock Management",
-    description: "Stock, product types, audits, inbound, dispatch and transfers",
+    description: "Stock, audits, inbound, dispatch and transfers",
     icon: "Boxes",
     route: "/stock-management",
     group: "Operations",
@@ -130,27 +130,6 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     // gated by `zoho.fetch`, so nothing loses access. The seeder's stale-permission sweep
     // (seed-rbac.ts) deletes the row and its grants on the next `npm run db:seed:rbac`.
     actions: ["view", "create", "edit", "delete"],
-  },
-  {
-    // Added with Part B, which turned `ProductType` from a Prisma enum into a table.
-    //
-    // A child of `stock_management`, NOT of `stock` — and that is a hard constraint, not a
-    // preference. seed-rbac.ts rejects a grandchild outright, because the sidebar walks
-    // exactly two levels: nesting this under `stock` would create a row that exists in the
-    // database, grants correctly, and renders nowhere.
-    //
-    // No `delete` action, and that is deliberate: `Product.productTypeId` is required with a
-    // RESTRICT foreign key, so a type in use cannot be removed and one that is not still
-    // breaks saved reports. `isActive: false` is how a type leaves the pickers.
-    key: "product_types",
-    label: "Product Types",
-    description: "The product type list — the tabs on Stock and what every product is filed under",
-    icon: "Tag",
-    route: "/product-types",
-    parentKey: "stock_management",
-    group: "Operations", // MUST equal the parent's — the seeder asserts it
-    sortOrder: 102,
-    actions: ["view", "create", "edit"],
   },
   {
     key: "inbound",
@@ -270,16 +249,17 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     // for a dropdown, and re-guarding it here would empty those dropdowns for anyone who is
     // not a taxonomy admin — a silent empty list rather than an honest 403.
     //
-    // A CHILD of `stock_management`, sitting beside Product Types (102). Categories and
-    // types are the same kind of thing — the two taxonomies every product is filed under —
-    // so they belong next to each other rather than one under Operations and one under
-    // Purchase. `group` therefore moves Purchase -> Operations: seed-rbac.ts throws if a
-    // child's group differs from its parent's, and the sidebar groups by the PARENT's
-    // group anyway, so a mismatch would only have been a lie in the data.
+    // A CHILD of `stock_management`. `group` moves Purchase -> Operations: seed-rbac.ts
+    // throws if a child's group differs from its parent's, and the sidebar groups by the
+    // PARENT's group anyway, so a mismatch would only have been a lie in the data.
     //
-    // The route moved /more/categories -> /categories to match /product-types and the rest
-    // of the tree. next.config.ts permanently redirects the old path; nothing in src/
-    // linked to it, so bookmarks were the only thing at stake.
+    // The route moved /more/categories -> /categories to match the rest of the tree.
+    // next.config.ts permanently redirects the old path; nothing in src/ linked to it, so
+    // bookmarks were the only thing at stake.
+    //
+    // Categories is now the only taxonomy a product is filed under — `product_types` was
+    // removed in P3 of the 0409 plan. sortOrder 103 is left as-is rather than renumbered:
+    // the gap at 102 is harmless and renumbering would rewrite rows for nothing.
     key: "categories",
     label: "Categories",
     description: "Product categories — the taxonomy Zoho imports into",
@@ -287,7 +267,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: "/categories",
     parentKey: "stock_management",
     group: "Operations", // MUST equal the parent's — the seeder asserts it
-    sortOrder: 103, // beside Product Types (102); stock_audit and below shifted up one
+    sortOrder: 103, // 102 is now vacant (product_types removed); nothing renumbered
     actions: CRUD,
   },
   {

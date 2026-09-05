@@ -25,11 +25,6 @@ export async function GET(req: NextRequest) {
 
     const categoryId = searchParams.get("categoryId") || undefined;
     const brandId = searchParams.get("brandId") || undefined;
-    // Two ways to ask for a type, because callers changed at different times:
-    //   ?productTypeId=<cuid>  the id — what the new pickers send
-    //   ?type=<name>           the name — what older screens send
-    const productTypeId = searchParams.get("productTypeId") || undefined;
-    const typeName = searchParams.get("type") || undefined;
     const status = searchParams.get("status") || "ACTIVE";
     const size = searchParams.get("size") || undefined;
     const binId = searchParams.get("binId") || undefined;
@@ -91,8 +86,6 @@ export async function GET(req: NextRequest) {
       ...(categoryId && { categoryId }),
       ...(brandId && { brandId }),
       ...(binId && { binId }),
-      ...(productTypeId && { productTypeId }),
-      ...(!productTypeId && typeName && { productType: { name: { equals: typeName, mode: "insensitive" as const } } }),
       ...(status && { status: status as never }),
       ...(size && { size }),
       ...(minStock !== undefined && maxStock !== undefined
@@ -107,11 +100,6 @@ export async function GET(req: NextRequest) {
         where,
         select: {
           id: true, sku: true, name: true, status: true, size: true,
-          // The relation, plus a flat `type` alias built below. Seventeen screens declare
-          // their own `interface { type: string }` over this response; dropping the field
-          // outright would leave every one of them reading undefined with a GREEN BUILD,
-          // because a locally-declared structural type has nothing to check against.
-          productType: { select: { id: true, name: true } },
           costPrice: isAdmin, sellingPrice: true, mrp: true, gstRate: true, hsnCode: true,
           currentStock: true, minStock: true, reorderLevel: true,
           category: { select: { id: true, name: true } },
@@ -125,15 +113,7 @@ export async function GET(req: NextRequest) {
       prisma.product.count({ where }),
     ]);
 
-    // `type` is the type NAME, kept so existing consumers keep working; `productType`
-    // carries the id for anything that needs to filter or write.
-    const shaped = products.map(({ productType, ...p }) => ({
-      ...p,
-      productType,
-      type: productType?.name ?? null,
-    }));
-
-    return paginatedResponse(shaped, total, page, limit);
+    return paginatedResponse(products, total, page, limit);
   } catch (error) {
     if (error instanceof AuthError) {
       return errorResponse(error.message, error.status);
@@ -151,21 +131,13 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const data = productSchema.parse(body);
 
-    // zod can only check that an id was sent. Confirm the row exists, so a bad id fails as a
-    // 400 naming the problem rather than a raw foreign-key violation.
-    const productType = await prisma.productType.findUnique({
-      where: { id: data.productTypeId },
-      select: { id: true },
-    });
-    if (!productType) return errorResponse("Unknown product type", 400);
-
     const product = await prisma.product.create({
       data: {
         ...data,
         imageUrls: data.imageUrls || [],
         tags: data.tags || [],
       },
-      include: { category: true, brand: true, bin: true, productType: true },
+      include: { category: true, brand: true, bin: true },
     });
 
     return successResponse(product, 201);

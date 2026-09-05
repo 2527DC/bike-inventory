@@ -1,7 +1,6 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
-import { PRODUCT_TYPE_SELECT, withNestedTypeName } from "@/lib/product-type";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
@@ -65,7 +64,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       include: {
         product: {
           select: {
-            name: true, sku: true, currentStock: true, productType: PRODUCT_TYPE_SELECT, size: true,
+            name: true, sku: true, currentStock: true, size: true,
             category: { select: { name: true } },
             brand: { select: { name: true } },
             bin: { select: { code: true, location: true } },
@@ -91,7 +90,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const totalCount = allCounts[0]?._count || 0;
 
     return successResponse({
-      items: items.map(withNestedTypeName),
+      items,
       staleCount,
       totalCount,
       countedCount,
