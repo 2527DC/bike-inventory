@@ -67,7 +67,14 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
         id: true,
         name: true,
         _count: {
-          select: { warehouses: true, users: true, countEvents: true, analyticsDevices: true },
+          select: {
+            warehouses: true,
+            users: true,
+            countEvents: true,
+            analyticsDevices: true,
+            deliveries: true,
+            stockCounts: true,
+          },
         },
       },
     });
@@ -77,6 +84,11 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     if (store._count.warehouses) blockers.push(`${store._count.warehouses} warehouse(s)`);
     if (store._count.countEvents) blockers.push(`${store._count.countEvents} footfall event(s)`);
     if (store._count.analyticsDevices) blockers.push(`${store._count.analyticsDevices} counting device(s)`);
+    // Both added by MIG-1a as Restrict foreign keys. Without them on this list the database
+    // still refuses the delete, but with a constraint-violation string instead of the
+    // sentence this route exists to produce.
+    if (store._count.deliveries) blockers.push(`${store._count.deliveries} delivery/deliveries`);
+    if (store._count.stockCounts) blockers.push(`${store._count.stockCounts} stock audit(s)`);
     // Users are NOT a blocker: User.storeId is SetNull, so deleting a store unassigns staff
     // rather than destroying them. Mentioned in the message so the effect is not a surprise.
 

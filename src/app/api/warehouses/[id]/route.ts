@@ -85,12 +85,28 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
       select: {
         id: true,
         name: true,
-        _count: { select: { stockLevels: true, users: true, transfersFrom: true, transfersTo: true } },
+        _count: {
+          select: {
+            stockLevels: true,
+            users: true,
+            transfersFrom: true,
+            transfersTo: true,
+            // Three Restrict foreign keys added by MIG-1a. `stockCounts` is an audit scoped
+            // to this warehouse; the two `orderTransfers*` are the transfer HEADER lane, as
+            // opposed to `transfersFrom`/`transfersTo`, which are the per-item lanes that
+            // already existed. Both sets are counted because both hold the row.
+            stockCounts: true,
+            orderTransfersFrom: true,
+            orderTransfersTo: true,
+          },
+        },
       },
     });
     if (!warehouse) return errorResponse("Warehouse not found", 404);
 
     const transfers = warehouse._count.transfersFrom + warehouse._count.transfersTo;
+    const transferOrders =
+      warehouse._count.orderTransfersFrom + warehouse._count.orderTransfersTo;
     const blockers: string[] = [];
 
     if (warehouse._count.stockLevels) {
@@ -105,6 +121,8 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
       );
     }
     if (transfers) blockers.push(`${transfers} transfer line(s)`);
+    if (transferOrders) blockers.push(`${transferOrders} transfer order(s)`);
+    if (warehouse._count.stockCounts) blockers.push(`${warehouse._count.stockCounts} stock audit(s)`);
 
     if (blockers.length) {
       log.info("warehouse delete refused", { warehouseId: id, blockers });

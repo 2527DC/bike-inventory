@@ -99,13 +99,18 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
       select: {
         id: true,
         name: true,
-        _count: { select: { products: true, children: true } },
+        _count: { select: { products: true, children: true, inboundShipments: true } },
       },
     });
     if (!category) return errorResponse("Category not found", 404);
 
     const blockers: string[] = [];
     if (category._count.products) blockers.push(`${category._count.products} product(s)`);
+    // InboundShipment.categoryId is Restrict (MIG-1a), so the database refuses this anyway.
+    // Counting it here is what makes the refusal a sentence instead of a constraint string —
+    // the same reason every other blocker on this list exists.
+    if (category._count.inboundShipments)
+      blockers.push(`${category._count.inboundShipments} inbound shipment(s)`);
     // A child left behind would point at a row that no longer exists. Prisma's referential
     // action would null it silently and quietly promote the child to a root — a structural
     // change nobody asked for, so refuse instead.

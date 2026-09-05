@@ -36,7 +36,12 @@ function endpointLabel(bin: { code: string } | null, loc: string | null): string
 interface TransferOrder {
   id: string;
   orderNo: string;
-  status: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
+  // IN_TRANSIT and RECEIVED were added to the TransferOrderStatus enum by MIG-1a. No code
+  // writes them until P14, but this union is hand-written over an API response and `tsc`
+  // cannot check it against the enum — so a status it does not list would arrive as a value
+  // TypeScript insists is impossible, and the accent/badge below would fall through to the
+  // "unknown" branch. Listing them now is what makes that impossible.
+  status: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED" | "IN_TRANSIT" | "RECEIVED";
   notes: string | null;
   rejectionNote: string | null;
   createdAt: string;
@@ -47,7 +52,7 @@ interface TransferOrder {
   _count: { items: number };
 }
 
-type StatusFilter = "all" | "PENDING" | "APPROVED" | "REJECTED";
+type StatusFilter = "all" | "PENDING" | "APPROVED" | "IN_TRANSIT" | "RECEIVED" | "REJECTED";
 
 export default function TransfersPage() {
   const { canApprove: canApproveCheck } = usePermissions();
@@ -141,8 +146,8 @@ export default function TransfersPage() {
   }
 
   const statusBadge = (status: string) => {
-    const icon = status === "APPROVED" ? <CheckCircle2 className="h-3 w-3 mr-0.5" />
-      : status === "PENDING" ? <Clock className="h-3 w-3 mr-0.5" />
+    const icon = status === "APPROVED" || status === "RECEIVED" ? <CheckCircle2 className="h-3 w-3 mr-0.5" />
+      : status === "PENDING" || status === "IN_TRANSIT" ? <Clock className="h-3 w-3 mr-0.5" />
       : status === "REJECTED" ? <XCircle className="h-3 w-3 mr-0.5" />
       : null;
     return <Badge className={`text-xs ${getStatusColor(status)}`}>{icon}{getStatusLabel(status)}</Badge>;
@@ -174,6 +179,10 @@ export default function TransfersPage() {
             { key: "all", label: "All" },
             { key: "PENDING", label: "Pending" },
             { key: "APPROVED", label: "Approved" },
+            // Filterable from today even though P14 is what starts writing them. An order
+            // that reaches one of these states must not be invisible on every tab.
+            { key: "IN_TRANSIT", label: "In Transit" },
+            { key: "RECEIVED", label: "Received" },
             { key: "REJECTED", label: "Rejected" },
           ],
           onChange: (key) => setFilter(key as StatusFilter),
@@ -203,11 +212,11 @@ export default function TransfersPage() {
       ) : (
         <div className="space-y-2">
           {orders.map((order) => {
-            const accent = order.status === "APPROVED"
+            const accent = order.status === "APPROVED" || order.status === "RECEIVED"
               ? "border-l-green-500"
               : order.status === "REJECTED"
               ? "border-l-red-500"
-              : order.status === "PENDING"
+              : order.status === "PENDING" || order.status === "IN_TRANSIT"
               ? "border-l-amber-400"
               : "border-l-slate-200";
             return (

@@ -236,11 +236,31 @@ enum ProductCondition {
 /// A site — the shop itself, with a door people walk through. Stock does NOT live here;
 /// it lives in this store's Warehouse rows. Footfall does, because the camera is at the door.
 model Store {
-  id        String   @id @default(cuid())
-  code      String   @unique // "BCH_STORE", "BCC_STORE" — the old enum strings
-  name      String // "BCH Store"
-  address   String?
-  phone     String?
+  id            String  @id @default(cuid())
+  code          String  @unique // "BCH_STORE", "BCC_STORE" — the old enum strings
+  name          String // "BCH Store"
+  address       String?
+  phone         String?
+  // Every store has its own GSTIN (owner). These decide the transfer document in P14: two
+  // stores with different GSTINs need a TAX INVOICE, movement inside one store needs only a
+  // DELIVERY CHALLAN. Nullable because every existing row predates them; P14 refuses an
+  // inter-store transfer while either is missing rather than guessing.
+  gstin         String? // 15 characters, e.g. 29ABCDE1234F1Z5
+  stateCode     String? // first two digits of the GSTIN, e.g. "29" — Karnataka
+  // The prefix this store's sales invoices carry: "BCH/", "BCC/". Unique because two stores
+  // claiming one prefix would make `storeIdForInvoice()` ambiguous.
+  //
+  // NOT a database prefix search, so no index beyond the unique one: `storeIdForInvoice()`
+  // (P1b) is a pure function over the store list already in memory -- there are two stores --
+  // and picks the longest matching prefix in JavaScript. Null until the owner fills it in on
+  // /stores; until then every sale falls back to the primary store with a log.warn.
+  invoicePrefix String? @unique
+
+  // ⚠ These three columns are ADDITIVE-ONLY in this migration, on purpose (CLAUDE.md rule 7).
+  // Nothing writes them yet and no zod schema accepts them: `invoicePrefix` gets its input on
+  // /stores in P1b, `gstin`/`stateCode` in P13. The column has to exist a release before the
+  // code that fills it, not the other way round.
+
   isActive  Boolean  @default(true)
   sortOrder Int      @default(0)
   createdAt DateTime @default(now())
@@ -255,6 +275,9 @@ model Store {
   countEvents      CountEvent[]
   agentHeartbeats  AgentHeartbeat[]
   analyticsDevices AnalyticsDevice[]
+
+  stockCounts StockCount[] @relation("StockCountStore")
+  deliveries  Delivery[]   @relation("DeliveryStore")
 }
 
 /// A godown. Stock lives here. One per store on day one, but the whole point of the model is
@@ -278,6 +301,13 @@ model Warehouse {
   stockLevels   StockLevel[]
   transfersFrom TransferOrderItem[] @relation("TransferFromWarehouse")
   transfersTo   TransferOrderItem[] @relation("TransferToWarehouse")
+  stockCounts   StockCount[]        @relation("StockCountWarehouse")
+
+  // The HEADER lane of a transfer, as opposed to the per-item lanes above. Both exist during
+  // P14/P15: the header is the lane the whole order moves on, the item lanes are legacy and
+  // are dropped in the release after P15.
+  orderTransfersFrom TransferOrder[] @relation("TransferOrderFromWarehouse")
+  orderTransfersTo   TransferOrder[] @relation("TransferOrderToWarehouse")
 
   // `code` is globally unique above, which already prevents a duplicate. This pair is kept
   // because the natural key of a warehouse is (site, code) and a future rename that relaxes
@@ -321,6 +351,9 @@ model User {
 
   createdPOs               PurchaseOrder[]   @relation("POCreatedBy")
   approvedPOs              PurchaseOrder[]   @relation("POApprovedBy")
+  // Only for PurchaseOrder.sentBy, the denormalised "who sent it last" on the header.
+  // PurchaseOrderSend.sentById deliberately has NO relation — a send trail outlives its user.
+  sentPOs                  PurchaseOrder[]   @relation("POSentBy")
   recordedPayments         VendorPayment[]   @relation("PaymentRecordedBy")
   recordedExpenses         Expense[]         @relation("ExpenseRecordedBy")
   recordedCustomerPayments CustomerPayment[] @relation("CustomerPaymentRecordedBy")
@@ -358,8 +391,12 @@ model User {
   verifiedSettlements DailySettlement[] @relation("SettlementCashVerifier")
 
   // Operations Hub (Tasks, SOPs, Updates)
+  //
+  // No back-relation for the activity log. `ActivityLog` replaced `OpsActivityLog` and holds
+  // `userId` + `userName` as plain columns on purpose, so a log entry outlives the user it
+  // names -- see the model comment. Deleting a user must not cascade away the record of what
+  // they did.
   postedUpdates     StoreUpdate[]      @relation("UpdatePostedBy")
-  opsActivityLogs   OpsActivityLog[]   @relation("OpsActivityLoggedBy")
   brandStockUploads BrandStockUpload[] @relation("BrandStockUploadedBy")
 
   // Brand ledger reconciliation
@@ -402,7 +439,8 @@ model Category {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  products Product[]
+  products         Product[]
+  inboundShipments InboundShipment[]
 }
 
 model Brand {
@@ -627,26 +665,44 @@ model InventoryTransaction {
 }
 
 model StockCount {
-  id              String    @id @default(cuid())
-  countNo         String?   @unique // Auto: SC-YYYYMM-NNNN
+  id              String     @id @default(cuid())
+  countNo         String?    @unique // Auto: SC-YYYYMM-NNNN
   title           String // "Weekly Audit - Week 15"
   assignedToId    String
-  assignedTo      User      @relation(fields: [assignedToId], references: [id])
+  assignedTo      User       @relation(fields: [assignedToId], references: [id])
   binId           String?
-  bin             Bin?      @relation(fields: [binId], references: [id])
-  status          String    @default("PENDING") // PENDING, IN_PROGRESS, COMPLETED, APPROVED, REJECTED
+  bin             Bin?       @relation(fields: [binId], references: [id])
+  status          String     @default("PENDING") // PENDING, IN_PROGRESS, COMPLETED, APPROVED, REJECTED
   dueDate         DateTime
   completedAt     DateTime?
   approvedById    String?
-  approvedBy      User?     @relation("StockCountApprovedBy", fields: [approvedById], references: [id])
+  approvedBy      User?      @relation("StockCountApprovedBy", fields: [approvedById], references: [id])
   approvedAt      DateTime?
   rejectionReason String?
   notes           String?
-  location        String? // Location-level scope: "BCH-GF", "BCH-FF", etc. Null = single bin or all
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  location        String? // LEGACY, dropped in MIG-2. Superseded by storeId/warehouseId below.
+  // Audit scope (R2). THREE states, not two -- see §5.1 of the 0409 plan:
+  //   storeId set, warehouseId null  -> the whole store, every warehouse under it
+  //   both set                       -> that one warehouse
+  //   both null                      -> a legacy audit with no resolvable scope, or a single
+  //                                     bin count. Never read as "the whole store".
+  // Restrict on both: a store or warehouse with audit history is not deletable, and the
+  // audit's scope must not silently become null underneath it.
+  storeId         String?
+  store           Store?     @relation("StockCountStore", fields: [storeId], references: [id], onDelete: Restrict)
+  warehouseId     String?
+  warehouse       Warehouse? @relation("StockCountWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
 
   items StockCountItem[]
+
+  // `[assignedToId, status]` serves the dashboard's `?mine=1&status=` query, which is the
+  // one read that runs on every page load. A lone index on a five-value `status` across a
+  // few hundred rows would not earn its keep; the pair does.
+  @@index([assignedToId, status])
+  @@index([storeId])
+  @@index([warehouseId])
 }
 
 model StockCountItem {
@@ -661,6 +717,12 @@ model StockCountItem {
   suggestedBrand String? // Staff suggests brand for "Imported" items
   notes          String?
   countedAt      DateTime?
+
+  // This table had NO index at all. It is the one that grows per product per audit -- a
+  // 300-line count is 300 rows -- and both of its foreign keys are read on every screen that
+  // opens an audit. Postgres does not index a foreign key for you.
+  @@index([stockCountId])
+  @@index([productId])
 }
 
 model Vendor {
@@ -743,15 +805,86 @@ model PurchaseOrder {
   createdBy       User      @relation("POCreatedBy", fields: [createdById], references: [id])
   notes           String?
   deliveryAddress String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+
+  // ─── Sending the PO to the vendor (R9, written by P12) ────────────────────────────────
+  //
+  // These five are a DENORMALISED summary of the latest send, kept on the header so the list
+  // screen can show "sent 2 days ago" without joining the trail below. `sends` is the record
+  // of what actually happened, including the failures; these are the answer to "is it out?".
+  sentAt      DateTime?
+  sentById    String?
+  // SetNull, written explicitly rather than left to Prisma's default for an optional
+  // relation. Deleting a user must not delete the purchase order, and this column is only
+  // the convenience copy — the durable answer to "who sent it" is PurchaseOrderSend.sentById
+  // + sentByName, which carry no foreign key precisely so they survive the user's deletion.
+  sentBy      User?                     @relation("POSentBy", fields: [sentById], references: [id], onDelete: SetNull)
+  sentToEmail String?
+  sentVia     PurchaseOrderSendChannel?
+  // Counts every ATTEMPT that reached SENT, so a re-send to a corrected address is visible
+  // as a re-send rather than overwriting the first one silently.
+  sendCount   Int                       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   items PurchaseOrderItem[]
   bills VendorBill[]
+  sends PurchaseOrderSend[]
 
   @@index([vendorId])
   @@index([status])
   @@index([createdAt])
+}
+
+enum PurchaseOrderSendStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+// MANUAL is not a gap — it is "the buyer sent it some other way and said so". Keeping it as a
+// channel means "Mark sent" writes a row in the same trail as an email, instead of leaving a
+// PO that went out over WhatsApp looking unsent.
+enum PurchaseOrderSendChannel {
+  EMAIL
+  WHATSAPP
+  MANUAL
+}
+
+// One row per attempt to get a PO to a vendor, successes and failures alike.
+//
+// A FAILED row is the point of the table: an SMTP rejection currently vanishes into a toast,
+// so nobody can answer "did the vendor ever get PO-00042?" a week later. `error` keeps the
+// reason, `messageId` keeps the proof.
+model PurchaseOrderSend {
+  id              String        @id @default(cuid())
+  purchaseOrderId String
+  // RESTRICT, explicitly, and not Cascade. A PO that has been sent to a vendor is a document
+  // that exists in someone else's inbox — it is CANCELLED, never deleted, and its send trail
+  // must not be removable by deleting the parent.
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+
+  channel PurchaseOrderSendChannel
+  status  PurchaseOrderSendStatus  @default(PENDING)
+
+  toEmail String?
+  ccEmail String?
+  subject String?
+  note    String? @db.Text
+
+  // No FK to User, and a name snapshot beside the id — the same policy as ActivityLog and
+  // NotificationOutbox. A send trail outlives the buyer who sent it.
+  sentById   String
+  sentByName String
+
+  messageId String? // the SMTP server's id on a 250 — the proof it was accepted
+  error     String? @db.Text
+  pdfUrl    String? // the exact PDF attached, kept because the PO may be edited afterwards
+
+  attemptedAt DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([purchaseOrderId, attemptedAt])
 }
 
 model PurchaseOrderItem {
@@ -962,6 +1095,12 @@ model IntegrationConfig {
   organizationName     String?
   isConnected          Boolean   @default(false)
   lastSyncAt           DateTime?
+  // Set when a token refresh is REFUSED (integrations/base.ts). `isConnected` is only ever
+  // written by a successful connect, so a Zoho whose refresh token has been revoked keeps a
+  // green badge on /settings/integrations forever and /deliveries reports "no new invoices"
+  // for what is actually a dead connection (R1). This timestamp is what lets the badge tell
+  // the truth; P4 reads it.
+  lastAuthErrorAt      DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
@@ -1350,6 +1489,15 @@ model Delivery {
   customerArea    String?
   customerPincode String?
 
+  // Which store SOLD this (O8). Stock deduction is store-scoped -- a delivery names a store,
+  // never a warehouse (owner, 4 Sep) -- and without this column P1b has nothing to deduct
+  // from but the primary store, which would take BCH stock for a BCC sale.
+  //
+  // Nullable because every existing row predates it, and Restrict because a store with sales
+  // history is not deletable. Populated by P1b from `Store.invoicePrefix` against `invoiceNo`.
+  storeId String?
+  store   Store?  @relation("DeliveryStore", fields: [storeId], references: [id], onDelete: Restrict)
+
   status       DeliveryStatus @default(PENDING)
   verifiedAt   DateTime?
   verifiedById String?
@@ -1403,6 +1551,12 @@ model Delivery {
   @@index([invoiceDate])
   @@index([customerArea])
   @@index([scheduledDate])
+  // Earned today, before P1b adds a single `where: { storeId }`. `prisma.store.delete` at
+  // api/stores/[id]/route.ts:94 is a live call site, and a Restrict foreign key makes
+  // Postgres check this table on every one of those deletes -- unindexed, that is a
+  // sequential scan of every delivery ever recorded. Postgres does not index a referencing
+  // column for you. P1b's store-scoped reads then use the same index.
+  @@index([storeId])
 }
 
 model AlertConfig {
@@ -1502,11 +1656,38 @@ model SecondHandCycle {
 
 // ─── Transfer Orders (Multi-item bin transfers) ───────────────────────
 
+// IN_TRANSIT and RECEIVED are added HERE, in MIG-1a, and no code writes them until P14.
+//
+// That is not tidiness, it is a Postgres constraint: a value added by `ALTER TYPE … ADD
+// VALUE` cannot be USED inside the same transaction that added it (error 55P04), and Prisma
+// applies one migration folder as one transaction. So the value must land a folder before the
+// UPDATE that writes it -- which is exactly what MIG-2 does in P14.
+//
+// `tsc` will NOT catch a screen that meets an unknown status: there is no
+// `Record<TransferOrderStatus, …>` anywhere in src/ (status-colors.ts is Record<string,
+// string>). The compensating check is a grep, and P1 extends the two places that enumerate
+// the statuses by hand -- the union at transfers/page.tsx and its StatusFilter list.
 enum TransferOrderStatus {
   PENDING
   APPROVED
   REJECTED
   CANCELLED
+  IN_TRANSIT
+  RECEIVED
+}
+
+// Derived, never chosen by the user: both warehouses under one store = INTRA_STORE, different
+// stores = INTER_STORE. It decides which document the transfer requires.
+enum TransferType {
+  INTRA_STORE
+  INTER_STORE
+}
+
+// A movement between two GSTINs is a supply and needs a tax invoice; a movement inside one
+// registration is not, and a delivery challan covers it.
+enum TransferDocType {
+  DELIVERY_CHALLAN
+  TAX_INVOICE
 }
 
 model TransferOrder {
@@ -1522,6 +1703,48 @@ model TransferOrder {
   reviewedAt    DateTime?
   rejectionNote String?
 
+  // ─── The header lane (R10, written by P14) ────────────────────────────────────────────
+  //
+  // EVERY column below is nullable and unwritten in this migration. They exist a release
+  // ahead of the code that fills them (CLAUDE.md rule 7) because MIG-2 backfills them in P14
+  // and a backfill cannot target a column that does not exist yet.
+  //
+  // Today a transfer's lane lives per ITEM (TransferOrderItem.fromWarehouseId). That was
+  // workable while every item moved together, but an order is dispatched and received as one
+  // thing, so the lane belongs on the header. Restrict on both: a warehouse with transfer
+  // history is not deletable.
+  fromWarehouseId String?
+  fromWarehouse   Warehouse? @relation("TransferOrderFromWarehouse", fields: [fromWarehouseId], references: [id], onDelete: Restrict)
+  toWarehouseId   String?
+  toWarehouse     Warehouse? @relation("TransferOrderToWarehouse", fields: [toWarehouseId], references: [id], onDelete: Restrict)
+
+  // Derived from the two lanes, stored so history stays readable after a warehouse moves
+  // store. `requiredDocType` NULL means "pre-policy" -- an order raised before P15 existed --
+  // and is never rendered as "no document needed".
+  transferType    TransferType?
+  requiredDocType TransferDocType?
+
+  // The document itself (P15).
+  docType          TransferDocType?
+  docNumber        String?
+  docDate          DateTime?
+  docUrl           String?
+  docUploadedById  String?
+  docUploadedAt    DateTime?
+  eWayBillNo       String?
+  consignmentValue Decimal?         @db.Decimal(12, 2)
+
+  // Dispatch: stock LEAVES here.
+  dispatchedById  String?
+  dispatchedAt    DateTime?
+  vehicleNo       String?
+  transporterName String?
+
+  // Receipt: stock ARRIVES here, and a shortfall is recorded per item.
+  receivedById String?
+  receivedAt   DateTime?
+  receiveNote  String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1530,6 +1753,12 @@ model TransferOrder {
   @@index([status])
   @@index([createdById])
   @@index([createdAt])
+  // Both FK columns are indexed: Restrict makes every warehouse delete check this table, and
+  // P14 adds a `?toWarehouseId=` filter to the list route for the receiving clerk. No
+  // composite `[status, toWarehouseId]` -- the existing `[status]` index bitmap-ANDs with
+  // either of these, and a composite that no query has asked for yet is dead weight.
+  @@index([fromWarehouseId])
+  @@index([toWarehouseId])
 }
 
 model TransferOrderItem {
@@ -1550,7 +1779,16 @@ model TransferOrderItem {
   fromWarehouse   Warehouse?    @relation("TransferFromWarehouse", fields: [fromWarehouseId], references: [id], onDelete: Restrict)
   toWarehouseId   String?
   toWarehouse     Warehouse?    @relation("TransferToWarehouse", fields: [toWarehouseId], references: [id], onDelete: Restrict)
-  createdAt       DateTime      @default(now())
+
+  // Written on receipt (P14). NULL means "not received yet" -- distinct from 0, which means
+  // "received, and none of it arrived". A short receipt is a fact worth keeping, so the
+  // difference against `quantity` is the shortfall rather than an edit to `quantity`.
+  receivedQty Int?
+  // The cost this stock moves at, captured per line because a transfer between GSTINs is a
+  // supply and the tax invoice needs a value. Decimal, not Float: money.
+  unitCost    Decimal? @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
 
   @@index([transferOrderId])
   @@index([productId])
@@ -1577,6 +1815,15 @@ model InboundShipment {
   billDate             DateTime
   expectedDeliveryDate DateTime
   status               InboundShipmentStatus @default(IN_TRANSIT)
+  // Cycles / Spares / Accessories — the choice that decides how this shipment is received
+  // (R3). It lived in ONE phone's localStorage, so the shipment looked uncategorised to
+  // everybody else and lost its category when that browser cleared. It is a property of the
+  // shipment, so it belongs on the row.
+  //
+  // Nullable: every existing shipment predates it. Restrict, because a category that has
+  // received stock is history and must not be deletable out from under it.
+  categoryId           String?
+  category             Category?             @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   totalAmount          Float
   totalItems           Int
   approvedAt           DateTime?
@@ -1606,6 +1853,12 @@ model InboundShipment {
   @@index([billNo])
   @@index([expectedDeliveryDate])
   @@index([createdAt])
+  // Justified by the Restrict FK, not by a `where` -- there are TWO live category deletes:
+  // api/categories/[id]/route.ts:124 and, worse, api/categories/[id]/merge/route.ts:66,
+  // which deletes inside a transaction. Postgres checks this table on both, and unindexed
+  // that is a sequential scan while the merge holds its locks. P7 then filters receiving by
+  // category on the same index.
+  @@index([categoryId])
 }
 
 model InboundLineItem {
@@ -1795,22 +2048,62 @@ model StoreUpdate {
   @@index([createdAt])
 }
 
-model OpsActivityLog {
-  id        String   @id @default(cuid())
-  action    String
-  details   String   @db.Text
-  userId    String
-  user      User     @relation("OpsActivityLoggedBy", fields: [userId], references: [id])
-  createdAt DateTime @default(now())
+// The activity log (R11). REPLACED `OpsActivityLog`, which had two free-text columns
+// (`action`, `details`) and one writer -- api/ops-activity-logs/route.ts, deleted in this
+// same change. It held zero rows, which is the proof that dropping it loses nothing.
+//
+// The shape answers the question the owner actually asks: who changed what, from what to
+// what, and when. `fromValue`/`toValue` are named that way because `from` and `to` are SQL
+// keywords; a status move reads "PENDING -> APPROVED" without parsing `details`.
+//
+// `userId` is deliberately NOT a relation. A log outlives the user it names -- the same
+// policy as NotificationOutbox.userId and PurchaseOrderSend.sentById -- so `userName` is a
+// snapshot taken at write time and "by Ravi" needs no join and survives Ravi's deletion.
+//
+// The four indexes are the four ways it is read: the feed (createdAt), one person's history
+// (userId), one module's history (module), and one record's trail (entityType+entityId).
+model ActivityLog {
+  id         String   @id @default(cuid())
+  module     String // RBAC module keys: stock_audit | inbound | vendor_issues | zoho | categories | customers | purchase_orders | transfers
+  action     String // created | updated | status_changed | approved | rejected | received | delivered | issue_reported | pulled | imported | sent | dispatched | cancelled
+  entityType String // StockCount | InboundShipment | VendorIssue | Category | Customer | ZohoPull | PurchaseOrder | TransferOrder
+  entityId   String
+  entityRef  String? // SC-202609-0003, IB-202609-0001, PO-00042, TRF-202609-0007
+  fromValue  String?
+  toValue    String?
+  details    String?  @db.Text
+  userId     String
+  userName   String
+  createdAt  DateTime @default(now())
 
-  @@index([action])
   @@index([createdAt])
+  @@index([userId, createdAt])
+  @@index([module, createdAt])
+  @@index([entityType, entityId])
 }
 
 model AppSetting {
   key       String   @id
   value     String   @db.Text
   updatedAt DateTime @updatedAt
+}
+
+// One row per document series: "PO", "SC-202609", "TRF-202609", "IB-202609", "ISS-202609".
+//
+// Deliberately NOT seeded by the migration. This table lands weeks before P7/P9/P14 switch
+// their allocators onto it, so any `INSERT … SELECT MAX(...)` written today would be stale by
+// the time the first caller arrives. `nextSequence()` in src/lib/sequence.ts seeds a missing
+// key from the caller's own numeric max on first use instead -- see that file.
+//
+// Mapped to lowercase `counter` because the allocator is one hand-written statement
+// (`INSERT INTO counter(key, current) … ON CONFLICT (key) DO UPDATE`) and an unquoted
+// identifier in Postgres folds to lowercase. Naming the model `Counter` and letting Prisma
+// create `"Counter"` would make that statement fail to find the table.
+model Counter {
+  key     String @id
+  current Int    @default(0)
+
+  @@map("counter")
 }
 
 // ─── Brand Stock Upload + Smart Reorder ───────────
@@ -1829,22 +2122,47 @@ enum BrandStockMatchStatus {
   UNMATCHED
 }
 
+// What a row's fill colour MEANS, once a person has said so (R7).
+//
+// The app never interprets a colour. `BrandStockItem.rowColor` records the colour exceljs
+// read out of the .xlsx -- a stored property of the file, not a guess -- and the user labels
+// each distinct colour once per brand. UNKNOWN is the default and the honest answer for an
+// unlabelled colour or a sheet with no fills; it is never treated as AVAILABLE.
+enum BrandStockAvailability {
+  AVAILABLE
+  UNAVAILABLE
+  UNKNOWN
+}
+
 model BrandStockUpload {
-  id             String                 @id @default(cuid())
-  brandId        String
-  brand          Brand                  @relation("BrandStockUploads", fields: [brandId], references: [id])
-  fileName       String
-  fileType       String
-  status         BrandStockUploadStatus @default(PROCESSING)
-  totalItems     Int                    @default(0)
-  matchedItems   Int                    @default(0)
-  unmatchedItems Int                    @default(0)
-  notes          String?
-  uploadedById   String
-  uploadedBy     User                   @relation("BrandStockUploadedBy", fields: [uploadedById], references: [id])
-  items          BrandStockItem[]
-  createdAt      DateTime               @default(now())
-  updatedAt      DateTime               @updatedAt
+  id                String                 @id @default(cuid())
+  brandId           String
+  brand             Brand                  @relation("BrandStockUploads", fields: [brandId], references: [id])
+  fileName          String
+  fileType          String
+  status            BrandStockUploadStatus @default(PROCESSING)
+  totalItems        Int                    @default(0)
+  matchedItems      Int                    @default(0)
+  unmatchedItems    Int                    @default(0)
+  notes             String?
+  // The colour -> meaning map the user confirmed for this upload, e.g.
+  // {"FFFF0000":"UNAVAILABLE","FF00B050":"AVAILABLE"}. Json because the key set is whatever
+  // colours that particular sheet happens to use — a table of two columns would be a row per
+  // colour per upload for data that is only ever read as a whole.
+  //
+  // Remembered per BRAND (the legend from that brand's last confirmed upload is offered as
+  // the default next time), which is why it lives on the upload rather than in a global
+  // setting: brands do not agree on what red means.
+  colorLegend       Json?
+  // Null until a person has actually confirmed the legend. Until then nothing on the sheet
+  // is treated as orderable — the difference between "no legend yet" and "a legend that
+  // says nothing is available".
+  legendConfirmedAt DateTime?
+  uploadedById      String
+  uploadedBy        User                   @relation("BrandStockUploadedBy", fields: [uploadedById], references: [id])
+  items             BrandStockItem[]
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
 
   @@index([brandId])
   @@index([status])
@@ -1852,26 +2170,33 @@ model BrandStockUpload {
 }
 
 model BrandStockItem {
-  id                String                @id @default(cuid())
+  id                String                 @id @default(cuid())
   uploadId          String
-  upload            BrandStockUpload      @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  upload            BrandStockUpload       @relation(fields: [uploadId], references: [id], onDelete: Cascade)
   rawSku            String?
   rawName           String
   rawCategory       String?
-  brandAvailableQty Int                   @default(0)
+  brandAvailableQty Int                    @default(0)
   brandPrice        Float?
   brandMrp          Float?
   rawSize           String?
-  matchStatus       BrandStockMatchStatus @default(UNMATCHED)
+  matchStatus       BrandStockMatchStatus  @default(UNMATCHED)
   matchConfidence   Float?
   productId         String?
-  product           Product?              @relation("BrandStockMatches", fields: [productId], references: [id])
+  product           Product?               @relation("BrandStockMatches", fields: [productId], references: [id])
   bchCurrentStock   Int?
   bchReorderLevel   Int?
   suggestedQty      Int?
   orderQty          Int?
-  selected          Boolean               @default(false)
-  createdAt         DateTime              @default(now())
+  selected          Boolean                @default(false)
+  // The colour exceljs read from this row's fill, verbatim -- "FFFF0000", or null when the
+  // cell had no fill. Stored raw so the legend can be re-labelled later without re-reading
+  // the file, and so a colour nobody has labelled is still visible as itself.
+  rowColor          String?
+  // What that colour means, resolved through the upload's legend. Defaults to UNKNOWN so an
+  // unlabelled sheet orders nothing by accident.
+  availability      BrandStockAvailability @default(UNKNOWN)
+  createdAt         DateTime               @default(now())
 
   @@index([uploadId])
   @@index([matchStatus])
@@ -2046,8 +2371,8 @@ model TokenCounter {
   @@map("token_counter")
 }
 
-// Service-side audit trail. Kept as its own table rather than folded into OpsActivityLog,
-// per the merge decision to keep logs separate for now.
+// Service-side audit trail. Kept as its own table rather than folded into the house activity
+// log (`ActivityLog`), per the merge decision to keep logs separate for now.
 model ServiceAuditLog {
   id         String   @id @default(cuid())
   jobId      String
@@ -2792,12 +3117,12 @@ model LmsProgress {
   @@map("lms_progress")
 }
 
-// Kept separate from OpsActivityLog on purpose: different shape, and the XP engine reads
-// it back to count `product_learned` events.
+// Kept separate from the house activity log (`ActivityLog`) on purpose: different shape, and
+// the XP engine reads it back to count `product_learned` events.
 //
 // The only model in this block with no `updatedAt`, deliberately — it is append-only, and
-// OpsActivityLog (the house's own activity log) omits it for the same reason. A row here
-// is a fact about a moment; there is nothing to update.
+// `ActivityLog` omits it for the same reason. A row here is a fact about a moment; there is
+// nothing to update.
 model LmsActivityLog {
   id           String   @id @default(cuid())
   userId       String   @map("user_id")
