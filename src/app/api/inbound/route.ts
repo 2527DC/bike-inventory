@@ -4,6 +4,8 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, parseSearchParams } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { nextSequence } from "@/lib/sequence";
+import { ibSeedSql } from "@/lib/inbound/sequence";
 import { inboundShipmentSchema } from "@/lib/validations";
 import { createLogger } from "@/lib/logger";
 
@@ -155,18 +157,20 @@ export async function POST(req: NextRequest) {
     const expectedDeliveryDate = new Date(billDate);
     expectedDeliveryDate.setDate(expectedDeliveryDate.getDate() + leadDays);
 
-    // Auto-generate shipment number: IB-YYYYMM-0001
+    // Shipment number: IB-YYYYMM-0001, allocated atomically (§4 Counter).
+    //
+    // Was a read-then-write — findFirst ordered by shipmentNo desc, parse the tail, add one —
+    // with two defects. Two people creating a shipment in the same month at the same moment
+    // both read the same last number and both wrote it; `shipmentNo` is unique, so one of
+    // them lost their work to a constraint error. And the ordering was a STRING sort, so
+    // "IB-202609-0002" ranks above "IB-202609-00010" once the count passes four digits and
+    // the allocator starts handing out numbers that already exist.
+    //
+    // `IB-` has two allocators — this one and the import loop in zoho/pull-review/approve —
+    // and a unique series with two allocators is the real hazard, so both switch together.
     const now = new Date();
     const prefix = `IB-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const lastShipment = await prisma.inboundShipment.findFirst({
-      where: { shipmentNo: { startsWith: prefix } },
-      orderBy: { shipmentNo: "desc" },
-      select: { shipmentNo: true },
-    });
-    const seq = lastShipment
-      ? parseInt(lastShipment.shipmentNo.split("-").pop() || "0") + 1
-      : 1;
-    const shipmentNo = `${prefix}-${String(seq).padStart(4, "0")}`;
+    const shipmentNo = `${prefix}-${await nextSequence(prisma, prefix, 4, ibSeedSql(prefix))}`;
 
     const totalAmount = data.lineItems.reduce((s, li) => s + li.amount, 0);
 

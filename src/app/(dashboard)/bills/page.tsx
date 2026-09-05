@@ -64,7 +64,7 @@ function formatCurrency(amount: number) {
 
 export default function BillsPage() {
   const { canFetch: canFetchCheck } = usePermissions();
-  const canFetchBills = canFetchCheck("bills");
+  const canFetchBills = canFetchCheck("zoho");
 
   const [bills, setBills] = useState<BillItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -83,6 +83,8 @@ export default function BillsPage() {
   const [billSearch, setBillSearch] = useState("");
   const [fetchDays, setFetchDays] = useState<number>(7);
   const [fetchCustomFrom, setFetchCustomFrom] = useState("");
+  // CREATED here — this screen had only a From input, so a custom range always ran to today.
+  const [fetchCustomTo, setFetchCustomTo] = useState("");
   const [dateFilter, setDateFilter] = useState<DateRangeKey>("all");
   const [dateFrom, setDateFrom] = useState<string | undefined>();
   const [dateTo, setDateTo] = useState<string | undefined>();
@@ -148,24 +150,22 @@ export default function BillsPage() {
       setFetchPullId(pullId);
 
       const searchTerm = billSearch.trim();
-      let fromDate: string;
-      if (searchTerm) {
-        fromDate = "";
-      } else if (fetchDays === -1 && fetchCustomFrom) {
-        fromDate = fetchCustomFrom;
-      } else {
-        const fromDateObj = new Date();
-        fromDateObj.setDate(fromDateObj.getDate() - fetchDays);
-        fromDate = fromDateObj.toISOString().slice(0, 10);
-      }
+      // No local date arithmetic (root cause #5). `new Date()` +
+      // `toISOString().slice(0,10)` on an IST browser rolls back a day before 05:30, so the
+      // range chips asked Zoho for the wrong days. The server resolves the window in IST and
+      // reports back what it used; `fetchCustomTo` is finally sent rather than collected and
+      // discarded.
+      const windowBody = searchTerm
+        ? { searchText: searchTerm }
+        : fetchDays === -1
+          ? { fromDate: fetchCustomFrom || undefined, toDate: fetchCustomTo || undefined }
+          : { days: fetchDays };
+
       const label = searchTerm ? `"${searchTerm}"` : fetchDays === -1 ? "custom range" : `last ${fetchDays} days`;
       setFetchProgress(searchTerm ? `Searching ${label} in Zoho...` : `Pulling bills (${label})...`);
       const billRes = await fetchWithTimeout("/api/zoho/trigger-pull", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          step: "bills", pullId,
-          ...(searchTerm ? { searchText: searchTerm } : { fromDate }),
-        }),
+        body: JSON.stringify({ step: "bills", pullId, ...windowBody }),
       }, 60000).then(r => r.json());
       if (!billRes.success) throw new Error(billRes.error || "Bills fetch failed");
 
@@ -308,6 +308,11 @@ export default function BillsPage() {
               <div>
                 <label className="text-[10px] text-slate-500 block mb-0.5">From</label>
                 <input type="date" value={fetchCustomFrom} onChange={(e) => setFetchCustomFrom(e.target.value)}
+                  className="px-2 py-1.5 text-xs border border-slate-300 rounded-lg" />
+              </div>
+              <div>
+                <label className="text-[10px] text-slate-500 block mb-0.5">To (default today)</label>
+                <input type="date" value={fetchCustomTo} onChange={(e) => setFetchCustomTo(e.target.value)}
                   className="px-2 py-1.5 text-xs border border-slate-300 rounded-lg" />
               </div>
             </div>

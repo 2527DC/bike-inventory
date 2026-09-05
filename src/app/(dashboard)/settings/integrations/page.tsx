@@ -26,9 +26,37 @@ interface ZohoStatus {
   organizationName?: string | null;
   lastSyncAt?: string;
   tokenValid?: boolean;
+  /**
+   * Set when a token refresh was REFUSED (R1). `connected` cannot express this on its own —
+   * it is only ever written by a successful connect, so a revoked refresh token leaves a
+   * green "Connected" badge while every fetch reports "no new invoices". Cleared by the next
+   * successful refresh.
+   */
+  lastAuthErrorAt?: string | null;
 }
 
 type SourceStatus = ZohoStatus;
+
+/**
+ * The line that stops a dead connection from looking healthy.
+ *
+ * Rendered only when the row says "connected" AND a refresh has been refused — the exact
+ * combination that was previously invisible. A never-connected source already reads "Not
+ * connected" and needs nothing extra.
+ */
+function TokenRefusedNotice({ status }: { status?: SourceStatus | null }) {
+  if (!status?.connected || !status.lastAuthErrorAt) return null;
+  const when = new Date(status.lastAuthErrorAt).toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+  return (
+    <p className="mt-1.5 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
+      Token refused on {when} — reconnect. Fetches will return nothing until you do.
+    </p>
+  );
+}
 
 interface SyncLogEntry {
   id: string;
@@ -383,6 +411,7 @@ export default function ZohoSettingsPage() {
                     </>
                   )}
                 </div>
+                <TokenRefusedNotice status={status} />
                 {status?.connected ? (
                   <button onClick={handleDisconnect} className="mt-2 w-full min-h-[48px] flex items-center justify-center rounded-lg border border-red-200 text-sm text-red-600 hover:bg-red-50 font-medium focus-ring">
                     Disconnect
@@ -462,6 +491,7 @@ export default function ZohoSettingsPage() {
                     </>
                   )}
                 </div>
+                <TokenRefusedNotice status={posStatus} />
                 {posStatus?.connected ? (
                   <button onClick={handleDisconnectPos} className="mt-2 w-full min-h-[48px] flex items-center justify-center rounded-lg border border-red-200 text-sm text-red-600 hover:bg-red-50 font-medium focus-ring">
                     Disconnect
@@ -515,6 +545,7 @@ export default function ZohoSettingsPage() {
                     </>
                   )}
                 </div>
+                <TokenRefusedNotice status={invStatus} />
                 {invStatus?.connected ? (
                   <button onClick={handleDisconnectInv} className="mt-2 w-full min-h-[48px] flex items-center justify-center rounded-lg border border-red-200 text-sm text-red-600 hover:bg-red-50 font-medium focus-ring">
                     Disconnect

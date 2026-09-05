@@ -55,15 +55,42 @@ export class ApiError extends Error {
   url: string;
   /** True when the failure was an expired/absent session rather than a real fault. */
   isAuth: boolean;
+  /**
+   * True when the request was aborted by `timeoutMs` rather than answered.
+   *
+   * Distinguished from a network failure because the two need different words: a timeout
+   * means the request WAS sent and may still be running upstream, so "try again" is honest
+   * advice; "check your connection" is not.
+   */
+  isTimeout: boolean;
 
-  constructor(message: string, opts: { status: number; url: string; isAuth?: boolean }) {
+  constructor(
+    message: string,
+    opts: { status: number; url: string; isAuth?: boolean; isTimeout?: boolean }
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = opts.status;
     this.url = opts.url;
     this.isAuth = opts.isAuth ?? false;
+    this.isTimeout = opts.isTimeout ?? false;
   }
 }
+
+/**
+ * Options every entry point accepts. `json` serialises the body; `timeoutMs` aborts the
+ * request.
+ *
+ * `timeoutMs` is IGNORED when the caller passes its own `signal` — two abort sources on one
+ * request means whichever fires first wins and the loser's reason is lost, so the caller's
+ * own cancellation stays authoritative.
+ */
+export type ApiInit = Omit<RequestInit, "body"> & {
+  json?: unknown;
+  body?: BodyInit | null;
+  /** Abort after this many milliseconds. Ignored if `signal` is supplied. */
+  timeoutMs?: number;
+};
 
 let requestSeq = 0;
 
@@ -76,10 +103,7 @@ let requestSeq = 0;
  * Throws ApiError on any failure — including the HTML cases above — so callers use
  * try/catch instead of hand-checking `res.ok` and `res.success` at every call site.
  */
-export async function apiFetch<T = unknown>(
-  url: string,
-  init: (Omit<RequestInit, "body"> & { json?: unknown; body?: BodyInit | null }) = {}
-): Promise<T> {
+export async function apiFetch<T = unknown>(url: string, init: ApiInit = {}): Promise<T> {
   return (await apiFetchEnvelope<T>(url, init)).data;
 }
 
@@ -95,18 +119,31 @@ export async function apiFetch<T = unknown>(
  */
 export async function apiFetchEnvelope<T = unknown>(
   url: string,
-  init: (Omit<RequestInit, "body"> & { json?: unknown; body?: BodyInit | null }) = {}
+  init: ApiInit = {}
 ): Promise<ApiEnvelope<T>> {
   const id = ++requestSeq;
   const method = (init.method || "GET").toUpperCase();
   const started = Date.now();
 
-  const { json, ...rest } = init;
+  const { json, timeoutMs, ...rest } = init;
   const options: RequestInit = { ...rest };
   if (json !== undefined) {
     options.method = method;
     options.headers = { "Content-Type": "application/json", ...(init.headers || {}) };
     options.body = JSON.stringify(json);
+  }
+
+  // Only when the caller has not supplied its own signal — see the note on ApiInit.
+  const useTimeout = typeof timeoutMs === "number" && timeoutMs > 0 && !init.signal;
+  const controller = useTimeout ? new AbortController() : null;
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  if (controller) {
+    options.signal = controller.signal;
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
   }
 
   log.debug(`#${id} -> ${method} ${url}`, json !== undefined ? { body: json } : undefined);
@@ -115,10 +152,22 @@ export async function apiFetchEnvelope<T = unknown>(
   try {
     res = await fetch(url, options);
   } catch (e) {
+    // A timeout arrives here as an AbortError, indistinguishable from a real network failure
+    // unless we remember that WE aborted it. `timedOut` is that memory.
+    if (timedOut) {
+      const secs = Math.round((timeoutMs as number) / 1000);
+      log.error(`#${id} xx ${method} ${url} — timed out after ${timeoutMs}ms`);
+      throw new ApiError(
+        `Timed out after ${secs}s — Zoho may be slow, try again.`,
+        { status: 0, url, isTimeout: true }
+      );
+    }
     // Network-level: offline, DNS, connection reset. No response object exists.
     const msg = e instanceof Error ? e.message : "Network request failed";
     log.error(`#${id} xx ${method} ${url} — network failure`, { error: msg });
     throw new ApiError(`Cannot reach the server. Check your connection.`, { status: 0, url });
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 
   const ms = Date.now() - started;
@@ -181,16 +230,17 @@ export async function apiFetchEnvelope<T = unknown>(
  */
 export async function apiTry<T = unknown>(
   url: string,
-  init?: Parameters<typeof apiFetch>[1]
-): Promise<{ data: T | null; error: string | null; isAuth: boolean }> {
+  init?: ApiInit
+): Promise<{ data: T | null; error: string | null; isAuth: boolean; isTimeout: boolean }> {
   try {
-    return { data: await apiFetch<T>(url, init), error: null, isAuth: false };
+    return { data: await apiFetch<T>(url, init), error: null, isAuth: false, isTimeout: false };
   } catch (e) {
     const err = e instanceof ApiError ? e : null;
     return {
       data: null,
       error: e instanceof Error ? e.message : "Request failed",
       isAuth: err?.isAuth ?? false,
+      isTimeout: err?.isTimeout ?? false,
     };
   }
 }

@@ -195,6 +195,25 @@ export abstract class IntegrationClient {
     });
     if (data.error || !data.access_token) {
       log.error("token refresh rejected", { provider: this.provider, error: data.error });
+      // Record WHEN the refusal happened (R1). `isConnected` is only ever written by a
+      // successful connect, so without this a Zoho whose refresh token has been revoked
+      // keeps a green "Connected" badge on /settings/integrations forever, while every
+      // fetch quietly reports "no new invoices". The badge could not tell the difference
+      // between "never connected" and "connected, but the token is now refused" — they
+      // both came back as `false` from init() and neither changed any stored state.
+      //
+      // Best-effort: a failure to record the failure must not mask the failure itself.
+      try {
+        await prisma.integrationConfig.update({
+          where: { provider: this.provider },
+          data: { lastAuthErrorAt: new Date() },
+        });
+      } catch (e) {
+        log.error("could not record lastAuthErrorAt", {
+          provider: this.provider,
+          message: e instanceof Error ? e.message : String(e),
+        });
+      }
       return false;
     }
     log.info("access token refreshed", { provider: this.provider });
@@ -204,7 +223,14 @@ export abstract class IntegrationClient {
 
     await prisma.integrationConfig.update({
       where: { provider: this.provider },
-      data: { accessToken: data.access_token, accessTokenExpiresAt: expiresAt },
+      data: {
+        accessToken: data.access_token,
+        accessTokenExpiresAt: expiresAt,
+        // CLEARED on every success, not only set on failure. Without this the warning on
+        // /settings/integrations would survive a reconnect and become permanent furniture —
+        // a stale alarm that people learn to ignore is worse than no alarm.
+        lastAuthErrorAt: null,
+      },
     });
 
     return true;

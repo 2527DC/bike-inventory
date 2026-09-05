@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { Search, Truck, Loader2, Calendar, Cloud, Download } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,10 @@ import { FilterSheet } from "@/components/filter-sheet";
 import { usePermissions } from "@/lib/use-permissions";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
+import { apiFetch, apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("inbound");
 
 interface InboundShipment {
   id: string;
@@ -96,7 +100,7 @@ const STATUS_OPTIONS: { key: StatusFilter; label: string }[] = [
 
 export default function InboundPage() {
   const { canFetch } = usePermissions();
-  const canFetchBills = canFetch("inbound");
+  const canFetchBills = canFetch("zoho");
 
   const [shipments, setShipments] = useState<InboundShipment[]>([]);
   const [legacyInwards, setLegacyInwards] = useState<LegacyInward[]>([]);
@@ -118,12 +122,23 @@ export default function InboundPage() {
   const [fetchPullId, setFetchPullId] = useState("");
   const [fetchDays, setFetchDays] = useState<number>(7);
   const [fetchCustomFrom, setFetchCustomFrom] = useState("");
+  const [fetchCustomTo, setFetchCustomTo] = useState("");
+  const [fetchSummary, setFetchSummary] = useState("");
+  // The bills this window found that are ALREADY in — rendered as a neutral card with a link
+  // to each shipment, not as errors. They used to be pushed into errors[] by the server and
+  // shown in a red banner, which made a normal re-fetch look like a failure.
+  const [alreadyImported, setAlreadyImported] = useState<Array<{ ref: string; where?: string; id?: string; no?: string; status?: string }>>([]);
+  // The fetch that produced the current error, so Retry re-runs THAT fetch. It used to call
+  // fetchData(), which reloads the local shipment list and does not retry anything.
+  const lastFetchRef = useRef<"search" | "range">("range");
+  const [listError, setListError] = useState("");
   const [billSearchNo, setBillSearchNo] = useState("");
   const [billPreviews, setBillPreviews] = useState<ZohoBillPreview[]>([]);
   const [selectedBills, setSelectedBills] = useState<Set<string>>(new Set());
 
   const fetchData = useCallback(() => {
     setLoading(true);
+    setListError("");
     const params = new URLSearchParams({ limit: "50" });
     if (filter !== "ALL") params.set("status", filter);
     if (debouncedSearch.length >= 2) params.set("search", debouncedSearch);
@@ -149,10 +164,14 @@ export default function InboundPage() {
         if (statsRes.success) setStats(statsRes.data);
       })
       .catch((e) => {
+        // listError, NOT fetchError. Failing to LOAD the shipment list is a different
+        // failure from a Zoho fetch going wrong, and sharing one banner meant a load error
+        // offered a Retry that re-ran a Zoho pull, and vice versa.
+        log.error("inbound list load failed", { message: e instanceof Error ? e.message : String(e) });
         if (typeof navigator !== "undefined" && !navigator.onLine) {
-          setFetchError("You're offline. Check your connection and retry.");
+          setListError("You are offline. Check your connection and retry.");
         } else {
-          setFetchError(e instanceof Error ? e.message : "Failed to load data. Tap retry.");
+          setListError(e instanceof Error ? e.message : "Failed to load data. Tap retry.");
         }
       })
       .finally(() => setLoading(false));
@@ -161,90 +180,95 @@ export default function InboundPage() {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   // ─── Zoho Bill Fetch ───
-  const fetchWithTimeout = async (url: string, options?: RequestInit, timeoutMs = 20000) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      return await fetch(url, { ...options, signal: controller.signal });
-    } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") throw new Error("Request timed out — try again");
-      throw e;
-    } finally { clearTimeout(timer); }
-  };
+  //
+  // `fetchWithTimeout` is GONE. It was a hand-rolled AbortController wrapper that returned a
+  // raw Response, so every call site still did `.then(r => r.json())` — the exact pattern
+  // CLAUDE.md bans, and the reason an expired session showed up as
+  // "Unexpected token '<'" instead of "your session has expired". `apiFetch`'s `timeoutMs`
+  // does the same job and keeps the HTML guard.
 
-  const handleFetchBills = async () => {
+  /**
+   * MODE IS AN ARGUMENT, not read from state.
+   *
+   * The old version decided search-vs-range by reading `billSearchNo` at call time, so the
+   * Fetch button used the search text whenever the box happened to be non-empty — the range
+   * chips were silently ignored (D7, defect 1). Passing the mode explicitly makes the two
+   * buttons mean what they say and removes the stale-closure hazard entirely.
+   */
+  const handleFetchBills = useCallback(async (mode: "search" | "range") => {
+    lastFetchRef.current = mode;
     setFetchStep("fetching");
     setFetchError("");
-    setFetchProgress("Connecting to Zoho...");
+    setFetchSummary("");
+    setFetchProgress("Connecting to Zoho…");
     try {
-      const initRes = await fetchWithTimeout("/api/zoho/trigger-pull", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ step: "init" }),
-      }).then(r => r.json());
-      if (!initRes.success) throw new Error(initRes.error || "Init failed");
-      const pullId = initRes.data.pullId;
+      const init = await apiFetch<{ pullId: string }>("/api/zoho/trigger-pull", {
+        method: "POST", json: { step: "init" }, timeoutMs: 20_000,
+      });
+      const pullId = init.pullId;
       setFetchPullId(pullId);
 
-      const isBillSearch = billSearchNo.trim().length > 0;
-      let fromDate: string | undefined;
-      let searchText: string | undefined;
-      let label: string;
+      // No local date arithmetic. `new Date()` + `toISOString().slice(0,10)` on an IST
+      // browser rolls back a day before 05:30, so "3 days" fetched the wrong three days.
+      // The server resolves the window in IST and reports what it used.
+      const body: Record<string, unknown> =
+        mode === "search"
+          ? { searchText: billSearchNo.trim() }
+          : fetchDays === -1
+            ? { fromDate: fetchCustomFrom || undefined, toDate: fetchCustomTo || undefined }
+            : { days: fetchDays };
 
-      if (isBillSearch) {
-        searchText = billSearchNo.trim();
-        label = `"${searchText}"`;
-        setFetchProgress(`Searching for bill ${label}...`);
-      } else if (fetchDays === -1 && fetchCustomFrom) {
-        fromDate = fetchCustomFrom;
-        label = "custom range";
-        setFetchProgress(`Pulling bills (${label})...`);
-      } else {
-        const fromDateObj = new Date();
-        fromDateObj.setDate(fromDateObj.getDate() - fetchDays);
-        fromDate = fromDateObj.toISOString().slice(0, 10);
-        label = `last ${fetchDays} days`;
-        setFetchProgress(`Pulling bills (${label})...`);
-      }
+      setFetchProgress(
+        mode === "search" ? `Searching for bill "${billSearchNo.trim()}"…` : "Pulling bills…"
+      );
 
-      const billRes = await fetchWithTimeout("/api/zoho/trigger-pull", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ step: "bills", pullId, fromDate, searchText }),
-      }, 60000).then(r => r.json());
-      if (!billRes.success) throw new Error(billRes.error || "Bills fetch failed");
+      const billRes = await apiFetch<{
+        billsNew: number; apiCalls: number; errors: string[]; fetched: number;
+        window: { from: string; to: string; clampedToFy: boolean } | null;
+        skipped: { counts: { alreadyImported: number }; items: Array<{ ref: string; where?: string; id?: string; no?: string; status?: string }> };
+      }>("/api/zoho/trigger-pull", {
+        method: "POST", json: { step: "bills", pullId, ...body }, timeoutMs: 60_000,
+      });
 
-      const billsFound = billRes.data.billsNew || 0;
-      setFetchProgress(`Found ${billsFound} new bill${billsFound !== 1 ? "s" : ""}. Finalizing...`);
+      const billsFound = billRes.billsNew || 0;
+      const w = billRes.window;
+      const rangeLabel = w ? `${w.from} – ${w.to}` : `"${billSearchNo.trim()}"`;
+      setAlreadyImported(billRes.skipped?.items ?? []);
+      setFetchSummary(
+        `${billRes.fetched ?? 0} found in Zoho (${rangeLabel})` +
+        (billRes.skipped?.counts.alreadyImported ? ` · ${billRes.skipped.counts.alreadyImported} already imported` : "")
+      );
 
-      await fetchWithTimeout("/api/zoho/trigger-pull", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      setFetchProgress(`Found ${billsFound} new bill${billsFound !== 1 ? "s" : ""}. Finalizing…`);
+      await apiTry("/api/zoho/trigger-pull", {
+        method: "POST",
+        json: {
           step: "finalize", pullId,
-          billsNew: billRes.data.billsNew, apiCalls: billRes.data.apiCalls,
-          allErrors: billRes.data.errors || [],
-        }),
-      }).then(r => r.json()).catch(() => {});
+          billsNew: billRes.billsNew, apiCalls: billRes.apiCalls, allErrors: billRes.errors || [],
+        },
+        timeoutMs: 20_000,
+      }).then((r) => { if (r.error) log.warn("finalize failed", { pullId, error: r.error }); });
 
-      setFetchProgress("Loading preview...");
-      const previewRes = await fetchWithTimeout(`/api/zoho/pull-review?pullId=${pullId}`).then(r => r.json());
-      if (!previewRes.success) throw new Error(previewRes.error || "Failed to load preview");
-      const billItems = (previewRes.data.previews || []).filter(
-        (p: ZohoBillPreview & { entityType: string; status: string }) => p.entityType === "bill" && p.status === "PENDING"
+      setFetchProgress("Loading preview…");
+      const previewData = await apiFetch<{ previews: Array<ZohoBillPreview & { entityType: string; status: string }> }>(
+        `/api/zoho/pull-review?pullId=${pullId}`, { timeoutMs: 20_000 }
+      );
+      const billItems = (previewData.previews || []).filter(
+        (p) => p.entityType === "bill" && p.status === "PENDING"
       );
       setBillPreviews(billItems);
-      setSelectedBills(new Set(billItems.map((b: ZohoBillPreview) => b.id)));
+      setSelectedBills(new Set(billItems.map((b) => b.id)));
       setFetchStep(billItems.length > 0 ? "selecting" : "idle");
-      // Show dedup info (already imported bills)
-      const fetchErrors = billRes.data.errors || [];
+
       if (billItems.length === 0) {
-        if (fetchErrors.length > 0) {
-          setFetchError(fetchErrors.join("\n"));
-        } else {
-          setFetchError(billsFound > 0 ? `${billsFound} found but all already imported` : `No new bills found (${label})`);
-        }
-        if (isBillSearch) setBillSearchNo("");
-      } else if (fetchErrors.length > 0) {
-        // Some new + some already imported
-        setFetchError(fetchErrors.join("\n"));
+        // The already-imported list is NOT an error any more — it renders as its own neutral
+        // card. This message is only about the genuinely empty outcomes.
+        setFetchError(
+          billRes.skipped?.counts.alreadyImported
+            ? `${billRes.fetched} bill${billRes.fetched === 1 ? "" : "s"} dated ${rangeLabel}, all already imported.`
+            : `Zoho has no bills dated ${rangeLabel}.`
+        );
+        if (mode === "search") setBillSearchNo("");
       }
     } catch (e) {
       setFetchError(e instanceof Error ? e.message : "Fetch failed");
@@ -252,7 +276,7 @@ export default function InboundPage() {
     } finally {
       setFetchProgress("");
     }
-  };
+  }, [billSearchNo, fetchDays, fetchCustomFrom, fetchCustomTo]);
 
   const toggleBill = (id: string) => {
     setSelectedBills(prev => {
@@ -330,11 +354,11 @@ export default function InboundPage() {
                 placeholder="e.g. EB/10311/FY27"
                 value={billSearchNo}
                 onChange={(e) => setBillSearchNo(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && billSearchNo.trim()) handleFetchBills(); }}
+                onKeyDown={(e) => { if (e.key === "Enter" && billSearchNo.trim()) handleFetchBills("search"); }}
                 className="flex-1 text-xs h-8"
               />
               <button
-                onClick={handleFetchBills}
+                onClick={() => handleFetchBills("search")}
                 disabled={!billSearchNo.trim()}
                 className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600 text-white disabled:opacity-50 shrink-0"
               >
@@ -373,12 +397,19 @@ export default function InboundPage() {
                   <input type="date" value={fetchCustomFrom} onChange={(e) => setFetchCustomFrom(e.target.value)}
                     className="px-2 py-1.5 text-xs border border-slate-300 rounded-lg" />
                 </div>
+                {/* CREATED here — this screen never had a To date, so a custom range always
+                    ran to today whether or not that was wanted. */}
+                <div>
+                  <label className="text-[10px] text-slate-500 block mb-0.5">To (default today)</label>
+                  <input type="date" value={fetchCustomTo} onChange={(e) => setFetchCustomTo(e.target.value)}
+                    className="px-2 py-1.5 text-xs border border-slate-300 rounded-lg" />
+                </div>
               </div>
             )}
           </div>
           <div className="flex gap-2">
             <button
-              onClick={() => { setBillSearchNo(""); handleFetchBills(); }}
+              onClick={() => handleFetchBills("range")}
               disabled={fetchDays === -1 && !fetchCustomFrom}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-900 text-white disabled:opacity-50"
             >
@@ -402,14 +433,63 @@ export default function InboundPage() {
         </div>
       )}
 
+      {/* Loading the shipment LIST failed — a different failure from a Zoho fetch, with a
+          different retry. Sharing one banner meant Retry ran the wrong thing. */}
+      {listError && (
+        <ErrorBanner
+          message={listError}
+          type={typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "error"}
+          onRetry={() => { setListError(""); fetchData(); }}
+          onDismiss={() => setListError("")}
+        />
+      )}
+
       {/* Fetch Error */}
       {fetchError && (
         <ErrorBanner
           message={fetchError}
           type={typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "error"}
-          onRetry={() => { setFetchError(""); fetchData(); }}
+          onRetry={() => { setFetchError(""); handleFetchBills(lastFetchRef.current); }}
           onDismiss={() => setFetchError("")}
         />
+      )}
+
+      {/* What the window found, including what is NOT in the selection panel below. */}
+      {fetchSummary && (
+        <div className="mb-3 bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-[11px] text-slate-600">
+          {fetchSummary}
+        </div>
+      )}
+
+      {/* ALREADY IMPORTED — a neutral card, not an error banner.
+          The server used to push these into `errors[]`, which turned an ordinary re-fetch of
+          a window into a red "partial pull" warning listing bills that were perfectly fine. */}
+      {alreadyImported.length > 0 && (
+        <Card className="mb-3">
+          <CardContent className="p-3">
+            <p className="text-xs font-semibold text-slate-700 mb-1.5">
+              Already imported ({alreadyImported.length})
+            </p>
+            <ul className="space-y-1">
+              {alreadyImported.map((it) => (
+                <li key={it.ref} className="text-[11px] text-slate-600 flex items-center gap-1.5 flex-wrap">
+                  <span className="font-mono">{it.ref}</span>
+                  {it.no && it.id ? (
+                    <>
+                      <span className="text-slate-400">→</span>
+                      <Link href={`/inbound/${it.id}`} className="text-blue-600 underline font-mono">
+                        {it.no}
+                      </Link>
+                      {it.status && <Badge variant="default" className="text-[10px]">{it.status}</Badge>}
+                    </>
+                  ) : (
+                    <span className="text-slate-400">→ in accounts</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
       )}
 
       {/* Bill Selection Panel */}

@@ -840,3 +840,31 @@ export const warehouseSchema = z.object({
 export const warehouseUpdateSchema = warehouseSchema.partial().extend({
   isActive: z.boolean().optional(),
 });
+
+/**
+ * The body of POST /api/zoho/trigger-pull (R1).
+ *
+ * There was no schema here at all — the route did `const { step, pullId, fromDate, searchText }
+ * = body as {...}`, a bare cast. That is precisely why a client sending `days` or `toDate` was
+ * silently ignored: the cast named four fields, the other two fell on the floor, and the
+ * screen's date chips appeared to do nothing. A schema makes an unknown field a visible
+ * decision rather than an invisible drop.
+ */
+export const zohoPullSchema = z.object({
+  step: z.enum(["init", "bills", "invoices", "finalize"]),
+  pullId: z.string().optional(),
+  /** Rolling window INCLUDING today. Ignored when fromDate is given. */
+  days: z.number().int().min(1).max(400).optional(),
+  fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "From date must look like 2026-09-04").optional(),
+  toDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "To date must look like 2026-09-04").optional(),
+  /** Free-text search. When present the date window is not applied at all. */
+  searchText: z.string().max(100).optional(),
+
+  // finalize-only tallies, carried by the client across the steps.
+  itemsNew: z.number().int().min(0).optional(),
+  contactsNew: z.number().int().min(0).optional(),
+  billsNew: z.number().int().min(0).optional(),
+  invoicesNew: z.number().int().min(0).optional(),
+  apiCalls: z.number().int().min(0).optional(),
+  allErrors: z.array(z.string()).optional(),
+});
