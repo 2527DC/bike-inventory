@@ -7,16 +7,21 @@ import {
   Package, Truck, ArrowDownCircle, ArrowRightLeft,
   Receipt, IndianRupee, FileText, AlertTriangle, Share2,
   ChevronLeft, ChevronRight, User,
+  ClipboardCheck, AlertOctagon, RefreshCw, Tags,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SkeletonList } from "@/components/ui/skeleton";
+import { apiTry } from "@/lib/api-client";
+import { formatIST } from "@/lib/services/timezone";
 
 interface Activity {
   id: string;
   action: string;
   detail: string;
-  category: "STOCK" | "DELIVERY" | "INBOUND" | "TRANSFER" | "EXPENSE" | "PAYMENT" | "PO";
+  category:
+    | "STOCK" | "DELIVERY" | "INBOUND" | "TRANSFER" | "EXPENSE" | "PAYMENT" | "PO"
+    | "AUDIT" | "ISSUE" | "ZOHO" | "MASTER_DATA";
   userName: string;
   userId: string;
   timestamp: string;
@@ -33,6 +38,14 @@ interface UserSummary {
   categories: Record<string, number>;
 }
 
+interface ActivityResponse {
+  date: string;
+  totalActions: number;
+  errorCount: number;
+  activities: Activity[];
+  userSummary: UserSummary[];
+}
+
 const CATEGORY_CONFIG: Record<string, { icon: typeof Package; color: string; label: string }> = {
   STOCK: { icon: Package, color: "text-blue-600 bg-blue-50", label: "Stock" },
   DELIVERY: { icon: Truck, color: "text-green-600 bg-green-50", label: "Delivery" },
@@ -41,14 +54,27 @@ const CATEGORY_CONFIG: Record<string, { icon: typeof Package; color: string; lab
   EXPENSE: { icon: Receipt, color: "text-amber-600 bg-amber-50", label: "Expense" },
   PAYMENT: { icon: IndianRupee, color: "text-red-600 bg-red-50", label: "Payment" },
   PO: { icon: FileText, color: "text-slate-600 bg-slate-50", label: "PO" },
+  // The four ActivityLog categories (P5). A category missing here renders with no icon and
+  // no label, so this object and the union above are edited together, in both activity pages.
+  AUDIT: { icon: ClipboardCheck, color: "text-indigo-600 bg-indigo-50", label: "Audit" },
+  ISSUE: { icon: AlertOctagon, color: "text-orange-600 bg-orange-50", label: "Issue" },
+  ZOHO: { icon: RefreshCw, color: "text-teal-600 bg-teal-50", label: "Zoho" },
+  MASTER_DATA: { icon: Tags, color: "text-violet-600 bg-violet-50", label: "Master data" },
 };
 
 function formatINR(n: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n);
 }
 
+/**
+ * "3 Sep, 11:42 pm" — IST, and carrying the day.
+ *
+ * It was `toLocaleTimeString` with no timeZone, so it rendered in the VIEWER's zone while the
+ * feed's day window is IST. The two agreed only for a viewer sitting in India. The day is shown
+ * because a row near either midnight is otherwise impossible to place.
+ */
 function formatTime(ts: string) {
-  return new Date(ts).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
+  return formatIST(ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: true });
 }
 
 function formatDate(d: Date) {
@@ -70,14 +96,14 @@ export default function ActivityPage() {
   const [loading, setLoading] = useState(true);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [users, setUsers] = useState<Array<{ id: string; name: string }>>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Fetch users list for admin
   useEffect(() => {
     if (isAdmin) {
-      fetch("/api/team")
-        .then((r) => r.json())
-        .then((res) => { if (res.success) setUsers(res.data); })
-        .catch(() => {});
+      apiTry<Array<{ id: string; name: string }>>("/api/team").then(({ data }) => {
+        if (data) setUsers(data);
+      });
     }
   }, [isAdmin]);
 
@@ -85,17 +111,25 @@ export default function ActivityPage() {
     setLoading(true);
     const params = new URLSearchParams({ date: formatDate(date) });
     if (selectedUser) params.set("userId", selectedUser);
-    fetch(`/api/activity?${params}`)
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success) {
-          setActivities(res.data.activities);
-          setUserSummary(res.data.userSummary);
-          setTotalActions(res.data.totalActions);
-          setErrorCount(res.data.errorCount);
+    // Raw fetch + .json() was banned for exactly this screen's failure mode: an expired session
+    // answers 307 -> /login -> HTML with status 200, so `res.ok` is true and `res.json()` throws
+    // a parse error the `.catch(() => {})` then swallowed. The page showed an empty day.
+    apiTry<ActivityResponse>(`/api/activity?${params}`)
+      .then(({ data, error }) => {
+        if (data) {
+          setActivities(data.activities);
+          setUserSummary(data.userSummary);
+          setTotalActions(data.totalActions);
+          setErrorCount(data.errorCount);
+          setLoadError(null);
+        } else {
+          setActivities([]);
+          setUserSummary([]);
+          setTotalActions(0);
+          setErrorCount(0);
+          setLoadError(error);
         }
       })
-      .catch(() => {})
       .finally(() => setLoading(false));
   }, [date, selectedUser]);
 
@@ -246,9 +280,26 @@ export default function ActivityPage() {
       )}
 
       {/* Activity Feed */}
+      {/* A failed load used to render as "No activity recorded" — indistinguishable from a quiet
+          day, which is the worst possible reading of an expired session. */}
+      {!loading && loadError && (
+        <div className="flex items-start gap-3 p-3 rounded-xl border border-red-200 bg-red-50 mb-3">
+          <AlertTriangle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-red-800">Could not load activity</p>
+            <p className="text-xs text-red-600 mt-0.5 break-words">{loadError}</p>
+          </div>
+          <button
+            onClick={fetchActivity}
+            className="text-xs font-medium text-red-700 underline shrink-0 min-h-[44px] px-2"
+          >
+            Retry
+          </button>
+        </div>
+      )}
       {loading ? (
         <SkeletonList count={6} type="transaction" />
-      ) : activities.length === 0 ? (
+      ) : loadError ? null : activities.length === 0 ? (
         <div className="text-center py-12">
           <Package className="h-8 w-8 text-slate-300 mx-auto mb-2" />
           <p className="text-sm text-slate-400">No activity recorded</p>

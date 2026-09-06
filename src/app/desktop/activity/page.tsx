@@ -7,15 +7,20 @@ import {
   Loader2, Package, Truck, ArrowDownCircle, ArrowRightLeft,
   Receipt, IndianRupee, FileText, AlertTriangle, Share2,
   ChevronLeft, ChevronRight, ClipboardList,
+  ClipboardCheck, AlertOctagon, RefreshCw, Tags,
 } from "lucide-react";
 import { DataTable, type Column } from "@/components/desktop/data-table";
 import { Badge } from "@/components/ui/badge";
+import { apiTry } from "@/lib/api-client";
+import { formatIST } from "@/lib/services/timezone";
 
 interface Activity {
   id: string;
   action: string;
   detail: string;
-  category: "STOCK" | "DELIVERY" | "INBOUND" | "TRANSFER" | "EXPENSE" | "PAYMENT" | "PO";
+  category:
+    | "STOCK" | "DELIVERY" | "INBOUND" | "TRANSFER" | "EXPENSE" | "PAYMENT" | "PO"
+    | "AUDIT" | "ISSUE" | "ZOHO" | "MASTER_DATA";
   userName: string;
   userId: string;
   timestamp: string;
@@ -32,6 +37,14 @@ interface UserSummary {
   categories: Record<string, number>;
 }
 
+interface ActivityResponse {
+  date: string;
+  totalActions: number;
+  errorCount: number;
+  activities: Activity[];
+  userSummary: UserSummary[];
+}
+
 const CATEGORY_CONFIG: Record<string, { icon: typeof Package; color: string; label: string }> = {
   STOCK: { icon: Package, color: "text-blue-600", label: "Stock" },
   DELIVERY: { icon: Truck, color: "text-green-600", label: "Delivery" },
@@ -40,14 +53,21 @@ const CATEGORY_CONFIG: Record<string, { icon: typeof Package; color: string; lab
   EXPENSE: { icon: Receipt, color: "text-amber-600", label: "Expense" },
   PAYMENT: { icon: IndianRupee, color: "text-red-600", label: "Payment" },
   PO: { icon: FileText, color: "text-slate-600", label: "PO" },
+  // The four ActivityLog categories (P5). Kept identical to the mobile page's copy — a category
+  // present in one and missing in the other renders unlabelled on whichever screen forgot it.
+  AUDIT: { icon: ClipboardCheck, color: "text-indigo-600", label: "Audit" },
+  ISSUE: { icon: AlertOctagon, color: "text-orange-600", label: "Issue" },
+  ZOHO: { icon: RefreshCw, color: "text-teal-600", label: "Zoho" },
+  MASTER_DATA: { icon: Tags, color: "text-violet-600", label: "Master data" },
 };
 
 function formatINR(n: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n);
 }
 
+/** "3 Sep, 11:42 pm" — IST, carrying the day. See the note on the mobile page's copy. */
 function formatTime(ts: string) {
-  return new Date(ts).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
+  return formatIST(ts, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: true });
 }
 
 function formatDate(d: Date) {
@@ -68,13 +88,13 @@ export default function DesktopActivityPage() {
   const [loading, setLoading] = useState(true);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [users, setUsers] = useState<Array<{ id: string; name: string }>>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isAdmin) {
-      fetch("/api/team")
-        .then((r) => r.json())
-        .then((res) => { if (res.success) setUsers(res.data); })
-        .catch(() => {});
+      apiTry<Array<{ id: string; name: string }>>("/api/team").then(({ data }) => {
+        if (data) setUsers(data);
+      });
     }
   }, [isAdmin]);
 
@@ -82,17 +102,24 @@ export default function DesktopActivityPage() {
     setLoading(true);
     const params = new URLSearchParams({ date: formatDate(date) });
     if (selectedUser) params.set("userId", selectedUser);
-    fetch(`/api/activity?${params}`)
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success) {
-          setActivities(res.data.activities);
-          setUserSummary(res.data.userSummary);
-          setTotalActions(res.data.totalActions);
-          setErrorCount(res.data.errorCount);
+    // See the mobile page: raw .json() on a 307-to-login turns an expired session into an
+    // empty day rather than a message.
+    apiTry<ActivityResponse>(`/api/activity?${params}`)
+      .then(({ data, error }) => {
+        if (data) {
+          setActivities(data.activities);
+          setUserSummary(data.userSummary);
+          setTotalActions(data.totalActions);
+          setErrorCount(data.errorCount);
+          setLoadError(null);
+        } else {
+          setActivities([]);
+          setUserSummary([]);
+          setTotalActions(0);
+          setErrorCount(0);
+          setLoadError(error);
         }
       })
-      .catch(() => {})
       .finally(() => setLoading(false));
   }, [date, selectedUser]);
 
@@ -308,11 +335,25 @@ export default function DesktopActivityPage() {
         </div>
       </div>
 
+      {/* A failed load rendered as "No activity recorded for this date" — a quiet day and a dead
+          session looked identical. */}
+      {!loading && loadError && (
+        <div className="flex items-start gap-3 p-4 rounded-xl border border-red-200 bg-red-50 mb-4">
+          <AlertTriangle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-red-800">Could not load activity</p>
+            <p className="text-xs text-red-600 mt-0.5 break-words">{loadError}</p>
+          </div>
+          <button onClick={fetchActivity} className="text-xs font-medium text-red-700 underline shrink-0">
+            Retry
+          </button>
+        </div>
+      )}
       {loading ? (
         <div className="flex items-center justify-center py-16">
           <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
         </div>
-      ) : (
+      ) : loadError ? null : (
         <>
           {/* Per-user summary table (admin, all view) */}
           {isAdmin && !selectedUser && userSummary.length > 0 && (

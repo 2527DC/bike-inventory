@@ -6,12 +6,13 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { categoryUpdateSchema } from "@/lib/validations";
 import { createLogger } from "@/lib/logger";
+import { logActivity } from "@/lib/activity-log";
 
 const log = createLogger("api:categories:id");
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    await requireFeature("categories", "edit");
+    const user = await requireFeature("categories", "edit");
     const { id } = await params;
 
     const parsed = categoryUpdateSchema.safeParse(await req.json().catch(() => null));
@@ -22,7 +23,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     const existing = await prisma.category.findUnique({
       where: { id },
-      select: { id: true, name: true, parentId: true },
+      // description and reorderLevel are selected for the activity log: it records WHICH fields
+      // moved, and that cannot be decided without the values they moved from.
+      select: { id: true, name: true, parentId: true, description: true, reorderLevel: true },
     });
     if (!existing) return errorResponse("Category not found", 404);
 
@@ -59,18 +62,55 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
     }
 
-    const category = await prisma.category.update({
-      where: { id },
-      data: {
-        ...(data.name !== undefined ? { name: data.name.trim() } : {}),
-        ...(data.description !== undefined ? { description: data.description?.trim() || null } : {}),
-        ...(data.parentId !== undefined ? { parentId: data.parentId || null } : {}),
-        ...(data.reorderLevel !== undefined ? { reorderLevel: data.reorderLevel } : {}),
-      },
-      include: { _count: { select: { products: true, children: true } } },
+    const nextName = data.name !== undefined ? data.name.trim() : existing.name;
+    const nextDescription =
+      data.description !== undefined ? data.description?.trim() || null : existing.description;
+    const nextParentId = data.parentId !== undefined ? data.parentId || null : existing.parentId;
+    const nextReorderLevel =
+      data.reorderLevel !== undefined ? data.reorderLevel : existing.reorderLevel;
+
+    // Which fields actually MOVED, not which were present in the body. The edit sheet submits
+    // every field it renders, so keying off `Object.keys(data)` would file "changed name,
+    // description, parent" against a save where the person changed nothing.
+    const changed: string[] = [];
+    if (nextName !== existing.name) changed.push("name");
+    if (nextDescription !== existing.description) changed.push("description");
+    if (nextParentId !== existing.parentId) changed.push("parent");
+    if (nextReorderLevel !== existing.reorderLevel) changed.push("reorder level");
+
+    const category = await prisma.$transaction(async (tx) => {
+      const row = await tx.category.update({
+        where: { id },
+        data: {
+          ...(data.name !== undefined ? { name: nextName } : {}),
+          ...(data.description !== undefined ? { description: nextDescription } : {}),
+          ...(data.parentId !== undefined ? { parentId: nextParentId } : {}),
+          ...(data.reorderLevel !== undefined ? { reorderLevel: nextReorderLevel } : {}),
+        },
+        include: { _count: { select: { products: true, children: true } } },
+      });
+
+      // An unchanged save writes no row. The feed is meant to show what happened, and
+      // "opened the sheet and pressed Save" did not happen to the category.
+      if (changed.length > 0) {
+        await logActivity(tx, {
+          module: "categories",
+          action: "updated",
+          entityType: "Category",
+          entityId: id,
+          entityRef: nextName,
+          fromValue: changed.includes("name") ? existing.name : null,
+          toValue: changed.includes("name") ? nextName : null,
+          details: `Changed ${changed.join(", ")}`,
+          userId: user.id,
+          userName: user.name,
+        });
+      }
+
+      return row;
     });
 
-    log.info("category updated", { categoryId: id, fields: Object.keys(data) });
+    log.info("category updated", { categoryId: id, fields: changed });
     return successResponse(category);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);

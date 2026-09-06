@@ -17,6 +17,10 @@ import { formatINR, formatTime } from "@/lib/utils";
 import { usePermissions } from "@/lib/use-permissions";
 import { SendScorecardButton } from "./_components/send-scorecard-button";
 import { MyStockAudits } from "./_components/my-stock-audits";
+// "Today" on this screen is the STORE's today, not the browser's UTC one. toISOString() names
+// yesterday for every one of these six calls between midnight and 05:30 IST, which is when the
+// morning shift is already working.
+import { getTodayIST } from "@/lib/services/timezone";
 
 
 interface CEOData {
@@ -50,7 +54,7 @@ function ShareDailyReport() {
   const handleShare = async () => {
     setSharing(true);
     try {
-      const today = new Date().toISOString().split("T")[0];
+      const today = getTodayIST();
       const res = await fetch(`/api/activity?date=${today}`);
       const json = await res.json();
       if (!json.success) throw new Error(json.error);
@@ -72,9 +76,15 @@ function ShareDailyReport() {
       for (const a of activities) {
         catCounts[a.category] = (catCounts[a.category] || 0) + 1;
       }
-      const catEmoji: Record<string, string> = { DELIVERY: "🚚", STOCK: "📦", INBOUND: "📥", TRANSFER: "🔄", EXPENSE: "💰", PAYMENT: "💳", PO: "📝" };
+      // The last four arrived with the ActivityLog source (P5). Without them the report still
+      // printed the line, but as a bullet and the raw key — "• MASTER_DATA: 3".
+      const catEmoji: Record<string, string> = {
+        DELIVERY: "🚚", STOCK: "📦", INBOUND: "📥", TRANSFER: "🔄", EXPENSE: "💰", PAYMENT: "💳", PO: "📝",
+        AUDIT: "📋", ISSUE: "⚠️", ZOHO: "🔄", MASTER_DATA: "🏷️",
+      };
+      const catLabel: Record<string, string> = { MASTER_DATA: "MASTER DATA" };
       for (const [cat, count] of Object.entries(catCounts)) {
-        msg += `${catEmoji[cat] || "•"} ${cat}: ${count}\n`;
+        msg += `${catEmoji[cat] || "•"} ${catLabel[cat] || cat}: ${count}\n`;
       }
 
       // Per-user summary
@@ -127,7 +137,7 @@ function InwardsEODReport() {
   const handleShare = async () => {
     setSharing(true);
     try {
-      const today = new Date().toISOString().split("T")[0];
+      const today = getTodayIST();
       const dateStr = new Date().toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 
       const [inwardsRes, transfersRes, inboundRes] = await Promise.all([
@@ -214,7 +224,7 @@ function AdminDashboard() {
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    const today = new Date().toISOString().split("T")[0];
+    const today = getTodayIST();
     const safeFetch = (url: string) => fetch(url).then((r) => r.ok ? r.json() : { success: false }).catch(() => ({ success: false }));
 
     Promise.all([
@@ -508,7 +518,7 @@ function SupervisorDashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const today = new Date().toISOString().split("T")[0];
+    const today = getTodayIST();
     const safeFetch = (url: string) => fetch(url).then((r) => r.ok ? r.json() : { success: false }).catch(() => ({ success: false }));
 
     Promise.all([
@@ -651,7 +661,7 @@ function ClerkDashboard({ type }: { type: "inward" | "outward" }) {
   const [shareOpen, setShareOpen] = useState(false);
 
   useEffect(() => {
-    const today = new Date().toISOString().split("T")[0];
+    const today = getTodayIST();
     const endpoint = type === "inward" ? "/api/inventory/inwards" : "/api/inventory/outwards";
     Promise.all([
       fetch(`${endpoint}?dateFrom=${today}&limit=50&mine=true`).then(r => r.json()),
@@ -881,7 +891,7 @@ function PurchaseManagerDashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const today = new Date().toISOString().split("T")[0];
+    const today = getTodayIST();
     const safeFetch = (url: string) => fetch(url).then((r) => r.ok ? r.json() : { success: false }).catch(() => ({ success: false }));
     Promise.all([
       safeFetch("/api/products?limit=1&status=ACTIVE"),
