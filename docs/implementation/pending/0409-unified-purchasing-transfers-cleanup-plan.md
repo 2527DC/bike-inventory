@@ -2,11 +2,11 @@
 
 > **To continue this work:** read **[▶ RESUME HERE](#-resume-here--the-only-place-that-holds-current-state)** below. It is the only section that holds current state — branch, database, what is done, what is next. Everything else is design or history.
 
-Status: in-progress — 5 Sep 2026, **P0–P7 done** (R1, R2, R3, R4, R12, R13 closed; R11 is half —
-its feed is P5). **Left: P5 and P8–P15**, all on ONE branch — see "Branching changed 5 Sep" in §3.
-Branch: **`feat/inbound-receiving`** — carries **P7** (R3), the tip of six stacked branches, each
-cut from the previous phase's tip rather than from `main`. Nothing is merged; the owner opens
-every PR. Update this line as work moves, and keep the detail in ▶ RESUME HERE, not here.
+Status: in-progress — 6 Sep 2026, **P0–P7 and P5 done** (R1, R2, R3, R4, R11, R12, R13 closed).
+**Left: P8–P15**, continuing on the single branch `feat/purchasing-transfers-p5-p15`.
+Branch: **`feat/purchasing-transfers-p5-p15`** — cut from `feat/inbound-receiving` @ `df12868`,
+one commit per phase from here. Nothing is merged; the owner opens every PR. Update this line as
+work moves, and keep the detail in ▶ RESUME HERE, not here.
 
 Written 4 Sep 2026. Merges and **replaces** two plans written the same day:
 `0409-purchasing-deliveries-transfers-plan.md` (PLAN-1: §A–§G) and
@@ -27,8 +27,8 @@ Last updated: **5 Sep 2026**, session 3.
 
 ### 1. Where the code is
 
-**TWO branches, stacked. Nothing on `main`. The owner opens and merges every PR — Claude
-commits and pushes only.**
+**SEVEN branches. Six stacked one per phase, then one branch for everything left. Nothing on
+`main`. The owner opens and merges every PR — Claude commits and pushes only.**
 
 | Branch | Cut from | Carries |
 |---|---|---|
@@ -38,6 +38,7 @@ commits and pushes only.**
 | `feat/zoho-fetch-window` | the branch above | P4 — **pushed** |
 | `feat/stock-audit-scope` | the branch above | P6 — **pushed** |
 | `feat/inbound-receiving` | the branch above | P7 — **pushed** |
+| `feat/purchasing-transfers-p5-p15` | the branch above | **P5, and P8–P15 to come** — one commit per phase (owner, 6 Sep) |
 
 **Branch rule confirmed by the owner, 5 Sep:** keep stacking each phase on the previous
 phase's tip, **and ask before creating each branch**. Claude cut P1 and P1b on its own
@@ -338,6 +339,64 @@ migration. `deductAnywhere` reverses against the rows that exist, largest first 
 equivalent today, when each store has one warehouse. **The precise fix is
 `InboundLineItem.warehouseId`, written at receive time; it needs a migration and a phase.**
 
+**P5 is complete** (R11's second half — the activity feed). No migration: P1 already created
+`ActivityLog`. R11 is now closed.
+
+P1 built the table and `logActivity`, and seven routes write to it. **Nothing read it** —
+`/api/activity` still inferred the whole feed from timestamp columns on seven other tables. P5
+makes the log the eighth source and fixes the day it is all filed under.
+
+| Was | Now |
+|---|---|
+| The day window was `setHours(0,0,0,0)` — midnight in the SERVER's zone. Vercel is UTC, so the day ran 05:30 IST to 05:30 IST and everything done between midnight and dawn filed under yesterday | `istDayBounds(dateStr?)` in `services/timezone.ts`, returning the day's name with its two UTC bounds |
+| The response echoed `dayStart.toISOString()`, i.e. the same wrong day — so the screen agreed with itself and the gap was invisible from the UI | Returns the window's own IST day name |
+| The log's modules had no feed category | `AUDIT · ISSUE · ZOHO · MASTER_DATA` added to the `Activity` union and `CATEGORY_CONFIG` in **both** activity pages, and to `catEmoji` in the dashboard's WhatsApp report — which lives in `(dashboard)/page.tsx`, not in either activity page, and printed "• MASTER_DATA: 3" until it was told |
+| Rows showed a bare time in the VIEWER's zone | `formatIST` — "3 Sep, 11:42 pm", and carrying the day, because a row near either midnight is otherwise unplaceable |
+| `/api/team` and `/api/activity` were raw `fetch().then(r => r.json())` with `.catch(() => {})` | `apiTry`, plus an error banner with Retry on both pages |
+| The dashboard computed "today" as `new Date().toISOString()` in **six** places | `getTodayIST()` in all six |
+
+**Proven against `bch-local`**, in a transaction that rolls back, with a row written at 02:00 IST
+on 4 Sep (= 20:30 UTC on 3 Sep):
+
+```
+ask for 4 Sep -> NEW window finds it : 1   <- the fix
+ask for 4 Sep -> OLD window finds it : 0   <- the bug, reproduced alongside
+ask for 3 Sep -> NEW window leaks it : 0
+response date NEW = 2026-09-04            OLD = 2026-09-04  <- echoed back, so the UI agreed with itself
+```
+
+`istDayBounds` itself: **10/10** cases, including 29 Feb 2028, and the malformed ones
+(`2026-02-31`, `2026-13-01`, `2026-9-3`, `garbage`) which all fall back to today rather than
+reaching Prisma as an Invalid Date.
+
+**A trap worth naming.** `src/lib/analytics/time.ts` already exports `calendarDayRange(date)`,
+which looks exactly like the helper this phase needed. It is not: `toDateColumn` builds
+`T00:00:00.000Z`, so it is a **UTC**-midnight range for Postgres `@db.Date` columns, and against a
+real timestamp column it is wrong by 5h30m in a way that reads as correct. The comment on
+`istDayBounds` says so, because the next person will find `calendarDayRange` first.
+
+**Dedupe, and why it covers phases that have not happened yet.** Six of the seven inferred
+sources describe events the log now records, so without suppression each shows twice. Today only
+inbound approved/delivered actually collide (P7 made those routes log). The guard is also wired
+for `PurchaseOrder` created/approved and `TransferOrder` created/approved|rejected, which
+**P9 and P14 will start writing** — the duplicate would otherwise appear the day those phases
+land, in a file neither of them touches.
+
+**Two judgement calls the PR should name:**
+1. **An unchanged save writes no log row.** Both edit sheets submit every field they render, so
+   keying off `Object.keys(body)` would file "changed name, description, parent" against a save
+   where nothing moved. Changed fields are computed against the stored row instead.
+2. **The customer row carries the customer's NAME but never a field VALUE.** §5.3 says field
+   names only, and the values stay out — the feed is readable by anyone holding `activity.view`,
+   a wider audience than `customers.view`, so an old and new phone number there would publish
+   contact details to people with no grant to read them. The name is the deliberate exception:
+   the feed already prints it on every delivery row, so it discloses nothing new, and without it
+   the row reads "someone changed a customer's phone" and names no customer.
+
+**Unknown modules are rendered, not dropped** — with a humanised label and one `log.warn` naming
+them. A module missing from the feed's map is someone's work going invisible, and the warn is how
+that gets found by reading logs rather than by a person noticing their day looks empty.
+
 ### 4. What is VERIFIED, and what is not
 
 | Check | Result |
@@ -347,9 +406,11 @@ equivalent today, when each store has one warehouse. **The precise fix is
 | `npx eslint` on every changed file | **zero issues.** 7 exist repo-wide, all pre-existing in untouched files, confirmed by linting HEAD's copy |
 | `npx prisma migrate status` | **up to date, 3 migrations** (`0_init`, MIG-1b, MIG-1a) |
 | Product created from brand + category alone | **PASSES** — P3's acceptance criterion |
-| `npm run build` | **PASSES for R4, P1, P1b, P4, P6 and P7** (P7 re-run 6 Sep, exit 0). Full route table; **no `/product-types` and no `/api/ops-activity-logs` in it** |
+| `npm run build` | **PASSES for R4, P1, P1b, P4, P6, P7 and P5** (P5 run 6 Sep over the final tree, exit 0). Full route table; **no `/product-types` and no `/api/ops-activity-logs` in it** |
 | P6 | tsc + eslint clean; the whole-store 400 and the assignee gates are code-verified, NOT browser-walked |
 | P7 | tsc + eslint clean; the build manifest carries `/api/inbound/[id]/issues` and **no `/api/inbound/[id]/status`** — the deleted route is gone from the built app, not just from the tree. The idempotent claim, the approval gate and the deferred Books push are code-verified, NOT browser-walked |
+| P5 | tsc + eslint clean. `istDayBounds` **10/10** cases; the day window and the dedupe **proved against `bch-local`** in a rolled-back transaction, with the old behaviour reproduced beside the new. NOT browser-walked |
+| P5 eslint caveat | `(dashboard)/activity/page.tsx` and `desktop/activity/page.tsx` each report 1 error + 1 warning (`react-hooks/set-state-in-effect`, unused `session`). **Pre-existing** — HEAD's copies produce the identical 4 problems, confirmed by linting them. P5 adds none and fixes none |
 | P4 date-window spot-checks | **12/12 PASS**, including the plan`s four and the owner`s "3 days on 4 Sep" case |
 | P1b acceptance scenario | **PASSES** — 10 → sell 3 → 7 → receive 5 → **12**; the old path reproduced alongside gives **15**. Ran against `bch-local` in a rolled-back transaction |
 | `npm run db:snapshot` | **PASSES** — ran it; `pg_restore -l` lists `ActivityLog`, `counter`, `PurchaseOrderSend`, and no `OpsActivityLog` |
@@ -388,8 +449,17 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
    - `/inbound/[id]` (P7) — the category picker refuses receiving until it is set; `Receive ×N`
      per line then `Received ×N ✓`; a double-tap adds the stock once; Report Issue on a
      shipment with **no** Zoho bill creates `ISS-…` and it appears on `/vendor-issues`
+   - `/activity` and `/desktop/activity` (P5) — rows read "3 Sep, 11:42 pm"; renaming a
+     category gives ONE row with `from → to`; editing a customer names the fields and never a
+     value; approving a shipment gives exactly one row, not two; an expired session shows the
+     error banner with Retry instead of "No activity recorded". **The 02:00 IST case is the
+     one that needs a real clock** — the proof script covers the query, not the screen
+   - the dashboard (P5) — "today" is the IST today in all six places, checked between
+     midnight and 05:30 IST or by moving the machine clock
 2. **PRs — the owner's job, not Claude's** (owner, 5 Sep: "u dont do anything related to pr").
-   All SIX branches are pushed. **Merge in stacking order: R4 → P1 → P1b → P4 → P6 → P7.**
+   Six branches are pushed; `feat/purchasing-transfers-p5-p15` is the seventh and stays local
+   until P8–P15 are on it, or until you ask for it. **Merge in stacking order:
+   R4 → P1 → P1b → P4 → P6 → P7 → P5-to-P15.**
    - **R4** — the two behaviour changes in §3, and **run `npm run db:seed:rbac` after merge**
      or the sidebar keeps a "Product Types" entry that 404s.
    - **P1** — the three Restrict-FK delete-path fixes in §3, and **`npm run db:snapshot`
@@ -414,11 +484,22 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
    an amber **"No invoice prefix"** badge until it is set, and `resolveStoreIdOrPrimary` logs
    a `warn` on every invoice that falls back. The input is built (P1b) — it is one field on
    the store form.
-4. **Then the rest of the plan — P5 and P8–P15, on ONE branch**, one commit per phase, in the
-   order of §0.6: P5, P8, P9, P10, P11, P12, P13, P14, P15. The per-phase branch is over; the
-   rules for that single branch are in §3 "Branching changed 5 Sep". **Ask which branch to cut
-   it from before creating it** (owner, 5 Sep); the stack tip is `feat/inbound-receiving`.
-   P14 carries MIG-2, the last migration folder — `npm run db:snapshot` before that PR merges.
+4. **Then P8–P15**, continuing on `feat/purchasing-transfers-p5-p15` (cut 6 Sep from
+   `feat/inbound-receiving` @ `df12868`), one commit per phase, in the order of §0.6:
+   P8, P9, P10, P11, P12, P13, P14, P15. The rules for that branch are in §3 "Branching
+   changed 5 Sep". P14 carries MIG-2, the last migration folder — `npm run db:snapshot`
+   before that PR merges.
+
+   **On running these in parallel (owner asked, 6 Sep):** only **P8, P9 and P13** are pairwise
+   independent; P10 and P11 wait on P8+P9, P12 on P9, and P14/P15 on P13. One branch with one
+   commit per phase serialises them by construction, and parallel writers would collide in the
+   shared files §5.4 names — `validations.ts`, `rbac-catalog.ts`, `api-utils.ts` (P9 changes
+   `errorResponse`'s signature), `api-client.ts`. Parallelism pays for **read-only
+   verification**, not for writing. If one lane is split off, **P13 is the clean candidate** —
+   it touches stores and nothing P8–P12 touches — and it needs its own worktree and branch.
+   The machine is the nearer limit anyway: a build is 8–10 minutes and two at once on the
+   5400rpm HDD is slower than one after another, so §6's Defender exclusions and moving
+   `.next` to the SSD buy more than any agent does.
 
 ### 6. Owner actions still outstanding
 
@@ -930,7 +1011,7 @@ Saving individual counts is deliberately not logged. PO and transfer rows use th
 | `src/lib/activity-log.ts` | `logActivity(db, entry)` with `as const` unions; throws inside a tx, `log.error`s on the root client | P1 |
 | `src/lib/sequence.ts` | `nextSequence(tx, key, pad, seedFrom?)` | P1 |
 | `src/lib/zoho/date-window.ts` | `resolveBillWindow({ days?, fromDate?, toDate? }, todayIST) → { from, to, clampedToFy }` — pure, `Date.UTC` arithmetic, FY floor derived (1 Apr of the Indian FY containing today), `from > to` throws | P4 |
-| `src/lib/services/timezone.ts` (extend) | `istDayBounds(dateStr?)` beside `getTodayIST` (does not exist yet; `src/lib/analytics/time.ts` is a second IST module — do not add a third) | P5 |
+| `src/lib/services/timezone.ts` (extend) | `istDayBounds(dateStr?) → { dayStr, start, end }` beside `getTodayIST`. **Built.** Note `analytics/time.ts`'s `calendarDayRange` is NOT this: it anchors at UTC midnight for `@db.Date` columns and is wrong by 5h30m against a timestamp column | P5 |
 | `src/lib/deliveries/zoho-invoice.ts` | prefix rule as data; `deliveryFieldsFromInvoiceDetail(inv)` lifted from `import-zoho/route.ts:74-116` | P4 |
 | `src/lib/stock-location.ts` (extend) | `getStoreQtyMap(ids, storeId)` beside `getWarehouseQtyMap` (L59) | P6 |
 | `src/lib/inbound/complete-shipment.ts` | `finaliseDelivered(tx, …)`, `scheduleDeliveredSideEffects(snapshot, actor)` | P7 |
