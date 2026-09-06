@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Trash2 } from "lucide-react";
+import { ArrowLeft, Trash2, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,15 @@ interface VendorOption { id: string; name: string; code: string; }
 // it `number` was how this screen ended up rendering ₹NaN in five places — the type said the
 // value was always there, so nothing forced anyone to handle its absence.
 interface ProductOption { id: string; name: string; sku: string; costPrice?: number; gstRate?: number; }
+/** The shape POST /api/purchase-orders sends beside a 409. See lib/purchase-orders/duplicates.ts. */
+interface PoConflict {
+  poId: string;
+  poNumber: string;
+  status: string;
+  productIds: string[];
+  productNames: string[];
+}
+
 interface POLineItem { productId: string; productName: string; sku: string; quantity: number; unitPrice: number; gstRate: number; }
 
 function formatCurrency(amount: number) {
@@ -30,6 +39,7 @@ export default function NewPurchaseOrderPage() {
   const [items, setItems] = useState<POLineItem[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [conflicts, setConflicts] = useState<PoConflict[] | null>(null);
 
   // Product search
   const [productSearch, setProductSearch] = useState("");
@@ -48,6 +58,13 @@ export default function NewPurchaseOrderPage() {
     if (stored) {
       try {
         const poItems = JSON.parse(stored);
+        // Reading sessionStorage on mount is the one thing an effect IS for: it is an
+        // external store, and it cannot move into a lazy useState initialiser because a
+        // client component also renders on the server, where sessionStorage does not exist.
+        // This statement predates P9 — the rule began reporting it only because P9
+        // restructured the submit path, and the React Compiler lint bails out of components
+        // it cannot fully analyse.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setItems(poItems.map((item: { productId: string; name: string; sku: string; quantity: number; unitPrice: number }) => ({
           productId: item.productId,
           productName: item.name,
@@ -62,6 +79,11 @@ export default function NewPurchaseOrderPage() {
   }, []);
 
   useEffect(() => {
+    // Clears stale results when the query drops below two characters. Also pre-existing,
+    // also newly reported for the reason above. Deriving it instead would leave the previous
+    // query's matches on screen while the box reads one character, which is worse than a
+    // cascading render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (productSearch.length < 2) { setProductResults([]); return; }
     // apiTry, not .json(): an expired session answers 307 -> /login -> HTML with status 200,
     // so the old .catch(() => {}) turned a dead session into "no products match".
@@ -94,30 +116,52 @@ export default function NewPurchaseOrderPage() {
   const subtotal = items.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0);
   const gstTotal = items.reduce((sum, i) => sum + i.quantity * i.unitPrice * (i.gstRate / 100), 0);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!vendorId || items.length === 0) return;
+  /** Lines with no rate. The server refuses the whole PO if any survives to it. */
+  const unpricedLines = items.filter((i) => !(i.unitPrice > 0));
+
+  async function submit(submitForApproval: boolean) {
+    if (!vendorId || items.length === 0 || unpricedLines.length > 0) return;
 
     setSubmitting(true);
     setError("");
+    setConflicts(null);
 
-    try {
-      const res = await fetch("/api/purchase-orders", {
+    // apiTry rather than raw fetch: the 409 carries a conflicts array beside its message, and
+    // the old `const data = await res.json()` path flattened the whole envelope to one string
+    // and never looked at res.status, so that array was dropped on the floor.
+    const { data, error: err, errorData, status } = await apiTry<{ id: string }>(
+      "/api/purchase-orders",
+      {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          vendorId, expectedDate, notes,
+        json: {
+          vendorId,
+          expectedDate,
+          notes,
+          submit: submitForApproval,
           items: items.map(({ productId, quantity, unitPrice, gstRate }) => ({ productId, quantity, unitPrice, gstRate })),
-        }),
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || "Failed to create PO");
+        },
+      }
+    );
+    setSubmitting(false);
+
+    if (data) {
       router.push("/purchase-orders");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
-    } finally {
-      setSubmitting(false);
+      return;
     }
+
+    if (status === 409 && errorData && typeof errorData === "object" && "conflicts" in errorData) {
+      setConflicts((errorData as { conflicts: PoConflict[] }).conflicts);
+      setError("");
+      return;
+    }
+    setError(err ?? "Something went wrong");
+  }
+
+  /** Drop every line already on an open PO, so the rest can be ordered. */
+  function removeConflictingLines() {
+    const clashing = new Set((conflicts ?? []).flatMap((c) => c.productIds));
+    setItems((prev) => prev.filter((i) => !clashing.has(i.productId)));
+    setConflicts(null);
   }
 
   return (
@@ -131,7 +175,52 @@ export default function NewPurchaseOrderPage() {
 
       {error && <div className="bg-red-50 text-red-700 text-sm p-3 rounded-lg mb-4">{error}</div>}
 
-      <form onSubmit={handleSubmit} className="space-y-4">
+      {/* The duplicate-PO refusal. A flat red sentence would leave the buyer to find the
+          existing PO themselves; this names it, links to it, and offers the one action that
+          gets the rest of the order through. */}
+      {conflicts && conflicts.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-amber-900">
+                Already on an open purchase order
+              </p>
+              <div className="mt-2 space-y-2">
+                {conflicts.map((c) => (
+                  <div key={c.poId} className="text-xs text-amber-800">
+                    <Link href={`/purchase-orders/${c.poId}`} className="font-semibold underline tabular-nums">
+                      {c.poNumber}
+                    </Link>
+                    <span className="text-amber-600"> · {c.status.replace(/_/g, " ").toLowerCase()}</span>
+                    <p className="mt-0.5 break-words">{c.productNames.join(", ")}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-wrap gap-2 mt-3">
+                <button
+                  type="button"
+                  onClick={removeConflictingLines}
+                  className="min-h-[44px] px-3 rounded-lg bg-amber-600 text-white text-xs font-medium"
+                >
+                  Remove those lines and continue
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConflicts(null)}
+                  className="min-h-[44px] px-3 rounded-lg border border-amber-300 text-amber-800 text-xs font-medium"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* No onSubmit: there are two destinations now (submit for approval, or save a draft),
+          so the buttons say which one rather than the form deciding. */}
+      <form onSubmit={(e) => e.preventDefault()} className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Vendor *</label>
           <select
@@ -210,13 +299,27 @@ export default function NewPurchaseOrderPage() {
                       />
                     </div>
                     <div>
-                      <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Unit Price</label>
+                      <label className="block text-[11px] font-medium text-slate-600 mb-0.5">
+                        Unit Price <span className="text-red-500">*</span>
+                      </label>
+                      {/* EMPTY, not a literal 0, when the rate is unknown. api/products/search
+                          withholds costPrice from anyone without cost_price.view, so for those
+                          users this box used to render "0" — a number nobody typed, which then
+                          became the rate on a purchase order emailed to the vendor. An empty
+                          required box asks the question instead of answering it wrongly. */}
                       <Input
                         type="number"
                         inputMode="decimal"
-                        value={item.unitPrice}
+                        required
+                        min="0.01"
+                        step="0.01"
+                        value={item.unitPrice > 0 ? item.unitPrice : ""}
+                        placeholder="Rate"
                         onChange={(e) => updateItem(index, "unitPrice", parseFloat(e.target.value) || 0)}
-                        className="text-sm min-h-[44px] tabular-nums"
+                        aria-invalid={!(item.unitPrice > 0)}
+                        className={`text-sm min-h-[44px] tabular-nums ${
+                          item.unitPrice > 0 ? "" : "border-amber-400 bg-amber-50"
+                        }`}
                       />
                     </div>
                     <div>
@@ -269,9 +372,20 @@ export default function NewPurchaseOrderPage() {
         </div>
 
         <div>
-          <Button type="submit" size="lg" disabled={!vendorId || items.length === 0 || submitting} className="w-full min-h-[48px] bg-green-600 hover:bg-green-700 text-white">
-            {submitting ? "Creating..." : "Create Purchase Order"}
+          {unpricedLines.length > 0 && (
+            <p className="text-xs text-amber-600 mb-2">
+              {unpricedLines.length === 1 ? "One line has" : `${unpricedLines.length} lines have`} no rate.
+              Enter a unit price — a purchase order cannot go to a vendor with a ₹0 line.
+            </p>
+          )}
+          <div className="flex flex-col sm:flex-row gap-2">
+          <Button type="button" onClick={() => void submit(true)} size="lg" disabled={!vendorId || items.length === 0 || submitting || unpricedLines.length > 0} className="flex-1 min-h-[48px] bg-green-600 hover:bg-green-700 text-white">
+            {submitting ? "Creating..." : "Submit for approval"}
           </Button>
+          <Button type="button" variant="outline" onClick={() => void submit(false)} size="lg" disabled={!vendorId || items.length === 0 || submitting || unpricedLines.length > 0} className="flex-1 min-h-[48px]">
+            Save draft
+          </Button>
+          </div>
           {(!vendorId || items.length === 0) && !submitting && (
             <p className="text-xs text-slate-500 mt-1.5 text-center">
               {!vendorId ? "Select a vendor to continue" : "Add at least one product to continue"}

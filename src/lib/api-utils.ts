@@ -5,8 +5,29 @@ export function successResponse(data: unknown, status = 200) {
   return NextResponse.json({ success: true, data }, { status });
 }
 
-export function errorResponse(message: string, status = 400) {
-  return NextResponse.json({ success: false, error: message }, { status });
+/**
+ * @param data Optional STRUCTURED detail carried beside the message, for the rare refusal a
+ *             client must act on rather than only display. P9's duplicate-PO 409 is the first:
+ *             the sentence says "Already on PO-00042: Item A", and `data.conflicts` is what
+ *             lets the screen render "Open PO-00042" and "Remove those lines and continue".
+ *
+ *             Reaching the client takes THREE more things beyond this parameter, so do not
+ *             expect a new field to arrive on its own: `api-client.ts` must forward the
+ *             envelope into `ApiError.data` (it kept only `payload.error` before P9),
+ *             `ApiEnvelope` must allow it, and `apiTry` must surface it.
+ *
+ *             Keep it small and keep it data. It is serialised to every caller of the route,
+ *             so it must never carry anything the caller is not already allowed to read.
+ */
+export function errorResponse(message: string, status = 400, data?: unknown) {
+  return NextResponse.json(
+    // The key is omitted entirely when there is no data, so the ~200 existing two-argument
+    // callers keep producing byte-identical bodies.
+    data === undefined
+      ? { success: false, error: message }
+      : { success: false, error: message, data },
+    { status }
+  );
 }
 
 /**
@@ -30,9 +51,10 @@ export function errorResponse(message: string, status = 400) {
  */
 export function failure(
   error: unknown,
-  ctx: { scope: string; status?: number } & Record<string, unknown>
+  // `data` is forwarded to the response; everything else in ctx is logged, not returned.
+  ctx: { scope: string; status?: number; data?: unknown } & Record<string, unknown>
 ) {
-  const { scope, status = 500, ...rest } = ctx;
+  const { scope, status = 500, data, ...rest } = ctx;
   const err = error instanceof Error ? error : new Error(String(error));
 
   createLogger(scope).error(err.message, {
@@ -42,7 +64,7 @@ export function failure(
     ...rest,
   });
 
-  return errorResponse(err.message, status);
+  return errorResponse(err.message, status, data);
 }
 
 export function paginatedResponse(

@@ -357,12 +357,62 @@ export const purchaseOrderSchema = z.object({
   expectedDate: z.string().optional(),
   deliveryAddress: z.string().optional(),
   notes: z.string().optional(),
+  /**
+   * true (the default) submits for approval; false saves a draft.
+   *
+   * Defaulting to true is deliberate: a PO nobody submits is invisible work, and the previous
+   * behaviour — every PO landing in DRAFT with no way to advance it except an Approve button
+   * that skipped the review step entirely — is what made the approval state meaningless.
+   */
+  submit: z.boolean().default(true),
   items: z.array(z.object({
     productId: z.string().min(1, "Product is required"),
     quantity: z.number().int().min(1, "Quantity must be at least 1"),
-    unitPrice: z.number().min(0, "Price must be positive"),
+    // Still min(0) here, NOT min(0.01). The zero rule is enforced in createPurchaseOrder,
+    // because it is not the same rule for both callers: /purchase-orders/new refuses a ₹0 line
+    // (a blank rate there is a typo), while the brand-stock sheet skips priceless rows and
+    // reports them (a blank price cell there is missing data — owner, 6 Sep). A schema cannot
+    // express "depends who is asking", and putting min(0.01) here would make the message
+    // "Price must be positive" on a screen where the right answer is to leave the line out.
+    unitPrice: z.number().min(0, "Price cannot be negative"),
     gstRate: z.number().min(0).max(100).optional(),
   })).min(1, "At least one item is required"),
+});
+
+/**
+ * The header fields a PO's PUT may change.
+ *
+ * `status` is accepted but heavily constrained by PO_TRANSITIONS: APPROVED and
+ * SENT_TO_VENDOR are refused here with a sentence pointing at the route that owns them,
+ * because both have side effects (an authoriser on record; the send columns) that a bare
+ * status write would skip.
+ */
+export const purchaseOrderUpdateSchema = z.object({
+  status: z.enum([
+    "DRAFT",
+    "PENDING_APPROVAL",
+    "APPROVED",
+    "SENT_TO_VENDOR",
+    "PARTIALLY_RECEIVED",
+    "RECEIVED",
+    "CANCELLED",
+  ]).optional(),
+  notes: z.string().optional(),
+  expectedDate: z.string().nullable().optional(),
+}).refine((v) => Object.keys(v).length > 0, { message: "Nothing to update" });
+
+/** The query filter on GET /api/purchase-orders. Exists because that param used to be cast
+ *  with `as never` and passed to Prisma unvalidated. */
+export const purchaseOrderListQuerySchema = z.object({
+  status: z.enum([
+    "DRAFT",
+    "PENDING_APPROVAL",
+    "APPROVED",
+    "SENT_TO_VENDOR",
+    "PARTIALLY_RECEIVED",
+    "RECEIVED",
+    "CANCELLED",
+  ]).optional(),
 });
 
 export const vendorBillSchema = z.object({

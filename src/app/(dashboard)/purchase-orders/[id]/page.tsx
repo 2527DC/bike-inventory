@@ -1,12 +1,17 @@
 "use client";
 
-import { useState, useEffect, use } from "react";
+import { useState, useEffect, useCallback, use } from "react";
 import Link from "next/link";
-import { ArrowLeft, Check, Send, MessageSquare } from "lucide-react";
+import { ArrowLeft, Check, Send, MessageSquare, Undo2, XCircle, SendHorizonal } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SkeletonList } from "@/components/ui/skeleton";
+import { apiFetch, apiTry } from "@/lib/api-client";
+import { usePermissions } from "@/lib/use-permissions";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("purchase-orders:detail");
 
 interface PODetail {
   id: string;
@@ -18,6 +23,12 @@ interface PODetail {
   orderDate: string;
   expectedDate?: string;
   notes?: string;
+  // Written by the mark-sent route (and by P12's email send). They have existed on the header
+  // since MIG-1a and were written by NOTHING before P9 — a PO could read SENT_TO_VENDOR with
+  // every column recording the send still null.
+  sentAt?: string | null;
+  sentVia?: string | null;
+  sendCount?: number;
   vendor: { name: string; code: string; whatsappNumber?: string; phone?: string };
   items: Array<{
     id: string;
@@ -43,38 +54,64 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState("");
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch(`/api/purchase-orders/${id}`)
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setPo(res.data); })
-      .catch(() => {})
+  // This screen had NO permission checks of any kind before P9. Approve was shown to
+  // everyone, and because the handlers used bare fetch with no !success branch, a 403 came
+  // back and nothing happened at all — the error banner below was unreachable code.
+  const { canEdit, canApprove } = usePermissions();
+  const mayEdit = canEdit("purchase_orders");
+  const mayApprove = canApprove("purchase_orders");
+
+  const load = useCallback(() => {
+    setLoading(true);
+    apiTry<PODetail>(`/api/purchase-orders/${id}`)
+      .then(({ data, error }) => {
+        setPo(data);
+        setLoadError(data ? null : error);
+      })
       .finally(() => setLoading(false));
   }, [id]);
 
-  async function handleApprove() {
+  useEffect(() => { load(); }, [load]);
+
+  /**
+   * Every action re-reads the PO instead of patching the status locally.
+   *
+   * The old handlers did `setPo(prev => ({ ...prev, status }))`, which is a guess about what
+   * the server did. It is wrong for approve (approvedBy and approvedAt come back), wrong for
+   * mark-sent (sentAt, sentVia, sendCount), and wrong for re-open (the approval is cleared).
+   * A refetch is one extra request on an action somebody tapped deliberately.
+   */
+  async function runAction(fn: () => Promise<unknown>, label: string) {
     setActionLoading(true);
+    setActionError("");
     try {
-      const res = await fetch(`/api/purchase-orders/${id}/approve`, { method: "POST" });
-      const data = await res.json();
-      if (data.success) setPo((prev) => prev ? { ...prev, status: "APPROVED" } : prev);
-    } catch (e) { setActionError(e instanceof Error ? e.message : "Approve failed"); }
-    setActionLoading(false);
+      await fn();
+      load();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : `${label} failed`;
+      log.error("po action failed", { poId: id, action: label, message });
+      setActionError(message);
+    } finally {
+      setActionLoading(false);
+    }
   }
 
-  async function handleStatusChange(status: string) {
-    setActionLoading(true);
-    try {
-      const res = await fetch(`/api/purchase-orders/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
-      });
-      const data = await res.json();
-      if (data.success) setPo((prev) => prev ? { ...prev, status } : prev);
-    } catch (e) { setActionError(e instanceof Error ? e.message : "Status change failed"); }
-    setActionLoading(false);
-  }
+  const submitForApproval = () =>
+    runAction(() => apiFetch(`/api/purchase-orders/${id}`, { method: "PUT", json: { status: "PENDING_APPROVAL" } }), "Submit");
+
+  const approve = () =>
+    runAction(() => apiFetch(`/api/purchase-orders/${id}/approve`, { method: "POST", json: {} }), "Approve");
+
+  const sendBackToDraft = () =>
+    runAction(() => apiFetch(`/api/purchase-orders/${id}`, { method: "PUT", json: { status: "DRAFT" } }), "Send back to draft");
+
+  const markSent = (channel: "WHATSAPP" | "MANUAL") =>
+    runAction(() => apiFetch(`/api/purchase-orders/${id}/mark-sent`, { method: "POST", json: { channel } }), "Mark sent");
+
+  const cancel = () =>
+    runAction(() => apiFetch(`/api/purchase-orders/${id}`, { method: "PUT", json: { status: "CANCELLED" } }), "Cancel");
 
   function getWhatsAppLink() {
     if (!po?.vendor.whatsappNumber) return null;
@@ -96,7 +133,14 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
 
   if (!po) return (
     <div className="text-center py-12">
-      <p className="text-sm text-slate-400">PO not found</p>
+      {/* A failed load and a genuinely missing PO used to look identical, because the fetch
+          swallowed its error. An expired session read as "PO not found". */}
+      <p className="text-sm text-slate-400">{loadError ?? "PO not found"}</p>
+      {loadError && (
+        <button onClick={load} className="text-sm text-blue-600 hover:underline mt-2 block mx-auto min-h-[44px]">
+          Try again
+        </button>
+      )}
       <Link href="/purchase-orders" className="text-sm text-blue-600 hover:underline mt-2 inline-block">
         Back to Purchase Orders
       </Link>
@@ -122,34 +166,89 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
           <h1 className="text-lg font-bold text-slate-900 tabular-nums truncate">{po.poNumber}</h1>
           <p className="text-xs text-slate-500 tabular-nums truncate">{po.vendor.name} ({po.vendor.code})</p>
         </div>
-        <Badge variant={po.status === "RECEIVED" ? "success" : po.status === "CANCELLED" ? "danger" : "warning"}>
-          {po.status.replace(/_/g, " ")}
+        <Badge variant={po.status === "RECEIVED" || po.status === "APPROVED" ? "success" : po.status === "CANCELLED" ? "danger" : "warning"}>
+          {po.status.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase())}
         </Badge>
       </div>
 
-      {/* Action Buttons */}
-      {((po.status === "DRAFT" || po.status === "PENDING_APPROVAL") || po.status === "APPROVED") && (
-        <div className="flex gap-2 mb-4">
-          {(po.status === "DRAFT" || po.status === "PENDING_APPROVAL") && (
-            <Button onClick={handleApprove} disabled={actionLoading} className="flex-1 min-h-[48px] rounded-lg font-medium bg-green-600 text-white hover:bg-green-700">
+      {/* ─── Actions, by state ────────────────────────────────────────────────────────────
+          Every button here matches an edge in PO_TRANSITIONS (src/lib/purchase-orders/status.ts)
+          and is gated on the SAME permission the route demands. Before P9 there was one
+          Approve button shown on DRAFT as well as PENDING_APPROVAL — so a draft went straight
+          to approved and the review step did not exist — and no permission check at all.
+
+          Approve is deliberately NOT hidden from someone lacking the grant on a PENDING PO:
+          it is disabled with a reason, because a hidden button reads as "this PO cannot be
+          approved" rather than "you cannot approve it". */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        {po.status === "DRAFT" && mayEdit && (
+          <Button onClick={submitForApproval} disabled={actionLoading} className="flex-1 min-w-[10rem] min-h-[48px] rounded-lg font-medium">
+            <SendHorizonal className="h-4 w-4 mr-1.5" /> Submit for approval
+          </Button>
+        )}
+
+        {po.status === "PENDING_APPROVAL" && (
+          <>
+            <Button
+              onClick={approve}
+              disabled={actionLoading || !mayApprove}
+              title={mayApprove ? undefined : "You do not have permission to approve purchase orders"}
+              className="flex-1 min-w-[10rem] min-h-[48px] rounded-lg font-medium bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+            >
               <Check className="h-4 w-4 mr-1.5" /> Approve
             </Button>
-          )}
-          {po.status === "APPROVED" && (
-            <>
-              <Button onClick={() => handleStatusChange("SENT_TO_VENDOR")} disabled={actionLoading} className="flex-1 min-h-[48px] rounded-lg font-medium">
-                <Send className="h-4 w-4 mr-1.5" /> Mark Sent
+            {mayEdit && (
+              <Button onClick={sendBackToDraft} disabled={actionLoading} variant="outline" className="flex-1 min-w-[10rem] min-h-[48px] rounded-lg font-medium">
+                <Undo2 className="h-4 w-4 mr-1.5" /> Send back to draft
               </Button>
-              {whatsappLink && (
-                <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="flex-1">
-                  <Button variant="outline" className="w-full min-h-[48px] rounded-lg font-medium text-green-600 border-green-300">
-                    <MessageSquare className="h-4 w-4 mr-1.5" /> Send via WA
-                  </Button>
-                </a>
-              )}
-            </>
-          )}
-        </div>
+            )}
+          </>
+        )}
+
+        {po.status === "APPROVED" && mayEdit && (
+          <>
+            <Button onClick={() => markSent("MANUAL")} disabled={actionLoading} className="flex-1 min-w-[10rem] min-h-[48px] rounded-lg font-medium">
+              <Send className="h-4 w-4 mr-1.5" /> Mark sent
+            </Button>
+            {whatsappLink && (
+              // Opens WhatsApp AND records the send, because the old version did neither —
+              // it was a bare link, so a PO sent this way stayed APPROVED for ever.
+              <a
+                href={whatsappLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => { void markSent("WHATSAPP"); }}
+                className="flex-1 min-w-[10rem]"
+              >
+                <Button variant="outline" className="w-full min-h-[48px] rounded-lg font-medium text-green-600 border-green-300">
+                  <MessageSquare className="h-4 w-4 mr-1.5" /> Send via WA
+                </Button>
+              </a>
+            )}
+            <Button onClick={sendBackToDraft} disabled={actionLoading} variant="outline" className="flex-1 min-w-[10rem] min-h-[48px] rounded-lg font-medium">
+              <Undo2 className="h-4 w-4 mr-1.5" /> Re-open
+            </Button>
+          </>
+        )}
+
+        {/* Cancel is offered from every non-terminal state. It had no route into the UI at
+            all before P9, so a mistaken PO could only be left sitting there. */}
+        {mayEdit && po.status !== "RECEIVED" && po.status !== "CANCELLED" && (
+          <Button
+            onClick={cancel}
+            disabled={actionLoading}
+            variant="outline"
+            className="flex-1 min-w-[10rem] min-h-[48px] rounded-lg font-medium text-red-600 border-red-300"
+          >
+            <XCircle className="h-4 w-4 mr-1.5" /> Cancel PO
+          </Button>
+        )}
+      </div>
+
+      {po.status === "APPROVED" && !po.sentAt && (
+        <p className="text-[11px] text-slate-400 -mt-2 mb-4">
+          Approved but not yet sent. Marking it sent records who sent it and how.
+        </p>
       )}
 
       {/* Order Info */}

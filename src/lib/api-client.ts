@@ -30,6 +30,11 @@ const log = createLogger("http");
 
 export interface ApiEnvelope<T> {
   success: boolean;
+  /**
+   * Absent on an error body. `errorResponse` omits the key entirely unless a route passes
+   * structured detail (P9's duplicate-PO 409 is the first that does), so this cannot be typed
+   * as always-present without lying to every error path that reads the envelope.
+   */
   data: T;
   error?: string;
   /**
@@ -64,9 +69,20 @@ export class ApiError extends Error {
    */
   isTimeout: boolean;
 
+  /**
+   * Structured detail from the failing response's `data` key, when the route sent one.
+   *
+   * For the refusals a screen must ACT on rather than only display. The first is P9's
+   * duplicate-PO 409, whose `{ conflicts: [...] }` is what lets the new-PO screen offer
+   * "Open PO-00042" and "Remove those lines and continue" instead of one red sentence.
+   *
+   * `unknown`, so a caller has to narrow it. It comes off the wire.
+   */
+  data?: unknown;
+
   constructor(
     message: string,
-    opts: { status: number; url: string; isAuth?: boolean; isTimeout?: boolean }
+    opts: { status: number; url: string; isAuth?: boolean; isTimeout?: boolean; data?: unknown }
   ) {
     super(message);
     this.name = "ApiError";
@@ -74,6 +90,7 @@ export class ApiError extends Error {
     this.url = opts.url;
     this.isAuth = opts.isAuth ?? false;
     this.isTimeout = opts.isTimeout ?? false;
+    this.data = opts.data;
   }
 }
 
@@ -216,7 +233,14 @@ export async function apiFetchEnvelope<T = unknown>(
   if (!res.ok || payload?.success === false) {
     const msg = payload?.error || `Request failed (${res.status})`;
     log.warn(`#${id} <- ${method} ${url} — ${res.status} ${msg} (${ms}ms)`);
-    throw new ApiError(msg, { status: res.status, url, isAuth: res.status === 401 });
+    // The envelope's `data` is carried through. Before P9 only `error` survived, so a route
+    // could send structured detail with its refusal and the client would silently drop it.
+    throw new ApiError(msg, {
+      status: res.status,
+      url,
+      isAuth: res.status === 401,
+      data: (payload as { data?: unknown })?.data,
+    });
   }
 
   log.debug(`#${id} <- ${method} ${url} — ${res.status} ok (${ms}ms)`);
@@ -231,7 +255,16 @@ export async function apiFetchEnvelope<T = unknown>(
 export async function apiTry<T = unknown>(
   url: string,
   init?: ApiInit
-): Promise<{ data: T | null; error: string | null; isAuth: boolean; isTimeout: boolean }> {
+): Promise<{
+  data: T | null;
+  error: string | null;
+  isAuth: boolean;
+  isTimeout: boolean;
+  /** The failing response's structured detail, when it sent one. See ApiError.data. */
+  errorData?: unknown;
+  /** The failing response's HTTP status, so a caller can branch on 409 vs 400. */
+  status?: number;
+}> {
   try {
     return { data: await apiFetch<T>(url, init), error: null, isAuth: false, isTimeout: false };
   } catch (e) {
@@ -241,6 +274,8 @@ export async function apiTry<T = unknown>(
       error: e instanceof Error ? e.message : "Request failed",
       isAuth: err?.isAuth ?? false,
       isTimeout: err?.isTimeout ?? false,
+      errorData: err?.data,
+      status: err?.status,
     };
   }
 }
