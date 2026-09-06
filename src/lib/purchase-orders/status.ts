@@ -30,10 +30,22 @@ export const PO_TRANSITIONS: Record<POStatus, POStatus[]> = {
   // and writes approvedById/approvedAt. If APPROVED were listed, the PUT route would become a
   // second, ungated way in — which is the bug this table exists to close.
   PENDING_APPROVAL: ["DRAFT", "CANCELLED"],
-  // SENT_TO_VENDOR likewise: it belongs to the mark-sent route (and to P12's email send),
-  // because leaving APPROVED must also stamp sentAt/sentVia/sendCount. A bare status write
-  // would say the PO was sent while every column recording the send stayed null.
-  APPROVED: ["DRAFT", "CANCELLED"],
+  // SENT_TO_VENDOR IS listed here, and getting this wrong shipped a broken button.
+  //
+  // P9 left it out, reasoning that leaving APPROVED must also stamp sentAt/sentVia/sendCount
+  // so the transition "belongs to the mark-sent route". But that route asks THIS table for
+  // permission — so `canTransition("APPROVED", "SENT_TO_VENDOR")` was false, and every press
+  // of Mark sent or Send via WA returned 409 "Use Send to vendor or Mark sent": an error
+  // telling you to press the button you just pressed.
+  //
+  // What actually keeps this route-only is not the table. `PUT /api/purchase-orders/[id]`
+  // refuses `status: "SENT_TO_VENDOR"` explicitly, BEFORE it consults this table — the same
+  // way it refuses APPROVED. The table describes what is legal; the PUT decides who may ask.
+  //
+  // APPROVED stays absent from PENDING_APPROVAL's list for the same reason in reverse: there
+  // the PUT's explicit refusal AND the table agree, and the approve route does not consult
+  // the table at all.
+  APPROVED: ["DRAFT", "SENT_TO_VENDOR", "CANCELLED"],
   SENT_TO_VENDOR: ["PARTIALLY_RECEIVED", "RECEIVED", "CANCELLED"],
   PARTIALLY_RECEIVED: ["RECEIVED", "CANCELLED"],
   RECEIVED: [],

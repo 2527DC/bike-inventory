@@ -11,6 +11,14 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("purchase-orders:mark-sent");
 
+/** Thrown inside the transaction when another request claimed the send first. */
+class AlreadySentError extends Error {
+  constructor() {
+    super("This purchase order was just marked sent by someone else");
+    this.name = "AlreadySentError";
+  }
+}
+
 const markSentSchema = z.object({
   // MANUAL covers "handed it over at the counter" and "read it out on the phone". EMAIL is
   // reserved for P12, which sends it itself and records a PurchaseOrderSend row with the
@@ -62,8 +70,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const now = new Date();
 
     const updated = await prisma.$transaction(async (tx) => {
-      const row = await tx.purchaseOrder.update({
-        where: { id },
+      // Claimed, not asserted. A plain update({ where: { id } }) lets two taps both succeed
+      // and drives sendCount to 2 for one send — the same shape of bug P7 fixed on inbound
+      // receiving. The status in the WHERE is the idempotency key: exactly one caller wins.
+      const claim = await tx.purchaseOrder.updateMany({
+        where: { id, status: po.status },
         data: {
           status: "SENT_TO_VENDOR",
           sentAt: now,
@@ -73,6 +84,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           // rather than overwrite the first one silently.
           sendCount: { increment: 1 },
         },
+      });
+
+      if (claim.count === 0) {
+        // Somebody else got there first between the read and this write.
+        throw new AlreadySentError();
+      }
+
+      const row = await tx.purchaseOrder.findUniqueOrThrow({
+        where: { id },
         include: { vendor: { select: { name: true } }, items: true },
       });
 
@@ -115,6 +135,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return successResponse(updated);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof AlreadySentError) return errorResponse(error.message, 409);
     const message = error instanceof Error ? error.message : "Failed to mark the purchase order sent";
     log.error("mark sent failed", { message });
     return errorResponse(message, 400);
