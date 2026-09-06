@@ -2,8 +2,8 @@
 
 > **To continue this work:** read **[▶ RESUME HERE](#-resume-here--the-only-place-that-holds-current-state)** below. It is the only section that holds current state — branch, database, what is done, what is next. Everything else is design or history.
 
-Status: in-progress — 6 Sep 2026, **P0–P9 done** (R1, R2, R3, R4, R5, R8, R11, R12, R13 closed).
-**Left: P10–P15**, continuing on the single branch `feat/purchasing-transfers-p5-p15`.
+Status: in-progress — 6 Sep 2026, **P0–P9 and P10a done** (R1, R2, R3, R4, R5, R8, R11, R12, R13 closed; R6 half — P10b is the multi-vendor screen).
+**Left: P10, P12–P15** (P11 dropped 6 Sep), continuing on the single branch `feat/purchasing-transfers-p5-p15`.
 Branch: **`feat/purchasing-transfers-p5-p15`** — cut from `feat/inbound-receiving` @ `df12868`,
 one commit per phase from here. Nothing is merged; the owner opens every PR. Update this line as
 work moves, and keep the detail in ▶ RESUME HERE, not here.
@@ -38,7 +38,7 @@ Last updated: **5 Sep 2026**, session 3.
 | `feat/zoho-fetch-window` | the branch above | P4 — **pushed** |
 | `feat/stock-audit-scope` | the branch above | P6 — **pushed** |
 | `feat/inbound-receiving` | the branch above | P7 — **pushed** |
-| `feat/purchasing-transfers-p5-p15` | the branch above | **P5 + P8 + P9, and P10–P15 to come** — one commit per phase (owner, 6 Sep) |
+| `feat/purchasing-transfers-p5-p15` | the branch above | **P5 + P8 + P9 + P10a, and P10b, P12–P15 to come** — one commit per phase, except P10 which the owner split in two on 6 Sep |
 
 **Branch rule confirmed by the owner, 5 Sep:** keep stacking each phase on the previous
 phase's tip, **and ask before creating each branch**. Claude cut P1 and P1b on its own
@@ -580,6 +580,76 @@ duplicate once the first PO is received or cancelled, because nothing ties an up
 (no FK either way, and no `BrandStockUploadStatus` value meaning "ordered"). Both are filed,
 not fixed.
 
+**P10a is complete** (R6, first half — vendor resolution, the vendor-brand editor, and the
+server side of deriving a PO's vendor). No migration. **P10b — the per-vendor sections on
+`/purchase-orders/new` — is the next commit** (owner, 6 Sep: split P10 in two).
+
+**Researched first, by four parallel agents**, and the plan's section was wrong again in ways
+that would have shipped defects:
+
+| The plan said | The code said |
+|---|---|
+| `BrandVendor` is at `schema.prisma:2447-2461` and is "read by nothing today" | It is at **`2738-2752`**, and it has **four readers** (both ledger routes, both ledger screens — `/ledger` already renders brand chips). What it has is **no WRITER**, which is the part that mattered |
+| A vendor-scoped `deleteMany + createMany` maintains `isPrimary` | **It cannot.** "Primary" is an invariant across vendors, not within one: marking brand X primary on vendor A must clear it on vendor B, and a vendor-scoped transaction never sees vendor B's row. There is no DB constraint either — no partial unique index |
+| Add a vendor `OR` to the product search | The top-level `OR` is **already occupied** by the text search. A second `OR` key silently REPLACES the first in JavaScript — it compiles, returns rows, and quietly drops the text match. It must be `AND: [{OR},{OR}]` |
+| The create-time vendor check is safe to add | **It would refuse every brand-stock PO on day one**, because `generate-po` picks its vendor by fuzzy name match |
+| Adding brand chips is a UI change | `GET /api/vendors/[id]` did not include `brands`, and the `Vendor` type had no such field. Neither was mentioned |
+| Vendor `<select>` cap "at L34" | It is at `new/page.tsx:49` |
+
+**The resolver is proven, 8/8 cases**, including the two that decide whether it is trustworthy:
+a **deactivated** product vendor falls through to the brand rather than putting a dead vendor on
+an order, and **two competing primaries return AMBIGUOUS** rather than picking one.
+
+**⚠ AND IT RESOLVES NOTHING TODAY.** Measured against `bch-local`:
+
+```
+brand_vendors rows      : 0
+active products         : 5739
+  with a reorder vendor : 0
+brands                  : 3
+```
+
+Every active product resolves to `NO_VENDOR`. That is the honest state, not a defect: tiers 2
+and 3 read a table nothing could write until this commit. **The data step is small** — there
+are only 3 brands, so linking them on `/vendors/[id]` is minutes, and P8's bulk "Vendor" tab on
+`/stock` sets `reorderVendorId` brand by brand for the rest. **Until that is done, `/reorder`'s
+Create PO is blocked for every selection**, which is a deliberate refusal rather than a silent
+wrong vendor — but it does mean P10 makes that path *less* usable until somebody enters the
+data.
+
+**Three defects fixed that were not in the plan's scope:**
+
+1. **Brand merge silently destroyed vendor links.** `BrandVendor.brandId` is `ON DELETE
+   CASCADE`, so merging a brand deleted every vendor mapping it had, with nothing to show it
+   had happened. Harmless while the table was empty; from P10 it decides who supplies a
+   product. Now the links move to the target first, skipping any the target already holds
+   (`@@unique([brandId, vendorId])`), and the target's own primary wins so a merge can never
+   manufacture the two-primaries state the resolver refuses to guess about. Same shape as the
+   category-merge fix in P1.
+2. **Every purchase order raised from `/reorder` has carried 0% GST.** The handoff consumer
+   hardcoded `gstRate: 0`. The v2 handoff carries ids and quantities only, and `prepare`
+   supplies the product's real GST.
+3. **The ₹NaN I left in P8.** `/reorder`'s handoff sent `unitPrice: p.costPrice`, and P8 made
+   that key absent for anyone without `cost_price.view` while `ReorderProduct` still typed it
+   `number` — the same lie `ProductOption` was telling, fixed on the search path and missed
+   here. The v2 handoff removes it by construction: no price crosses the boundary at all.
+
+**The v2 handoff had a trap worth naming.** The old consumer called `.map()` on the parsed
+value, so a v2 object threw a `TypeError`, the `catch { /* ignore */ }` swallowed it, and
+`removeItem` was never reached — the key stayed wedged and every later visit to the screen threw
+again. The new consumer removes the key FIRST, before anything can throw, and reads both shapes
+so a session holding a v1 payload still works.
+
+**`/reorder` had no permission checks at all** — every action was shown to anyone holding
+`reorder.view`, while the routes behind them demand `purchase_orders.create` and `reorder.edit`.
+Both gates added, and the amber "No vendor · Set" affordance opens P8's `ReorderSheet` rather
+than being a dead label.
+
+**Deliberately not done:** no backfill of `brand_vendors` from existing
+`Product.reorderVendorId` × `brandId` pairs. It would be derivable and reversible, but it writes
+business data on an assumption ("this vendor supplies this brand because one product says so"),
+and with 3 brands the manual route is minutes. Raise it if the brand count grows.
+
 ### 4. What is VERIFIED, and what is not
 
 | Check | Result |
@@ -595,6 +665,8 @@ not fixed.
 | P5 | tsc + eslint clean. `istDayBounds` **10/10** cases; the day window and the dedupe **proved against `bch-local`** in a rolled-back transaction, with the old behaviour reproduced beside the new. NOT browser-walked |
 | P8 | tsc clean; eslint 0 errors. The 14-copy unification proved behaviour-preserving by **26,784 assertions over 4,464 combinations, 0 differences**. NOT browser-walked |
 | P9 | tsc clean; eslint 0 new errors. Advisory lock, seed SQL and counter concurrency **proven against Postgres**; the transition table checked exhaustively. NOT browser-walked |
+| P10a | tsc + eslint clean. Vendor resolution **8/8 cases**, including a deactivated product vendor falling through to the brand and two competing primaries returning AMBIGUOUS. NOT browser-walked |
+| ⚠ P10a data state | Measured on `bch-local`: **0 `brand_vendors` rows, 0 of 5,739 active products with a reorder vendor, 3 brands.** Every product resolves to NO_VENDOR, so `/reorder`'s Create PO is blocked for every selection until the data is entered. Correct behaviour, but P10 is INERT until then — and with 3 brands it is minutes of work on `/vendors/[id]` |
 | ⚠ P9 lint-method note | The `pre-existing` comparisons for P5 and P8 put HEAD's copy in a temp dir OUTSIDE `src/app/`, where path-scoped rules do not apply, so those comparisons were weaker than stated. P9 was checked correctly, with HEAD's copy placed BESIDE the real file. Use that method from here |
 | P8 eslint caveat | `stock/page.tsx` (2) and `stock/[id]/page.tsx` (1) report warnings only, all **pre-existing** — HEAD's copies give the identical 3, confirmed by linting them. One error P8 DID introduce (a hook below an early return) was found and fixed |
 | ⚠ P8 proof caveat | The first proof ran over the real 5,739 products and said IDENTICAL — **worthless as evidence**: every product in `bch-local` has `reorderLevel = 0` and `currentStock = 0`, so it tested one degenerate case. The synthetic matrix is the proof. **Any future reorder work needs seeded levels to test against** |
@@ -678,6 +750,12 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
      the receiving role holds `stock.view`** on `/team/permissions` before release —
      `api/categories` is gated on it, so without it the category picker is empty and the
      shipment cannot be received at all. No data step, no migration.
+3. **Data step for P10, and it is the difference between P10 working and doing nothing:**
+   on `/vendors/[id]` → Brands supplied, link each of the **3 brands** to the vendor that
+   supplies it and star the primary. Then use `/stock` → select → **Vendor** (built in P8) to
+   set a reorder vendor brand by brand. Until one of those is done, **0 of 5,739 products
+   resolve to a vendor** and `/reorder`'s Create PO refuses every selection.
+
 3. **Data step, as soon as P1b is merged:** on `/stores`, set the **invoice prefix** to `BCH/`
    and `BCC/`. **Until that is done every sale deducts from the primary store** — a BCC sale
    takes BCH stock. Two things make that impossible to miss rather than silent: the row shows
@@ -686,7 +764,8 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
    the store form.
 4. **Then P10–P15**, continuing on `feat/purchasing-transfers-p5-p15` (cut 6 Sep from
    `feat/inbound-receiving` @ `df12868`), one commit per phase, in the order of §0.6:
-   P10, P11, P12, P13, P14, P15.
+   P10, P12, P13, P14, P15. **P11 was dropped by the owner on 6 Sep** — see §7 P11 for
+   what that gives up and for the two pieces of it that moved into P10.
    - `/purchase-orders` (P9) — the CANCELLED chip filters; labels read "Pending approval"
    - `/purchase-orders/new` (P9) — the rate box is EMPTY and amber until typed; both buttons
      refuse while any line has no rate; Submit lands the PO in PENDING_APPROVAL and Save
@@ -700,6 +779,16 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
    - `/brand-stock/[id]` (P9) — Create PO **used to return 500 every time**; it should now
      create a PENDING_APPROVAL PO. With some rows priceless it must stay on the page and
      list what was left off rather than navigating away
+   - `/vendors/[id]` (P10a) — Brands supplied: add a brand, star it, remove it; the star
+     must MOVE when another vendor already held that brand, and the note must say so.
+     The Email field saves and clears
+   - `/reorder` (P10a) — every row shows its vendor and where it came from, in all three
+     grouping modes; a row with none shows amber "No vendor · Set" and opens the reorder
+     sheet; Create PO refuses while anything selected is unresolved and names them.
+     **Link a brand to a vendor first or every row is unresolved**
+   - `/purchase-orders/new` from /reorder (P10a) — GST is the product's, NOT 0 (every PO
+     from this path has carried 0% until now); a mixed-vendor selection offers a vendor to
+     order first rather than truncating silently
 
    **Research each phase against the code before building it** (owner, 6 Sep). P8 proved why:
    its plan section had stale line numbers throughout, missed five of the fourteen call sites
@@ -726,7 +815,8 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
 - Dev speed: Defender exclusions, and moving `.next` (1.9 GB) off the 5400rpm HDD onto the SSD.
 - **BL12** — create a non-admin test role. Every phase's gate walk needs one; ADMIN holds every
   permission, so testing as admin proves no gate works.
-- **Q5** a real vendor `.xlsx` before P11 · **BL8** Gmail App Password before P12 · **BL9** vendor
+- ~~**Q5** a real vendor `.xlsx` before P11~~ — **moot, P11 dropped 6 Sep.** (A real
+  workbook did arrive: `docs/asset/Stock as on 04.09.2026 …xlsx`, untracked and unused) · **BL8** Gmail App Password before P12 · **BL9** vendor
   data before P10.
 
 ---
@@ -759,7 +849,7 @@ scope creep and comes out. If a requirement is dropped, the phases in its row go
 | **R5** | **One-tap reorder level on `/stock`** — set reorder level, reorder qty and optionally the vendor from a sheet on the row, without opening the product. | P8 |
 | **R8** | **A purchase order cannot be raised twice for the same thing.** Sequential PO numbers with no race, a real state machine, a 409 naming the existing PO, and approval by whoever holds the permission (self-approval allowed and logged). | P9 |
 | **R6** | **The PO vendor is derived from the product and shown read-only** — product's reorder vendor, else the brand's primary vendor, else the brand's only vendor. Mixed vendors in one selection produce one PO per vendor. | P10 |
-| **R7** | **The vendor's colour-coded availability sheet decides what can be ordered.** **No AI and no API key** (owner decision, 4 Sep — see §6): a row's fill colour is a stored property of the `.xlsx` and is read deterministically with `exceljs`. The app never interprets a colour; the user labels each colour once (Available / Not available / Ignore) and the legend is remembered per brand. AI remains only for PDF/image sheets. | P11 |
+| ~~**R7**~~ | **DROPPED by the owner, 6 Sep 2026.** The vendor's colour-coded availability sheet. Dropped because the implementation needs to change, not because the need went away — so it is removed rather than deferred, per this section's own rule that a dropped requirement takes its phases with it. **P11 goes with it.** The original wording and the reasoning behind the no-AI decision are kept in §7 P11 and in the Clarifications, so re-raising it later starts from the record rather than from scratch. |
 | **R9** | **An approved PO is emailed to the vendor with the PO PDF attached**, over the Gmail App Password already in Settings › Notifications. No Google Cloud project, no OAuth, no AI. "Mark sent" is kept for WhatsApp and other channels. | P12 |
 
 ### 0.4 Stock transfers
@@ -791,7 +881,7 @@ R11 P5   activity feed
 R5  P8   one-tap reorder + search fix
 R8  P9   PO state machine, numbers, duplicates, approval
 R6  P10  vendor derived from product
-R7  P11  colour-coded availability sheet
+R7  P11  colour-coded availability sheet                             DROPPED 6 Sep
 R9  P12  PO email with PDF
 R10 P13  stores: GSTIN + state code
 R10 P14  transfer lane, in-transit flow                                 (MIG-2)
@@ -804,7 +894,7 @@ folder after `0_init`; MIG-1a (P1) then applies on top. The two are independent 
 between them is free — what is *not* free is P2 before P3, because a screen still reading
 `product.type` after the column is dropped throws (`brand-count/page.tsx:584`).
 
-**Unchanged dependencies:** P1 → P1b, P5, P6, P9. P3 → P6, P8. P8 + P9 → P10 → P11. P9 → P12.
+**Unchanged dependencies:** P1 → P1b, P5, P6, P9. P3 → P6, P8. P8 + P9 → P10 (P11 dropped 6 Sep, and nothing depended on it — it was a leaf). P9 → P12.
 P13 → P14 → P15 (promote P14 and P15 together). P4, P5, P6, P7 remain pairwise independent.
 
 ---
@@ -935,7 +1025,7 @@ not negotiable.
 | P8 | **one branch — §3** | `isLowStock`; reorder sheet on `/stock`; `reorderVendorId` on product PUT; search returns cost/GST (the `₹NaN` fix) | PLAN-1 §A + search half of §B | none | M (10) | P3 | 375 px: Reorder → sheet → OK → badge flips; card link not triggered |
 | P9 | **one branch — §3** | PO transitions, `nextSequence("PO")`, duplicate 409 with advisory lock, approval on PENDING_APPROVAL, `generate-po` fixes, detail/list buttons | PLAN-1 §D | none | M (12) | P1 | two tabs create at once → distinct numbers; duplicate → 409 card |
 | P10 | **one branch — §3** | `resolveVendors`, `/reorder` groups + v2 handoff, `prepare`, read-only vendor sections, vendor-scoped search, `vendors/[id]/brands` | PLAN-1 §B | none | M (10) | P8, P9 | two vendors selected → two read-only sections; unresolved item blocks |
-| P11 | **one branch — §3** | `exceljs` parser with `rowColor`, legend card + route, `getVendorAvailability`, badges, `generate-po` exclusions | PLAN-1 §C | none | M (12) | P10 | colour-coded `.xlsx` → legend → confirm → unavailable excluded |
+| ~~P11~~ | — | **DROPPED 6 Sep 2026 (owner).** `exceljs` colour reading, legend card, `getVendorAvailability`, availability badges, `generate-po` exclusions | PLAN-1 §C | none | — | — | **Nothing depended on P11** — it was the only leaf in the graph, so dropping it blocks no other phase |
 | P12 | **one branch — §3** | Mailer attachments, PDF renderer, `/pdf`, `/send`, `/mark-sent`, `notifications/status`, bottom sheet | PLAN-1 §E | none | M (14) | P9 | send to own address → PDF attached, status flips only after SMTP accepts |
 | P13 | **one branch — §3** | `Store.gstin/stateCode` UI, `clearWarehouseCache()` on warehouse create, legacy `/api/transfers` removal. **No floor/godown — rescoped 4 Sep** | PLAN-1 §G (stores) | none | S (~5) | P1 | `/stores` saves GSTIN; a warehouse added to a store appears in the pickers same session |
 | P14 | **one branch — §3** | MIG-2; header lane, derived type/doc, approve = check only, dispatch/receive/cancel, detail page, list filters | PLAN-1 §G (flow) | MIG-2 | M (15) | P13 | legacy APPROVED read RECEIVED; dispatch −qty; receive with shortfall |
@@ -1959,7 +2049,27 @@ rolls back group 1's real PO.
   item blocks with names; manual path search scoped to the vendor; empty scope shows "No products
   are linked to this vendor yet".
 
-### P11 — brand-stock sheet: colour-coded availability, no AI
+### ~~P11~~ — brand-stock sheet: colour-coded availability, no AI  ·  **DROPPED 6 Sep 2026**
+
+> **Owner, 6 Sep 2026: skip P11 — the implementation needs to change.** Kept below as the
+> record of what was specified and why, so that re-raising it starts from this rather than
+> from a blank page. Nothing depended on P11: it was the only leaf in the dependency graph
+> (`P8 + P9 → P10 → P11`), so dropping it blocks no other phase and needs no re-plan.
+>
+> **Two things moved into P10 because of this:**
+> 1. P10 does **not** build the "Excluded — not available at vendor / Include anyway"
+>    sub-list. P11 was the phase that would have filled it, so it would have shipped as UI
+>    nothing could ever populate.
+> 2. P10 **does** move `generate-po` onto `resolveVendors`. The plan deferred that to P11, but
+>    P10's create-time vendor check would refuse every brand-stock PO on day one while that
+>    route still picks its vendor by fuzzy name match — so the fix cannot wait for a phase
+>    that is not happening.
+>
+> **What is given up:** nothing reads a vendor sheet's fill colours, so availability plays no
+> part in what can be ordered. `BrandStockItem` keeps its existing columns and the upload
+> flow is unchanged. If it comes back, note that `docs/asset/` now holds a real vendor
+> workbook — the thing §10 Q5 was blocked on.
+
 - `package.json`: `exceljs` (server-only; `excel-parser.ts` is imported by route handlers only;
   `serverExternalPackages: ["exceljs"]` if the bundler complains; check the on-disk size against
   `npm view exceljs dist.unpackedSize` — truncated installs have happened here).
