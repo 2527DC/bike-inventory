@@ -142,7 +142,14 @@ function InwardsEODReport() {
 
       const [inwardsRes, transfersRes, inboundRes] = await Promise.all([
         fetch(`/api/inventory/inwards?dateFrom=${today}&limit=100&mine=true`).then(r => r.json()),
-        fetch(`/api/transfers?dateFrom=${today}&limit=100`).then(r => r.json()),
+        // /api/transfer-orders, not the legacy /api/transfers, which P13 deletes.
+        //
+        // This repoint fixes three bugs at once. The old route IGNORED dateFrom entirely — it
+        // only ever read `status` — so "Transfers: N today" was really the last 100 transfer
+        // ledger rows of all time. It also had no transferNo and no status column (status was
+        // a substring inside `notes`), so the detail lines below fell back to an id fragment
+        // and printed "PENDING" for every row regardless of the truth.
+        fetch(`/api/transfer-orders?dateFrom=${today}&limit=100`).then(r => r.json()),
         fetch(`/api/inventory/inwards?dateFrom=${today}&limit=100`).then(r => r.json()),
       ]);
 
@@ -177,8 +184,11 @@ function InwardsEODReport() {
       if (transfers.length > 0) {
         msg += `*Transfer Details:*\n`;
         for (const t of transfers.slice(0, 10)) {
-          const no = t.transferNo || t.id?.slice(0, 8);
-          const status = t.status || "PENDING";
+          // Real columns now: orderNo is TRF-YYYYMM-NNNN and status is the enum. The old
+          // `|| "PENDING"` fallback is gone deliberately — it was not a fallback, it was the
+          // only value that ever printed.
+          const no = t.orderNo || t.id?.slice(0, 8);
+          const status = t.status;
           msg += `• ${no}: ${status}\n`;
         }
         if (transfers.length > 10) msg += `... +${transfers.length - 10} more\n`;

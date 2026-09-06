@@ -4,6 +4,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { clearWarehouseCache } from "@/lib/warehouses";
 import { warehouseUpdateSchema } from "@/lib/validations";
 import { createLogger } from "@/lib/logger";
 
@@ -58,6 +59,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     });
 
     log.info("warehouse updated", { warehouseId: id, fields: Object.keys(data) });
+    // A rename or a deactivation changes what the cached set says.
+    // The cached array would otherwise outlive the change for the life of the process —
+    // which is how a warehouse the picker offers gets refused by the server that offered it.
+    clearWarehouseCache();
     return successResponse(warehouse);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
@@ -137,6 +142,10 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
 
     await prisma.warehouse.delete({ where: { id } });
     log.info("warehouse deleted", { warehouseId: id, unassignedUsers: warehouse._count.users });
+    // The deleted warehouse is still in the cached set.
+    // The cached array would otherwise outlive the change for the life of the process —
+    // which is how a warehouse the picker offers gets refused by the server that offered it.
+    clearWarehouseCache();
     return successResponse({
       deleted: true,
       name: warehouse.name,

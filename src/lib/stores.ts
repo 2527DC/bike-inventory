@@ -7,10 +7,18 @@ export interface StoreRef {
   id: string;
   code: string;
   name: string;
+  /** Null until somebody enters it on /stores. P14 refuses an inter-store transfer without it. */
+  gstin: string | null;
+  stateCode: string | null;
 }
 
 /**
- * Store lookups, request-scoped cached. The Store half of what the StockLocation enum used
+ * Store lookups, cached for the life of the module — NOT "request-scoped", whatever the
+ * original wording said. See the note in src/lib/warehouses.ts: this is one long-lived
+ * process under `next start` and a warm lambda on Vercel. Every route that creates or edits
+ * a store calls `clearStoreCache()`; without it a new store stayed unknown to
+ * `resolveStoreParam()` until the process recycled, and /api/analytics/dashboard?store=NEW
+ * answered "unknown store". The Store half of what the StockLocation enum used
  * to answer for free; src/lib/warehouses.ts is the other half.
  *
  * Stores matter to ANALYTICS, not to stock: footfall is counted at the shop door, so
@@ -23,7 +31,8 @@ export async function listStores(): Promise<StoreRef[]> {
   if (cache) return cache;
   cache = await prisma.store.findMany({
     where: { isActive: true },
-    select: { id: true, code: true, name: true },
+    // gstin/stateCode for P14's transfer-document derivation, same reason as warehouses.ts.
+    select: { id: true, code: true, name: true, gstin: true, stateCode: true },
     orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
   });
   log.debug("store set loaded", { count: cache.length });

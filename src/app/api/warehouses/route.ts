@@ -4,6 +4,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireAuth, requireFeature, AuthError } from "@/lib/auth-helpers";
+import { clearWarehouseCache } from "@/lib/warehouses";
 import { warehouseSchema } from "@/lib/validations";
 import { createLogger } from "@/lib/logger";
 
@@ -34,7 +35,9 @@ export async function GET(req: NextRequest) {
         name: true,
         sortOrder: true,
         storeId: true,
-        store: { select: { id: true, code: true, name: true } },
+        // gstin/stateCode ride along for P14's transfer-document derivation. Printed on the
+        // document itself, so not sensitive — which is why this route stays requireAuth.
+        store: { select: { id: true, code: true, name: true, gstin: true, stateCode: true } },
       },
       orderBy: [{ store: { sortOrder: "asc" } }, { sortOrder: "asc" }, { name: "asc" }],
     });
@@ -87,6 +90,10 @@ export async function POST(req: NextRequest) {
     });
 
     log.info("warehouse created", { warehouseId: warehouse.id, code: warehouse.code, storeId: store.id });
+    // A new warehouse is not in the cached set.
+    // The cached array would otherwise outlive the change for the life of the process —
+    // which is how a warehouse the picker offers gets refused by the server that offered it.
+    clearWarehouseCache();
     return successResponse(warehouse, 201);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);

@@ -4,6 +4,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { clearStoreCache } from "@/lib/stores";
 import { storeUpdateSchema } from "@/lib/validations";
 import { createLogger } from "@/lib/logger";
 
@@ -56,10 +57,18 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         ...(data.invoicePrefix !== undefined
           ? { invoicePrefix: data.invoicePrefix.trim() || null }
           : {}),
+        // Upper-cased on the way in as well as in the form: a GSTIN typed in lower case would
+        // pass the browser but fail the schema's uppercase-only regex on the next edit.
+        ...(data.gstin !== undefined ? { gstin: data.gstin.trim().toUpperCase() || null } : {}),
+        ...(data.stateCode !== undefined ? { stateCode: data.stateCode.trim() || null } : {}),
       },
     });
 
     log.info("store updated", { storeId: id, fields: Object.keys(data) });
+    // A rename or a deactivation changes what the cached set says.
+    // The cached array would otherwise outlive the change for the life of the process —
+    // which is how a warehouse the picker offers gets refused by the server that offered it.
+    clearStoreCache();
     return successResponse(store);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
@@ -126,6 +135,10 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
 
     await prisma.store.delete({ where: { id } });
     log.info("store deleted", { storeId: id, unassignedUsers: store._count.users });
+    // The deleted store is still in the cached set.
+    // The cached array would otherwise outlive the change for the life of the process —
+    // which is how a warehouse the picker offers gets refused by the server that offered it.
+    clearStoreCache();
     return successResponse({
       deleted: true,
       name: store.name,

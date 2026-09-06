@@ -1008,6 +1008,33 @@ export const storeSchema = z.object({
    * every invoice.
    */
   invoicePrefix: z.string().max(20).optional(),
+  /**
+   * The store's own GSTIN. Every store has one (owner) — BCH and BCC are separate registrations.
+   *
+   * Same regex as `vendorSchema.gstin` above, deliberately: one definition of what a GSTIN
+   * looks like, or the two forms will drift and a number valid on one screen will be refused
+   * on the other. It is uppercase-only, so the form upper-cases on input the way
+   * /vendors/new already does.
+   *
+   * "" is accepted and normalised to null by the route — a store that has not had its GSTIN
+   * entered yet is a real state, and P14 refuses an inter-store transfer while it is missing
+   * rather than guessing a document type.
+   */
+  gstin: z
+    .string()
+    .regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/, "That does not look like a GSTIN")
+    .optional()
+    .or(z.literal("")),
+  /**
+   * The first two digits of the GSTIN — "29" for Karnataka. Stored separately because P14
+   * compares state codes to decide TAX INVOICE vs DELIVERY CHALLAN, and reading two characters
+   * out of a nullable string at every comparison is how that check ends up wrong once.
+   */
+  stateCode: z
+    .string()
+    .regex(/^[0-9]{2}$/, "State code is the first two digits of the GSTIN, e.g. 29")
+    .optional()
+    .or(z.literal("")),
 });
 
 export const storeUpdateSchema = storeSchema.partial().extend({

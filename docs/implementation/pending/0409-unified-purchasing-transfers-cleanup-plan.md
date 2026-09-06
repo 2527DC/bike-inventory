@@ -2,7 +2,7 @@
 
 > **To continue this work:** read **[▶ RESUME HERE](#-resume-here--the-only-place-that-holds-current-state)** below. It is the only section that holds current state — branch, database, what is done, what is next. Everything else is design or history.
 
-Status: in-progress — 6 Sep 2026, **P0–P10 done** (R1, R2, R3, R4, R5, R6, R8, R11, R12, R13 closed). **Left: P12, P13, P14, P15.**
+Status: in-progress — 6 Sep 2026, **P0–P10 and P13 done** (R1, R2, R3, R4, R5, R6, R8, R11, R12, R13 closed; R10 a third done). **Left: P12, P14, P15.** The owner is building all of it before merging, and will have the conflicts resolved here at that point.
 **Left: P10, P12–P15** (P11 dropped 6 Sep), continuing on the single branch `feat/purchasing-transfers-p5-p15`.
 Branch: **`feat/purchasing-transfers-p5-p15`** — cut from `feat/inbound-receiving` @ `df12868`,
 one commit per phase from here. Nothing is merged; the owner opens every PR. Update this line as
@@ -38,7 +38,7 @@ Last updated: **5 Sep 2026**, session 3.
 | `feat/zoho-fetch-window` | the branch above | P4 — **pushed** |
 | `feat/stock-audit-scope` | the branch above | P6 — **pushed** |
 | `feat/inbound-receiving` | the branch above | P7 — **pushed** |
-| `feat/purchasing-transfers-p5-p15` | the branch above | **P5 + P8 + P9 + P10a + P10b, and P12–P15 to come** — one commit per phase, except P10 which the owner split in two on 6 Sep |
+| `feat/purchasing-transfers-p5-p15` | the branch above | **P5 + P8 + P9 + P10a + P10b + the mark-sent fix + P13, and P12, P14, P15 to come** — one commit per phase, except P10 which the owner split in two on 6 Sep |
 
 **Branch rule confirmed by the owner, 5 Sep:** keep stacking each phase on the previous
 phase's tip, **and ask before creating each branch**. Claude cut P1 and P1b on its own
@@ -686,6 +686,90 @@ be linked. A plain report block with real links is the smaller lie.
 `setProductResults([])` synchronously to drop stale matches. The visible list is derived
 from the query length instead — same behaviour, no cascading render, no stale window.
 
+**P13 is complete** (R10, first third — stores carry a GSTIN and a state code; the legacy
+transfers API is gone). No migration: `Store.gstin` and `stateCode` have existed since MIG-1a
+and were written by nothing.
+
+**Researched first, by three agents**, and **three of this phase's own bullets were already
+satisfied**:
+
+| The plan said | The code said |
+|---|---|
+| P13 drops `Warehouse.kind`, the `<CODE>_FLOOR` seeding, and every kind-label in the pickers | **All three already gone.** No `kind` field, no `WarehouseKind` enum, `_FLOOR` appears only in this plan document. The plan's own changelog records the removal from MIG-1a — §P13 was never updated after that rescope |
+| `clearWarehouseCache()` must be added | **It already existed** (`warehouses.ts:77`). Only the CALL was missing |
+| `reports/daily/route.ts` must be repointed before the delete | **Not a caller at all.** It already queries `prisma.transferOrder` by `reviewedAt` and never touched the legacy route |
+| `storeSchema` at `validations.ts:823`; GSTIN regex at `:270` | `:993` and `:323` |
+| `stores/page.tsx:104` → `POST /api/warehouses` | `:104` is `POST /api/stores`; the warehouse create is `:108` |
+| `Warehouse.storeId` at `schema.prisma:289` | `:287` |
+
+**THE CACHE BUG IS REAL BUT THE PLAN AIMED IT AT THE WRONG THING.**
+
+The plan's verification — "adding a warehouse makes it appear in the audit and receiving pickers
+in the same session" — **already passes today**, because all three pickers read uncached
+`force-dynamic` routes. Shipping the fix would change nothing observable there.
+
+The actual break is one step later and worse: the picker **shows** the new warehouse, somebody
+selects it, and the **submit** is refused — `resolveWarehouse` consults the stale module cache
+and answers *"…is not an active warehouse"*, so the server denies a choice it just offered.
+Same on inwards-verify, on transfer creation, and as a 404 on `/stock/by-location`.
+
+And the comment that justified the staleness was wrong in a way worth recording:
+
+> *"The cache lives for the module's lifetime in a serverless invocation, which is effectively
+> the request… a stale entry cannot outlive the invocation."*
+
+Neither half is true. `next start` is one long-lived process, and a warm Vercel lambda serves
+many requests over minutes — this repo's own `notify/email.ts` says exactly that about its SMTP
+transport. The comment has been replaced with the truth.
+
+**`src/lib/stores.ts` had the identical bug and the plan never mentioned it** — same shape, same
+uncalled invalidator, same wrong "request-scoped" comment. A store created on `/stores` stayed
+unknown to `resolveStoreParam()` for the life of the process, so
+`/api/analytics/dashboard?store=NEW` answered "unknown store". Fixed too.
+
+**Six invalidation points, each in a mutating handler, after its write**: warehouse create /
+update / delete, store create / update / delete. Not on any GET, and not in the delete routes'
+*refusal* branches — an early pass put them there and it was wrong twice over: clearing on a
+read defeats the cache, and clearing on a refusal clears nothing that changed.
+
+The honest limit, recorded rather than hidden: this is correct on one process. Across several
+instances the others stay stale until they recycle. The real fix is request-scoped `cache()`
+from React, which four sibling modules already use (`rbac.ts`, `auth-helpers.ts`,
+`integrations/index.ts`) — worth doing, not done here, because it changes every call site.
+
+**THE DELETE WAS CHECKED, NOT ASSUMED.** `src/app/api/transfers/**` stored transfer status as a
+substring inside `InventoryTransaction.notes` (`[PENDING]`, `[APPROVED]`) with the bin ids
+regex-parsed back out, and its approve route was **the only code in the repo that could resolve
+a pending one**. Deleting it with pending rows present would have made them permanently
+un-actionable through the app. Measured against `bch-local` before removing anything:
+
+```
+legacy InventoryTransaction rows of type TRANSFER
+  total     : 0
+  [PENDING] : 0
+  [APPROVED]: 0
+TransferOrder rows (the new table): 0
+```
+
+Nothing stranded. **Run the same check against any other database before this merges** — it is
+three counts and it is the difference between a safe delete and orphaned records.
+
+**The one real prerequisite, and it fixes three bugs.** `(dashboard)/page.tsx` was the only
+caller. Left alone, deleting the route would have thrown inside its `Promise.all` and killed
+**the whole Inwards EOD report**, including the two inwards sections that have nothing to do
+with transfers. Repointing it to `/api/transfer-orders` also fixed: `dateFrom` was **silently
+ignored** by the old route (so "Transfers: N today" was really the last 100 rows of all time),
+`t.transferNo` did not exist, and `t.status` did not exist — so **every line printed
+"PENDING"** regardless of the truth.
+
+**One trap avoided on the way in:** `StoreRow` and BOTH draft seeds needed the new fields. Miss
+the *edit* seed and the form submits `gstin: ""` — silently clearing a GSTIN somebody had
+already entered, on the second save. That is a build-clean, data-destroying omission.
+
+**Not done, deliberately:** `reports/daily` still counts only `status: "APPROVED"`. Once P14
+adds the in-transit flow, an order past APPROVED drops out of the daily count — a real
+improvement, but P14-facing, and not a prerequisite for anything here.
+
 ### 4. What is VERIFIED, and what is not
 
 | Check | Result |
@@ -703,6 +787,8 @@ from the query length instead — same behaviour, no cascading render, no stale 
 | P9 | tsc clean; eslint 0 new errors. Advisory lock, seed SQL and counter concurrency **proven against Postgres**; the transition table checked exhaustively. NOT browser-walked |
 | P10a | tsc + eslint clean. Vendor resolution **8/8 cases**, including a deactivated product vendor falling through to the brand and two competing primaries returning AMBIGUOUS. NOT browser-walked |
 | P10b | tsc + eslint clean. The per-vendor sections, the sequential run and the outcome report are code-verified, NOT browser-walked — and the walk needs a MIXED-vendor selection, which needs at least two brands linked to two different vendors |
+| P13 | tsc + eslint clean. The legacy-route delete was **measured, not assumed** — 0 legacy transfer rows, 0 pending, so nothing is stranded. NOT browser-walked |
+| ⚠ P13 before merge | Re-run the stranded-rows check against any database this merges into: three counts on `InventoryTransaction` where `type = 'TRANSFER'` and `notes LIKE '%[PENDING]%'`. Non-zero means those rows become permanently un-actionable, because the deleted approve route was the only code that could resolve them |
 | ⚠ P10a data state | Measured on `bch-local`: **0 `brand_vendors` rows, 0 of 5,739 active products with a reorder vendor, 3 brands.** Every product resolves to NO_VENDOR, so `/reorder`'s Create PO is blocked for every selection until the data is entered. Correct behaviour, but P10 is INERT until then — and with 3 brands it is minutes of work on `/vendors/[id]` |
 | ⚠ P9 lint-method note | The `pre-existing` comparisons for P5 and P8 put HEAD's copy in a temp dir OUTSIDE `src/app/`, where path-scoped rules do not apply, so those comparisons were weaker than stated. P9 was checked correctly, with HEAD's copy placed BESIDE the real file. Use that method from here |
 | P8 eslint caveat | `stock/page.tsx` (2) and `stock/[id]/page.tsx` (1) report warnings only, all **pre-existing** — HEAD's copies give the identical 3, confirmed by linting them. One error P8 DID introduce (a hook below an early return) was found and fixed |
@@ -801,7 +887,7 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
    the store form.
 4. **Then P12–P15**, continuing on `feat/purchasing-transfers-p5-p15` (cut 6 Sep from
    `feat/inbound-receiving` @ `df12868`), one commit per phase, in the order of §0.6:
-   P12, P13, P14, P15. **P11 was dropped by the owner on 6 Sep** — see §7 P11 for
+   P12, P14, P15. **P11 was dropped by the owner on 6 Sep** — see §7 P11 for
    what that gives up and for the two pieces of it that moved into P10.
    - `/purchase-orders` (P9) — the CANCELLED chip filters; labels read "Pending approval"
    - `/purchase-orders/new` (P9) — the rate box is EMPTY and amber until typed; both buttons
