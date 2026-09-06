@@ -2,8 +2,8 @@
 
 > **To continue this work:** read **[▶ RESUME HERE](#-resume-here--the-only-place-that-holds-current-state)** below. It is the only section that holds current state — branch, database, what is done, what is next. Everything else is design or history.
 
-Status: in-progress — 6 Sep 2026, **P0–P8 done** (R1, R2, R3, R4, R5, R11, R12, R13 closed).
-**Left: P9–P15**, continuing on the single branch `feat/purchasing-transfers-p5-p15`.
+Status: in-progress — 6 Sep 2026, **P0–P9 done** (R1, R2, R3, R4, R5, R8, R11, R12, R13 closed).
+**Left: P10–P15**, continuing on the single branch `feat/purchasing-transfers-p5-p15`.
 Branch: **`feat/purchasing-transfers-p5-p15`** — cut from `feat/inbound-receiving` @ `df12868`,
 one commit per phase from here. Nothing is merged; the owner opens every PR. Update this line as
 work moves, and keep the detail in ▶ RESUME HERE, not here.
@@ -38,7 +38,7 @@ Last updated: **5 Sep 2026**, session 3.
 | `feat/zoho-fetch-window` | the branch above | P4 — **pushed** |
 | `feat/stock-audit-scope` | the branch above | P6 — **pushed** |
 | `feat/inbound-receiving` | the branch above | P7 — **pushed** |
-| `feat/purchasing-transfers-p5-p15` | the branch above | **P5 + P8, and P9–P15 to come** — one commit per phase (owner, 6 Sep) |
+| `feat/purchasing-transfers-p5-p15` | the branch above | **P5 + P8 + P9, and P10–P15 to come** — one commit per phase (owner, 6 Sep) |
 
 **Branch rule confirmed by the owner, 5 Sep:** keep stacking each phase on the previous
 phase's tip, **and ask before creating each branch**. Claude cut P1 and P1b on its own
@@ -481,6 +481,105 @@ complained; they are optional now, because `costPrice` is genuinely absent for a
 places. The Reorder button inherits it to match its three siblings; raising one of four would
 look broken. The sheet's own controls are 44px.
 
+**P9 is complete** (R8 — the PO state machine, numbers, duplicates and approval). No
+migration: every column it writes has been in the schema since MIG-1a.
+
+**Researched first, by four parallel agents.** As with P8 the plan's own section was
+substantially wrong, and this time two of its instructions would not even have run.
+
+| The plan said | The code said |
+|---|---|
+| enum `PurchaseOrderStatus` | It is **`POStatus`** (schema.prisma:132-140). No such enum exists |
+| `nextSequence(tx, "PO", 5)` | **Would not compile** — `seedSql` is a required 4th parameter, and `src/lib/purchase-orders/` did not exist |
+| `SELECT pg_advisory_xact_lock(...)` | Must be `$executeRaw`; the function returns `void` and nothing here has ever deserialised one |
+| The xact lock is needed because of the 6543 pgbouncer pooler | Right conclusion, **wrong reason**. `.env` points at `localhost:5432`; the load-bearing reason is Prisma's OWN pool (`src/lib/db.ts`), which leaks a session lock on every topology. As written, the PR note the plan asks to preserve would have taught the next reader that session locks are fine off the pooler |
+| (implied) no PO transition logic exists | **Three** ad-hoc guards existed, and they disagreed |
+| `errorResponse(msg, 409, {conflicts})` | Not possible — two parameters, on a function every route in the app uses |
+| "P9 adds `ApiError.data`" | Necessary but **not sufficient**: four changes, or the conflicts array is dropped inside `api-client.ts` |
+
+**Five live defects P9 repairs, none of them in the plan's stated scope:**
+
+1. **`brand-stock/uploads/[id]/generate-po` has NEVER worked.** It passed `hsnCode` into a
+   `PurchaseOrderItem` create and that column does not exist, so every valid request threw and
+   returned 500. It survived because the objects came out of a `.map()` rather than a fresh
+   literal, so TypeScript's excess-property check never fired — clean `tsc`, clean build,
+   guaranteed runtime failure. Its numbering was broken too: string-sorted `poNumber`, so once
+   `PO-00010` existed it read `PO-0002` as the maximum and would have re-issued a used number.
+2. **`PUT` could set `APPROVED` directly**, bypassing the approve route entirely: no
+   `purchase_orders.approve` grant needed, and `approvedById`/`approvedAt` left null — an
+   approved purchase order with no authoriser on record.
+3. **Every other transition was free.** `RECEIVED → DRAFT`, `CANCELLED → APPROVED` and
+   `DRAFT → RECEIVED` all succeeded.
+4. **Approve fired on DRAFT**, so nothing was ever approved FROM the pending state — the review
+   step did not exist in practice.
+5. **A ₹0 purchase order was creatable end to end** — no client guard, and
+   `unitPrice: z.number().min(0)` accepts 0. P12 would have emailed that PDF to the vendor.
+
+Plus: the whole `purchase-orders` tree had **zero client permission checks**, and both action
+handlers used bare `fetch` with no `!success` branch — so a 403 did nothing at all and the
+error banner was unreachable code. `GET` passed an unvalidated `status` param to Prisma via
+`as never`. And `sentAt` / `sentById` / `sentVia` / `sendCount` had existed since MIG-1a and
+were written by **nothing**, so a PO could read SENT_TO_VENDOR with every send column null.
+
+**A bug the proof caught before it shipped.** The first run of the advisory-lock statement
+failed with `42883: function pg_advisory_xact_lock(bigint, integer) does not exist`. Prisma
+binds a JS number as **bigint**, so the namespace argument needs an explicit `::int4` — without
+it **every purchase order creation would have been a 500**, which is exactly the failure mode of
+the route this phase is repairing. Reasoning about the SQL literal misses what the parameter
+binder does to it; only running it finds this.
+
+**Proven against Postgres** (`bch-local`; the proof counter row was removed afterwards):
+
+```
+pg_advisory_xact_lock(::int4, hashtext(text)) executes via $executeRaw   PASS
+uncast namespace fails with 42883 — the cast is load-bearing            PASS
+same key acquired 3x in sequence, no hang — released by COMMIT          PASS
+no advisory locks left held                                             PASS
+SAME vendor serialises:              A-in A-out B-in                    PASS
+DIFFERENT vendors run concurrently:  X-in Y-in X-out                    PASS
+the SHIPPED seed query runs (read from sequence.ts, not retyped)        PASS
+PO-0042 and PO-00042 both read as 42 — legacy padding collapses         PASS
+20 concurrent allocations gave 20 DISTINCT numbers                      PASS
+```
+
+The transition table was checked exhaustively: **no self-transitions, every target a real
+status, RECEIVED and CANCELLED the only terminal states, cancellable from all five non-terminal
+states**, and the whole happy path walkable — `DRAFT → PENDING_APPROVAL` (PUT), `→ APPROVED`
+(approve route), `→ SENT_TO_VENDOR` (mark-sent), `→ PARTIALLY_RECEIVED → RECEIVED` (PUT).
+APPROVED and SENT_TO_VENDOR are deliberately **unreachable by PUT**, so each keeps its own
+permission and its own side effects.
+
+**Decisions taken with the owner, 6 Sep:**
+
+1. **₹0 lines: reject on `/purchase-orders/new`, SKIP and report on the brand-stock sheet.**
+   `brandPrice || costPrice || 0` legitimately yields 0 when a sheet leaves a price cell blank,
+   and failing forty rows because three had no price would make that screen unusable. On the
+   manual screen a blank rate is a typo, so it is refused. One creator, one option:
+   `onPricelessLine: "reject" | "skip"`.
+2. **Brand-stock POs now land in PENDING_APPROVAL**, like every other route to a vendor. They
+   used to land in DRAFT, so the approval gate could be sidestepped by ordering from a sheet.
+
+**A new route, `POST /[id]/mark-sent`.** Not scope creep: once the state machine refuses
+`SENT_TO_VENDOR` on the PUT, the existing Mark Sent button would simply stop working. It also
+writes the five send columns and a `PurchaseOrderSend` row, which the bare status write never
+did.
+
+**⚠ Two things the PR must name:**
+
+- **"Send via WA" now records the send.** It was a bare `wa.me` link, so a PO sent that way
+  stayed APPROVED for ever.
+- **One known degradation.** `prisma migrate deploy` runs against live traffic; an
+  `ALTER TABLE "PurchaseOrder"` takes ACCESS EXCLUSIVE, and a PO creation blocked behind it now
+  holds the vendor advisory lock while it waits, so other creates for that vendor queue behind
+  it and hit the 15 s timeout as P2028. Before P9 they would have failed independently.
+
+**Deliberately NOT done:** no index on `(vendorId, status)` for the duplicate check — separate
+indexes on each already exist and PO volume is tiny, and adding one would make this MIG-3 and
+force a snapshot before merge. And **no upload → PO link**: re-running a brand sheet can still
+duplicate once the first PO is received or cancelled, because nothing ties an upload to its PO
+(no FK either way, and no `BrandStockUploadStatus` value meaning "ordered"). Both are filed,
+not fixed.
+
 ### 4. What is VERIFIED, and what is not
 
 | Check | Result |
@@ -490,11 +589,13 @@ look broken. The sheet's own controls are 44px.
 | `npx eslint` on every changed file | **zero issues.** 7 exist repo-wide, all pre-existing in untouched files, confirmed by linting HEAD's copy |
 | `npx prisma migrate status` | **up to date, 3 migrations** (`0_init`, MIG-1b, MIG-1a) |
 | Product created from brand + category alone | **PASSES** — P3's acceptance criterion |
-| `npm run build` | **PASSES for R4, P1, P1b, P4, P6, P7, P5 and P8** (P8 run 6 Sep over the final tree). Full route table; **no `/product-types` and no `/api/ops-activity-logs` in it** |
+| `npm run build` | **PASSES for R4, P1, P1b, P4, P6, P7, P5, P8 and P9** (P9 run 6 Sep over the final tree). Full route table; **no `/product-types` and no `/api/ops-activity-logs` in it** |
 | P6 | tsc + eslint clean; the whole-store 400 and the assignee gates are code-verified, NOT browser-walked |
 | P7 | tsc + eslint clean; the build manifest carries `/api/inbound/[id]/issues` and **no `/api/inbound/[id]/status`** — the deleted route is gone from the built app, not just from the tree. The idempotent claim, the approval gate and the deferred Books push are code-verified, NOT browser-walked |
 | P5 | tsc + eslint clean. `istDayBounds` **10/10** cases; the day window and the dedupe **proved against `bch-local`** in a rolled-back transaction, with the old behaviour reproduced beside the new. NOT browser-walked |
 | P8 | tsc clean; eslint 0 errors. The 14-copy unification proved behaviour-preserving by **26,784 assertions over 4,464 combinations, 0 differences**. NOT browser-walked |
+| P9 | tsc clean; eslint 0 new errors. Advisory lock, seed SQL and counter concurrency **proven against Postgres**; the transition table checked exhaustively. NOT browser-walked |
+| ⚠ P9 lint-method note | The `pre-existing` comparisons for P5 and P8 put HEAD's copy in a temp dir OUTSIDE `src/app/`, where path-scoped rules do not apply, so those comparisons were weaker than stated. P9 was checked correctly, with HEAD's copy placed BESIDE the real file. Use that method from here |
 | P8 eslint caveat | `stock/page.tsx` (2) and `stock/[id]/page.tsx` (1) report warnings only, all **pre-existing** — HEAD's copies give the identical 3, confirmed by linting them. One error P8 DID introduce (a hook below an early return) was found and fixed |
 | ⚠ P8 proof caveat | The first proof ran over the real 5,739 products and said IDENTICAL — **worthless as evidence**: every product in `bch-local` has `reorderLevel = 0` and `currentStock = 0`, so it tested one degenerate case. The synthetic matrix is the proof. **Any future reorder work needs seeded levels to test against** |
 | P5 eslint caveat | `(dashboard)/activity/page.tsx` and `desktop/activity/page.tsx` each report 1 error + 1 warning (`react-hooks/set-state-in-effect`, unused `session`). **Pre-existing** — HEAD's copies produce the identical 4 problems, confirmed by linting them. P5 adds none and fixes none |
@@ -583,9 +684,22 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
    an amber **"No invoice prefix"** badge until it is set, and `resolveStoreIdOrPrimary` logs
    a `warn` on every invoice that falls back. The input is built (P1b) — it is one field on
    the store form.
-4. **Then P9–P15**, continuing on `feat/purchasing-transfers-p5-p15` (cut 6 Sep from
+4. **Then P10–P15**, continuing on `feat/purchasing-transfers-p5-p15` (cut 6 Sep from
    `feat/inbound-receiving` @ `df12868`), one commit per phase, in the order of §0.6:
-   P9, P10, P11, P12, P13, P14, P15.
+   P10, P11, P12, P13, P14, P15.
+   - `/purchase-orders` (P9) — the CANCELLED chip filters; labels read "Pending approval"
+   - `/purchase-orders/new` (P9) — the rate box is EMPTY and amber until typed; both buttons
+     refuse while any line has no rate; Submit lands the PO in PENDING_APPROVAL and Save
+     draft in DRAFT; adding a product already on an open PO for that vendor shows the 409
+     card, "Open PO-xxxxx" links, and "Remove those lines and continue" leaves the rest
+   - `/purchase-orders/[id]` (P9) — walk DRAFT → Submit → Approve → Mark sent, and check the
+     buttons change at each step; Re-open clears the approver; Cancel appears on every
+     non-terminal state. **As a role WITHOUT purchase_orders.approve**, Approve must be
+     visible but DISABLED, and every other action must report failure rather than doing
+     nothing — that is the bug this phase fixes
+   - `/brand-stock/[id]` (P9) — Create PO **used to return 500 every time**; it should now
+     create a PENDING_APPROVAL PO. With some rows priceless it must stay on the page and
+     list what was left off rather than navigating away
 
    **Research each phase against the code before building it** (owner, 6 Sep). P8 proved why:
    its plan section had stale line numbers throughout, missed five of the fourteen call sites
