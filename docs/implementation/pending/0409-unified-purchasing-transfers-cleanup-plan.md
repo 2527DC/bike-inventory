@@ -2,7 +2,7 @@
 
 > **To continue this work:** read **[▶ RESUME HERE](#-resume-here--the-only-place-that-holds-current-state)** below. It is the only section that holds current state — branch, database, what is done, what is next. Everything else is design or history.
 
-Status: in-progress — 6 Sep 2026, **P0–P9 and P10a done** (R1, R2, R3, R4, R5, R8, R11, R12, R13 closed; R6 half — P10b is the multi-vendor screen).
+Status: in-progress — 6 Sep 2026, **P0–P10 done** (R1, R2, R3, R4, R5, R6, R8, R11, R12, R13 closed). **Left: P12, P13, P14, P15.**
 **Left: P10, P12–P15** (P11 dropped 6 Sep), continuing on the single branch `feat/purchasing-transfers-p5-p15`.
 Branch: **`feat/purchasing-transfers-p5-p15`** — cut from `feat/inbound-receiving` @ `df12868`,
 one commit per phase from here. Nothing is merged; the owner opens every PR. Update this line as
@@ -38,7 +38,7 @@ Last updated: **5 Sep 2026**, session 3.
 | `feat/zoho-fetch-window` | the branch above | P4 — **pushed** |
 | `feat/stock-audit-scope` | the branch above | P6 — **pushed** |
 | `feat/inbound-receiving` | the branch above | P7 — **pushed** |
-| `feat/purchasing-transfers-p5-p15` | the branch above | **P5 + P8 + P9 + P10a, and P10b, P12–P15 to come** — one commit per phase, except P10 which the owner split in two on 6 Sep |
+| `feat/purchasing-transfers-p5-p15` | the branch above | **P5 + P8 + P9 + P10a + P10b, and P12–P15 to come** — one commit per phase, except P10 which the owner split in two on 6 Sep |
 
 **Branch rule confirmed by the owner, 5 Sep:** keep stacking each phase on the previous
 phase's tip, **and ask before creating each branch**. Claude cut P1 and P1b on its own
@@ -650,6 +650,42 @@ than being a dead label.
 business data on an assumption ("this vendor supplies this brand because one product says so"),
 and with 3 brands the manual route is minutes. Raise it if the brand count grows.
 
+**P10b is complete** (R6 closed — the per-vendor purchase-order screen). No migration.
+
+One section per vendor on `/purchase-orders/new`, each with its own lines, totals, refusal
+and outcome, plus a `Create all (N)` that runs them in order.
+
+**It is a rewrite of that screen, not an addition**, and the agents said so before it was
+attempted: every piece of state except the date and notes became per-section, the index
+arithmetic in `addItem`/`updateItem`/`removeItem` could not address a `(group, index)` pair,
+and the global de-dupe was wrong under groups because the duplicate rule is per vendor.
+The line-item card, the totals block and the conflict card survived as markup; the wiring
+did not. `VendorSection` is the extracted component.
+
+**Three decisions worth keeping:**
+
+1. **The screen does NOT navigate away when orders are created.** It used to `router.push`
+   on success. After a partial run that would destroy the only record of which vendors got
+   an order and which were refused — and nothing rolls back, because by then a real
+   purchase order exists. The report stays, with a link per PO and an explicit line saying
+   the created ones are not undone.
+2. **`Create all` is sequential, not parallel.** Each create takes a per-vendor advisory
+   lock and re-reads that vendor's open orders, so parallel calls would serialise in the
+   database anyway — and a failure in the middle of a parallel run is far harder to report
+   honestly.
+3. **The product search belongs to the manual section only.** Adding by hand to a derived
+   section would put a product on a vendor that does not supply it, which P10a's
+   create-time check would then refuse — a dead end built into the UI.
+
+**`ActionConfirmation` was NOT used for the report**, though the plan named it. Its
+`referenceId` is a required single string rendered as the hero line, and its `items` list
+takes `string` values only — so N purchase orders have no honest reference and no PO could
+be linked. A plain report block with real links is the smaller lie.
+
+**A real fix rather than a suppression:** the product search effect used to call
+`setProductResults([])` synchronously to drop stale matches. The visible list is derived
+from the query length instead — same behaviour, no cascading render, no stale window.
+
 ### 4. What is VERIFIED, and what is not
 
 | Check | Result |
@@ -666,6 +702,7 @@ and with 3 brands the manual route is minutes. Raise it if the brand count grows
 | P8 | tsc clean; eslint 0 errors. The 14-copy unification proved behaviour-preserving by **26,784 assertions over 4,464 combinations, 0 differences**. NOT browser-walked |
 | P9 | tsc clean; eslint 0 new errors. Advisory lock, seed SQL and counter concurrency **proven against Postgres**; the transition table checked exhaustively. NOT browser-walked |
 | P10a | tsc + eslint clean. Vendor resolution **8/8 cases**, including a deactivated product vendor falling through to the brand and two competing primaries returning AMBIGUOUS. NOT browser-walked |
+| P10b | tsc + eslint clean. The per-vendor sections, the sequential run and the outcome report are code-verified, NOT browser-walked — and the walk needs a MIXED-vendor selection, which needs at least two brands linked to two different vendors |
 | ⚠ P10a data state | Measured on `bch-local`: **0 `brand_vendors` rows, 0 of 5,739 active products with a reorder vendor, 3 brands.** Every product resolves to NO_VENDOR, so `/reorder`'s Create PO is blocked for every selection until the data is entered. Correct behaviour, but P10 is INERT until then — and with 3 brands it is minutes of work on `/vendors/[id]` |
 | ⚠ P9 lint-method note | The `pre-existing` comparisons for P5 and P8 put HEAD's copy in a temp dir OUTSIDE `src/app/`, where path-scoped rules do not apply, so those comparisons were weaker than stated. P9 was checked correctly, with HEAD's copy placed BESIDE the real file. Use that method from here |
 | P8 eslint caveat | `stock/page.tsx` (2) and `stock/[id]/page.tsx` (1) report warnings only, all **pre-existing** — HEAD's copies give the identical 3, confirmed by linting them. One error P8 DID introduce (a hook below an early return) was found and fixed |
@@ -762,9 +799,9 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
    an amber **"No invoice prefix"** badge until it is set, and `resolveStoreIdOrPrimary` logs
    a `warn` on every invoice that falls back. The input is built (P1b) — it is one field on
    the store form.
-4. **Then P10–P15**, continuing on `feat/purchasing-transfers-p5-p15` (cut 6 Sep from
+4. **Then P12–P15**, continuing on `feat/purchasing-transfers-p5-p15` (cut 6 Sep from
    `feat/inbound-receiving` @ `df12868`), one commit per phase, in the order of §0.6:
-   P10, P12, P13, P14, P15. **P11 was dropped by the owner on 6 Sep** — see §7 P11 for
+   P12, P13, P14, P15. **P11 was dropped by the owner on 6 Sep** — see §7 P11 for
    what that gives up and for the two pieces of it that moved into P10.
    - `/purchase-orders` (P9) — the CANCELLED chip filters; labels read "Pending approval"
    - `/purchase-orders/new` (P9) — the rate box is EMPTY and amber until typed; both buttons
