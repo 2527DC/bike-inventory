@@ -1,5 +1,10 @@
 export const dynamic = "force-dynamic";
 
+export const runtime = "nodejs";
+// nodejs, explicitly: receiving the last line finishes the shipment, which reaches SMTP and
+// the FCM JWT signer through notify(), and Zoho Books through createBill(). None of that
+// works on the edge runtime, and the failure there is not self-explanatory.
+
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
@@ -7,6 +12,12 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
 import { resolveWarehouse } from "@/lib/warehouses";
 import { adjustWarehouseQty, deductAnywhere } from "@/lib/stock-location";
+import { inboundReceiveLineSchema, inboundCategorySchema } from "@/lib/validations";
+import { logActivity } from "@/lib/activity-log";
+import { finaliseDelivered, scheduleDeliveredSideEffects } from "@/lib/inbound/complete-shipment";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("inbound:detail");
 
 // GET: Shipment detail
 export async function GET(
@@ -21,6 +32,9 @@ export async function GET(
       where: { id },
       include: {
         brand: { select: { name: true } },
+        // The receiving gate: no line can be received until this is set (R3). `parent` so the
+        // picker and the header can show "Spare Parts › Tyres" rather than a bare leaf name.
+        category: { select: { id: true, name: true, parent: { select: { name: true } } } },
         createdBy: { select: { name: true } },
         approvedBy: { select: { name: true } },
         deliveredBy: { select: { name: true } },
@@ -60,45 +74,132 @@ export async function PUT(
     const existing = await prisma.inboundShipment.findUnique({ where: { id } });
     if (!existing) return errorResponse("Not found", 404);
 
-    // Update individual line item delivery + add stock + auto-create delivery for pre-booked
+    // ─── SET THE SHIPMENT CATEGORY (R3) ───────────────────────────────────────────────────
     //
-    // inbound.delivered is deliberately NOT wired here, although the notifications plan (§F.3)
-    // lists this file. This handler never writes InboundShipment.status — it marks ONE line item
-    // delivered and adds its stock; the shipment stays IN_TRANSIT / PARTIALLY_DELIVERED until
-    // someone marks it DELIVERED through [id]/status, which is the only site that fires.
-    if (body.lineItemId && body.deliveredQty !== undefined) {
+    // Cycles / Spares / Accessories used to live in ONE phone's localStorage, so the shipment
+    // read as uncategorised to everybody else and lost the value whenever that browser
+    // cleared. It is a property of the shipment, so it is a column now (MIG-1a).
+    if (body.categoryId !== undefined && body.lineItemId === undefined) {
+      const parsed = inboundCategorySchema.safeParse(body);
+      if (!parsed.success) return errorResponse(parsed.error.issues[0]?.message ?? "Invalid request", 400);
+
+      const category = await prisma.category.findUnique({
+        where: { id: parsed.data.categoryId },
+        select: { id: true, name: true },
+      });
+      if (!category) return errorResponse("That category does not exist", 400);
+
+      // Refused once anything has been received: the category decides how the lines are
+      // handled, so changing it afterwards would re-interpret stock already in the building.
+      const received = await prisma.inboundLineItem.count({
+        where: { shipmentId: id, isDelivered: true },
+      });
+      if (received > 0) {
+        return errorResponse(
+          "Items have already been received on this shipment, so its category can no longer be changed.",
+          400
+        );
+      }
+
+      const previous = existing.categoryId
+        ? await prisma.category.findUnique({ where: { id: existing.categoryId }, select: { name: true } })
+        : null;
+
+      const updated = await prisma.$transaction(async (tx) => {
+        const row = await tx.inboundShipment.update({
+          where: { id },
+          data: { categoryId: category.id },
+          include: { category: { select: { id: true, name: true } } },
+        });
+        await logActivity(tx, {
+          module: "inbound",
+          action: "updated",
+          entityType: "InboundShipment",
+          entityId: id,
+          entityRef: existing.shipmentNo,
+          fromValue: previous?.name ?? null,
+          toValue: category.name,
+          details: "category",
+          userId: user.id,
+          userName: user.name,
+        });
+        return row;
+      });
+
+      log.info("shipment category set", { shipmentId: id, categoryId: category.id });
+      return successResponse(updated);
+    }
+
+    // ─── RECEIVE ONE LINE (R3) ────────────────────────────────────────────────────────────
+    //
+    // Per LINE, and the shipment finishes itself: when the last outstanding line is received
+    // the transition into DELIVERED is claimed here, so the Mark All / Partial / Undo buttons
+    // and the whole [id]/status route are gone.
+    if (body.lineItemId !== undefined) {
+      const parsed = inboundReceiveLineSchema.safeParse(body);
+      if (!parsed.success) return errorResponse(parsed.error.issues[0]?.message ?? "Invalid request", 400);
+      const { lineItemId, deliveredQty: qty, warehouseId } = parsed.data;
+
+      // ── Gates, all before the transaction ──
+      //
+      // The per-line route had NO approval gate at all: stock could be received into a
+      // shipment nobody had approved.
+      if (existing.status === "DELIVERED") {
+        return errorResponse("This shipment is already fully received", 400);
+      }
+      if (!existing.approvedAt) {
+        return errorResponse("This shipment has not been approved yet", 403);
+      }
+      if (!existing.categoryId) {
+        return errorResponse("Choose the shipment category before receiving", 400);
+      }
+
       const lineItem = await prisma.inboundLineItem.findUnique({
-        where: { id: body.lineItemId },
+        where: { id: lineItemId },
         include: {
           shipment: { include: { brand: { select: { name: true } } } },
           preBooking: true,
         },
       });
       if (!lineItem) return errorResponse("Line item not found", 404);
+      if (lineItem.shipmentId !== id) {
+        return errorResponse("That line item belongs to a different shipment", 400);
+      }
+      // D6: the blue button receives the FULL bill quantity. A shortage is a vendor issue,
+      // not a smaller receipt — otherwise the shortfall silently becomes the new truth.
+      if (qty !== lineItem.quantity) {
+        return errorResponse(
+          `Receive the full billed quantity (${lineItem.quantity}). For a short delivery, use Report Issue.`,
+          400
+        );
+      }
 
-      const wasDelivered = lineItem.isDelivered;
-      const nowDelivered = body.deliveredQty > 0;
-      const qty = body.deliveredQty;
+      const resolved = await resolveWarehouse(warehouseId);
+      if ("error" in resolved) return errorResponse(resolved.error, 400);
+      const warehouse = resolved.warehouse;
 
-      // Bin mode (dormant): per-unit bin allocation. Location mode (active): receive
-      // the whole line into one location (default Store).
       const binAllocations: Array<{ binId: string; qty: number }> = body.binAllocations || (body.binId ? [{ binId: body.binId, qty }] : []);
       if (BIN_TRACKING_ENABLED && binAllocations.length === 0) {
         return errorResponse("Bin assignment is required when marking items delivered", 400);
       }
       const primaryBinId = binAllocations[0]?.binId ?? null;
-      const resolved = await resolveWarehouse(body.warehouseId ?? body.location);
-      if ("error" in resolved) return errorResponse(resolved.error, 400);
-      const warehouse = resolved.warehouse;
 
-      await prisma.$transaction(async (tx) => {
-        await tx.inboundLineItem.update({
-          where: { id: body.lineItemId },
-          data: { isDelivered: nowDelivered, deliveredQty: qty, ...(primaryBinId ? { binId: primaryBinId } : {}) },
+      const outcome = await prisma.$transaction(async (tx) => {
+        // ── THE IDEMPOTENT CLAIM ──
+        //
+        // `isDelivered` used to be read OUTSIDE the transaction (`wasDelivered`), so two taps
+        // in quick succession both saw false and both added the stock — a double-tap on a
+        // phone silently doubled the received quantity. Letting the database decide makes
+        // that impossible: exactly one caller gets count === 1.
+        const claim = await tx.inboundLineItem.updateMany({
+          where: { id: lineItemId, isDelivered: false },
+          data: { isDelivered: true, deliveredQty: qty, ...(primaryBinId ? { binId: primaryBinId } : {}) },
         });
+        if (claim.count === 0) {
+          return { updated: false, alreadyReceived: true, shipmentDelivered: false, snapshot: null };
+        }
 
-        // Add stock only when newly marking as delivered (not already delivered)
-        if (nowDelivered && !wasDelivered && qty > 0) {
+        {
           const searchName = lineItem.productName.substring(0, 20);
           const matchedProduct = lineItem.productId
             ? await tx.product.findUnique({ where: { id: lineItem.productId } })
@@ -182,9 +283,77 @@ export async function PUT(
             });
           }
         }
+
+        await logActivity(tx, {
+          module: "inbound",
+          action: "received",
+          entityType: "InboundShipment",
+          entityId: id,
+          entityRef: existing.shipmentNo,
+          details: `${lineItem.productName} ×${qty} → ${warehouse.name}`,
+          userId: user.id,
+          userName: user.name,
+        });
+
+        // ── DOES THIS FINISH THE SHIPMENT? ──
+        //
+        // Asked here, inside the transaction, off the row the claim just wrote — so the
+        // count cannot race with another line being received at the same moment.
+        const remaining = await tx.inboundLineItem.count({
+          where: { shipmentId: id, isDelivered: false },
+        });
+
+        if (remaining === 0) {
+          const snapshot = await finaliseDelivered(tx, id, user.id, user.name, existing.status);
+          return { updated: true, alreadyReceived: false, shipmentDelivered: Boolean(snapshot), snapshot };
+        }
+
+        // The FIRST receipt is a real state change and used to be invisible: a partially
+        // received shipment showed N receipts and no transition, so nothing distinguished
+        // "nobody has started" from "half of it is in".
+        if (existing.status === "IN_TRANSIT") {
+          await tx.inboundShipment.update({
+            where: { id },
+            data: { status: "PARTIALLY_DELIVERED" },
+          });
+          await logActivity(tx, {
+            module: "inbound",
+            action: "status_changed",
+            entityType: "InboundShipment",
+            entityId: id,
+            entityRef: existing.shipmentNo,
+            fromValue: "IN_TRANSIT",
+            toValue: "PARTIALLY_DELIVERED",
+            details: `${remaining} line(s) still to receive`,
+            userId: user.id,
+            userName: user.name,
+          });
+        }
+
+        return { updated: true, alreadyReceived: false, shipmentDelivered: false, snapshot: null };
       });
 
-      return successResponse({ updated: true });
+      // AFTER the transaction resolved, never inside it. `after()` fires even when the
+      // response throws, so registering the Zoho push inside would bill a shipment that then
+      // rolled back — and a rollback cannot recall a bill from someone else's books.
+      if (outcome.snapshot) {
+        scheduleDeliveredSideEffects(outcome.snapshot, { id: user.id, name: user.name });
+      }
+
+      log.info("line received", {
+        shipmentId: id,
+        lineItemId,
+        qty,
+        warehouseId: warehouse.id,
+        alreadyReceived: outcome.alreadyReceived,
+        shipmentDelivered: outcome.shipmentDelivered,
+      });
+
+      return successResponse({
+        updated: outcome.updated,
+        alreadyReceived: outcome.alreadyReceived,
+        shipmentDelivered: outcome.shipmentDelivered,
+      });
     }
 
     // Update notes

@@ -485,6 +485,33 @@ export const deliveryUpdateSchema = z.object({
 
 // ─── Inbound Tracking ───────────────────────
 
+/**
+ * Receiving ONE line of a shipment (R3).
+ *
+ * `deliveredQty` must equal the line's billed quantity — the blue button means "receive the
+ * full bill qty" (owner decision D6) and shortages are raised through Report Issue instead.
+ * The route enforces the equality; this only guarantees a positive integer arrived.
+ *
+ * `warehouseId` is required. The old handler defaulted a missing warehouse through
+ * `resolveWarehouse(body.warehouseId ?? body.location)`, so stock could land somewhere nobody
+ * chose.
+ */
+export const inboundReceiveLineSchema = z.object({
+  lineItemId: z.string().min(1, "Line item is required"),
+  deliveredQty: z.number().int().min(1, "Quantity must be at least 1"),
+  warehouseId: z.string().min(1, "Choose where the stock is going"),
+});
+
+/**
+ * The Cycles / Spares / Accessories choice that gates receiving (R3).
+ *
+ * It lived in ONE phone's localStorage, so the shipment looked uncategorised to everybody
+ * else and lost the value when that browser cleared. It is a property of the shipment.
+ */
+export const inboundCategorySchema = z.object({
+  categoryId: z.string().min(1, "Choose a category"),
+});
+
 export const inboundShipmentSchema = z.object({
   brandId: z.string().min(1, "Brand is required"),
   billNo: z.string().min(1, "Bill number is required"),
@@ -504,6 +531,46 @@ export const inboundShipmentSchema = z.object({
     hsn: z.string().optional(),
   })).min(1, "At least one line item is required"),
 });
+
+/**
+ * Report Issue on a receiving line (`POST /api/inbound/[id]/issues`).
+ *
+ * The person at the goods desk names the LINE, not the vendor: the route resolves the vendor
+ * from the shipment's bill (or its brand) itself. The old client-side call sent a `vendorId`
+ * read from `shipment.vendorBill`, so every shipment without a Zoho bill sent `undefined` and
+ * was refused with 400.
+ *
+ * `issueType` is the full `IssueType` enum from the schema, unchanged — this endpoint is one
+ * more way to raise the same VendorIssue, not a second vocabulary.
+ *
+ * `issueQty` is optional for the enum as a whole but required for SHORTAGE and DAMAGE, which
+ * are the two that read a count back to the brand ("Short by 3 of 10"). The refine keeps that
+ * rule in one place rather than in the route and the form separately.
+ */
+export const inboundIssueSchema = z
+  .object({
+    lineItemId: z.string().min(1, "Line item is required"),
+    issueType: z.enum([
+      "QUALITY",
+      "SHORTAGE",
+      "DAMAGE",
+      "WRONG_ITEM",
+      "BILLING_ERROR",
+      "DELIVERY_DELAY",
+      "OTHER",
+    ]),
+    issueQty: z.number().int().min(1, "Quantity must be at least 1").optional(),
+    notes: z.string().optional(),
+  })
+  .refine(
+    (d) =>
+      (d.issueType !== "SHORTAGE" && d.issueType !== "DAMAGE") ||
+      d.issueQty !== undefined,
+    {
+      message: "Quantity is required for a shortage or damage issue",
+      path: ["issueQty"],
+    }
+  );
 
 export const preBookingSchema = z.object({
   customerName: z.string().min(1, "Customer name is required"),
