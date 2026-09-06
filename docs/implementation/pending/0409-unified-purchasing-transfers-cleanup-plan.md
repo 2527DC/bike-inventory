@@ -2,8 +2,8 @@
 
 > **To continue this work:** read **[▶ RESUME HERE](#-resume-here--the-only-place-that-holds-current-state)** below. It is the only section that holds current state — branch, database, what is done, what is next. Everything else is design or history.
 
-Status: in-progress — 6 Sep 2026, **P0–P7 and P5 done** (R1, R2, R3, R4, R11, R12, R13 closed).
-**Left: P8–P15**, continuing on the single branch `feat/purchasing-transfers-p5-p15`.
+Status: in-progress — 6 Sep 2026, **P0–P8 done** (R1, R2, R3, R4, R5, R11, R12, R13 closed).
+**Left: P9–P15**, continuing on the single branch `feat/purchasing-transfers-p5-p15`.
 Branch: **`feat/purchasing-transfers-p5-p15`** — cut from `feat/inbound-receiving` @ `df12868`,
 one commit per phase from here. Nothing is merged; the owner opens every PR. Update this line as
 work moves, and keep the detail in ▶ RESUME HERE, not here.
@@ -38,7 +38,7 @@ Last updated: **5 Sep 2026**, session 3.
 | `feat/zoho-fetch-window` | the branch above | P4 — **pushed** |
 | `feat/stock-audit-scope` | the branch above | P6 — **pushed** |
 | `feat/inbound-receiving` | the branch above | P7 — **pushed** |
-| `feat/purchasing-transfers-p5-p15` | the branch above | **P5, and P8–P15 to come** — one commit per phase (owner, 6 Sep) |
+| `feat/purchasing-transfers-p5-p15` | the branch above | **P5 + P8, and P9–P15 to come** — one commit per phase (owner, 6 Sep) |
 
 **Branch rule confirmed by the owner, 5 Sep:** keep stacking each phase on the previous
 phase's tip, **and ask before creating each branch**. Claude cut P1 and P1b on its own
@@ -397,6 +397,90 @@ land, in a file neither of them touches.
 them. A module missing from the feed's map is someone's work going invisible, and the warn is how
 that gets found by reading logs rather than by a person noticing their day looks empty.
 
+**P8 is complete** (R5 — one-tap reorder on `/stock`, and the `₹NaN` search fix). No
+migration: `reorderVendorId` and its index have been in the schema since MIG-1a
+(schema.prisma:514-515, :538) — only Zod and the UI were missing.
+
+**Researched before it was built**, by four parallel read-only agents (owner asked for this on
+6 Sep). That was the right call: **the plan's P8 section was substantially stale**, and two of
+its instructions would have produced a bug.
+
+| The plan said | The code said |
+|---|---|
+| Lift the "focus trap" from `filter-sheet.tsx` | **There is no focus trap** — not in that file, not anywhere; no Tab handler exists in the repo. And `filter-sheet` is a right-hand DRAWER used by **12 screens** |
+| "Two sheet patterns in two phases was the earlier draft's mistake" | **15 overlay sites**, 4 named components, 3 layout shapes, 2 z-tiers already exist |
+| Use a vendor `<select>` | The plan predates P7's `SearchableSelect`, which was built for this (its `hint` prop is documented as "vendor code, city") |
+| `userCan("cost_price","view")` | Not callable — the signature is `userCan(userId, module, action)`, and the search route discarded `requireFeature`'s return |
+| `costPrice` may be a `Decimal` whose serialisation causes the NaN | It is `Float` (schema.prisma:491). The NaN had exactly one cause: the field was absent from the select |
+| Nine low-stock copies at listed lines | **14 copies**, and every line number was stale. It missed the three `suggestedOrderQty` copies and two `isLowStock` sites |
+
+**Decisions taken with the owner, 6 Sep:**
+
+1. **`PUT /api/products/[id]/reorder` is guarded on `reorder.edit`, not `stock.edit`** —
+   `api/reorder/update-levels` already writes the same three columns behind it, and one column
+   behind two permissions depending on the URL is not a permission. **Consequence to grant
+   before release: the `/stock` Reorder button is gated on `canEdit("reorder")`, so a role
+   holding only `stock.edit` does not see it.** Gating the button and the route differently is
+   the exact bug P7 had to fix on inbound.
+2. **"Low stock" keeps its two meanings, documented rather than unified.** `api/dashboard/stats`
+   counts `currentStock - reservedStock`; everything else counts on hand. So the dashboard tile
+   and `/reorder` disagree whenever anything is reserved. Fixing that is a decision about what
+   the shop means by "low" and it moves a number people already read — filed, not fixed.
+3. **No shared sheet primitive.** `reorder-sheet.tsx` reuses the shape
+   `customer-edit-sheet.tsx` already proved, and adds the two things it lacks (`pb-safe`, focus
+   return). Collapsing the 15 overlays is its own phase.
+
+**The unification is proven behaviour-preserving.** `isLowStock` and `suggestedOrderQty`
+replaced 14 inline copies; **26,784 assertions over 4,464 input combinations found zero
+differences** (coverage: 1,860 low, 1,860 OK, 744 out-of-stock). Note the first run, over the
+real 5,739 products, was worthless as evidence — **every product in `bch-local` has
+`reorderLevel = 0` and `currentStock = 0`**, so it exercised one degenerate case. The matrix is
+the proof.
+
+**Six copies were deliberately NOT converted**, each commented at its own site and listed in
+`src/lib/reorder.ts`'s header: the notifier's downward-CROSSING detector
+(`lib/notify/stock.ts:48` — replacing it re-notifies on every later sale), `desktop/stock`'s
+hardcoded `<= 5`, the two brand-stock shortfalls (floor 0, and 0 is a "not selected" SIGNAL),
+`brand-stock/[id]`'s nullable snapshot column, and four raw-SQL copies a TypeScript helper
+cannot reach.
+
+**FOUR bugs found and fixed on the way, none of them in the plan:**
+
+1. **The sheet would have shown the wrong numbers and then erased them.** `api/products` (list)
+   selected neither `reorderQty` nor `reorderVendorId`, so the sheet — which opens pre-filled
+   from the row — would have shown 0 and no vendor for a product that had both, and saving
+   would have written those zeros back.
+2. **A side door.** Adding `reorderVendorId` to `productSchema` made it writable through
+   `PUT /api/products/[id]`, which is guarded on `stock.edit` — bypassing the `reorder.edit`
+   decision entirely. That route now demands `reorder.edit` and validates the vendor when the
+   field is present.
+3. **A cleared vendor would not clear.** `/stock/[id]`'s save drops empty strings before
+   sending — right for text fields, wrong for "No vendor". Sent as an explicit null now.
+4. **A cost-price leak.** `api/reorder/route.ts:36` selected `costPrice` unconditionally behind
+   only `reorder.view`, so anyone who could open `/reorder` could read every product's cost —
+   past the `cost_price` module that exists to gate exactly that.
+
+**`api/reorder/update-levels` had no Zod, no logger and no batch cap.** Its `Number(x) || 0`
+also turned a typo into 0, and 0 switches low-stock detection OFF for that product
+(`isLowStock` requires `reorderLevel > 0`). All three added.
+
+**`api/products/bulk` moved `stock.create` → `stock.edit`**, and additionally requires
+`reorder.edit` **only when the body carries `reorderVendorId`** — so the four original bulk
+actions keep working on the grants roles already hold. Its "nothing to update" guard had to
+change too, or a vendor-only body 400s; and `reorderVendorId` is tested with `!== undefined`
+rather than truthiness, because null is a real request there ("clear the vendor on these 40").
+
+**`₹NaN` was worse than reported: five render sites**, not one — the dropdown row before the
+item is even added, the line total, and all three of subtotal, GST and grand total. The two
+missing fields also flowed into the line item as `unitPrice`/`gstRate`, so the PO was built on
+them. `ProductOption` declared both as non-optional `number`, which is why nothing ever
+complained; they are optional now, because `costPrice` is genuinely absent for a caller without
+`cost_price.view`.
+
+**Deliberately not changed:** `RowBtn` is `min-h-[32px]`, under the 44px rule that holds in 158
+places. The Reorder button inherits it to match its three siblings; raising one of four would
+look broken. The sheet's own controls are 44px.
+
 ### 4. What is VERIFIED, and what is not
 
 | Check | Result |
@@ -406,10 +490,13 @@ that gets found by reading logs rather than by a person noticing their day looks
 | `npx eslint` on every changed file | **zero issues.** 7 exist repo-wide, all pre-existing in untouched files, confirmed by linting HEAD's copy |
 | `npx prisma migrate status` | **up to date, 3 migrations** (`0_init`, MIG-1b, MIG-1a) |
 | Product created from brand + category alone | **PASSES** — P3's acceptance criterion |
-| `npm run build` | **PASSES for R4, P1, P1b, P4, P6, P7 and P5** (P5 run 6 Sep over the final tree, exit 0). Full route table; **no `/product-types` and no `/api/ops-activity-logs` in it** |
+| `npm run build` | **PASSES for R4, P1, P1b, P4, P6, P7, P5 and P8** (P8 run 6 Sep over the final tree). Full route table; **no `/product-types` and no `/api/ops-activity-logs` in it** |
 | P6 | tsc + eslint clean; the whole-store 400 and the assignee gates are code-verified, NOT browser-walked |
 | P7 | tsc + eslint clean; the build manifest carries `/api/inbound/[id]/issues` and **no `/api/inbound/[id]/status`** — the deleted route is gone from the built app, not just from the tree. The idempotent claim, the approval gate and the deferred Books push are code-verified, NOT browser-walked |
 | P5 | tsc + eslint clean. `istDayBounds` **10/10** cases; the day window and the dedupe **proved against `bch-local`** in a rolled-back transaction, with the old behaviour reproduced beside the new. NOT browser-walked |
+| P8 | tsc clean; eslint 0 errors. The 14-copy unification proved behaviour-preserving by **26,784 assertions over 4,464 combinations, 0 differences**. NOT browser-walked |
+| P8 eslint caveat | `stock/page.tsx` (2) and `stock/[id]/page.tsx` (1) report warnings only, all **pre-existing** — HEAD's copies give the identical 3, confirmed by linting them. One error P8 DID introduce (a hook below an early return) was found and fixed |
+| ⚠ P8 proof caveat | The first proof ran over the real 5,739 products and said IDENTICAL — **worthless as evidence**: every product in `bch-local` has `reorderLevel = 0` and `currentStock = 0`, so it tested one degenerate case. The synthetic matrix is the proof. **Any future reorder work needs seeded levels to test against** |
 | P5 eslint caveat | `(dashboard)/activity/page.tsx` and `desktop/activity/page.tsx` each report 1 error + 1 warning (`react-hooks/set-state-in-effect`, unused `session`). **Pre-existing** — HEAD's copies produce the identical 4 problems, confirmed by linting them. P5 adds none and fixes none |
 | P4 date-window spot-checks | **12/12 PASS**, including the plan`s four and the owner`s "3 days on 4 Sep" case |
 | P1b acceptance scenario | **PASSES** — 10 → sell 3 → 7 → receive 5 → **12**; the old path reproduced alongside gives **15**. Ran against `bch-local` in a rolled-back transaction |
@@ -456,6 +543,18 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
      one that needs a real clock** — the proof script covers the query, not the screen
    - the dashboard (P5) — "today" is the IST today in all six places, checked between
      midnight and 05:30 IST or by moving the machine clock
+   - `/stock` (P8) — at 375 px: Reorder → sheet → Save → the badge flips WITHOUT a reload and
+     the card link does not fire; "Reorder @ N" appears only where a level is set; select
+     mode → Vendor tab → Apply. **Grant `reorder.edit` first or the button is invisible.** A
+     role with `reorder.edit` but no `vendors.view` must still save level and quantity, with
+     the picker hidden and a note in its place
+   - `/stock/[id]` (P8) — Reorder Qty and Vendor save; "No vendor" actually CLEARS it
+   - `/purchase-orders/new` (P8) — type 2+ characters: no `₹NaN` in the dropdown row, the
+     line total or any of the three totals. Then repeat as a role WITHOUT `cost_price.view`:
+     the cost is absent from the row and the line opens at ₹0, still no NaN
+   - `/reorder` (P8) — the low-stock filter, select-all and the WhatsApp share list the same
+     products as before. **Seed some reorder levels first** — every product in `bch-local`
+     currently has 0, so the screen has nothing to show either way
 2. **PRs — the owner's job, not Claude's** (owner, 5 Sep: "u dont do anything related to pr").
    Six branches are pushed; `feat/purchasing-transfers-p5-p15` is the seventh and stays local
    until P8–P15 are on it, or until you ask for it. **Merge in stacking order:
@@ -484,9 +583,14 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
    an amber **"No invoice prefix"** badge until it is set, and `resolveStoreIdOrPrimary` logs
    a `warn` on every invoice that falls back. The input is built (P1b) — it is one field on
    the store form.
-4. **Then P8–P15**, continuing on `feat/purchasing-transfers-p5-p15` (cut 6 Sep from
+4. **Then P9–P15**, continuing on `feat/purchasing-transfers-p5-p15` (cut 6 Sep from
    `feat/inbound-receiving` @ `df12868`), one commit per phase, in the order of §0.6:
-   P8, P9, P10, P11, P12, P13, P14, P15. The rules for that branch are in §3 "Branching
+   P9, P10, P11, P12, P13, P14, P15.
+
+   **Research each phase against the code before building it** (owner, 6 Sep). P8 proved why:
+   its plan section had stale line numbers throughout, missed five of the fourteen call sites
+   it was meant to unify, and gave two instructions that would have produced bugs — a focus
+   trap to lift from a file that has none, and an uncallable `userCan` signature. The rules for that branch are in §3 "Branching
    changed 5 Sep". P14 carries MIG-2, the last migration folder — `npm run db:snapshot`
    before that PR merges.
 
@@ -1016,8 +1120,9 @@ Saving individual counts is deliberately not logged. PO and transfer rows use th
 | `src/lib/stock-location.ts` (extend) | `getStoreQtyMap(ids, storeId)` beside `getWarehouseQtyMap` (L59) | P6 |
 | `src/lib/inbound/complete-shipment.ts` | `finaliseDelivered(tx, …)`, `scheduleDeliveredSideEffects(snapshot, actor)` | P7 |
 | `src/components/ui/searchable-select.tsx` | combobox, 44 px rows, keyboard, click-outside | P7 |
-| `src/lib/reorder.ts` | `isLowStock(p)`, `suggestedOrderQty(p)` (client-safe) | P8 |
-| `src/components/reorder-sheet.tsx` | bottom sheet built from `filter-sheet.tsx` | P8 |
+| `src/lib/reorder.ts` | `isLowStock(p)`, `suggestedOrderQty(p)` (client-safe). **Built.** Its header lists the SIX copies deliberately left alone and why — read it before adding a seventh caller | P8 |
+| `src/lib/vendors/validate.ts` | `validateReorderVendor(id)` → `Promise<string | null>`, on the `validateSiteAssignment` pattern. **Built** — three routes write `reorderVendorId` and every prior vendor check in the repo tested existence but never `isActive` | P8 |
+| `src/components/reorder-sheet.tsx` | **Built**, but NOT from `filter-sheet.tsx` — that is a right-hand drawer used by 12 screens and has no focus trap to lift. Reuses `customer-edit-sheet.tsx`'s shape + `pb-safe` + focus return | P8 |
 | `src/lib/api-utils.ts` (edit) | `errorResponse(message, status, data?)` (two args today, L8) | P9 |
 | `src/lib/api-client.ts` (edit) | `timeoutMs` + `ApiError.isTimeout` (P4); `ApiError.data` (P9); `signal` already flows through `init` (`Omit<RequestInit,"body">`, L81) | P4, P9 |
 | `src/lib/purchase-orders/status.ts`, `duplicates.ts` | `PO_TRANSITIONS`, `canTransition`, `applyTransition`; `findOpenPoConflicts` | P9 |
