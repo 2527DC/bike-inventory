@@ -4,6 +4,8 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { userCan } from "@/lib/rbac";
+import { validateReorderVendor } from "@/lib/vendors/validate";
 import { createLogger } from "@/lib/logger";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
 
@@ -13,17 +15,29 @@ import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
 // gets asked afterwards.
 const log = createLogger("products:bulk");
 
-// POST — bulk update products (category, brand, bin, status)
+// POST — bulk update products (category, brand, bin, status, reorder vendor)
+//
+// GUARD CHANGED IN P8: `stock.create` -> `stock.edit`. This route does not create anything;
+// it rewrites a column on rows that already exist, which is an edit. The practical reason is
+// that it is the only screen that can assign reorder vendors brand by brand — filter /stock by
+// brand, select all, set vendor — and a role holding `stock.edit` for the reorder sheet must
+// not meet a 403 on the one screen that makes that data exist in bulk.
+//
+// `reorderVendorId` additionally requires `reorder.edit`, because that column is written by
+// two other routes behind exactly that permission (api/products/[id]/reorder,
+// api/reorder/update-levels). Requiring it only when the field is PRESENT means the four
+// original bulk actions keep working on the grants roles already hold.
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireFeature("stock", "create");
+    const user = await requireFeature("stock", "edit");
     const body = await req.json();
-    const { productIds, brandId, status, categoryId, binId } = body as {
+    const { productIds, brandId, status, categoryId, binId, reorderVendorId } = body as {
       productIds: string[];
       brandId?: string;
       status?: "ACTIVE" | "INACTIVE";
       categoryId?: string;
       binId?: string;
+      reorderVendorId?: string | null;
     };
 
     if (!productIds || productIds.length === 0) {
@@ -32,8 +46,22 @@ export async function POST(req: NextRequest) {
     if (productIds.length > 500) {
       return errorResponse("Maximum 500 products per batch", 400);
     }
-    if (!brandId && !status && !categoryId && !binId) {
-      return errorResponse("Nothing to update — provide brandId, categoryId, binId, or status", 400);
+    // `reorderVendorId` is checked with `undefined`, not truthiness: null is a real request
+    // here — "clear the reorder vendor on these 40 products" — and a truthy test would answer
+    // it with "Nothing to update".
+    if (!brandId && !status && !categoryId && !binId && reorderVendorId === undefined) {
+      return errorResponse(
+        "Nothing to update — provide brandId, categoryId, binId, status, or reorderVendorId",
+        400
+      );
+    }
+
+    if (reorderVendorId !== undefined) {
+      if (!(await userCan(user.id, "reorder", "edit"))) {
+        return errorResponse("You do not have permission to set the reorder vendor", 403);
+      }
+      const vendorError = await validateReorderVendor(reorderVendorId);
+      if (vendorError) return errorResponse(vendorError, 400);
     }
 
     // Validate brand exists if provided
@@ -69,6 +97,8 @@ export async function POST(req: NextRequest) {
     if (status) updateData.status = status;
     if (categoryId) updateData.categoryId = categoryId;
     if (binId) updateData.binId = binId;
+    // Assigned when PRESENT rather than when truthy, so null clears it.
+    if (reorderVendorId !== undefined) updateData.reorderVendorId = reorderVendorId || null;
 
     const result = await prisma.product.updateMany({
       where: { id: { in: productIds } },
@@ -86,6 +116,7 @@ export async function POST(req: NextRequest) {
       categoryId,
       binId,
       status,
+      reorderVendorId,
     });
 
     return successResponse({ updated: result.count });

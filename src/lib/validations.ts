@@ -44,6 +44,11 @@ export const productSchema = z.object({
   maxStock: z.number().int().min(0).optional(),
   reorderLevel: z.number().int().min(0).optional(),
   reorderQty: z.number().int().min(0).optional(),
+  // Nullable, not just optional: "" and null both mean "no reorder vendor", and clearing the
+  // field is how a wrong one gets undone. The column has been there since MIG-1a
+  // (schema.prisma:514) — only this schema was missing, so a reorderVendorId sent to
+  // PUT /api/products/[id] was silently STRIPPED by productUpdateSchema.partial().
+  reorderVendorId: z.string().nullable().optional(),
   size: z.string().optional(),
   color: z.string().optional(),
   imageUrls: z.array(z.string().url()).optional(),
@@ -52,6 +57,47 @@ export const productSchema = z.object({
 });
 
 export const productUpdateSchema = productSchema.partial();
+
+/**
+ * The three columns the reorder sheet writes, and nothing else.
+ *
+ * This exists so the sheet does NOT post to PUT /api/products/[id]. That route parses the
+ * whole `productUpdateSchema` and spreads it into `prisma.product.update` behind a bare
+ * `stock.edit` grant (api/products/[id]/route.ts:65-74), so wiring a reorder sheet to it
+ * would hand every `stock.edit` holder a write on `costPrice`, `sellingPrice` and `sku` —
+ * while READING cost price needs `cost_price.view`. A narrow schema on a narrow route is
+ * what keeps the sheet from being an accidental price editor.
+ */
+export const reorderSettingsSchema = z.object({
+  reorderLevel: z.number().int().min(0, "Reorder level cannot be negative"),
+  reorderQty: z.number().int().min(0, "Reorder quantity cannot be negative"),
+  reorderVendorId: z.string().nullable().optional(),
+});
+
+/**
+ * The /reorder screen's batch save (PUT /api/reorder/update-levels).
+ *
+ * The route had NO validation at all: it read `body.items`, checked `Array.isArray`, and
+ * looped. That meant an unbounded array — one request could open a transaction over every
+ * product in the catalogue — and a `reorderVendorId` written straight through, where a bad
+ * id surfaced as a raw foreign-key violation instead of a sentence.
+ *
+ * The 500 cap matches `api/products/bulk` (bulk/route.ts:32), which is the other route that
+ * rewrites many product rows at once.
+ */
+export const reorderLevelsSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        id: z.string().min(1, "Product id is required"),
+        reorderLevel: z.number().int().min(0, "Reorder level cannot be negative"),
+        reorderQty: z.number().int().min(0, "Reorder quantity cannot be negative").optional(),
+        reorderVendorId: z.string().nullable().optional(),
+      })
+    )
+    .min(1, "Nothing to update")
+    .max(500, "Too many products in one request (max 500)"),
+});
 
 export const inwardSchema = z.object({
   productId: z.string().min(1, "Product is required"),

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { usePermissions } from "@/lib/use-permissions";
+import { isLowStock } from "@/lib/reorder";
 import { ArrowLeft, ChevronDown, ChevronRight, Search, AlertTriangle, Package, Loader2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -313,7 +314,7 @@ export default function BrandStockPage() {
                                 </div>
                                 <div className="text-right shrink-0">
                                   <p className={`text-sm font-bold ${
-                                    p.reorderLevel > 0 && p.currentStock <= p.reorderLevel ? "text-yellow-600" : "text-green-600"
+                                    isLowStock(p) ? "text-yellow-600" : "text-green-600"
                                   }`}>{p.currentStock}</p>
                                 </div>
                               </div>

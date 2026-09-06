@@ -7,9 +7,14 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
+import { apiTry } from "@/lib/api-client";
 
 interface VendorOption { id: string; name: string; code: string; }
-interface ProductOption { id: string; name: string; sku: string; costPrice: number; gstRate: number; }
+// costPrice is OPTIONAL and that is not laziness: api/products/search selects it only for a
+// caller holding cost_price.view, so for everyone else the key is genuinely absent. Declaring
+// it `number` was how this screen ended up rendering ₹NaN in five places — the type said the
+// value was always there, so nothing forced anyone to handle its absence.
+interface ProductOption { id: string; name: string; sku: string; costPrice?: number; gstRate?: number; }
 interface POLineItem { productId: string; productName: string; sku: string; quantity: number; unitPrice: number; gstRate: number; }
 
 function formatCurrency(amount: number) {
@@ -58,17 +63,21 @@ export default function NewPurchaseOrderPage() {
 
   useEffect(() => {
     if (productSearch.length < 2) { setProductResults([]); return; }
-    fetch(`/api/products/search?q=${encodeURIComponent(productSearch)}`)
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setProductResults(res.data); })
-      .catch(() => {});
+    // apiTry, not .json(): an expired session answers 307 -> /login -> HTML with status 200,
+    // so the old .catch(() => {}) turned a dead session into "no products match".
+    apiTry<ProductOption[]>(`/api/products/search?q=${encodeURIComponent(productSearch)}`).then(
+      ({ data }) => setProductResults(data ?? [])
+    );
   }, [productSearch]);
 
   function addItem(product: ProductOption) {
     if (items.find((i) => i.productId === product.id)) return;
     setItems([...items, {
       productId: product.id, productName: product.name, sku: product.sku,
-      quantity: 1, unitPrice: product.costPrice, gstRate: product.gstRate,
+      // ?? 0 rather than ||, so a genuine zero cost stays zero instead of being replaced.
+      // A missing cost means "this person cannot see cost prices" — the line opens at 0 and
+      // they type the price, which is the same thing they did before this screen worked.
+      quantity: 1, unitPrice: product.costPrice ?? 0, gstRate: product.gstRate ?? 0,
     }]);
     setProductSearch("");
     setProductResults([]);
@@ -162,7 +171,10 @@ export default function NewPurchaseOrderPage() {
                     className="w-full text-left px-3 py-2.5 hover:bg-slate-50 border-b border-slate-100 last:border-0"
                   >
                     <p className="text-sm font-medium text-slate-900">{p.name}</p>
-                    <p className="text-xs text-slate-500">{p.sku} | Cost: {formatCurrency(p.costPrice)}</p>
+                    <p className="text-xs text-slate-500">
+                      {p.sku}
+                      {p.costPrice !== undefined ? ` | Cost: ${formatCurrency(p.costPrice)}` : ""}
+                    </p>
                   </button>
                 ))}
               </div>

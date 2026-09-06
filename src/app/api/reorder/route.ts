@@ -4,10 +4,17 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { userCan } from "@/lib/rbac";
+import { isLowStock } from "@/lib/reorder";
 
 export async function GET(req: NextRequest) {
   try {
-    await requireFeature("reorder", "view");
+    const user = await requireFeature("reorder", "view");
+    // This route selected costPrice unconditionally behind reorder.view alone, so anyone who
+    // could open /reorder could read every product's cost — the exact thing the cost_price
+    // module exists to gate, and which api/products/route.ts has gated all along. Fixed here
+    // because P8 is already in this file; it is a leak, not a feature of the reorder screen.
+    const canSeeCost = await userCan(user.id, "cost_price", "view");
     const { searchParams } = new URL(req.url);
     const groupBy = searchParams.get("groupBy") || "brand"; // brand | category | vendor
     const filter = searchParams.get("filter") || "all"; // all | low | zero
@@ -33,7 +40,7 @@ export async function GET(req: NextRequest) {
       select: {
         id: true, sku: true, name: true,
         currentStock: true, reorderLevel: true, reorderQty: true,
-        costPrice: true,
+        costPrice: canSeeCost,
         category: { select: { id: true, name: true } },
         brand: { select: { id: true, name: true } },
         reorderVendor: { select: { id: true, name: true, whatsappNumber: true, phone: true } },
@@ -45,9 +52,9 @@ export async function GET(req: NextRequest) {
         : [{ category: { name: "asc" } }, { name: "asc" }],
     });
 
-    // For "low" filter: currentStock <= reorderLevel (can't compare two fields in Prisma)
+    // For "low" filter: done in memory because Prisma cannot compare two columns.
     if (filter === "low") {
-      products = products.filter((p) => p.reorderLevel > 0 && p.currentStock <= p.reorderLevel);
+      products = products.filter(isLowStock);
     }
 
     // The flat `type` name, added after filtering and before grouping so every product in
@@ -78,7 +85,7 @@ export async function GET(req: NextRequest) {
 
     // Summary counts
     const totalProducts = products.length;
-    const lowStockCount = products.filter((p) => p.reorderLevel > 0 && p.currentStock <= p.reorderLevel).length;
+    const lowStockCount = products.filter(isLowStock).length;
     const zeroStockCount = products.filter((p) => p.currentStock === 0).length;
 
     return successResponse({

@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { FilterSheet } from "@/components/filter-sheet";
 import { useDebounce } from "@/hooks/use-debounce";
+import { isLowStock, suggestedOrderQty } from "@/lib/reorder";
 
 interface ReorderProduct {
   id: string;
@@ -123,7 +124,7 @@ export default function ReorderDashboardPage() {
 
   const selectAllLowStock = () => {
     const lowStockIds = groups.flatMap((g) =>
-      g.products.filter((p) => p.reorderLevel > 0 && p.currentStock <= p.reorderLevel).map((p) => p.id)
+      g.products.filter(isLowStock).map((p) => p.id)
     );
     setSelectedForPO(new Set(lowStockIds));
   };
@@ -142,7 +143,7 @@ export default function ReorderDashboardPage() {
       productId: p.id,
       name: p.name,
       sku: p.sku,
-      quantity: p.reorderQty || Math.max(1, p.reorderLevel - p.currentStock),
+      quantity: suggestedOrderQty(p),
       unitPrice: p.costPrice,
       brandName: p.brand.name,
     }));
@@ -167,7 +168,7 @@ export default function ReorderDashboardPage() {
     for (const [brand, products] of Object.entries(brandGroups)) {
       message += `*${brand}*\n`;
       products.forEach((p, i) => {
-        const qty = p.reorderQty || Math.max(1, p.reorderLevel - p.currentStock);
+        const qty = suggestedOrderQty(p);
         message += `${i + 1}. ${p.name} (${p.sku}) - Qty: ${qty}\n`;
       });
       message += "\n";
@@ -181,12 +182,12 @@ export default function ReorderDashboardPage() {
   };
 
   const shareGroupOnWhatsApp = (group: ProductGroup) => {
-    const lowItems = group.products.filter((p) => p.reorderLevel > 0 && p.currentStock <= p.reorderLevel);
+    const lowItems = group.products.filter(isLowStock);
     const items = lowItems.length > 0 ? lowItems : group.products;
     let message = `*Bharath Cycle Hub - Reorder*\n`;
     message += `*${group.name}*\nDate: ${new Date().toLocaleDateString("en-IN")}\n\n`;
     items.forEach((p, i) => {
-      const qty = p.reorderQty || Math.max(1, p.reorderLevel - p.currentStock);
+      const qty = suggestedOrderQty(p);
       message += `${i + 1}. ${p.name} (${p.sku}) - Qty: ${qty}\n`;
     });
     message += `\nTotal: ${items.length} items\n---\nBharath Cycle Hub`;
@@ -348,7 +349,7 @@ export default function ReorderDashboardPage() {
               {expandedGroups.has(group.id) && (
                 <CardContent className="px-3 pb-3 pt-0 space-y-1.5">
                   {group.products.map((product) => {
-                    const isLow = product.reorderLevel > 0 && product.currentStock <= product.reorderLevel;
+                    const isLow = isLowStock(product);
                     const isZero = product.currentStock === 0;
                     const isSelected = selectedForPO.has(product.id);
                     const editedLevel = reorderLevels[product.id];
