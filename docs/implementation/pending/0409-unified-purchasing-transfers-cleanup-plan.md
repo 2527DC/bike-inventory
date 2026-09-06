@@ -2,11 +2,11 @@
 
 > **To continue this work:** read **[▶ RESUME HERE](#-resume-here--the-only-place-that-holds-current-state)** below. It is the only section that holds current state — branch, database, what is done, what is next. Everything else is design or history.
 
-Status: in-progress — 4 Sep 2026, P2 + P3 done (R4 complete, on one branch); P1 next
-Branch: **`chore/remove-type-ui-moving-level-customer-add`** — carries **P2 + P3 together** (R4).
-One branch and one PR per phase in the order of §0.6, each cut from the **reference branch
-`feat/notifications-and-settings-rbac`** (owner, 4 Sep — NOT `main`; local `main` is stale) after
-the previous phase merged. Update this line as work moves. See the Progress log at the end.
+Status: in-progress — 5 Sep 2026, **P0–P7 done** (R1, R2, R3, R4, R12, R13 closed; R11 is half —
+its feed is P5). **Left: P5 and P8–P15**, all on ONE branch — see "Branching changed 5 Sep" in §3.
+Branch: **`feat/inbound-receiving`** — carries **P7** (R3), the tip of six stacked branches, each
+cut from the previous phase's tip rather than from `main`. Nothing is merged; the owner opens
+every PR. Update this line as work moves, and keep the detail in ▶ RESUME HERE, not here.
 
 Written 4 Sep 2026. Merges and **replaces** two plans written the same day:
 `0409-purchasing-deliveries-transfers-plan.md` (PLAN-1: §A–§G) and
@@ -37,6 +37,7 @@ commits and pushes only.**
 | `feat/stock-ledger-integrity` | the branch above | P1b — **pushed** |
 | `feat/zoho-fetch-window` | the branch above | P4 — **pushed** |
 | `feat/stock-audit-scope` | the branch above | P6 — **pushed** |
+| `feat/inbound-receiving` | the branch above | P7 — **pushed** |
 
 **Branch rule confirmed by the owner, 5 Sep:** keep stacking each phase on the previous
 phase's tip, **and ask before creating each branch**. Claude cut P1 and P1b on its own
@@ -222,6 +223,58 @@ except `zoho`, and no client reads one. All six are removed under the plan's own
 ("delete the action when no route guards on it"); `zoho.fetch` is the only survivor.
 **`npm run db:seed:rbac` after deploy** or the six stay grantable and keep implying access.
 
+**P7 is complete** (R3 — inbound per-line receiving, saved category, Report Issue). No
+migration: MIG-1a already added `InboundShipment.categoryId`.
+
+R3's three complaints, all closed:
+
+| Was | Now |
+|---|---|
+| **"Report Issue never creates anything."** Three compounding causes: the button is gated on `inbound.edit` but the endpoint demanded `vendor_issues.create`, which no seeded role holds (403); a shipment with no Zoho bill sent no `vendorId` (400); so nothing was ever written | New `api/inbound/[id]/issues`, guarded on **`inbound.edit`** — reporting what arrived is part of receiving. The vendor is resolved SERVER-SIDE (bill → brand name → create), so the client cannot omit it. Creates a real `VendorIssue`, visible on `/vendor-issues` |
+| **The Cycles/Spares/Accessories choice lived in one phone's `localStorage`** (`inbound-shiptype-<id>`), so the shipment read as uncategorised to everyone else and lost the value when that browser cleared | A `categoryId` column, set through a searchable picker over the real Category tree, and **receiving is refused until it is set**. Refused to change once any line is received |
+| **Receiving was Mark All / Partial / Undo** | One blue `Receive ×N` per line behind a confirm sheet, then green `Received ×N ✓`. The shipment finishes itself |
+
+**FIVE latent bugs found and fixed:**
+
+1. **A double-tap doubled the stock.** `wasDelivered` was read OUTSIDE the transaction, so two
+   taps both saw `false` and both added the quantity. Now an idempotent claim —
+   `updateMany({ where: { id, isDelivered: false } })` — so the database decides and exactly
+   one caller wins.
+2. **The per-line route had NO approval gate.** Stock could be received into a shipment nobody
+   had approved, leaving `approvedAt`/`approvedBy` null with no authoriser on record.
+3. **"Undo" undid the label, not the stock.** `handleRevert` set the shipment back to
+   IN_TRANSIT without touching a line item or removing anything — the shipment then read as
+   unreceived while its stock sat on the shelves. Gone with `api/inbound/[id]/status`.
+4. **Mark All wrote a status over untouched lines**, so a shipment could read DELIVERED with
+   every line unreceived. State is derived from the lines now, not asserted over them.
+5. **Two `ISS-` allocators disagreed** — a read-then-write with a string sort. Both now share
+   `issSeedSql` + `nextSequence`, and validation moved BEFORE allocation so a rejection does
+   not burn a number.
+
+`finaliseDelivered` claims the DELIVERED transition the same way. That claim count is the
+idempotency key and it is load-bearing: with receiving per line, two people finishing the last
+two lines at once would otherwise both fire the side effects — **two notifications and two
+purchase bills pushed to Zoho Books for one shipment**. `scheduleDeliveredSideEffects` runs
+strictly AFTER the transaction resolves, because `after()` fires even when the response throws
+and a rollback cannot recall a bill from someone else's accounts. It also skips the push when
+`zohoBillId` is set — a shipment that came FROM a Books bill must not create a second one.
+
+**⚠ A BEHAVIOUR CHANGE THE PR MUST NAME:** the Zoho Books push was INLINE in the request and is
+now deferred. A push failure no longer fails the response — it is logged and the receipt still
+succeeds. The right trade (the stock is in the building either way), but nobody sees a Zoho
+error at the goods desk any more.
+
+**Two corrections to the plan's letter:** it says `finaliseDelivered` sets pre-bookings to
+`READY`, but that value is not in `PreBookingStatus` — the real transition is `FULFILLED` with
+`fulfilledAt`, matching the route being replaced. And `api/categories` is gated on `stock.view`,
+so **a receiving role without it gets an empty category picker and cannot receive at all** —
+check that role's grants on `/team/permissions` before release.
+
+Also: new `src/components/ui/searchable-select.tsx` (no combobox existed; the pattern was
+hand-rolled inline in `vendor-issues/new`). The issue modal now shows its error INSIDE itself —
+the page-level banner rendered behind the open modal, so a failed report looked like a dead
+button. And the confirmation no longer says "Sravan will be notified": nothing notifies anyone.
+
 **P6 is complete** (R2 — stock audit scope and assignee). No migration: MIG-1a already added
 `StockCount.storeId`/`warehouseId` and the indexes.
 
@@ -294,8 +347,9 @@ equivalent today, when each store has one warehouse. **The precise fix is
 | `npx eslint` on every changed file | **zero issues.** 7 exist repo-wide, all pre-existing in untouched files, confirmed by linting HEAD's copy |
 | `npx prisma migrate status` | **up to date, 3 migrations** (`0_init`, MIG-1b, MIG-1a) |
 | Product created from brand + category alone | **PASSES** — P3's acceptance criterion |
-| `npm run build` | **PASSES for R4, P1, P1b and P4** (5 Sep). Full route table, exit 0; **no `/product-types` and no `/api/ops-activity-logs` in it** |
+| `npm run build` | **PASSES for R4, P1, P1b, P4, P6 and P7** (P7 re-run 6 Sep, exit 0). Full route table; **no `/product-types` and no `/api/ops-activity-logs` in it** |
 | P6 | tsc + eslint clean; the whole-store 400 and the assignee gates are code-verified, NOT browser-walked |
+| P7 | tsc + eslint clean; the build manifest carries `/api/inbound/[id]/issues` and **no `/api/inbound/[id]/status`** — the deleted route is gone from the built app, not just from the tree. The idempotent claim, the approval gate and the deferred Books push are code-verified, NOT browser-walked |
 | P4 date-window spot-checks | **12/12 PASS**, including the plan`s four and the owner`s "3 days on 4 Sep" case |
 | P1b acceptance scenario | **PASSES** — 10 → sell 3 → 7 → receive 5 → **12**; the old path reproduced alongside gives **15**. Ran against `bch-local` in a rolled-back transaction |
 | `npm run db:snapshot` | **PASSES** — ran it; `pg_restore -l` lists `ActivityLog`, `counter`, `PurchaseOrderSend`, and no `OpsActivityLog` |
@@ -325,8 +379,17 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
    Then walk P1's screens too — nothing there should have changed: `/transfers` (two new
    filter tabs, no order in them yet), `/stores`, `/warehouses`, `/categories` delete + merge,
    `/purchase-orders`, `/stock-audit`.
+   Then the screens the later phases rewrote, none of which has been opened in a browser:
+   - `/deliveries` (P4) — the inline panel wraps under the header; a disconnected Zoho shows
+     the 409 sentence and the retry works immediately; `/stores` shows the invoice prefix
+   - `/stock-audit` + `/stock-audit/[id]` (P6) — the store → warehouse picker; an assignee
+     holding `approve` sees Start; whole-store + correct-stock gives a readable 400; the
+     `0 ✓` pill; "Your stock audits" on the dashboard
+   - `/inbound/[id]` (P7) — the category picker refuses receiving until it is set; `Receive ×N`
+     per line then `Received ×N ✓`; a double-tap adds the stock once; Report Issue on a
+     shipment with **no** Zoho bill creates `ISS-…` and it appears on `/vendor-issues`
 2. **PRs — the owner's job, not Claude's** (owner, 5 Sep: "u dont do anything related to pr").
-   All FIVE branches are pushed. **Merge in stacking order: R4 → P1 → P1b → P4 → P6.**
+   All SIX branches are pushed. **Merge in stacking order: R4 → P1 → P1b → P4 → P6 → P7.**
    - **R4** — the two behaviour changes in §3, and **run `npm run db:seed:rbac` after merge**
      or the sidebar keeps a "Product Types" entry that 404s.
    - **P1** — the three Restrict-FK delete-path fixes in §3, and **`npm run db:snapshot`
@@ -340,16 +403,22 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
      second warehouse** or the new whole-store 400 reads as a regression. Existing audits
      have `storeId` null and are treated as legacy: verify-only, header "Legacy audit — no
      location". No data step.
+   - **P7** — name the deferred Zoho Books push in the body: a bill-push failure no longer
+     fails the receipt, so nobody sees a Zoho error at the goods desk any more. And **check
+     the receiving role holds `stock.view`** on `/team/permissions` before release —
+     `api/categories` is gated on it, so without it the category picker is empty and the
+     shipment cannot be received at all. No data step, no migration.
 3. **Data step, as soon as P1b is merged:** on `/stores`, set the **invoice prefix** to `BCH/`
    and `BCC/`. **Until that is done every sale deducts from the primary store** — a BCC sale
    takes BCH stock. Two things make that impossible to miss rather than silent: the row shows
    an amber **"No invoice prefix"** badge until it is set, and `resolveStoreIdOrPrimary` logs
    a `warn` on every invoice that falls back. The input is built (P1b) — it is one field on
    the store form.
-4. **Then P7** — inbound per-line receiving, saved category, Report Issue (R3). MIG-1a already
-   added `InboundShipment.categoryId`, so P7 writes code only — no migration folder.
-   **Ask which branch to base it on before creating it** (owner, 5 Sep); the stack tip is
-   `feat/stock-audit-scope`.
+4. **Then the rest of the plan — P5 and P8–P15, on ONE branch**, one commit per phase, in the
+   order of §0.6: P5, P8, P9, P10, P11, P12, P13, P14, P15. The per-phase branch is over; the
+   rules for that single branch are in §3 "Branching changed 5 Sep". **Ask which branch to cut
+   it from before creating it** (owner, 5 Sep); the stack tip is `feat/inbound-receiving`.
+   P14 carries MIG-2, the last migration folder — `npm run db:snapshot` before that PR merges.
 
 ### 6. Owner actions still outstanding
 
@@ -512,11 +581,46 @@ the Vercel build in P1 and no migration is applied by hand (O11).
 The full list of open questions and blockers, each with a recommended answer and its current
 status, is **§10**.
 
-## 3. Phases — small, one PR each
+## 3. Phases — one branch per phase up to P7, ONE branch for the rest
 
 Size: S ≤ 8 files, M ≤ 15, L > 15. `npm run build` takes >10 minutes, so each phase is verified
 with `npx tsc --noEmit` + opening the affected screens, and the full build runs once per phase
 before the PR. Bugs first, removals second, features third, transfers last.
+
+### Branching changed 5 Sep (owner decision)
+
+**P0–P7 each had their own branch. Every phase from here does not.** The remaining work —
+**P5, P8, P9, P10, P11, P12, P13, P14, P15** — is built on a **single branch**, with **one commit
+per phase**:
+
+```
+feat/purchasing-transfers-p5-p15        ← name is a proposal; owner may rename before it is cut
+```
+
+Rules for that branch, which replace the per-phase branch column below:
+
+1. **Cut it once**, from the reference branch the owner names (ask — never assume `main`, and
+   never assume the local `main` is current).
+2. **One commit per phase, in dependency order**, each message opening with the phase tag so the
+   log reads as the roadmap: `feat(stock): P8 one-tap reorder level on /stock`. A phase is one
+   commit — not three "fix typo" commits after it.
+3. **`npx tsc --noEmit` must be green at every phase commit.** The point of one commit per phase
+   is that each commit is a working tree; a commit that does not compile destroys that. Never
+   commit a phase mid-edit to "save progress".
+4. **A phase carrying a migration commits `prisma/schema.prisma` and the
+   `prisma/migrations/<timestamp>_<name>/` folder in the SAME commit** — P14 (MIG-2) is the only
+   one left. That rule is from CLAUDE.md and one branch does not relax it.
+5. **`npm run db:snapshot` before the PR is merged**, because P14 carries a migration and Prisma
+   has no down migrations.
+6. **Still never commit or push to `main`.** The branch is merged by pull request only.
+
+**The trade being accepted, stated plainly:** nine phases on one branch is one large PR instead of
+nine reviewable ones, and a revert of one phase means reverting a commit out of the middle rather
+than dropping a branch. One commit per phase is what keeps that possible at all — it is the only
+thing preserving per-phase granularity once the branches are gone, which is why rules 2 and 3 are
+not negotiable.
+
+**The Branch column in the table below is historical for P0–P7 and superseded for the rest.**
 
 | # | Branch | Goal | Source | Migration | Size | Needs | Key verification |
 |---|---|---|---|---|---|---|---|
@@ -526,17 +630,17 @@ before the PR. Bugs first, removals second, features third, transfers last.
 | P2 | `chore/remove-type-ui-moving-level-customer-add` | Screens stop reading `product.type`, `movingLevel`, and the customer quick-add | PLAN-2 Parts 5 (screens), 6, 7 | none | M (11) | none | `/stock` no type tabs, `/customers` no Add, `/categories` edit = name only |
 | P3 | `chore/drop-product-type-and-moving-level` | Schema drops + MIG-1b; delete product-type routes/page/lib; every API reader; catalog; import script | PLAN-2 Parts 5 (API), 6 | MIG-1b | L by count (~23 mechanical deletions) | P1, P2 | proof greps clean; bill import creates a product with brand + category |
 | P4 | `fix/zoho-fetch-window-and-deliveries-panel` | Deliveries fetch root causes; shared IST date window; merged `trigger-pull`; `skipped` shape; approve invoice branch; permission gating; `apiFetch timeoutMs`; deliveries modal → inline panel; inbound/bills/receivables panel fixes | PLAN-1 §F, PLAN-2 Part 4 + zoho activity row | none | M (14) | P1, P3 | Zoho disconnected → 409 sentence, immediate retry works; "3 days" on 4 Sep = 2–4 Sep |
-| P5 | `feat/activity-log-feed` | `/api/activity` IST day + `ActivityLog` source + dedupe; clients; category/customer edit rows | PLAN-2 Part 1 feed | none | S (7) | P1 | rename a category → one row with from → to; 02:00 IST rows file under yesterday |
+| P5 | **one branch — §3** | `/api/activity` IST day + `ActivityLog` source + dedupe; clients; category/customer edit rows | PLAN-2 Part 1 feed | none | S (7) | P1 | rename a category → one row with from → to; 02:00 IST rows file under yesterday |
 | P6 | `fix/stock-audit-scope-and-assignee` | Store/warehouse scope, assignee gates, verify-only whole-store rule, `0 ✓`, dashboard card | PLAN-2 Part 2 + §5.1 | none | M (12) | P1, P3 | assignee holding `approve` sees Start; whole-store correct-stock → readable 400 |
 | P7 | `feat/inbound-per-line-receiving` | Shared finalisation, per-line receive, saved category, delete status route, Report Issue route, `SearchableSelect`, page | PLAN-2 Part 3 + `Counter` for ISS | none | M (10) | P1 | Report Issue without a Zoho bill creates ISS-…; double-tap adds stock once |
-| P8 | `feat/stock-reorder-action` | `isLowStock`; reorder sheet on `/stock`; `reorderVendorId` on product PUT; search returns cost/GST (the `₹NaN` fix) | PLAN-1 §A + search half of §B | none | M (10) | P3 | 375 px: Reorder → sheet → OK → badge flips; card link not triggered |
-| P9 | `feat/po-state-machine-and-numbers` | PO transitions, `nextSequence("PO")`, duplicate 409 with advisory lock, approval on PENDING_APPROVAL, `generate-po` fixes, detail/list buttons | PLAN-1 §D | none | M (12) | P1 | two tabs create at once → distinct numbers; duplicate → 409 card |
-| P10 | `feat/po-vendor-resolution` | `resolveVendors`, `/reorder` groups + v2 handoff, `prepare`, read-only vendor sections, vendor-scoped search, `vendors/[id]/brands` | PLAN-1 §B | none | M (10) | P8, P9 | two vendors selected → two read-only sections; unresolved item blocks |
-| P11 | `feat/brand-stock-colour-availability` | `exceljs` parser with `rowColor`, legend card + route, `getVendorAvailability`, badges, `generate-po` exclusions | PLAN-1 §C | none | M (12) | P10 | colour-coded `.xlsx` → legend → confirm → unavailable excluded |
-| P12 | `feat/po-send-to-vendor` | Mailer attachments, PDF renderer, `/pdf`, `/send`, `/mark-sent`, `notifications/status`, bottom sheet | PLAN-1 §E | none | M (14) | P9 | send to own address → PDF attached, status flips only after SMTP accepts |
-| P13 | `feat/stores-gstin` | `Store.gstin/stateCode` UI, `clearWarehouseCache()` on warehouse create, legacy `/api/transfers` removal. **No floor/godown — rescoped 4 Sep** | PLAN-1 §G (stores) | none | S (~5) | P1 | `/stores` saves GSTIN; a warehouse added to a store appears in the pickers same session |
-| P14 | `feat/transfer-in-transit-flow` | MIG-2; header lane, derived type/doc, approve = check only, dispatch/receive/cancel, detail page, list filters | PLAN-1 §G (flow) | MIG-2 | M (15) | P13 | legacy APPROVED read RECEIVED; dispatch −qty; receive with shortfall |
-| P15 | `feat/transfer-documents` | `transfers/` upload prefix + PDF, document route, dispatch gate, Document card | PLAN-1 §G (documents) | none | S (6) | P14 | floor → godown says delivery challan; BCH → BCC says tax invoice; dispatch 400 until the right document |
+| P8 | **one branch — §3** | `isLowStock`; reorder sheet on `/stock`; `reorderVendorId` on product PUT; search returns cost/GST (the `₹NaN` fix) | PLAN-1 §A + search half of §B | none | M (10) | P3 | 375 px: Reorder → sheet → OK → badge flips; card link not triggered |
+| P9 | **one branch — §3** | PO transitions, `nextSequence("PO")`, duplicate 409 with advisory lock, approval on PENDING_APPROVAL, `generate-po` fixes, detail/list buttons | PLAN-1 §D | none | M (12) | P1 | two tabs create at once → distinct numbers; duplicate → 409 card |
+| P10 | **one branch — §3** | `resolveVendors`, `/reorder` groups + v2 handoff, `prepare`, read-only vendor sections, vendor-scoped search, `vendors/[id]/brands` | PLAN-1 §B | none | M (10) | P8, P9 | two vendors selected → two read-only sections; unresolved item blocks |
+| P11 | **one branch — §3** | `exceljs` parser with `rowColor`, legend card + route, `getVendorAvailability`, badges, `generate-po` exclusions | PLAN-1 §C | none | M (12) | P10 | colour-coded `.xlsx` → legend → confirm → unavailable excluded |
+| P12 | **one branch — §3** | Mailer attachments, PDF renderer, `/pdf`, `/send`, `/mark-sent`, `notifications/status`, bottom sheet | PLAN-1 §E | none | M (14) | P9 | send to own address → PDF attached, status flips only after SMTP accepts |
+| P13 | **one branch — §3** | `Store.gstin/stateCode` UI, `clearWarehouseCache()` on warehouse create, legacy `/api/transfers` removal. **No floor/godown — rescoped 4 Sep** | PLAN-1 §G (stores) | none | S (~5) | P1 | `/stores` saves GSTIN; a warehouse added to a store appears in the pickers same session |
+| P14 | **one branch — §3** | MIG-2; header lane, derived type/doc, approve = check only, dispatch/receive/cancel, detail page, list filters | PLAN-1 §G (flow) | MIG-2 | M (15) | P13 | legacy APPROVED read RECEIVED; dispatch −qty; receive with shortfall |
+| P15 | **one branch — §3** | `transfers/` upload prefix + PDF, document route, dispatch gate, Document card | PLAN-1 §G (documents) | none | S (6) | P14 | floor → godown says delivery challan; BCH → BCC says tax invoice; dispatch 400 until the right document |
 
 **Dependencies.** P2 needs nothing and runs first. P1 → P1b, P5, P6, P9. P2 → P3 (a screen reading
 `type` after the drop throws: `brand-count`). P3 → P6, P8. **P4, P5, P6, P7 are pairwise
