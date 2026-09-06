@@ -13,6 +13,8 @@ import { SkeletonList } from "@/components/ui/skeleton";
 import { FilterSheet } from "@/components/filter-sheet";
 import { useDebounce } from "@/hooks/use-debounce";
 import { isLowStock, suggestedOrderQty } from "@/lib/reorder";
+import { usePermissions } from "@/lib/use-permissions";
+import { ReorderSheet, type ReorderTarget } from "@/components/reorder-sheet";
 
 interface ReorderProduct {
   id: string;
@@ -21,7 +23,13 @@ interface ReorderProduct {
   currentStock: number;
   reorderLevel: number;
   reorderQty: number;
-  costPrice: number;
+  // OPTIONAL: api/reorder gates it on cost_price.view, so the key is genuinely absent for
+  // some users. It was typed `number`, which is why the old handoff shipped `undefined` as a
+  // price and the PO screen rendered ₹NaN.
+  costPrice?: number;
+  reorderVendorId?: string | null;
+  vendor?: { id: string; name: string; source: string; sourceLabel: string } | null;
+  unresolvedReason?: string | null;
   category: { id: string; name: string };
   brand: { id: string; name: string };
 }
@@ -54,6 +62,13 @@ export default function ReorderDashboardPage() {
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
   const [actionError, setActionError] = useState("");
+
+  // This screen had no permission checks whatsoever before P10 — every action was shown to
+  // anyone holding reorder.view. Both routes behind these buttons demand more than that.
+  const { canCreate, canEdit } = usePermissions();
+  const mayCreatePo = canCreate("purchase_orders");
+  const mayEditReorder = canEdit("reorder");
+  const [reorderTarget, setReorderTarget] = useState<ReorderTarget | null>(null);
   const [selectedForPO, setSelectedForPO] = useState<Set<string>>(new Set());
 
   const fetchData = useCallback(() => {
@@ -133,21 +148,40 @@ export default function ReorderDashboardPage() {
     return groups.flatMap((g) => g.products.filter((p) => selectedForPO.has(p.id)));
   };
 
+  /** Selected products with no vendor. The PO screen cannot group these, so they block it. */
+  const unresolvedSelected = getSelectedProducts().filter((p) => !p.vendor);
+
   const createPOFromSelected = () => {
-    // Group selected products by brand (for brand-wise PO)
     const selected = getSelectedProducts();
     if (selected.length === 0) return;
 
+    // Refused here rather than at the PO screen, because at that point the person has already
+    // navigated away from the rows they would need to fix.
+    if (unresolvedSelected.length > 0) {
+      setActionError(
+        `${unresolvedSelected.length} selected ${unresolvedSelected.length === 1 ? "product has" : "products have"} no vendor: ` +
+          unresolvedSelected.slice(0, 4).map((p) => p.name).join(", ") +
+          (unresolvedSelected.length > 4 ? ` and ${unresolvedSelected.length - 4} more` : "") +
+          ". Set a reorder vendor on them, or link the brand to a vendor on the vendor's page."
+      );
+      return;
+    }
+    setActionError("");
+
     // Store in sessionStorage for the PO creation page to pick up
-    const poItems = selected.map((p) => ({
-      productId: p.id,
-      name: p.name,
-      sku: p.sku,
-      quantity: suggestedOrderQty(p),
-      unitPrice: p.costPrice,
-      brandName: p.brand.name,
-    }));
-    sessionStorage.setItem("reorder-po-items", JSON.stringify(poItems));
+    // v2: ids and quantities, nothing else.
+    //
+    // v1 carried name, sku, unitPrice and brandName. Three of those were wrong or unused:
+    // `brandName` was never read, `unitPrice` came from a costPrice the API withholds without
+    // cost_price.view (so it arrived undefined and rendered ₹NaN), and the consumer hardcoded
+    // `gstRate: 0` — which means every PO raised from this screen so far has carried 0% GST.
+    // POST /api/purchase-orders/prepare now supplies price, GST and vendor server-side, under
+    // the caller's own permissions.
+    const payload = {
+      v: 2 as const,
+      items: selected.map((p) => ({ productId: p.id, quantity: suggestedOrderQty(p) })),
+    };
+    sessionStorage.setItem("reorder-po-items", JSON.stringify(payload));
     router.push("/purchase-orders/new");
   };
 
@@ -208,6 +242,15 @@ export default function ReorderDashboardPage() {
           <Badge variant="info">{selectedForPO.size} selected</Badge>
         )}
       </div>
+
+      <ReorderSheet
+        open={reorderTarget !== null}
+        product={reorderTarget}
+        onClose={() => setReorderTarget(null)}
+        // Refetch rather than patch: setting a vendor changes which GROUP the row belongs to
+        // and what its resolution source is, and neither is derivable on the client.
+        onSaved={() => { setReorderTarget(null); void fetchData(); }}
+      />
 
       {actionError && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-2.5 mb-3 text-xs text-red-700">
@@ -290,10 +333,17 @@ export default function ReorderDashboardPage() {
           )}
           {selectedForPO.size > 0 && (
             <>
-              <button onClick={createPOFromSelected}
-                className="flex-1 flex items-center justify-center gap-1.5 bg-blue-600 text-white py-2 rounded-lg text-xs font-medium">
-                <ShoppingCart className="h-3.5 w-3.5" /> Create PO
-              </button>
+              {/* Gated on purchase_orders.create — this screen had NO permission checks at all
+                  before P10, so anyone who could open it saw every action. */}
+              {mayCreatePo && (
+                <button onClick={createPOFromSelected}
+                  className={`flex-1 flex items-center justify-center gap-1.5 text-white py-2 rounded-lg text-xs font-medium ${
+                    unresolvedSelected.length > 0 ? "bg-slate-500" : "bg-blue-600"
+                  }`}>
+                  <ShoppingCart className="h-3.5 w-3.5" />
+                  {unresolvedSelected.length > 0 ? `${unresolvedSelected.length} without a vendor` : "Create PO"}
+                </button>
+              )}
               <button onClick={shareOnWhatsApp}
                 className="flex items-center justify-center gap-1.5 bg-green-600 text-white px-3 py-2 rounded-lg text-xs font-medium">
                 <Share2 className="h-3.5 w-3.5" /> WhatsApp
@@ -369,6 +419,27 @@ export default function ReorderDashboardPage() {
                               <p className="text-sm font-medium text-slate-900">{product.name}</p>
                               <p className="text-[11px] text-slate-500 tabular-nums">{product.sku}</p>
                             </button>
+                            {/* The resolved vendor, on every row and in every grouping mode.
+                                Before P10 the vendor was fetched on every request and rendered
+                                only as a group header under groupBy=vendor — invisible the rest
+                                of the time, which is why "why is this on the wrong PO?" had no
+                                answer on screen. */}
+                            {product.vendor ? (
+                              <p className="text-[11px] text-slate-400 mt-0.5 truncate">
+                                {product.vendor.name}
+                                <span className="text-slate-300"> · {product.vendor.sourceLabel}</span>
+                              </p>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => mayEditReorder && setReorderTarget(product)}
+                                disabled={!mayEditReorder}
+                                className="mt-0.5 text-[11px] text-amber-700 bg-amber-100 rounded px-1.5 py-0.5 min-h-[24px] disabled:opacity-60"
+                                title={mayEditReorder ? "Set a reorder vendor" : "You do not have permission to set a reorder vendor"}
+                              >
+                                No vendor{mayEditReorder ? " · Set" : ""}
+                              </button>
+                            )}
                           </div>
                           <div className="text-right shrink-0">
                             <p className={`text-base font-bold tabular-nums ${isZero ? "text-red-600" : isLow ? "text-amber-600" : "text-slate-900"}`}>

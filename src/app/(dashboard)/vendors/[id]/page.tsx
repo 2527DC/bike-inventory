@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { SkeletonList } from "@/components/ui/skeleton";
 import type { Vendor, PurchaseOrder, VendorBill, VendorCredit } from "@/types";
 import { usePermissions } from "@/lib/use-permissions";
+import { apiFetch } from "@/lib/api-client";
+import { VendorBrands } from "./_components/vendor-brands";
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
@@ -33,6 +35,10 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   const [editingBalance, setEditingBalance] = useState(false);
   const [balanceValue, setBalanceValue] = useState("");
   const [savingBalance, setSavingBalance] = useState(false);
+  const [editingEmail, setEditingEmail] = useState(false);
+  const [emailValue, setEmailValue] = useState("");
+  const [savingEmail, setSavingEmail] = useState(false);
+  const [emailError, setEmailError] = useState("");
   const [editingTerms, setEditingTerms] = useState(false);
   const [termsValue, setTermsValue] = useState("");
   const [savingTerms, setSavingTerms] = useState(false);
@@ -319,6 +325,66 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
               <p className="text-sm text-slate-700 font-mono">{vendor.gstin}</p>
             </div>
           )}
+
+          {/* Email: the vendor PUT has always accepted it and only /vendors/new had an input,
+              so an address entered at creation could never be corrected. P12 emails the PO
+              here, which makes an uneditable address a real problem rather than a gap. */}
+          <div>
+            <p className="text-xs text-slate-500 mb-0.5">Email</p>
+            {editingEmail ? (
+              <div className="flex gap-2">
+                <input
+                  type="email"
+                  value={emailValue}
+                  onChange={(e) => setEmailValue(e.target.value)}
+                  placeholder="orders@vendor.com"
+                  className="flex-1 min-h-[44px] rounded-lg border border-slate-300 px-3 text-sm"
+                />
+                <Button
+                  onClick={async () => {
+                    setSavingEmail(true);
+                    try {
+                      await apiFetch(`/api/vendors/${id}`, { method: "PUT", json: { email: emailValue.trim() } });
+                      setVendor(vendor ? { ...vendor, email: emailValue.trim() || undefined } : vendor);
+                      setEditingEmail(false);
+                    } catch (e) {
+                      setEmailError(e instanceof Error ? e.message : "Could not save the email");
+                    } finally {
+                      setSavingEmail(false);
+                    }
+                  }}
+                  disabled={savingEmail}
+                  className="min-h-[44px]"
+                >
+                  {savingEmail ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+                </Button>
+                <Button variant="outline" onClick={() => { setEditingEmail(false); setEmailError(""); }} disabled={savingEmail} className="min-h-[44px]">
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <p className="text-sm text-slate-700 break-all">{vendor.email || <span className="text-slate-400">Not set</span>}</p>
+                {canEditBalance && (
+                  <button
+                    onClick={() => { setEmailValue(vendor.email || ""); setEditingEmail(true); }}
+                    className="text-xs text-blue-600 min-h-[32px] px-1"
+                  >
+                    Edit
+                  </button>
+                )}
+              </div>
+            )}
+            {emailError && <p className="text-xs text-red-600 mt-1">{emailError}</p>}
+          </div>
+
+          <VendorBrands
+            vendorId={id}
+            vendorName={vendor.name}
+            initial={vendor.brands ?? []}
+            canEdit={canEditBalance}
+            onSaved={(brands) => setVendor(vendor ? { ...vendor, brands } : vendor)}
+          />
           <div className="grid grid-cols-2 gap-3">
             <div>
               <p className="text-xs text-slate-500 mb-0.5">Payment Terms</p>

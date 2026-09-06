@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { createPurchaseOrder, PoCreateError } from "@/lib/purchase-orders/create";
+import { resolveVendors } from "@/lib/purchase-orders/resolve-vendor";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("brand-stock:generate-po");
@@ -59,7 +60,7 @@ export async function POST(
         brand: { select: { name: true } },
         items: {
           where: { selected: true, orderQty: { gt: 0 }, productId: { not: null } },
-          include: { product: { select: { id: true, sku: true, name: true, costPrice: true, gstRate: true } } },
+          include: { product: { select: { id: true, sku: true, name: true, costPrice: true, gstRate: true, brandId: true, reorderVendorId: true } } },
         },
       },
     });
@@ -67,14 +68,56 @@ export async function POST(
     if (!upload) return errorResponse("Upload not found", 404);
     if (upload.items.length === 0) return errorResponse("No items selected for PO", 400);
 
-    // Vendor by fuzzy brand-name match. Unchanged here, and still the weak link: P10 replaces
-    // it with the product's reorder vendor, then the brand's primary vendor.
-    const vendor = await prisma.vendor.findFirst({
-      where: { name: { contains: upload.brand.name, mode: "insensitive" }, isActive: true },
-      select: { id: true, name: true },
-    });
+    // ─── vendor resolution ────────────────────────────────────────────────────────────
+    //
+    // Was a fuzzy `vendor.name contains brand.name` match — the weakest link in this route,
+    // and the reason the create-time vendor check has to stay OFF for this caller. P10 asks
+    // the same resolver the rest of the purchasing loop uses, and only falls back to the name
+    // match when it has no answer at all.
+    //
+    // Moved here from P11, which the owner dropped on 6 Sep: the check landing in P10 would
+    // otherwise refuse every brand-stock order while this route still guessed by name.
+    const resolutions = await resolveVendors(
+      upload.items.map((i) => ({
+        id: i.productId!,
+        brandId: i.product?.brandId ?? null,
+        reorderVendorId: i.product?.reorderVendorId ?? null,
+      }))
+    );
+
+    const resolvedIds = [...resolutions.values()]
+      .filter((r) => r.resolved)
+      .map((r) => (r.resolved ? r.vendor.id : ""));
+    const distinct = [...new Set(resolvedIds)];
+
+    // One sheet, one purchase order — this route has no per-vendor UI. Two vendors across the
+    // selected rows is a real answer, not an error, so it says which and points at the screen
+    // that can split them.
+    if (distinct.length > 1) {
+      const names = [...new Set(
+        [...resolutions.values()].filter((r) => r.resolved).map((r) => (r.resolved ? r.vendor.name : ""))
+      )];
+      return errorResponse(
+        `These rows come from ${names.length} vendors (${names.join(", ")}). ` +
+          `Order them from Purchase Orders → New, which can split by vendor.`,
+        400
+      );
+    }
+
+    const resolvedVendorId = distinct[0];
+    const vendor = resolvedVendorId
+      ? await prisma.vendor.findUnique({ where: { id: resolvedVendorId }, select: { id: true, name: true } })
+      : await prisma.vendor.findFirst({
+          where: { name: { contains: upload.brand.name, mode: "insensitive" }, isActive: true },
+          select: { id: true, name: true },
+        });
+
     if (!vendor) {
-      return errorResponse("No vendor found matching this brand. Create a vendor first.", 400);
+      return errorResponse(
+        "No vendor could be worked out for this brand. Set a reorder vendor on the products, " +
+          "or add this brand to a vendor on the vendor's page.",
+        400
+      );
     }
 
     const { po, skipped } = await createPurchaseOrder(

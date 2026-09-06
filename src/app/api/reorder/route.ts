@@ -6,6 +6,7 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { isLowStock } from "@/lib/reorder";
+import { resolveVendors, SOURCE_LABEL } from "@/lib/purchase-orders/resolve-vendor";
 
 export async function GET(req: NextRequest) {
   try {
@@ -40,6 +41,9 @@ export async function GET(req: NextRequest) {
       select: {
         id: true, sku: true, name: true,
         currentStock: true, reorderLevel: true, reorderQty: true,
+        // Both scalars are for resolveVendors: it batches one brandVendor.findMany over the
+        // distinct brandIds, so the nested brand object is not enough.
+        brandId: true, reorderVendorId: true,
         costPrice: canSeeCost,
         category: { select: { id: true, name: true } },
         brand: { select: { id: true, name: true } },
@@ -57,17 +61,31 @@ export async function GET(req: NextRequest) {
       products = products.filter(isLowStock);
     }
 
-    // The flat `type` name, added after filtering and before grouping so every product in
-    // every group carries it — /reorder declares its own `interface { type: string }` and
-    // would otherwise render undefined with a green build.
+    // ─── resolve the vendor for every product ────────────────────────────────────────────
+    // After filtering, before grouping. Two bulk queries regardless of how many products.
+    const resolutions = await resolveVendors(products);
+    const withVendor = products.map((p) => {
+      const r = resolutions.get(p.id);
+      return {
+        ...p,
+        vendor: r?.resolved
+          ? { id: r.vendor.id, name: r.vendor.name, source: r.source, sourceLabel: SOURCE_LABEL[r.source] }
+          : null,
+        unresolvedReason: r && !r.resolved ? r.reason : null,
+      };
+    });
+
 
     // Group products (handle null brand/category/vendor)
-    const groups: Record<string, { id: string; name: string; whatsappNumber?: string | null; phone?: string | null; products: typeof products }> = {};
-    for (const p of products) {
+    const groups: Record<string, { id: string; name: string; whatsappNumber?: string | null; phone?: string | null; products: typeof withVendor }> = {};
+    for (const p of withVendor) {
       let key: string, name: string, whatsappNumber: string | null | undefined, phone: string | null | undefined;
       if (groupBy === "vendor") {
-        key = p.reorderVendor?.id || "unassigned";
-        name = p.reorderVendor?.name || "No Vendor Assigned";
+        // The RESOLVED vendor, not the stored one — that is the whole point of P10. A product
+        // with no reorderVendorId but a brand linked to exactly one vendor now groups under
+        // that vendor instead of falling into "No Vendor Assigned".
+        key = p.vendor?.id || "unassigned";
+        name = p.vendor?.name || "No Vendor Assigned";
         whatsappNumber = p.reorderVendor?.whatsappNumber;
         phone = p.reorderVendor?.phone;
       } else if (groupBy === "brand") {
@@ -87,10 +105,13 @@ export async function GET(req: NextRequest) {
     const totalProducts = products.length;
     const lowStockCount = products.filter(isLowStock).length;
     const zeroStockCount = products.filter((p) => p.currentStock === 0).length;
+    // How many of the selected products have no vendor at all. The screen blocks Create PO on
+    // this, so it has to be visible before somebody selects forty rows and is then refused.
+    const unresolvedCount = withVendor.filter((p) => !p.vendor).length;
 
     return successResponse({
       groups: data,
-      summary: { totalProducts, lowStockCount, zeroStockCount },
+      summary: { totalProducts, lowStockCount, zeroStockCount, unresolvedCount },
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);

@@ -5,6 +5,7 @@ import { logActivity } from "@/lib/activity-log";
 import { createLogger } from "@/lib/logger";
 import { poSeedSql, PO_SEQUENCE_KEY, PO_SEQUENCE_PAD } from "./sequence";
 import { findOpenPoConflicts, conflictMessage, type PoConflict } from "./duplicates";
+import { resolveVendors } from "./resolve-vendor";
 
 const log = createLogger("purchase-orders:create");
 
@@ -51,6 +52,17 @@ export interface CreatePoOptions {
    *            (owner, 6 Sep).
    */
   onPricelessLine?: "reject" | "skip";
+
+  /**
+   * Refuse the order when a product is not supplied by the chosen vendor.
+   *
+   * OFF by default, and that default is load-bearing. `generate-po` picks its vendor by a
+   * fuzzy `name contains brand.name` match, which frequently is NOT any product's resolved
+   * vendor — turning this on unconditionally would make every brand-stock purchase order a
+   * 400 on the day it shipped. The manual screen turns it on, because there the vendor was
+   * chosen deliberately and a mismatch means somebody picked the wrong one.
+   */
+  verifyVendorSupplies?: boolean;
 }
 
 export interface SkippedLine {
@@ -162,13 +174,54 @@ export async function createPurchaseOrder(
   const productIds = [...new Set(input.items.map((i) => i.productId))];
   const products = await prisma.product.findMany({
     where: { id: { in: productIds } },
-    select: { id: true, sku: true, name: true },
+    // brandId and reorderVendorId feed the vendor check below. Selected here rather than in a
+    // second query because this lookup already runs for every create.
+    select: { id: true, sku: true, name: true, brandId: true, reorderVendorId: true },
   });
   const byId = new Map(products.map((p) => [p.id, p]));
 
   const missing = productIds.filter((id) => !byId.has(id));
   if (missing.length > 0) {
     throw new PoCreateError(`${missing.length} product(s) on this order no longer exist`, 400);
+  }
+
+  // ─── does this vendor actually supply these products? ─────────────────────────────────
+  // Outside the transaction and outside the lock, for the same reason as the lookup above: it
+  // is a read, and serialising it would buy nothing.
+  if (options.verifyVendorSupplies) {
+    const resolutions = await resolveVendors(products);
+    const mismatched = products.filter((p) => {
+      const r = resolutions.get(p.id);
+      return r?.resolved === true && r.vendor.id !== input.vendorId;
+    });
+
+    if (mismatched.length > 0) {
+      const vendor = await prisma.vendor.findUnique({
+        where: { id: input.vendorId },
+        select: { name: true },
+      });
+      const names = mismatched.slice(0, 3).map((p) => p.name).join(", ");
+      throw new PoCreateError(
+        `${names}${mismatched.length > 3 ? ` and ${mismatched.length - 3} more` : ""} ` +
+          `${mismatched.length === 1 ? "is" : "are"} not supplied by ${vendor?.name ?? "this vendor"}. ` +
+          `Set the vendor on ${mismatched.length === 1 ? "it" : "them"} first.`,
+        400,
+        // Structured like the 409's conflicts, so the screen can offer to drop these lines
+        // instead of only printing the sentence.
+        {
+          mismatches: mismatched.map((p) => {
+            const r = resolutions.get(p.id);
+            return {
+              productId: p.id,
+              sku: p.sku,
+              name: p.name,
+              expectedVendorId: r?.resolved ? r.vendor.id : null,
+              expectedVendorName: r?.resolved ? r.vendor.name : null,
+            };
+          }),
+        }
+      );
+    }
   }
 
   // ─── ₹0 lines ──────────────────────────────────────────────────────────────────────────

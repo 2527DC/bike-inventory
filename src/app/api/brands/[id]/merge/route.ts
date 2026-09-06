@@ -38,9 +38,49 @@ export async function POST(
         data: { brandId: targetBrandId },
       });
 
+      // ─── carry the vendor links across ────────────────────────────────────────────────
+      //
+      // BrandVendor.brandId is ON DELETE CASCADE, so deleting the source brand DESTROYS every
+      // vendor link it had — silently, and with no way to tell afterwards that it happened.
+      // That did not matter while the table was empty. From P10 it decides which vendor
+      // supplies a product, so a merge would quietly un-resolve a whole brand's catalogue.
+      //
+      // Same shape as the category merge fixed in P1: move what the source held to the target
+      // BEFORE deleting, and skip the ones the target already has, because
+      // @@unique([brandId, vendorId]) would reject a duplicate.
+      const sourceLinks = await tx.brandVendor.findMany({
+        where: { brandId: sourceBrandId },
+        select: { vendorId: true, isPrimary: true, note: true },
+      });
+      const targetLinks = await tx.brandVendor.findMany({
+        where: { brandId: targetBrandId },
+        select: { vendorId: true },
+      });
+      const targetVendorIds = new Set(targetLinks.map((l) => l.vendorId));
+      const toMove = sourceLinks.filter((l) => !targetVendorIds.has(l.vendorId));
+
+      if (toMove.length > 0) {
+        await tx.brandVendor.createMany({
+          data: toMove.map((l) => ({
+            brandId: targetBrandId,
+            vendorId: l.vendorId,
+            // The target's own primary wins. Two primaries on one brand is the state
+            // resolveVendors refuses to guess about, so a merge must not create one.
+            isPrimary: targetLinks.length > 0 ? false : l.isPrimary,
+            note: l.note,
+          })),
+        });
+      }
+
+      // The cascade removes the source's rows along with the brand.
       await tx.brand.delete({ where: { id: sourceBrandId } });
 
-      return { moved: updated.count, deleted: sourceBrand.name };
+      return {
+        moved: updated.count,
+        deleted: sourceBrand.name,
+        vendorLinksMoved: toMove.length,
+        vendorLinksDropped: sourceLinks.length - toMove.length,
+      };
     });
 
     return successResponse(result);

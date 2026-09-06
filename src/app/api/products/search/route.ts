@@ -26,7 +26,11 @@ export async function GET(req: NextRequest) {
     const user = await requireFeature("stock", "view");
     // The route used to discard requireFeature's return, so there was no user to check with.
     const canSeeCost = await userCan(user.id, "cost_price", "view");
-    const q = new URL(req.url).searchParams.get("q") || "";
+    const params = new URL(req.url).searchParams;
+    const q = params.get("q") || "";
+    // "" means no filter, NOT "products with no vendor" — the search box on
+    // /purchase-orders/new is usable before a vendor has been chosen.
+    const vendorId = params.get("vendorId") || undefined;
     if (q.length < 2) {
       return successResponse([]);
     }
@@ -34,13 +38,34 @@ export async function GET(req: NextRequest) {
     const products = await prisma.product.findMany({
       where: {
         status: "ACTIVE",
-        OR: [
-          { name: { contains: q, mode: "insensitive" } },
-          { sku: { contains: q, mode: "insensitive" } },
-          { brand: { name: { contains: q, mode: "insensitive" } } },
-          { size: { contains: q, mode: "insensitive" } },
-          { category: { name: { contains: q, mode: "insensitive" } } },
-          { bin: { code: { contains: q, mode: "insensitive" } } },
+        // AND of two ORs, NOT two OR keys. A second `OR` in the same object literal silently
+        // REPLACES the first in JavaScript — it still compiles and still returns rows, just
+        // the wrong ones, with the text search quietly gone. This is the shape that keeps both.
+        AND: [
+          {
+            OR: [
+              { name: { contains: q, mode: "insensitive" as const } },
+              { sku: { contains: q, mode: "insensitive" as const } },
+              { brand: { name: { contains: q, mode: "insensitive" as const } } },
+              { size: { contains: q, mode: "insensitive" as const } },
+              { category: { name: { contains: q, mode: "insensitive" as const } } },
+              { bin: { code: { contains: q, mode: "insensitive" as const } } },
+            ],
+          },
+          // Scope to what this vendor supplies: the product's own reorder vendor, or any
+          // product of a brand the vendor is linked to. The brand half reads `brand_vendors`,
+          // which is empty until somebody fills it in on a vendor's page — so before that,
+          // this narrows to reorderVendorId alone. That is the honest behaviour, not a bug.
+          ...(vendorId
+            ? [
+                {
+                  OR: [
+                    { reorderVendorId: vendorId },
+                    { brand: { vendors: { some: { vendorId } } } },
+                  ],
+                },
+              ]
+            : []),
         ],
       },
       select: {

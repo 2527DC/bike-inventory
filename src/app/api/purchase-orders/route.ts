@@ -83,7 +83,13 @@ export async function POST(req: NextRequest) {
 
     // "reject": on this screen a blank rate is a typo somebody can fix in the field they are
     // looking at. The brand-stock caller passes "skip" instead.
-    const { po } = await createPurchaseOrder(data, user, { onPricelessLine: "reject" });
+    const { po } = await createPurchaseOrder(data, user, {
+      onPricelessLine: "reject",
+      // ON here, OFF for the brand-stock caller. On this screen the vendor was chosen
+      // deliberately, so a product resolving to a different vendor means the wrong one was
+      // picked — and P10 makes the vendor read-only precisely so that cannot happen silently.
+      verifyVendorSupplies: true,
+    });
 
     return successResponse(po, 201);
   } catch (error) {

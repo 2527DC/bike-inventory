@@ -8,6 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("purchase-orders:new");
 
 interface VendorOption { id: string; name: string; code: string; }
 // costPrice is OPTIONAL and that is not laziness: api/products/search selects it only for a
@@ -22,6 +25,32 @@ interface PoConflict {
   status: string;
   productIds: string[];
   productNames: string[];
+}
+
+/** One product as POST /api/purchase-orders/prepare returns it. */
+interface PreparedItem {
+  productId: string;
+  sku: string;
+  name: string;
+  quantity: number;
+  gstRate: number;
+  /** Absent when the caller lacks cost_price.view — see P9's ₹0 rule. */
+  costPrice?: number;
+}
+
+interface PreparedGroup {
+  vendorId: string;
+  vendorName: string;
+  source: string;
+  sourceLabel: string;
+  items: PreparedItem[];
+}
+
+interface PrepareResponse {
+  groups: PreparedGroup[];
+  unresolved: Array<PreparedItem & { reason: string }>;
+  missing: string[];
+  canSeeCost: boolean;
 }
 
 interface POLineItem { productId: string; productName: string; sku: string; quantity: number; unitPrice: number; gstRate: number; }
@@ -40,6 +69,8 @@ export default function NewPurchaseOrderPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [conflicts, setConflicts] = useState<PoConflict[] | null>(null);
+  const [preparing, setPreparing] = useState(false);
+  const [prepared, setPrepared] = useState<PrepareResponse | null>(null);
 
   // Product search
   const [productSearch, setProductSearch] = useState("");
@@ -52,38 +83,75 @@ export default function NewPurchaseOrderPage() {
       .catch(() => {});
   }, []);
 
-  // Pick up pre-selected items from Reorder page
+  // Pick up pre-selected items from /reorder.
+  //
+  // TWO SHAPES. v2 is `{ v: 2, items: [{ productId, quantity }] }`; v1 was a bare array
+  // carrying name, sku, unitPrice and brandName. Both are handled because a session that
+  // started before this deploy can still be holding a v1 payload — and the failure mode is
+  // nasty: the old code called `.map()` on the parsed value, so a v2 object threw a
+  // TypeError, the `catch { /* ignore */ }` swallowed it, and `removeItem` was never reached.
+  // The key then stayed wedged and every later visit to this screen threw again.
+  //
+  // The key is removed FIRST, before anything can throw, so a malformed payload can never
+  // wedge the screen the way it could before.
   useEffect(() => {
     const stored = sessionStorage.getItem("reorder-po-items");
-    if (stored) {
-      try {
-        const poItems = JSON.parse(stored);
-        // Reading sessionStorage on mount is the one thing an effect IS for: it is an
-        // external store, and it cannot move into a lazy useState initialiser because a
-        // client component also renders on the server, where sessionStorage does not exist.
-        // This statement predates P9 — the rule began reporting it only because P9
-        // restructured the submit path, and the React Compiler lint bails out of components
-        // it cannot fully analyse.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setItems(poItems.map((item: { productId: string; name: string; sku: string; quantity: number; unitPrice: number }) => ({
-          productId: item.productId,
-          productName: item.name,
-          sku: item.sku,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          gstRate: 0,
-        })));
-        sessionStorage.removeItem("reorder-po-items");
-      } catch { /* ignore */ }
+    if (!stored) return;
+    sessionStorage.removeItem("reorder-po-items");
+
+    const productIds: string[] = [];
+    const quantities: Record<string, number> = {};
+    try {
+      const parsed: unknown = JSON.parse(stored);
+      if (Array.isArray(parsed)) {
+        // v1
+        for (const it of parsed as Array<{ productId?: string; quantity?: number }>) {
+          if (!it?.productId) continue;
+          productIds.push(it.productId);
+          quantities[it.productId] = it.quantity ?? 1;
+        }
+      } else if (parsed && typeof parsed === "object" && "items" in parsed) {
+        for (const it of (parsed as { items: Array<{ productId?: string; quantity?: number }> }).items ?? []) {
+          if (!it?.productId) continue;
+          productIds.push(it.productId);
+          quantities[it.productId] = it.quantity ?? 1;
+        }
+      }
+    } catch (e) {
+      log.error("could not read the reorder handoff", { message: e instanceof Error ? e.message : String(e) });
+      setError("Could not read the products carried over from Reorder. Add them here instead.");
+      return;
     }
+
+    if (productIds.length === 0) return;
+
+    // The server fills in price, GST and vendor. The handoff deliberately carries none of
+    // them: v1 sent a costPrice the API withholds without cost_price.view (so it arrived
+    // undefined and rendered ₹NaN) and the consumer hardcoded gstRate to 0, which is why
+    // every PO raised from /reorder until now has carried 0% GST.
+    setPreparing(true);
+    apiTry<PrepareResponse>("/api/purchase-orders/prepare", {
+      method: "POST",
+      json: { productIds, quantities },
+    })
+      .then(({ data, error: err }) => {
+        if (!data) {
+          setError(err ?? "Could not prepare the purchase order");
+          return;
+        }
+        setPrepared(data);
+      })
+      .finally(() => setPreparing(false));
   }, []);
 
   useEffect(() => {
-    // Clears stale results when the query drops below two characters. Also pre-existing,
-    // also newly reported for the reason above. Deriving it instead would leave the previous
-    // query's matches on screen while the box reads one character, which is worse than a
-    // cascading render.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // Clears stale results when the query drops below two characters. Deriving it instead
+    // would leave the previous query's matches on screen while the box reads one character.
+    //
+    // No eslint-disable here any more: react-hooks/set-state-in-effect reported this in P9 and
+    // does not now. The React Compiler lint bails out of components it cannot fully analyse,
+    // so whether this line is flagged depends on unrelated edits elsewhere in the file. Do not
+    // read its silence as approval, and do not be surprised if it comes back.
     if (productSearch.length < 2) { setProductResults([]); return; }
     // apiTry, not .json(): an expired session answers 307 -> /login -> HTML with status 200,
     // so the old .catch(() => {}) turned a dead session into "no products match".
@@ -115,6 +183,41 @@ export default function NewPurchaseOrderPage() {
 
   const subtotal = items.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0);
   const gstTotal = items.reduce((sum, i) => sum + i.quantity * i.unitPrice * (i.gstRate / 100), 0);
+
+  /**
+   * Load one prepared vendor group into the form.
+   *
+   * P10a fills ONE vendor at a time. The plan's per-vendor sections with a single
+   * "Create all (N)" are the next commit; until then a mixed selection is offered as a
+   * choice rather than silently truncated to whichever vendor happened to be first.
+   */
+  function loadGroup(g: PreparedGroup) {
+    setVendorId(g.vendorId);
+    setItems(
+      g.items.map((it) => ({
+        productId: it.productId,
+        productName: it.name,
+        sku: it.sku,
+        quantity: it.quantity,
+        // ?? 0 leaves the rate box empty and required, rather than inventing a price for
+        // someone who is not allowed to see cost.
+        unitPrice: it.costPrice ?? 0,
+        // The product's real GST. The old handoff hardcoded 0 here, which is why every PO
+        // raised from /reorder so far has carried 0% GST.
+        gstRate: it.gstRate,
+      }))
+    );
+    setError("");
+    setConflicts(null);
+  }
+
+  // One vendor: just load it. Several: leave the choice on screen.
+  useEffect(() => {
+    if (prepared && prepared.groups.length === 1 && items.length === 0) {
+      loadGroup(prepared.groups[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prepared]);
 
   /** Lines with no rate. The server refuses the whole PO if any survives to it. */
   const unpricedLines = items.filter((i) => !(i.unitPrice > 0));
@@ -172,6 +275,69 @@ export default function NewPurchaseOrderPage() {
         </Link>
         <h1 className="text-lg font-bold text-slate-900 truncate">New Purchase Order</h1>
       </div>
+
+      {preparing && (
+        <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4 text-sm text-slate-600">
+          Working out who supplies these products…
+        </div>
+      )}
+
+      {/* Several vendors in one selection. P10a asks which to order first; the per-vendor
+          sections with one "Create all" are the next commit. Offered as a choice rather than
+          silently truncated, because losing lines from an order nobody was told about is the
+          worst of the available behaviours. */}
+      {prepared && prepared.groups.length > 1 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+          <p className="text-sm font-semibold text-blue-900">
+            These products come from {prepared.groups.length} vendors
+          </p>
+          <p className="text-xs text-blue-700 mt-0.5">
+            A purchase order goes to one vendor. Order them one at a time.
+          </p>
+          <div className="mt-2 space-y-1.5">
+            {prepared.groups.map((g) => (
+              <button
+                key={g.vendorId}
+                type="button"
+                onClick={() => loadGroup(g)}
+                className={`w-full text-left min-h-[44px] px-3 py-2 rounded-lg border text-xs ${
+                  vendorId === g.vendorId ? "bg-blue-600 text-white border-blue-600" : "bg-white border-blue-200 text-blue-900"
+                }`}
+              >
+                <span className="font-semibold">{g.vendorName}</span>
+                <span className={vendorId === g.vendorId ? "text-blue-100" : "text-blue-500"}>
+                  {" "}· {g.items.length} item{g.items.length === 1 ? "" : "s"} · {g.sourceLabel}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Products carried over that nobody supplies. They are named rather than dropped —
+          a shorter order than the one selected, with no explanation, is how stock quietly
+          fails to arrive. */}
+      {prepared && prepared.unresolved.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+          <p className="text-sm font-semibold text-amber-900">
+            {prepared.unresolved.length} product{prepared.unresolved.length === 1 ? " has" : "s have"} no vendor
+          </p>
+          <p className="text-xs text-amber-700 mt-0.5">
+            Not included. Set a reorder vendor on them, or link the brand to a vendor on the
+            vendor&apos;s page.
+          </p>
+          <ul className="mt-2 space-y-0.5">
+            {prepared.unresolved.slice(0, 6).map((u) => (
+              <li key={u.productId} className="text-xs text-amber-800 break-words">
+                {u.sku} — {u.name}
+              </li>
+            ))}
+            {prepared.unresolved.length > 6 && (
+              <li className="text-xs text-amber-600">and {prepared.unresolved.length - 6} more</li>
+            )}
+          </ul>
+        </div>
+      )}
 
       {error && <div className="bg-red-50 text-red-700 text-sm p-3 rounded-lg mb-4">{error}</div>}
 
