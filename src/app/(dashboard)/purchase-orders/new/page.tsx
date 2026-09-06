@@ -1,40 +1,39 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Trash2, AlertTriangle } from "lucide-react";
+import { ArrowLeft, AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
+import {
+  VendorSection,
+  formatCurrency,
+  type Section,
+  type POLineItem,
+  type PoConflict,
+  type VendorOption,
+} from "./_components/vendor-section";
 
 const log = createLogger("purchase-orders:new");
 
-interface VendorOption { id: string; name: string; code: string; }
-// costPrice is OPTIONAL and that is not laziness: api/products/search selects it only for a
-// caller holding cost_price.view, so for everyone else the key is genuinely absent. Declaring
-// it `number` was how this screen ended up rendering ₹NaN in five places — the type said the
-// value was always there, so nothing forced anyone to handle its absence.
-interface ProductOption { id: string; name: string; sku: string; costPrice?: number; gstRate?: number; }
-/** The shape POST /api/purchase-orders sends beside a 409. See lib/purchase-orders/duplicates.ts. */
-interface PoConflict {
-  poId: string;
-  poNumber: string;
-  status: string;
-  productIds: string[];
-  productNames: string[];
+interface ProductOption {
+  id: string;
+  name: string;
+  sku: string;
+  /** Absent for a caller without cost_price.view — declaring it `number` is what produced ₹NaN. */
+  costPrice?: number;
+  gstRate?: number;
 }
 
-/** One product as POST /api/purchase-orders/prepare returns it. */
 interface PreparedItem {
   productId: string;
   sku: string;
   name: string;
   quantity: number;
   gstRate: number;
-  /** Absent when the caller lacks cost_price.view — see P9's ₹0 rule. */
   costPrice?: number;
 }
 
@@ -53,47 +52,79 @@ interface PrepareResponse {
   canSeeCost: boolean;
 }
 
-interface POLineItem { productId: string; productName: string; sku: string; quantity: number; unitPrice: number; gstRate: number; }
+const MANUAL_KEY = "manual";
 
-function formatCurrency(amount: number) {
-  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
-}
+const toLine = (it: PreparedItem): POLineItem => ({
+  productId: it.productId,
+  productName: it.name,
+  sku: it.sku,
+  quantity: it.quantity,
+  // ?? 0 leaves the rate box empty and required rather than inventing a price for somebody
+  // who is not permitted to see cost.
+  unitPrice: it.costPrice ?? 0,
+  // The product's real GST. The v1 handoff hardcoded 0, which is why every purchase order
+  // raised from /reorder before P10 carried 0% GST.
+  gstRate: it.gstRate,
+});
 
+const emptyManualSection = (): Section => ({
+  key: MANUAL_KEY,
+  vendorId: "",
+  vendorName: null,
+  sourceLabel: null,
+  items: [],
+  status: "idle",
+  error: null,
+  conflicts: null,
+});
+
+/**
+ * Raise purchase orders.
+ *
+ * ─── ONE SCREEN, N ORDERS ────────────────────────────────────────────────────────────────
+ *
+ * A purchase order goes to one vendor. A person reordering does not think in vendors — they
+ * tick what is low — so a selection routinely spans several, and this screen renders one
+ * section per vendor rather than forcing the choice or silently picking one.
+ *
+ * Each section is a SEPARATE write that can fail on its own: the duplicate rule can refuse
+ * vendor B seconds after vendor A's order was created. Nothing rolls back, and nothing should
+ * — a real purchase order exists at that point. So "Create all" runs them in order, records an
+ * outcome per vendor, and the screen STAYS PUT afterwards. Navigating away on success is what
+ * would destroy the only report of what actually happened.
+ */
 export default function NewPurchaseOrderPage() {
   const router = useRouter();
   const [vendors, setVendors] = useState<VendorOption[]>([]);
-  const [vendorId, setVendorId] = useState("");
   const [expectedDate, setExpectedDate] = useState("");
   const [notes, setNotes] = useState("");
-  const [items, setItems] = useState<POLineItem[]>([]);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
-  const [conflicts, setConflicts] = useState<PoConflict[] | null>(null);
+  const [sections, setSections] = useState<Section[]>([emptyManualSection()]);
   const [preparing, setPreparing] = useState(false);
   const [prepared, setPrepared] = useState<PrepareResponse | null>(null);
+  const [runningAll, setRunningAll] = useState(false);
+  const [pageError, setPageError] = useState("");
 
-  // Product search
   const [productSearch, setProductSearch] = useState("");
   const [productResults, setProductResults] = useState<ProductOption[]>([]);
 
   useEffect(() => {
-    fetch("/api/vendors?limit=100")
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setVendors(res.data); })
-      .catch(() => {});
+    // limit=500 is what parseSearchParams clamps to; asking for more silently gets 500.
+    apiTry<VendorOption[]>("/api/vendors?limit=500").then(({ data, error }) => {
+      if (data) setVendors(data);
+      else log.warn("vendor list unavailable", { message: error });
+    });
   }, []);
 
-  // Pick up pre-selected items from /reorder.
+  // ─── the handoff from /reorder ────────────────────────────────────────────────────────
   //
-  // TWO SHAPES. v2 is `{ v: 2, items: [{ productId, quantity }] }`; v1 was a bare array
-  // carrying name, sku, unitPrice and brandName. Both are handled because a session that
-  // started before this deploy can still be holding a v1 payload — and the failure mode is
-  // nasty: the old code called `.map()` on the parsed value, so a v2 object threw a
-  // TypeError, the `catch { /* ignore */ }` swallowed it, and `removeItem` was never reached.
-  // The key then stayed wedged and every later visit to this screen threw again.
+  // TWO SHAPES. v2 is `{ v: 2, items: [{ productId, quantity }] }`; v1 was a bare array that
+  // also carried name, sku, unitPrice and brandName. Both are read, because a session that
+  // began before this deploy can still hold a v1 payload.
   //
-  // The key is removed FIRST, before anything can throw, so a malformed payload can never
-  // wedge the screen the way it could before.
+  // The key is removed FIRST, before anything can throw. The old consumer called `.map()` on
+  // the parsed value, so a v2 object threw a TypeError, the `catch { /* ignore */ }` swallowed
+  // it, and `removeItem` was never reached — leaving the key wedged so every later visit threw
+  // again.
   useEffect(() => {
     const stored = sessionStorage.getItem("reorder-po-items");
     if (!stored) return;
@@ -103,169 +134,160 @@ export default function NewPurchaseOrderPage() {
     const quantities: Record<string, number> = {};
     try {
       const parsed: unknown = JSON.parse(stored);
-      if (Array.isArray(parsed)) {
-        // v1
-        for (const it of parsed as Array<{ productId?: string; quantity?: number }>) {
-          if (!it?.productId) continue;
-          productIds.push(it.productId);
-          quantities[it.productId] = it.quantity ?? 1;
-        }
-      } else if (parsed && typeof parsed === "object" && "items" in parsed) {
-        for (const it of (parsed as { items: Array<{ productId?: string; quantity?: number }> }).items ?? []) {
-          if (!it?.productId) continue;
-          productIds.push(it.productId);
-          quantities[it.productId] = it.quantity ?? 1;
-        }
+      const list = Array.isArray(parsed)
+        ? (parsed as Array<{ productId?: string; quantity?: number }>)
+        : ((parsed as { items?: Array<{ productId?: string; quantity?: number }> })?.items ?? []);
+      for (const it of list) {
+        if (!it?.productId) continue;
+        productIds.push(it.productId);
+        quantities[it.productId] = it.quantity ?? 1;
       }
     } catch (e) {
       log.error("could not read the reorder handoff", { message: e instanceof Error ? e.message : String(e) });
-      setError("Could not read the products carried over from Reorder. Add them here instead.");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPageError("Could not read the products carried over from Reorder. Add them here instead.");
       return;
     }
 
     if (productIds.length === 0) return;
 
-    // The server fills in price, GST and vendor. The handoff deliberately carries none of
-    // them: v1 sent a costPrice the API withholds without cost_price.view (so it arrived
-    // undefined and rendered ₹NaN) and the consumer hardcoded gstRate to 0, which is why
-    // every PO raised from /reorder until now has carried 0% GST.
     setPreparing(true);
-    apiTry<PrepareResponse>("/api/purchase-orders/prepare", {
-      method: "POST",
-      json: { productIds, quantities },
-    })
-      .then(({ data, error: err }) => {
+    apiTry<PrepareResponse>("/api/purchase-orders/prepare", { method: "POST", json: { productIds, quantities } })
+      .then(({ data, error }) => {
         if (!data) {
-          setError(err ?? "Could not prepare the purchase order");
+          setPageError(error ?? "Could not work out who supplies these products");
           return;
         }
         setPrepared(data);
+        // One section per vendor, in the order the resolver returned them. The manual section
+        // is dropped: this run came from a selection, and an empty extra card would read as a
+        // sixth order somebody forgot to fill in.
+        if (data.groups.length > 0) {
+          setSections(
+            data.groups.map((g) => ({
+              key: g.vendorId,
+              vendorId: g.vendorId,
+              vendorName: g.vendorName,
+              sourceLabel: g.sourceLabel,
+              items: g.items.map(toLine),
+              status: "idle" as const,
+              error: null,
+              conflicts: null,
+            }))
+          );
+        }
       })
       .finally(() => setPreparing(false));
   }, []);
 
   useEffect(() => {
-    // Clears stale results when the query drops below two characters. Deriving it instead
-    // would leave the previous query's matches on screen while the box reads one character.
-    //
-    // No eslint-disable here any more: react-hooks/set-state-in-effect reported this in P9 and
-    // does not now. The React Compiler lint bails out of components it cannot fully analyse,
-    // so whether this line is flagged depends on unrelated edits elsewhere in the file. Do not
-    // read its silence as approval, and do not be surprised if it comes back.
-    if (productSearch.length < 2) { setProductResults([]); return; }
-    // apiTry, not .json(): an expired session answers 307 -> /login -> HTML with status 200,
-    // so the old .catch(() => {}) turned a dead session into "no products match".
-    apiTry<ProductOption[]>(`/api/products/search?q=${encodeURIComponent(productSearch)}`).then(
-      ({ data }) => setProductResults(data ?? [])
+    if (productSearch.length < 2) return;
+    apiTry<ProductOption[]>(`/api/products/search?q=${encodeURIComponent(productSearch)}`).then(({ data }) =>
+      setProductResults(data ?? [])
     );
   }, [productSearch]);
 
+  // Derived rather than cleared in the effect. The previous version called setProductResults([])
+  // synchronously inside the effect body to drop stale matches; deriving the visible list from
+  // the query length does the same job with no cascading render and no stale window.
+  const visibleResults = productSearch.length >= 2 ? productResults : [];
+
+  const patch = useCallback((key: string, next: Partial<Section>) => {
+    setSections((prev) => prev.map((s) => (s.key === key ? { ...s, ...next } : s)));
+  }, []);
+
+  /** Products go into the manual section — the derived ones are what the resolver decided. */
   function addItem(product: ProductOption) {
-    if (items.find((i) => i.productId === product.id)) return;
-    setItems([...items, {
-      productId: product.id, productName: product.name, sku: product.sku,
-      // ?? 0 rather than ||, so a genuine zero cost stays zero instead of being replaced.
-      // A missing cost means "this person cannot see cost prices" — the line opens at 0 and
-      // they type the price, which is the same thing they did before this screen worked.
-      quantity: 1, unitPrice: product.costPrice ?? 0, gstRate: product.gstRate ?? 0,
-    }]);
+    const manual = sections.find((s) => s.key === MANUAL_KEY);
+    if (!manual) return;
+    if (manual.items.some((i) => i.productId === product.id)) return;
+    patch(MANUAL_KEY, {
+      items: [
+        ...manual.items,
+        {
+          productId: product.id,
+          productName: product.name,
+          sku: product.sku,
+          quantity: 1,
+          unitPrice: product.costPrice ?? 0,
+          gstRate: product.gstRate ?? 0,
+        },
+      ],
+    });
     setProductSearch("");
     setProductResults([]);
   }
 
-  function updateItem(index: number, field: string, value: number) {
-    setItems(items.map((item, i) => i === index ? { ...item, [field]: value } : item));
-  }
+  /** Create ONE vendor's order. Returns true when a purchase order now exists. */
+  const submitSection = useCallback(
+    async (key: string, submitForApproval: boolean): Promise<boolean> => {
+      const s = sections.find((x) => x.key === key);
+      if (!s || s.status === "created") return false;
+      if (!s.vendorId || s.items.length === 0 || s.items.some((i) => !(i.unitPrice > 0))) return false;
 
-  function removeItem(index: number) {
-    setItems(items.filter((_, i) => i !== index));
-  }
+      patch(key, { status: "running", error: null, conflicts: null });
 
-  const subtotal = items.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0);
-  const gstTotal = items.reduce((sum, i) => sum + i.quantity * i.unitPrice * (i.gstRate / 100), 0);
+      const { data, error, errorData, status } = await apiTry<{ id: string; poNumber: string }>(
+        "/api/purchase-orders",
+        {
+          method: "POST",
+          json: {
+            vendorId: s.vendorId,
+            expectedDate,
+            notes,
+            submit: submitForApproval,
+            items: s.items.map(({ productId, quantity, unitPrice, gstRate }) => ({ productId, quantity, unitPrice, gstRate })),
+          },
+        }
+      );
+
+      if (data) {
+        patch(key, { status: "created", poId: data.id, poNumber: data.poNumber, error: null, conflicts: null });
+        log.info("purchase order created", { vendorId: s.vendorId, poNumber: data.poNumber });
+        return true;
+      }
+
+      // 409 carries the clashing purchase orders; 400 from the vendor check carries the
+      // mismatched products. Both are refusals a person can act on, so neither is flattened
+      // to a red sentence.
+      if (status === 409 && errorData && typeof errorData === "object" && "conflicts" in errorData) {
+        patch(key, { status: "failed", conflicts: (errorData as { conflicts: PoConflict[] }).conflicts, error: null });
+        return false;
+      }
+      patch(key, { status: "failed", error: error ?? "Could not create this purchase order", conflicts: null });
+      return false;
+    },
+    [sections, expectedDate, notes, patch]
+  );
 
   /**
-   * Load one prepared vendor group into the form.
+   * Create every outstanding section, one after another.
    *
-   * P10a fills ONE vendor at a time. The plan's per-vendor sections with a single
-   * "Create all (N)" are the next commit; until then a mixed selection is offered as a
-   * choice rather than silently truncated to whichever vendor happened to be first.
+   * SEQUENTIAL on purpose. Each create takes a per-vendor advisory lock and re-reads open
+   * orders for that vendor; firing them together would serialise in the database anyway, and
+   * a failure in the middle of a parallel run is much harder to report honestly.
    */
-  function loadGroup(g: PreparedGroup) {
-    setVendorId(g.vendorId);
-    setItems(
-      g.items.map((it) => ({
-        productId: it.productId,
-        productName: it.name,
-        sku: it.sku,
-        quantity: it.quantity,
-        // ?? 0 leaves the rate box empty and required, rather than inventing a price for
-        // someone who is not allowed to see cost.
-        unitPrice: it.costPrice ?? 0,
-        // The product's real GST. The old handoff hardcoded 0 here, which is why every PO
-        // raised from /reorder so far has carried 0% GST.
-        gstRate: it.gstRate,
-      }))
-    );
-    setError("");
-    setConflicts(null);
+  async function createAll(submitForApproval: boolean) {
+    setRunningAll(true);
+    setPageError("");
+    const pending = sections.filter((s) => s.status !== "created" && s.vendorId && s.items.length > 0);
+    for (const s of pending) {
+      await submitSection(s.key, submitForApproval);
+    }
+    setRunningAll(false);
   }
 
-  // One vendor: just load it. Several: leave the choice on screen.
-  useEffect(() => {
-    if (prepared && prepared.groups.length === 1 && items.length === 0) {
-      loadGroup(prepared.groups[0]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prepared]);
-
-  /** Lines with no rate. The server refuses the whole PO if any survives to it. */
-  const unpricedLines = items.filter((i) => !(i.unitPrice > 0));
-
-  async function submit(submitForApproval: boolean) {
-    if (!vendorId || items.length === 0 || unpricedLines.length > 0) return;
-
-    setSubmitting(true);
-    setError("");
-    setConflicts(null);
-
-    // apiTry rather than raw fetch: the 409 carries a conflicts array beside its message, and
-    // the old `const data = await res.json()` path flattened the whole envelope to one string
-    // and never looked at res.status, so that array was dropped on the floor.
-    const { data, error: err, errorData, status } = await apiTry<{ id: string }>(
-      "/api/purchase-orders",
-      {
-        method: "POST",
-        json: {
-          vendorId,
-          expectedDate,
-          notes,
-          submit: submitForApproval,
-          items: items.map(({ productId, quantity, unitPrice, gstRate }) => ({ productId, quantity, unitPrice, gstRate })),
-        },
-      }
-    );
-    setSubmitting(false);
-
-    if (data) {
-      router.push("/purchase-orders");
-      return;
-    }
-
-    if (status === 409 && errorData && typeof errorData === "object" && "conflicts" in errorData) {
-      setConflicts((errorData as { conflicts: PoConflict[] }).conflicts);
-      setError("");
-      return;
-    }
-    setError(err ?? "Something went wrong");
+  function removeConflictingLines(key: string) {
+    const s = sections.find((x) => x.key === key);
+    if (!s?.conflicts) return;
+    const clashing = new Set(s.conflicts.flatMap((c) => c.productIds));
+    patch(key, { items: s.items.filter((i) => !clashing.has(i.productId)), conflicts: null, status: "idle" });
   }
 
-  /** Drop every line already on an open PO, so the rest can be ordered. */
-  function removeConflictingLines() {
-    const clashing = new Set((conflicts ?? []).flatMap((c) => c.productIds));
-    setItems((prev) => prev.filter((i) => !clashing.has(i.productId)));
-    setConflicts(null);
-  }
+  const creatable = sections.filter((s) => s.status !== "created" && s.vendorId && s.items.length > 0);
+  const created = sections.filter((s) => s.status === "created");
+  const anyBlocked = creatable.some((s) => s.items.some((i) => !(i.unitPrice > 0)));
+  const allDone = sections.length > 0 && created.length === sections.filter((s) => s.items.length > 0).length;
 
   return (
     <div>
@@ -273,50 +295,35 @@ export default function NewPurchaseOrderPage() {
         <Link href="/purchase-orders" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
-        <h1 className="text-lg font-bold text-slate-900 truncate">New Purchase Order</h1>
+        <h1 className="text-lg font-bold text-slate-900 truncate">
+          {sections.length > 1 ? `New Purchase Orders (${sections.length})` : "New Purchase Order"}
+        </h1>
       </div>
 
+      {pageError && (
+        <div className="bg-red-50 text-red-700 text-sm p-3 rounded-lg mb-4">{pageError}</div>
+      )}
+
       {preparing && (
-        <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4 text-sm text-slate-600">
-          Working out who supplies these products…
+        <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4 text-sm text-slate-600 flex items-center gap-2">
+          <Loader2 className="h-4 w-4 animate-spin" /> Working out who supplies these products…
         </div>
       )}
 
-      {/* Several vendors in one selection. P10a asks which to order first; the per-vendor
-          sections with one "Create all" are the next commit. Offered as a choice rather than
-          silently truncated, because losing lines from an order nobody was told about is the
-          worst of the available behaviours. */}
-      {prepared && prepared.groups.length > 1 && (
+      {sections.length > 1 && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
           <p className="text-sm font-semibold text-blue-900">
-            These products come from {prepared.groups.length} vendors
+            {sections.length} vendors, {sections.length} purchase orders
           </p>
           <p className="text-xs text-blue-700 mt-0.5">
-            A purchase order goes to one vendor. Order them one at a time.
+            An order goes to one vendor, so these are created separately. Each one succeeds or
+            fails on its own — nothing is undone if a later one is refused.
           </p>
-          <div className="mt-2 space-y-1.5">
-            {prepared.groups.map((g) => (
-              <button
-                key={g.vendorId}
-                type="button"
-                onClick={() => loadGroup(g)}
-                className={`w-full text-left min-h-[44px] px-3 py-2 rounded-lg border text-xs ${
-                  vendorId === g.vendorId ? "bg-blue-600 text-white border-blue-600" : "bg-white border-blue-200 text-blue-900"
-                }`}
-              >
-                <span className="font-semibold">{g.vendorName}</span>
-                <span className={vendorId === g.vendorId ? "text-blue-100" : "text-blue-500"}>
-                  {" "}· {g.items.length} item{g.items.length === 1 ? "" : "s"} · {g.sourceLabel}
-                </span>
-              </button>
-            ))}
-          </div>
         </div>
       )}
 
-      {/* Products carried over that nobody supplies. They are named rather than dropped —
-          a shorter order than the one selected, with no explanation, is how stock quietly
-          fails to arrive. */}
+      {/* Carried-over products nobody supplies. Named rather than dropped: a shorter order
+          than the one selected, with no explanation, is how stock quietly fails to arrive. */}
       {prepared && prepared.unresolved.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
           <p className="text-sm font-semibold text-amber-900">
@@ -328,9 +335,7 @@ export default function NewPurchaseOrderPage() {
           </p>
           <ul className="mt-2 space-y-0.5">
             {prepared.unresolved.slice(0, 6).map((u) => (
-              <li key={u.productId} className="text-xs text-amber-800 break-words">
-                {u.sku} — {u.name}
-              </li>
+              <li key={u.productId} className="text-xs text-amber-800 break-words">{u.sku} — {u.name}</li>
             ))}
             {prepared.unresolved.length > 6 && (
               <li className="text-xs text-amber-600">and {prepared.unresolved.length - 6} more</li>
@@ -339,226 +344,146 @@ export default function NewPurchaseOrderPage() {
         </div>
       )}
 
-      {error && <div className="bg-red-50 text-red-700 text-sm p-3 rounded-lg mb-4">{error}</div>}
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Expected Delivery</label>
+            <Input type="date" value={expectedDate} onChange={(e) => setExpectedDate(e.target.value)} className="min-h-[44px]" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
+            <Input
+              placeholder="Any notes for these POs..."
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              className="min-h-[44px]"
+            />
+          </div>
+        </div>
+        {sections.length > 1 && (
+          <p className="text-[11px] text-slate-400 -mt-2">
+            The expected date and notes apply to every order below.
+          </p>
+        )}
 
-      {/* The duplicate-PO refusal. A flat red sentence would leave the buyer to find the
-          existing PO themselves; this names it, links to it, and offers the one action that
-          gets the rest of the order through. */}
-      {conflicts && conflicts.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-amber-900">
-                Already on an open purchase order
-              </p>
-              <div className="mt-2 space-y-2">
-                {conflicts.map((c) => (
-                  <div key={c.poId} className="text-xs text-amber-800">
-                    <Link href={`/purchase-orders/${c.poId}`} className="font-semibold underline tabular-nums">
-                      {c.poNumber}
-                    </Link>
-                    <span className="text-amber-600"> · {c.status.replace(/_/g, " ").toLowerCase()}</span>
-                    <p className="mt-0.5 break-words">{c.productNames.join(", ")}</p>
-                  </div>
-                ))}
+        {sections.map((s) => (
+          <VendorSection
+            key={s.key}
+            section={s}
+            vendors={s.key === MANUAL_KEY ? vendors : undefined}
+            onVendorChange={(vendorId) => patch(s.key, { vendorId, error: null, conflicts: null })}
+            onItemsChange={(items) => patch(s.key, { items })}
+            onSubmit={(forApproval) => void submitSection(s.key, forApproval)}
+            onDismissConflicts={() => patch(s.key, { conflicts: null, status: "idle" })}
+            onRemoveConflictingLines={() => removeConflictingLines(s.key)}
+            busy={runningAll}
+          >
+            {/* The product search belongs to the manual section only: a derived section's lines
+                are what the resolver decided, and adding to it by hand would put a product on
+                a vendor that does not supply it — which the server would then refuse. */}
+            {s.key === MANUAL_KEY && (
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Add Products <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <Input
+                    placeholder="Search product by name or SKU..."
+                    value={productSearch}
+                    onChange={(e) => setProductSearch(e.target.value)}
+                    className="min-h-[44px]"
+                  />
+                  {visibleResults.length > 0 && (
+                    <div className="absolute top-full left-0 right-0 z-10 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                      {visibleResults.map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => addItem(p)}
+                          className="w-full text-left px-3 py-2.5 hover:bg-slate-50 border-b border-slate-100 last:border-0"
+                        >
+                          <p className="text-sm font-medium text-slate-900">{p.name}</p>
+                          <p className="text-xs text-slate-500">
+                            {p.sku}
+                            {p.costPrice !== undefined ? ` | Cost: ${formatCurrency(p.costPrice)}` : ""}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="flex flex-wrap gap-2 mt-3">
-                <button
+            )}
+          </VendorSection>
+        ))}
+
+        {/* One button for the whole run, only when there is more than one order to make. */}
+        {creatable.length > 1 && (
+          <div className="sticky bottom-2">
+            <div className="rounded-xl border border-slate-200 bg-white shadow-lg p-3 space-y-2">
+              {anyBlocked && (
+                <p className="text-xs text-amber-600 text-center">
+                  Some lines have no rate. Fill them in, or create the ready vendors one at a time.
+                </p>
+              )}
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Button
                   type="button"
-                  onClick={removeConflictingLines}
-                  className="min-h-[44px] px-3 rounded-lg bg-amber-600 text-white text-xs font-medium"
+                  onClick={() => void createAll(true)}
+                  disabled={runningAll || anyBlocked}
+                  className="flex-1 min-h-[48px] bg-green-600 hover:bg-green-700 text-white"
                 >
-                  Remove those lines and continue
-                </button>
-                <button
+                  {runningAll ? <Loader2 className="h-4 w-4 animate-spin" /> : `Create all (${creatable.length})`}
+                </Button>
+                <Button
                   type="button"
-                  onClick={() => setConflicts(null)}
-                  className="min-h-[44px] px-3 rounded-lg border border-amber-300 text-amber-800 text-xs font-medium"
+                  variant="outline"
+                  onClick={() => void createAll(false)}
+                  disabled={runningAll || anyBlocked}
+                  className="flex-1 min-h-[48px]"
                 >
-                  Dismiss
-                </button>
+                  Save all as drafts
+                </Button>
               </div>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* No onSubmit: there are two destinations now (submit for approval, or save a draft),
-          so the buttons say which one rather than the form deciding. */}
-      <form onSubmit={(e) => e.preventDefault()} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Vendor *</label>
-          <select
-            value={vendorId}
-            onChange={(e) => setVendorId(e.target.value)}
-            className="flex h-10 min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
-          >
-            <option value="">Select vendor...</option>
-            {vendors.map((v) => (
-              <option key={v.id} value={v.id}>{v.name} ({v.code})</option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Expected Delivery</label>
-          <Input type="date" value={expectedDate} onChange={(e) => setExpectedDate(e.target.value)} className="min-h-[44px]" />
-        </div>
-
-        {/* Add Products */}
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Add Products *</label>
-          <div className="relative">
-            <Input
-              placeholder="Search product by name or SKU..."
-              value={productSearch}
-              onChange={(e) => setProductSearch(e.target.value)}
-              className="min-h-[44px]"
-            />
-            {productResults.length > 0 && (
-              <div className="absolute top-full left-0 right-0 z-10 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                {productResults.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => addItem(p)}
-                    className="w-full text-left px-3 py-2.5 hover:bg-slate-50 border-b border-slate-100 last:border-0"
-                  >
-                    <p className="text-sm font-medium text-slate-900">{p.name}</p>
-                    <p className="text-xs text-slate-500">
-                      {p.sku}
-                      {p.costPrice !== undefined ? ` | Cost: ${formatCurrency(p.costPrice)}` : ""}
-                    </p>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Line Items */}
-        {items.length > 0 && (
-          <div className="space-y-2">
-            {items.map((item, index) => (
-              <Card key={item.productId}>
-                <CardContent className="p-3">
-                  <div className="flex items-start justify-between mb-2">
-                    <div>
-                      <p className="text-sm font-medium text-slate-900">{item.productName}</p>
-                      <p className="text-xs text-slate-500">{item.sku}</p>
-                    </div>
-                    <button type="button" onClick={() => removeItem(index)} className="p-1 text-red-400 hover:text-red-600">
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Qty</label>
-                      <Input
-                        type="number"
-                        inputMode="numeric"
-                        value={item.quantity}
-                        onChange={(e) => updateItem(index, "quantity", parseInt(e.target.value) || 0)}
-                        min="1"
-                        className="text-sm min-h-[44px] tabular-nums"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-600 mb-0.5">
-                        Unit Price <span className="text-red-500">*</span>
-                      </label>
-                      {/* EMPTY, not a literal 0, when the rate is unknown. api/products/search
-                          withholds costPrice from anyone without cost_price.view, so for those
-                          users this box used to render "0" — a number nobody typed, which then
-                          became the rate on a purchase order emailed to the vendor. An empty
-                          required box asks the question instead of answering it wrongly. */}
-                      <Input
-                        type="number"
-                        inputMode="decimal"
-                        required
-                        min="0.01"
-                        step="0.01"
-                        value={item.unitPrice > 0 ? item.unitPrice : ""}
-                        placeholder="Rate"
-                        onChange={(e) => updateItem(index, "unitPrice", parseFloat(e.target.value) || 0)}
-                        aria-invalid={!(item.unitPrice > 0)}
-                        className={`text-sm min-h-[44px] tabular-nums ${
-                          item.unitPrice > 0 ? "" : "border-amber-400 bg-amber-50"
-                        }`}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-600 mb-0.5">GST %</label>
-                      <Input
-                        type="number"
-                        inputMode="decimal"
-                        value={item.gstRate}
-                        onChange={(e) => updateItem(index, "gstRate", parseFloat(e.target.value) || 0)}
-                        className="text-sm min-h-[44px] tabular-nums"
-                      />
-                    </div>
-                  </div>
-                  <p className="text-xs text-right text-slate-500 mt-1 tabular-nums">
-                    Line: {formatCurrency(item.quantity * item.unitPrice * (1 + item.gstRate / 100))}
-                  </p>
-                </CardContent>
-              </Card>
-            ))}
-
-            {/* Totals */}
-            <Card className="bg-slate-50">
-              <CardContent className="p-3 space-y-1">
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-500">Subtotal</span>
-                  <span className="text-slate-700 tabular-nums">{formatCurrency(subtotal)}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-500">GST</span>
-                  <span className="text-slate-700 tabular-nums">{formatCurrency(gstTotal)}</span>
-                </div>
-                <div className="flex justify-between text-sm font-bold border-t pt-1">
-                  <span className="text-slate-900">Grand Total</span>
-                  <span className="text-slate-900 tabular-nums">{formatCurrency(subtotal + gstTotal)}</span>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
         )}
 
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
-          <textarea
-            placeholder="Any notes for this PO..."
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={2}
-            className="flex w-full min-h-[44px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
-          />
-        </div>
-
-        <div>
-          {unpricedLines.length > 0 && (
-            <p className="text-xs text-amber-600 mb-2">
-              {unpricedLines.length === 1 ? "One line has" : `${unpricedLines.length} lines have`} no rate.
-              Enter a unit price — a purchase order cannot go to a vendor with a ₹0 line.
+        {/* The report. Shown instead of navigating away, because after a partial run this is
+            the only record of which vendors got an order and which did not. */}
+        {created.length > 0 && (
+          <div className="rounded-xl border border-green-200 bg-green-50 p-3">
+            <p className="text-sm font-semibold text-green-900 flex items-center gap-1.5">
+              <CheckCircle2 className="h-4 w-4" />
+              {created.length} purchase order{created.length === 1 ? "" : "s"} created
             </p>
-          )}
-          <div className="flex flex-col sm:flex-row gap-2">
-          <Button type="button" onClick={() => void submit(true)} size="lg" disabled={!vendorId || items.length === 0 || submitting || unpricedLines.length > 0} className="flex-1 min-h-[48px] bg-green-600 hover:bg-green-700 text-white">
-            {submitting ? "Creating..." : "Submit for approval"}
-          </Button>
-          <Button type="button" variant="outline" onClick={() => void submit(false)} size="lg" disabled={!vendorId || items.length === 0 || submitting || unpricedLines.length > 0} className="flex-1 min-h-[48px]">
-            Save draft
-          </Button>
+            <ul className="mt-2 space-y-1">
+              {created.map((s) => (
+                <li key={s.key} className="text-xs text-green-800">
+                  <Link href={`/purchase-orders/${s.poId}`} className="font-semibold underline tabular-nums">
+                    {s.poNumber}
+                  </Link>
+                  {" · "}{s.vendorName ?? vendors.find((v) => v.id === s.vendorId)?.name ?? "Vendor"}
+                </li>
+              ))}
+            </ul>
+            {sections.some((s) => s.status === "failed") && (
+              <p className="mt-2 text-xs text-amber-800 flex items-start gap-1.5">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                Some vendors were not created. The orders above already exist and are not undone.
+              </p>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => router.push("/purchase-orders")}
+              className="mt-3 min-h-[44px] w-full"
+            >
+              {allDone ? "Done — go to Purchase Orders" : "Leave the rest and go to Purchase Orders"}
+            </Button>
           </div>
-          {(!vendorId || items.length === 0) && !submitting && (
-            <p className="text-xs text-slate-500 mt-1.5 text-center">
-              {!vendorId ? "Select a vendor to continue" : "Add at least one product to continue"}
-            </p>
-          )}
-        </div>
-      </form>
+        )}
+      </div>
     </div>
   );
 }
