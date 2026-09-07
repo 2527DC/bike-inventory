@@ -21,7 +21,7 @@ import { Prisma } from "@prisma/client";
 export function ibSeedSql(prefix: string): Prisma.Sql {
   return Prisma.sql`
     SELECT COALESCE(
-      MAX(NULLIF(regexp_replace(split_part("shipmentNo", '-', 3), '\D', '', 'g'), '')::int),
+      MAX(NULLIF(regexp_replace(split_part("shipmentNo", '-', 3), '\\D', '', 'g'), '')::int),
       0
     )
     FROM "InboundShipment"

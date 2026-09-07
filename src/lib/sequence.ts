@@ -38,6 +38,26 @@ const log = createLogger("sequence");
  * the first caller arrives — every PO raised in between would be invisible to it, and the
  * counter would start handing out numbers that already exist.
  *
+ * ─── WRITE `\\D`, NOT `\D`, IN THE SEED QUERY ────────────────────────────────────────────
+ *
+ * `Prisma.sql` is a TAGGED template and it reads the COOKED strings. `\D` is not a recognised
+ * JavaScript escape, so it cooks to a bare `D` — and what Postgres actually receives is
+ * `regexp_replace(x, 'D', '', 'g')`, which strips the LETTER D and nothing else.
+ *
+ * Every seed in this codebase was originally written with one backslash, and four of the five
+ * got away with it: they `split_part` the tail off first, so the value being stripped is
+ * already all digits and removing no characters is harmless. `poSeedSql` strips the whole
+ * string, so it received "PO-00042" with nothing removed and threw 22P02, `invalid input
+ * syntax for type integer`. And because this function runs the seed on EVERY call — not only
+ * the first — that was a 500 on every purchase order raised once a single PO row existed.
+ *
+ * It went unnoticed because the local database had no PurchaseOrder rows, so `MAX()` over an
+ * empty table returned NULL and the cast never happened. Found on 7 Sep 2026 by a P14 proof
+ * that planted a row:
+ *
+ *     regexp_replace('PO-00042', '\D',  '', 'g')  ->  "PO-00042"   (nothing stripped)
+ *     regexp_replace('PO-00042', '\\D', '', 'g')  ->  "00042"      (correct)
+ *
  * So the CALLER passes `seedSql`: a query returning this series' current numeric maximum.
  * It runs only on the first call for a key, and it must parse the tail NUMERICALLY —
  * `regexp_replace(…, '\D', '', 'g')::int`, never a string sort, or it reintroduces bug 2.

@@ -33,7 +33,7 @@ export const PO_SEQUENCE_PAD = 5;
 export function poSeedSql(): Prisma.Sql {
   return Prisma.sql`
     SELECT COALESCE(
-      MAX(NULLIF(regexp_replace("poNumber", '\D', '', 'g'), '')::int),
+      MAX(NULLIF(regexp_replace("poNumber", '\\D', '', 'g'), '')::int),
       0
     )
     FROM "PurchaseOrder"

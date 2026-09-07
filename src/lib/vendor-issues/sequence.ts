@@ -24,7 +24,7 @@ import { Prisma } from "@prisma/client";
 export function issSeedSql(prefix: string): Prisma.Sql {
   return Prisma.sql`
     SELECT COALESCE(
-      MAX(NULLIF(regexp_replace(split_part("issueNo", '-', 3), '\D', '', 'g'), '')::int),
+      MAX(NULLIF(regexp_replace(split_part("issueNo", '-', 3), '\\D', '', 'g'), '')::int),
       0
     )
     FROM "VendorIssue"
