@@ -10,7 +10,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireFeature("purchase_orders", "edit");
+    await requireFeature("brand_stock", "edit");
     const { id } = await params;
     const body = await req.json();
     const { items } = body as { items: Array<{ id: string; productId?: string; orderQty?: number; selected?: boolean }> };
