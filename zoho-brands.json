@@ -1,0 +1,610 @@
+{
+  "code": 0,
+  "message": "success",
+  "brands": [
+    {
+      "brand_id": "1593656000000022797",
+      "name": "APOLLO"
+    },
+    {
+      "brand_id": "1593656000000022852",
+      "name": "CULTSPORT"
+    },
+    {
+      "brand_id": "1593656000000023000",
+      "name": "DODGE"
+    },
+    {
+      "brand_id": "1593656000000026069",
+      "name": "HERO"
+    },
+    {
+      "brand_id": "1593656000000026181",
+      "name": "HRX"
+    },
+    {
+      "brand_id": "1593656000000026210",
+      "name": "KEYSTO"
+    },
+    {
+      "brand_id": "1593656000000026349",
+      "name": "LUCIFIRE"
+    },
+    {
+      "brand_id": "1593656000000026362",
+      "name": "MAXMONT"
+    },
+    {
+      "brand_id": "1593656000000026400",
+      "name": "SCHNELL"
+    },
+    {
+      "brand_id": "1593656000000026539",
+      "name": "TATA"
+    },
+    {
+      "brand_id": "1593656000000026676",
+      "name": "TRINX"
+    },
+    {
+      "brand_id": "1593656000000026689",
+      "name": "UNIROX"
+    },
+    {
+      "brand_id": "1593656000000026700",
+      "name": "UT"
+    },
+    {
+      "brand_id": "1593656000000026749",
+      "name": "VESCO"
+    },
+    {
+      "brand_id": "1593656000000026827",
+      "name": "VIVELO"
+    },
+    {
+      "brand_id": "1593656000000043078",
+      "name": "CRADIAC"
+    },
+    {
+      "brand_id": "1593656000000069229",
+      "name": "TREK"
+    },
+    {
+      "brand_id": "1593656000000070141",
+      "name": "POLYGON"
+    },
+    {
+      "brand_id": "1593656000000080435",
+      "name": "GEAR HEAD MOTORS"
+    },
+    {
+      "brand_id": "1593656000000083028",
+      "name": "BERGAMONT"
+    },
+    {
+      "brand_id": "1593656000000175057",
+      "name": "BSA"
+    },
+    {
+      "brand_id": "1593656000000187001",
+      "name": "MONTRA"
+    },
+    {
+      "brand_id": "1593656000000199130",
+      "name": "SAMSTAR"
+    },
+    {
+      "brand_id": "1593656000000589111",
+      "name": "ALLWYN"
+    },
+    {
+      "brand_id": "1593656000000589223",
+      "name": "ALLWYNT"
+    },
+    {
+      "brand_id": "1593656000000589237",
+      "name": "AVON"
+    },
+    {
+      "brand_id": "1593656000000589265",
+      "name": "BABY"
+    },
+    {
+      "brand_id": "1593656000000589275",
+      "name": "BREAK"
+    },
+    {
+      "brand_id": "1593656000000589389",
+      "name": "COSMIC"
+    },
+    {
+      "brand_id": "1593656000000589503",
+      "name": "DLFC"
+    },
+    {
+      "brand_id": "1593656000000589541",
+      "name": "DOS"
+    },
+    {
+      "brand_id": "1593656000000589547",
+      "name": "E MOTRAD"
+    },
+    {
+      "brand_id": "1593656000000589619",
+      "name": "EMOTORAD"
+    },
+    {
+      "brand_id": "1593656000000589625",
+      "name": "FAVRON"
+    },
+    {
+      "brand_id": "1593656000000589641",
+      "name": "FENIX"
+    },
+    {
+      "brand_id": "1593656000000589647",
+      "name": "FIT TRIP"
+    },
+    {
+      "brand_id": "1593656000000589655",
+      "name": "FITRIP"
+    },
+    {
+      "brand_id": "1593656000000589673",
+      "name": "FULL"
+    },
+    {
+      "brand_id": "1593656000000589679",
+      "name": "FUN"
+    },
+    {
+      "brand_id": "1593656000000589697",
+      "name": "FUNBIKE"
+    },
+    {
+      "brand_id": "1593656000000589703",
+      "name": "FUNSTAR"
+    },
+    {
+      "brand_id": "1593656000000589713",
+      "name": "MAGNUS"
+    },
+    {
+      "brand_id": "1593656000000589721",
+      "name": "GANA"
+    },
+    {
+      "brand_id": "1593656000000589733",
+      "name": "GANG"
+    },
+    {
+      "brand_id": "1593656000000589839",
+      "name": "GIANT"
+    },
+    {
+      "brand_id": "1593656000000589847",
+      "name": "HERCULES"
+    },
+    {
+      "brand_id": "1593656000000590009",
+      "name": "YUVI"
+    },
+    {
+      "brand_id": "1593656000000590019",
+      "name": "HUSTLE"
+    },
+    {
+      "brand_id": "1593656000000590025",
+      "name": "JAMIS"
+    },
+    {
+      "brand_id": "1593656000000590037",
+      "name": "JAVA"
+    },
+    {
+      "brand_id": "1593656000000590051",
+      "name": "KAB"
+    },
+    {
+      "brand_id": "1593656000000590069",
+      "name": "KITTEN"
+    },
+    {
+      "brand_id": "1593656000000590075",
+      "name": "KONA"
+    },
+    {
+      "brand_id": "1593656000000590087",
+      "name": "KROSS"
+    },
+    {
+      "brand_id": "1593656000000590171",
+      "name": "LFC"
+    },
+    {
+      "brand_id": "1593656000000590225",
+      "name": "MAJOR"
+    },
+    {
+      "brand_id": "1593656000000590231",
+      "name": "MERIDA"
+    },
+    {
+      "brand_id": "1593656000000590253",
+      "name": "MINI"
+    },
+    {
+      "brand_id": "1593656000000590287",
+      "name": "MOUNT"
+    },
+    {
+      "brand_id": "1593656000000590293",
+      "name": "MRJ"
+    },
+    {
+      "brand_id": "1593656000000590299",
+      "name": "NEXZU"
+    },
+    {
+      "brand_id": "1593656000000590305",
+      "name": "NINETY ONE"
+    },
+    {
+      "brand_id": "1593656000000590317",
+      "name": "NINETYONE"
+    },
+    {
+      "brand_id": "1593656000000590435",
+      "name": "NNETYONE"
+    },
+    {
+      "brand_id": "1593656000000590441",
+      "name": "OAKLEY"
+    },
+    {
+      "brand_id": "1593656000000590529",
+      "name": "OVERHAUL"
+    },
+    {
+      "brand_id": "1593656000000590535",
+      "name": "PEADEALMORE"
+    },
+    {
+      "brand_id": "1593656000000590573",
+      "name": "PRIDER"
+    },
+    {
+      "brand_id": "1593656000000590579",
+      "name": "RALEIGH"
+    },
+    {
+      "brand_id": "1593656000000590735",
+      "name": "RALEIGY"
+    },
+    {
+      "brand_id": "1593656000000590741",
+      "name": "RAPTURE"
+    },
+    {
+      "brand_id": "1593656000000590747",
+      "name": "RARE"
+    },
+    {
+      "brand_id": "1593656000000590753",
+      "name": "RAVEMEN"
+    },
+    {
+      "brand_id": "1593656000000590785",
+      "name": "SAM"
+    },
+    {
+      "brand_id": "1593656000000590823",
+      "name": "SEVEENTY"
+    },
+    {
+      "brand_id": "1593656000000590829",
+      "name": "SHIMANO"
+    },
+    {
+      "brand_id": "1593656000000591265",
+      "name": "SIDE"
+    },
+    {
+      "brand_id": "1593656000000591271",
+      "name": "STRIP"
+    },
+    {
+      "brand_id": "1593656000000591277",
+      "name": "SUNBEAM"
+    },
+    {
+      "brand_id": "1593656000000591283",
+      "name": "SUNCROSS"
+    },
+    {
+      "brand_id": "1593656000000591477",
+      "name": "TRICYCLE"
+    },
+    {
+      "brand_id": "1593656000000591503",
+      "name": "UPGRADE"
+    },
+    {
+      "brand_id": "1593656000000591517",
+      "name": "VAUX"
+    },
+    {
+      "brand_id": "1593656000000591597",
+      "name": "VECTOR"
+    },
+    {
+      "brand_id": "1593656000002724167",
+      "name": "EM"
+    },
+    {
+      "brand_id": "1593656000002872787",
+      "name": "RALIEGH"
+    },
+    {
+      "brand_id": "1593656000002873775",
+      "name": "RADIANT"
+    },
+    {
+      "brand_id": "1593656000002875073",
+      "name": "FITTRIP"
+    },
+    {
+      "brand_id": "1593656000002878203",
+      "name": "MAGICSHINE"
+    },
+    {
+      "brand_id": "1593656000002878223",
+      "name": "MAXMOUNT"
+    },
+    {
+      "brand_id": "1593656000002879271",
+      "name": "PEDALEZE"
+    },
+    {
+      "brand_id": "1593656000003626543",
+      "name": "STRYDER"
+    },
+    {
+      "brand_id": "1593656000005053369",
+      "name": "g sports"
+    },
+    {
+      "brand_id": "1593656000005124208",
+      "name": "SPARES"
+    },
+    {
+      "brand_id": "1593656000005126670",
+      "name": "DHARA"
+    },
+    {
+      "brand_id": "1593656000005312055",
+      "name": "MUCOFF"
+    },
+    {
+      "brand_id": "1593656000005352714",
+      "name": "RALSON"
+    },
+    {
+      "brand_id": "1593656000005360638",
+      "name": "GULSHAN"
+    },
+    {
+      "brand_id": "1593656000005665757",
+      "name": "BCH TOYS"
+    },
+    {
+      "brand_id": "1593656000005680441",
+      "name": "HORNBACK"
+    },
+    {
+      "brand_id": "1593656000005750706",
+      "name": "CHIN CHAN"
+    },
+    {
+      "brand_id": "1593656000006098254",
+      "name": "BENGSHI"
+    },
+    {
+      "brand_id": "1593656000006379033",
+      "name": "UNISTAR"
+    },
+    {
+      "brand_id": "1593656000006544275",
+      "name": "SACH INDUSTRIES"
+    },
+    {
+      "brand_id": "1593656000006544712",
+      "name": "SOLID INDUSTRIES"
+    },
+    {
+      "brand_id": "1593656000007020270",
+      "name": "VELOCE"
+    },
+    {
+      "brand_id": "1593656000007143508",
+      "name": "COOL BABY"
+    },
+    {
+      "brand_id": "1593656000007574199",
+      "name": "SKARN"
+    },
+    {
+      "brand_id": "1593656000007574334",
+      "name": "TORINO"
+    },
+    {
+      "brand_id": "1593656000007574361",
+      "name": "KICK"
+    },
+    {
+      "brand_id": "1593656000007574388",
+      "name": "HARRIER"
+    },
+    {
+      "brand_id": "1593656000007611294",
+      "name": "SHRI TEJ INDUSTRIES"
+    },
+    {
+      "brand_id": "1593656000007667530",
+      "name": "HARTEX"
+    },
+    {
+      "brand_id": "1593656000007739500",
+      "name": "UNIQUE TRADERS"
+    },
+    {
+      "brand_id": "1593656000008171821",
+      "name": "EXTREME ADVENTURE SPORTS"
+    },
+    {
+      "brand_id": "1593656000008331057",
+      "name": "ACCESSORIES"
+    },
+    {
+      "brand_id": "1593656000008593851",
+      "name": "GURU MAHIMA"
+    },
+    {
+      "brand_id": "1593656000008602662",
+      "name": "TOYS"
+    },
+    {
+      "brand_id": "1593656000008684876",
+      "name": "JAGADAMBA KIDS WORLD (P) LTD."
+    },
+    {
+      "brand_id": "1593656000008940580",
+      "name": "ALPHAVECTOR INDIA PVT.LTD"
+    },
+    {
+      "brand_id": "1593656000008952006",
+      "name": "SETH INDUSTRIAL CORPORATION"
+    },
+    {
+      "brand_id": "1593656000009360093",
+      "name": "GK UDYOG 25-26"
+    },
+    {
+      "brand_id": "1593656000009414729",
+      "name": "AOKI E CYCLE"
+    },
+    {
+      "brand_id": "1593656000009568953",
+      "name": "THEOX"
+    },
+    {
+      "brand_id": "1593656000009823009",
+      "name": "BEPOSITIVE RACING PRIVATE LIMITE"
+    },
+    {
+      "brand_id": "1593656000009881247",
+      "name": "OYEKID BIKES"
+    },
+    {
+      "brand_id": "1593656000010056153",
+      "name": "SANGAM HARDWARE"
+    },
+    {
+      "brand_id": "1593656000010105320",
+      "name": "KTM"
+    },
+    {
+      "brand_id": "1593656000010160154",
+      "name": "FIRE FOX BIKES PVT LTD"
+    },
+    {
+      "brand_id": "1593656000010333030",
+      "name": "JILANI ENTERPRISE"
+    },
+    {
+      "brand_id": "1593656000010531023",
+      "name": "NARANG CYCLE STORES"
+    },
+    {
+      "brand_id": "1593656000010919558",
+      "name": "EXM"
+    },
+    {
+      "brand_id": "1593656000011142837",
+      "name": "M K STEELS"
+    },
+    {
+      "brand_id": "1593656000011558775",
+      "name": "BIKE"
+    },
+    {
+      "brand_id": "1593656000011756030",
+      "name": "VINSUN ENTERPRISES"
+    },
+    {
+      "brand_id": "1593656000011791285",
+      "name": "LITTLE RIDES INDIA PRIVATE LTD"
+    },
+    {
+      "brand_id": "1593656000011791802",
+      "name": "FARHAN TEXTILES"
+    },
+    {
+      "brand_id": "1593656000012068568",
+      "name": "SHAH CYCLE TRADING CO.(25-26)B0"
+    },
+    {
+      "brand_id": "1593656000012279330",
+      "name": "LECTRO"
+    },
+    {
+      "brand_id": "1593656000012363442",
+      "name": "SILCON STEELS PVT LTD"
+    },
+    {
+      "brand_id": "1593656000012909855",
+      "name": "HAVOC HOBBY CENTER PVT LTD"
+    },
+    {
+      "brand_id": "1593656000012952660",
+      "name": "VASTRA MANDIRA"
+    },
+    {
+      "brand_id": "1593656000012999212",
+      "name": "SSK I T SOLUTIONS"
+    },
+    {
+      "brand_id": "1593656000012999284",
+      "name": "JAI MATAJI HARDWARE"
+    },
+    {
+      "brand_id": "1593656000013126078",
+      "name": "NUTMEG"
+    },
+    {
+      "brand_id": "1593656000013283229",
+      "name": "KIDZ AUTO BHARAT LLP"
+    },
+    {
+      "brand_id": "1593656000013367340",
+      "name": "CHASE"
+    },
+    {
+      "brand_id": "1593656000013384035",
+      "name": "NAVEEN TOYS"
+    },
+    {
+      "brand_id": "1593656000013458685",
+      "name": "LIYA V ENTERPRISES"
+    },
+    {
+      "brand_id": "1593656000014796413",
+      "name": "ALLW"
+    },
+    {
+      "brand_id": "1593656000014901259",
+      "name": "SCORPION ENTERPRISE"
+    }
+  ]
+}
