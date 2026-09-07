@@ -2,8 +2,7 @@
 
 > **To continue this work:** read **[▶ RESUME HERE](#-resume-here--the-only-place-that-holds-current-state)** below. It is the only section that holds current state — branch, database, what is done, what is next. Everything else is design or history.
 
-Status: in-progress — 6 Sep 2026, **P0–P10 and P13 done** (R1, R2, R3, R4, R5, R6, R8, R11, R12, R13 closed; R10 a third done). **Left: P12, P14, P15.** The owner is building all of it before merging, and will have the conflicts resolved here at that point.
-**Left: P10, P12–P15** (P11 dropped 6 Sep), continuing on the single branch `feat/purchasing-transfers-p5-p15`.
+Status: **BUILD COMPLETE** — 7 Sep 2026. **Every phase is built** (P11 dropped 6 Sep by the owner). R1–R6, R8, R10, R11, R12, R13 all closed. Nothing is merged: the owner opens every PR, and asked for the conflicts to be resolved here when they merge to `main`.
 Branch: **`feat/purchasing-transfers-p5-p15`** — cut from `feat/inbound-receiving` @ `df12868`,
 one commit per phase from here. Nothing is merged; the owner opens every PR. Update this line as
 work moves, and keep the detail in ▶ RESUME HERE, not here.
@@ -23,7 +22,7 @@ Plan files are named `ddmm-<name>-plan.md` from now on.
 `Clarifications` sections at the end are decision history and explain *why*, not *where we are*.
 Update THIS section as work moves, and nowhere else.
 
-Last updated: **5 Sep 2026**, session 3.
+Last updated: **7 Sep 2026**, session 4 — the build is finished.
 
 ### 1. Where the code is
 
@@ -38,7 +37,7 @@ Last updated: **5 Sep 2026**, session 3.
 | `feat/zoho-fetch-window` | the branch above | P4 — **pushed** |
 | `feat/stock-audit-scope` | the branch above | P6 — **pushed** |
 | `feat/inbound-receiving` | the branch above | P7 — **pushed** |
-| `feat/purchasing-transfers-p5-p15` | the branch above | **P5 + P8 + P9 + P10a + P10b + the mark-sent fix + P13, and P12, P14, P15 to come** — one commit per phase, except P10 which the owner split in two on 6 Sep |
+| `feat/purchasing-transfers-p5-p15` | the branch above | **P5 + P8 + P9 + P10a + P10b + the mark-sent fix + P13 + P12a/b/c + P14 + P15 — everything left** — one commit per phase, except P10 and P12 which were split |
 
 **Branch rule confirmed by the owner, 5 Sep:** keep stacking each phase on the previous
 phase's tip, **and ask before creating each branch**. Claude cut P1 and P1b on its own
@@ -768,7 +767,88 @@ already entered, on the second save. That is a build-clean, data-destroying omis
 
 **Not done, deliberately:** `reports/daily` still counts only `status: "APPROVED"`. Once P14
 adds the in-transit flow, an order past APPROVED drops out of the daily count — a real
-improvement, but P14-facing, and not a prerequisite for anything here.
+improvement, but P14-facing, and not a prerequisite for anything here. **Done in P14.**
+
+---
+
+**P14 + P15 are complete** (R10 closed — transfers carry a header lane, a derived document
+policy, and a real in-transit flow). Shipped together, as §9 said to.
+
+**MIG-2 turned out to be one line of DDL and four backfills.** Every column P14 and P15 write
+already existed — MIG-1a front-loaded all of them on 5 Sep — so the only generated statement is
+`ALTER TABLE "StockCount" DROP COLUMN "location"`. Two things about that drop:
+
+- **P6 left a writer behind.** The plan and §7 P6 both say nothing reads `location` any more,
+  and that is true — but `api/stock-counts/route.ts` still *wrote* `location: null` on every
+  create. Dropping the column without deleting that line is a failed build, and because O11
+  runs `migrate deploy` **inside** the Vercel build, it would be a failed build against a
+  database that had already lost the column. The line and the migration ship in one commit.
+- The four backfills are idempotent and were all no-ops locally (`TransferOrder`: 0 rows).
+  They are therefore **untested against real data** — plan §10 BL6 (restore a production
+  snapshot) is still open.
+
+**Backfill 3 is the one that matters.** Under the old code, approving a transfer MOVED THE
+STOCK — source down, destination up, inside the approve route. Under P14, APPROVED means
+"agreed, nothing has moved yet" and dispatch performs the movement. So a legacy APPROVED row
+left alone is a trap: its stock has already moved, and the new Dispatch button would deduct it
+a **second** time. MIG-2 reads those rows as RECEIVED, with `reviewedAt` standing in for both
+dispatch and receipt.
+
+**A live TOCTOU hole is closed.** Both the old create route and the old approve route called
+`adjustWarehouseQty` **raw**, with the availability check read **outside** the transaction. That
+helper clamps at zero and reports success — so two people approving overlapping orders both
+passed a check against the same stale pre-image and the second silently wrote 0. Units gone, no
+error anywhere. `moveOutOfWarehouse` sums and refuses **inside** the transaction instead. Proved
+both ways: `adjustWarehouseQty(-25)` on a warehouse holding 10 returns 0 and "succeeds";
+`moveOutOfWarehouse` throws and leaves the row at 10.
+
+**The plan's shortfall instruction would have been a bug.** §P14 says receive writes
+`ADJUSTMENT −shortfall`. Follow the arithmetic: dispatch already took `quantity` out of the
+global total and receipt only puts `receivedQty` back, so the net change is **already** minus
+the shortfall. A second deducting adjustment would remove the missing units twice and
+understate stock by the size of every shortfall ever recorded. The `[TRANSIT SHORTFALL]` row is
+written with `previousStock === newStock` — it **records** the loss rather than causing it.
+Proved: 10 dispatched, 7 received, global total 7; the deducting version would have given 4.
+
+**`previousStock === newStock` stops being true.** Every TRANSFER ledger row before P14 has
+them equal, correctly — approval moved stock out of one warehouse and into another in one step,
+so the global figure never changed. Dispatch and receipt are separate events now and the total
+genuinely falls and rises. Copying the old row shape would have made the movement report claim
+nothing happened, twice.
+
+**`User.warehouseId` gets its first reader in the entire application.** The column has existed
+for a long time and nothing has ever enforced it. Dispatch is scoped to the source warehouse,
+receipt to the destination; unpinned users (all of them today) pass. It rides on `getAccess`'s
+existing query rather than a second read — `CurrentUser` and `ResolvedAccess.user` both gained
+the field.
+
+**Four plan claims were wrong and are recorded here rather than silently worked around:**
+
+| Plan said | Actually |
+|---|---|
+| Follow `inbound/[id]` "as rewritten in P7" for a **per-line receive stepper** | Inbound has **no stepper** — it receives a whole line in one tap and its confirm sheet says short receipts are a Report Issue. That is right for inbound, where a shortfall is a dispute with a vendor. A transfer has no vendor: both ends are ours, so the shortfall must be recordable at receipt or the only options are to lie or strand the order. Built fresh |
+| Follow `inbound/[id]` for a **bottom action bar** | Inbound has no bar; every action is inline. The in-repo template is `transfers/new/page.tsx:428`, the same fixed-bar string used in 8 places |
+| "Remove the per-row selects at `/transfers/new` L366-389" | That is only the live half of a `BIN_TRACKING_ENABLED` ternary. The dormant bin selects, the route preview, the `updateItem` same-lane fixup, the item type, the defaults and the validation all carried the lane too — a rewrite of the item model, not a deletion |
+| "P8's `ui/bottom-sheet.tsx` hosts the dispatch sheet" | That file was never created; both `reorder-sheet.tsx` and `send-to-vendor-sheet.tsx` document why. The dispatch sheet follows **send-to-vendor-sheet** — `max-h-[90dvh]` survives the soft keyboard, and it stays open on failure with the error inside, which is what a refused dispatch needs |
+
+**A pre-existing bug in P9 was found by P14's proof, and it was a 500 on every purchase
+order.** `Prisma.sql` is a tagged template that reads the COOKED strings, so `'\D'` cooks to a
+bare `'D'` — the query Postgres receives strips the letter D and nothing else. Four of the five
+seed queries got away with it because they `split_part` the numeric tail off first; `poSeedSql`
+strips the whole string, so it received `"PO-00042"` unchanged and threw `22P02, invalid input
+syntax for type integer`. `nextSequence` runs the seed on **every** call, so once a single PO
+row existed every purchase-order creation would have failed. It went unnoticed because
+`bch-local` had no PO rows, and `MAX()` over an empty table returns NULL so the cast never ran.
+All five sites now use `'\\D'`; the trap is documented in `sequence.ts`.
+
+**Also fixed while in the files:** `reports/daily` counts all three post-approval statuses (it
+would have fallen toward zero on a normal day and then hidden its own card), and its label says
+"approved" rather than "completed" — which was already wrong before P14; the dashboard and the
+activity feed render `getStatusLabel` instead of printing `IN_TRANSIT` into a WhatsApp message;
+`/transfers` gained the CANCELLED filter chip it never had, so a cancelled order is no longer
+invisible on every tab but All; `useWarehouses` declares `store.gstin`/`stateCode`, which the
+API has always returned; and `GET /api/transfer-orders` uses IST day bounds, so the EOD summary
+no longer drops every transfer raised before 05:30.
 
 ### 4. What is VERIFIED, and what is not
 
@@ -788,6 +868,13 @@ improvement, but P14-facing, and not a prerequisite for anything here.
 | P10a | tsc + eslint clean. Vendor resolution **8/8 cases**, including a deactivated product vendor falling through to the brand and two competing primaries returning AMBIGUOUS. NOT browser-walked |
 | P10b | tsc + eslint clean. The per-vendor sections, the sequential run and the outcome report are code-verified, NOT browser-walked — and the walk needs a MIXED-vendor selection, which needs at least two brands linked to two different vendors |
 | P13 | tsc + eslint clean. The legacy-route delete was **measured, not assumed** — 0 legacy transfer rows, 0 pending, so nothing is stranded. NOT browser-walked |
+| P14 + P15 | tsc clean. **27 assertions proved against `bch-local`**: the TRF seed reads `TRF-202609-0007` as 7 (a whole-string strip gives 2026090007); concurrent allocations do not collide; the document policy across all four GSTIN cases; six transition pairs; and the dispatch/receive arithmetic end to end. NOT browser-walked |
+| P14/P15 eslint | **5 errors found, 4 fixed, 0 introduced.** All five were `react-hooks/set-state-in-effect`. Two were mine and are gone; two more were pre-existing in files this phase rewrote and were fixed rather than suppressed, following P10b’s precedent — the effective transfer route and the visible search list are now DERIVED during render, and both loaders moved inside their effect behind a `cancelled` guard (P7 `inbound/[id]`, the only detail-page shape in the repo that lints clean). **Two pre-existing errors remain, neither in a line this phase wrote:** `transfers/new/page.tsx:148` (restoring a sessionStorage draft — it cannot move into a `useState` initialiser, which runs during the server render where `sessionStorage` does not exist, so the alternative is a hydration mismatch) and `reports/daily/page.tsx:35` (untouched; this phase changed only two words of copy in that file) |
+| ⚠ `reports/daily/page.tsx` | Still calls `fetch().then(r =&gt; r.json())` from the browser, which CLAUDE.md bans — an expired session returns 200 HTML and this reports it as a data error. **Pre-existing and deliberately left**: this phase changed two words of copy in that file and rewriting its loader is not P14 work. Worth a follow-up |
+| P14 clamp-vs-refuse | **Proved both ways on the real table.** `adjustWarehouseQty(-25)` against a warehouse holding 10 returns 0 and reports success; `moveOutOfWarehouse` throws with "Available: 10" and leaves the row at 10 |
+| P14 shortfall arithmetic | **Proved.** 10 dispatched, 7 received -> global total 7. The plan’s literal `ADJUSTMENT −shortfall` would have given 4 |
+| ⚠ P14 MIG-2 | Applied to `bch-local`; `prisma migrate status` says **up to date, 4 migrations**. All four backfills were **no-ops locally** (0 `TransferOrder` rows), so they are untested against real data — plan §10 BL6 is still open. `npm run db:snapshot` before the PR merges |
+| **Seed-query escaping (all five)** | **Fixed and proved.** `poSeedSql` threw `22P02` the moment one PO row existed — a 500 on every purchase order. `PO-00042`->42, `TRF-202609-0007`->7, `IB-202609-0003`->3, plus the ISS and SC queries running clean. See §3 P14 for why |
 | ⚠ P13 before merge | Re-run the stranded-rows check against any database this merges into: three counts on `InventoryTransaction` where `type = 'TRANSFER'` and `notes LIKE '%[PENDING]%'`. Non-zero means those rows become permanently un-actionable, because the deleted approve route was the only code that could resolve them |
 | ⚠ P10a data state | Measured on `bch-local`: **0 `brand_vendors` rows, 0 of 5,739 active products with a reorder vendor, 3 brands.** Every product resolves to NO_VENDOR, so `/reorder`'s Create PO is blocked for every selection until the data is entered. Correct behaviour, but P10 is INERT until then — and with 3 brands it is minutes of work on `/vendors/[id]` |
 | ⚠ P9 lint-method note | The `pre-existing` comparisons for P5 and P8 put HEAD's copy in a temp dir OUTSIDE `src/app/`, where path-scoped rules do not apply, so those comparisons were weaker than stated. P9 was checked correctly, with HEAD's copy placed BESIDE the real file. Use that method from here |
