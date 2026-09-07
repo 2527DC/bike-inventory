@@ -8,10 +8,9 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { getAccess } from "@/lib/rbac";
 import { createLogger } from "@/lib/logger";
 import { validateSiteAssignment } from "@/lib/site-assignment";
+import { MAX_NAV_TABS } from "@/lib/nav-tabs";
 
 const log = createLogger("api:users:id");
-
-const MAX_NAV_TABS = 4;
 
 // Bottom-nav hrefs an admin may pin. Validated against the real module table rather than a
 // hardcoded list, so seeding a new module immediately makes it pinnable and a removed module

@@ -13,6 +13,7 @@ import { usePermissionStore } from "@/stores/permissions";
 import { SiteSelect } from "@/components/site-select";
 import { apiTry, apiFetch } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
+import { MAX_NAV_TABS } from "@/lib/nav-tabs";
 
 const log = createLogger("team:detail");
 
@@ -49,8 +50,6 @@ interface RoleOption {
   isActive: boolean;
   _count: { permissions: number; users: number };
 }
-
-const MAX_NAV_TABS = 4;
 
 export default function EditTeamMemberPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -311,19 +310,41 @@ export default function EditTeamMemberPage({ params }: { params: Promise<{ id: s
           <div className="border-t border-slate-100 pt-4">
             <p className="text-sm font-semibold text-slate-800 mb-1">Bottom Navigation</p>
             <p className="text-[11px] text-slate-500 mb-3">
-              Pin up to {MAX_NAV_TABS} tabs (Home and More always show). Only modules this
-              person&apos;s role grants are listed. Leave empty to use their highest-priority
-              modules automatically.
+              Pin up to {MAX_NAV_TABS} tabs (Home and More sit outside that count). Only modules
+              this person&apos;s role grants are listed. Leaving it empty means this person gets
+              no bottom navigation on their phone at all.
             </p>
 
+            {/* Empty used to mean "auto-pick their highest-priority modules", so an admin who
+                leaves this alone still expects a bar. It now means no bar — and on a phone the
+                bar is the ONLY navigation there is: no menu button, no drawer, and the sidebar
+                is desktop-only. Say that before they save, not after. */}
+            {navTabs.length === 0 && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 mb-3">
+                Nothing pinned. Saving like this leaves <strong>{user.name}</strong> with no
+                bottom navigation bar on mobile at all — and that bar is the only menu a phone
+                has. Pin at least one tab below.
+              </div>
+            )}
+
+            {/* Preview of the real bar. With nothing pinned there IS no bar, so drawing Home and
+                More around an empty middle would promise a bar the PWA never renders. */}
             <div className="flex items-center gap-1 flex-wrap mb-3 bg-slate-50 rounded-lg p-2">
-              <Badge variant="default" className="text-[11px]">Home</Badge>
-              {navTabs.map((route) => (
-                <Badge key={route} variant="info" className="text-[11px]">
-                  {moduleByRoute(route)?.label || route}
-                </Badge>
-              ))}
-              <Badge variant="default" className="text-[11px]">More</Badge>
+              {navTabs.length === 0 ? (
+                <span className="text-[11px] text-slate-400">
+                  No bottom bar renders for this person.
+                </span>
+              ) : (
+                <>
+                  <Badge variant="default" className="text-[11px]">Home</Badge>
+                  {navTabs.map((route) => (
+                    <Badge key={route} variant="info" className="text-[11px]">
+                      {moduleByRoute(route)?.label || route}
+                    </Badge>
+                  ))}
+                  <Badge variant="default" className="text-[11px]">More</Badge>
+                </>
+              )}
             </div>
 
             {navTabs.length > 0 && (

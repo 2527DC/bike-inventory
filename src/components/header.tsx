@@ -1,7 +1,14 @@
 "use client";
 
 import { useSession } from "next-auth/react";
+import { HeaderMenu } from "@/components/header-menu";
 
+// Mobile top bar. Rendered only below `lg` (the dashboard layout wraps it in `lg:hidden`);
+// on desktop the sidebar carries branding, the user and the navigation.
+//
+// The menu button is not decoration. The bottom tab bar is per-user now and renders nothing
+// when an admin has pinned nothing, so on a phone this header is the ONLY navigation that is
+// always present — see src/components/header-menu.tsx for the full reasoning.
 export function Header() {
   const { data: session } = useSession();
   const userName = session?.user?.name || "User";
@@ -31,6 +38,7 @@ export function Header() {
               {initials}
             </span>
           </div>
+          <HeaderMenu />
         </div>
       </div>
     </header>

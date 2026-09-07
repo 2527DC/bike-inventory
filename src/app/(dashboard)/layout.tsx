@@ -5,6 +5,8 @@ import { redirect } from "next/navigation";
 import { Header } from "@/components/header";
 import { BottomNav } from "@/components/bottom-nav";
 import { AppSidebar } from "@/components/app-sidebar";
+import { useBottomNav } from "@/lib/use-bottom-nav";
+import { cn } from "@/lib/utils";
 
 export default function DashboardLayout({
   children,
@@ -12,6 +14,12 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const { data: session, status } = useSession();
+  // The bar is per-user now, so its height is not a constant any more. The same hook the bar
+  // itself uses decides this, so the two can never disagree; `.nav-hidden` zeroes
+  // --bottom-nav-height for the whole subtree, which is what `pb-nav` here and `.above-nav`
+  // on nine other pages resolve. Custom properties inherit, so one override on the root
+  // corrects every dependent at once — including position:fixed descendants.
+  const { hasNav } = useBottomNav();
 
   if (status === "loading") {
     return (
@@ -30,7 +38,7 @@ export default function DashboardLayout({
   }
 
   return (
-    <div className="flex min-h-screen">
+    <div className={cn("flex min-h-screen", !hasNav && "nav-hidden")}>
       {/* Desktop sidebar (lg+) */}
       <AppSidebar className="hidden lg:flex" />
 

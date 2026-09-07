@@ -93,6 +93,17 @@ export interface ResolvedAccess {
      * codebase deliberately consolidated to ONE User read per guarded request.
      */
     warehouseId: string | null;
+    /**
+     * The bottom-nav routes an admin pinned for this person, in the order they chose.
+     *
+     * This is a DISPLAY PREFERENCE, never a grant. It says where the tab bar points, not what
+     * the user may do — the answer to that is `permissions` below, and the API re-checks it
+     * regardless of what is pinned here. An empty array means no pinned bar at all.
+     *
+     * Like warehouseId it rides this single User read rather than a second query, which is the
+     * property getAccess was built to hold: ONE read of the row per guarded request.
+     */
+    navTabs: string[];
   } | null;
   /** module key -> { action -> true }. Absent action means "not granted". */
   permissions: Record<string, Partial<Record<PermAction, boolean>>>;
@@ -131,6 +142,8 @@ export const getAccess = cache(async (userId: string): Promise<ResolvedAccess> =
       isActive: true,
       // See ResolvedAccess.user.warehouseId — site scoping, read once per request.
       warehouseId: true,
+      // See ResolvedAccess.user.navTabs — a display preference, carried on this same read.
+      navTabs: true,
       role: {
         select: {
           id: true,
@@ -221,6 +234,7 @@ export const getAccess = cache(async (userId: string): Promise<ResolvedAccess> =
       email: user.email,
       isActive: user.isActive,
       warehouseId: user.warehouseId,
+      navTabs: user.navTabs,
     },
     permissions,
     modules,

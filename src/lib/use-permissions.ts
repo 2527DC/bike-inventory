@@ -20,6 +20,7 @@ export function usePermissions() {
   const status = usePermissionStore((s) => s.status);
   const permissions = usePermissionStore((s) => s.permissions);
   const modules = usePermissionStore((s) => s.modules);
+  const navTabs = usePermissionStore((s) => s.navTabs);
   const role = usePermissionStore((s) => s.role);
   const error = usePermissionStore((s) => s.error);
   const load = usePermissionStore((s) => s.load);
@@ -36,6 +37,8 @@ export function usePermissions() {
   return {
     permissions,
     modules,
+    // The admin's pinned bottom-nav routes. Display only — it never widens what `can` allows.
+    navTabs,
     role,
     error,
     // `loading` stays true until the grants are actually known, so callers never render

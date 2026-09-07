@@ -55,6 +55,14 @@ body {
   padding-right: env(safe-area-inset-right);
 }
 
+/* The bottom bar is per-user now (an admin pins each person's tabs), so it is not always
+   there. When it is absent the dashboard layout carries .nav-hidden and nothing may reserve
+   its height: custom properties inherit, so zeroing the variable here fixes `.pb-nav` below
+   AND the nine pages that anchor fixed elements with `.above-nav`, in one place. */
+.nav-hidden {
+  --bottom-nav-height: 0px;
+}
+
 /* Bottom nav safe area */
 .pb-nav {
   padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
