@@ -109,7 +109,7 @@ export default function DailyReportPage() {
                   <ArrowRightLeft className="h-4 w-4 text-purple-600" />
                   <span className="text-[11px] text-purple-600 font-medium">Transfers</span>
                   <span className="text-xl font-bold text-purple-700 ml-auto tabular-nums">{data.transfers}</span>
-                  <span className="text-[11px] text-purple-500">completed</span>
+                  <span className="text-[11px] text-purple-500">approved</span>
                 </div>
               </CardContent>
             </Card>
@@ -119,7 +119,7 @@ export default function DailyReportPage() {
           <button
             onClick={() => {
               const d = new Date(data.date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-              const msg = `*BCH Daily Report — ${d}*\n\nInwards: ${data.inwards.totalQty} items (${data.inwards.count} entries)\nOutwards: ${data.outwards.totalQty} items (${data.outwards.count} entries)\nPayments: ${fmt(data.payments.totalAmount)} (${data.payments.count})\nExpenses: ${fmt(data.expenses.totalAmount)} (${data.expenses.count})${data.transfers > 0 ? `\nTransfers: ${data.transfers} completed` : ""}\n\n— Sent from BCH App`;
+              const msg = `*BCH Daily Report — ${d}*\n\nInwards: ${data.inwards.totalQty} items (${data.inwards.count} entries)\nOutwards: ${data.outwards.totalQty} items (${data.outwards.count} entries)\nPayments: ${fmt(data.payments.totalAmount)} (${data.payments.count})\nExpenses: ${fmt(data.expenses.totalAmount)} (${data.expenses.count})${data.transfers > 0 ? `\nTransfers: ${data.transfers} approved` : ""}\n\n— Sent from BCH App`;
               window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank");
             }}
             className="w-full flex items-center justify-center gap-2 bg-green-600 text-white py-2.5 rounded-lg text-sm font-medium mb-4"

@@ -680,7 +680,6 @@ model StockCount {
   approvedAt      DateTime?
   rejectionReason String?
   notes           String?
-  location        String? // LEGACY, dropped in MIG-2. Superseded by storeId/warehouseId below.
   // Audit scope (R2). THREE states, not two -- see §5.1 of the 0409 plan:
   //   storeId set, warehouseId null  -> the whole store, every warehouse under it
   //   both set                       -> that one warehouse

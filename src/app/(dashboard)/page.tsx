@@ -14,6 +14,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SkeletonDashboard } from "@/components/ui/skeleton";
 import { formatINR, formatTime } from "@/lib/utils";
+import { getStatusLabel } from "@/lib/status-colors";
 import { usePermissions } from "@/lib/use-permissions";
 import { SendScorecardButton } from "./_components/send-scorecard-button";
 import { MyStockAudits } from "./_components/my-stock-audits";
@@ -187,8 +188,12 @@ function InwardsEODReport() {
           // Real columns now: orderNo is TRF-YYYYMM-NNNN and status is the enum. The old
           // `|| "PENDING"` fallback is gone deliberately — it was not a fallback, it was the
           // only value that ever printed.
+          //
+          // getStatusLabel, not the raw enum. This string is pasted into WhatsApp and read by
+          // a person, and P14 introduced IN_TRANSIT — which would have arrived in the owner’s
+          // evening summary as "TRF-202609-0001: IN_TRANSIT", underscore and all.
           const no = t.orderNo || t.id?.slice(0, 8);
-          const status = t.status;
+          const status = getStatusLabel(t.status);
           msg += `• ${no}: ${status}\n`;
         }
         if (transfers.length > 10) msg += `... +${transfers.length - 10} more\n`;

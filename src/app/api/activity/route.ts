@@ -4,6 +4,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { getStatusLabel } from "@/lib/status-colors";
 import { userCan } from "@/lib/rbac";
 import { istDayBounds } from "@/lib/services/timezone";
 import { createLogger } from "@/lib/logger";
@@ -421,8 +422,15 @@ export async function GET(req: NextRequest) {
         label: r.module.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()),
       };
 
+      // getStatusLabel, not the raw column. These are enum values written by logActivity, and
+      // P14 introduced IN_TRANSIT — which would otherwise read "APPROVED → IN_TRANSIT",
+      // underscore and all, in a feed a person is scanning. The helper falls back to a
+      // sentence-cased version of anything it does not know, so a value from a module added
+      // later still renders sensibly.
       const transition =
-        r.fromValue || r.toValue ? `${r.fromValue ?? "—"} → ${r.toValue ?? "—"}` : null;
+        r.fromValue || r.toValue
+          ? `${r.fromValue ? getStatusLabel(r.fromValue) : "—"} → ${r.toValue ? getStatusLabel(r.toValue) : "—"}`
+          : null;
       const detail = [r.entityRef, transition, r.details].filter(Boolean).join(" · ");
 
       activities.push({

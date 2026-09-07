@@ -197,7 +197,7 @@ export async function POST(req: NextRequest) {
         tx,
         `SC-${ym}`,
         4,
-        Prisma.sql`SELECT COALESCE(MAX(NULLIF(regexp_replace(split_part("countNo", '-', 3), '\D', '', 'g'), '')::int), 0) FROM "StockCount" WHERE "countNo" LIKE ${`SC-${ym}-%`}`
+        Prisma.sql`SELECT COALESCE(MAX(NULLIF(regexp_replace(split_part("countNo", '-', 3), '\\D', '', 'g'), '')::int), 0) FROM "StockCount" WHERE "countNo" LIKE ${`SC-${ym}-%`}`
       )}`;
 
       const created = await tx.stockCount.create({
@@ -208,10 +208,6 @@ export async function POST(req: NextRequest) {
         binId: binId || null,
         storeId: store.id,
         warehouseId: scopedWarehouse?.id ?? null,
-        // `location` is the column MIG-1a superseded and MIG-2 drops. Written NULL rather
-        // than left to carry a code that nothing reads any more — a stale value here would
-        // make a new audit look like a legacy one to §5.1's three-state check.
-        location: null,
         dueDate: new Date(data.dueDate),
         notes: data.notes,
         items: {

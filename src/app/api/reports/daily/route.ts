@@ -35,8 +35,22 @@ export async function GET(req: NextRequest) {
         _count: true,
         _sum: { amount: true },
       }),
+      // All three POST-APPROVAL statuses, not APPROVED alone.
+      //
+      // Before P14, APPROVED was where an agreed transfer STAYED — so counting it was the same
+      // as counting the day’s transfers. Now the flow continues through IN_TRANSIT to RECEIVED,
+      // usually within the same day, and an order that has been dispatched would have dropped
+      // straight out of this count. The card on /reports/daily would have fallen toward zero on
+      // a normal working day and then hidden itself, which reads as "no transfers happened"
+      // rather than "this query is stale".
+      //
+      // Still keyed on reviewedAt: the question is "what was agreed today", and that timestamp
+      // is the moment of agreement whatever happened to the goods afterwards.
       prisma.transferOrder.count({
-        where: { status: "APPROVED", reviewedAt: { gte: dayStart, lte: dayEnd } },
+        where: {
+          status: { in: ["APPROVED", "IN_TRANSIT", "RECEIVED"] },
+          reviewedAt: { gte: dayStart, lte: dayEnd },
+        },
       }),
       prisma.inventoryTransaction.findMany({
         where: { createdAt: { gte: dayStart, lte: dayEnd } },

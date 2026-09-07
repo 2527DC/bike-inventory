@@ -12,7 +12,16 @@ export interface WarehouseOption {
   name: string;
   sortOrder: number;
   storeId: string;
-  store: { id: string; code: string; name: string };
+  /**
+   * GET /api/warehouses has always RETURNED gstin and stateCode; this interface simply did not
+   * declare them, so every consumer was blind to fields that were already on the wire.
+   *
+   * P14 needs them client-side to tell somebody which document a transfer will require BEFORE
+   * they build the list — an inter-store move between two GSTINs needs a tax invoice raised in
+   * Zoho, and finding that out at dispatch is finding out too late. Nullable because a store
+   * that has not had its GSTIN filled in yet is exactly the case the banner warns about.
+   */
+  store: { id: string; code: string; name: string; gstin: string | null; stateCode: string | null };
 }
 
 export interface StoreOption {

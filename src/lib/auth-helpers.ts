@@ -16,6 +16,17 @@ export interface CurrentUser {
   roleKey: string;
   roleName: string;
   isActive: boolean;
+  /**
+   * The warehouse this user is pinned to, or null for somebody who works across all sites.
+   *
+   * Read by P14 transfers: a pinned clerk dispatches only from their own warehouse and
+   * receives only into it. Null means unpinned, which is every user today — so this is inert
+   * until somebody is actually assigned a site on /team.
+   *
+   * NOT an authorisation field on its own. It narrows WHICH rows a permission applies to; the
+   * permission itself still comes from requireFeature.
+   */
+  warehouseId: string | null;
 }
 
 export async function getServerSession() {
@@ -97,6 +108,7 @@ export const getCurrentUser = cache(async function getCurrentUser(): Promise<Cur
     roleKey: access.roleKey,
     roleName: access.roleName,
     isActive: access.user.isActive,
+    warehouseId: access.user.warehouseId,
   };
 });
 
