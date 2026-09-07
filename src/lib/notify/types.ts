@@ -67,11 +67,36 @@ export interface EmailRecipient {
   name?: string;
 }
 
+/** One file on an outgoing email. `content` is the bytes, never a path. */
+export interface EmailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType: string;
+}
+
 export interface EmailMessage {
   subject: string;
   text: string;
   /** Optional; when absent the sender wraps `text` in a minimal HTML template. */
   html?: string;
+  /**
+   * Files to attach. Nothing in this app attached one before the purchase-order email, so
+   * treat this as new ground rather than a well-worn path.
+   *
+   * ⚠ SIZE. The SMTP transport is built per call with `socketTimeout: 30_000` and no pooling,
+   * so a large attachment on a slow uplink dies at THIRTY seconds — not at a route's
+   * `maxDuration`. Worse, it surfaces as ESOCKET, which `describeSmtpError` reports as
+   * "Could not connect… check host, port and the secure setting" — a misleading sentence for a
+   * transfer that timed out mid-DATA. Keep attachments small; a purchase-order PDF is ~90 KB.
+   */
+  attachments?: EmailAttachment[];
+  /** Copied recipients. One address, because that is all the send sheet offers. */
+  cc?: string;
+  /**
+   * Where a reply should go. Without it a vendor replying to a purchase order writes back to
+   * the SMTP account, which may be a mailbox nobody reads.
+   */
+  replyTo?: string;
 }
 
 export interface PushTarget {
