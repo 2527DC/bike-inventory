@@ -52,6 +52,12 @@ interface PermissionState {
   role: { key: string; name: string } | null;
   permissions: PermissionMap;
   modules: GrantedModule[];
+  /**
+   * The bottom-nav routes an admin pinned for this user, in their order. A display
+   * preference, not a grant — it decides where the tab bar points, never what may be done
+   * there. Empty means this user has no pinned bar.
+   */
+  navTabs: string[];
   error: string | null;
 
   /** Fetch the permission set. Safe to call from many components — only one request runs. */
@@ -89,6 +95,7 @@ async function fetchAccess(set: (p: Partial<PermissionState>) => void) {
       role: json.data.role ?? null,
       permissions: (json.data.permissions as PermissionMap) ?? {},
       modules: (json.data.modules as GrantedModule[]) ?? [],
+      navTabs: (json.data.navTabs as string[]) ?? [],
       error: null,
     });
   } catch (e) {
@@ -97,6 +104,7 @@ async function fetchAccess(set: (p: Partial<PermissionState>) => void) {
       status: "error",
       permissions: {},
       modules: [],
+      navTabs: [],
       error: e instanceof Error ? e.message : "Failed to load permissions",
     });
   }
@@ -108,6 +116,7 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
   role: null,
   permissions: {},
   modules: [],
+  navTabs: [],
   error: null,
 
   load: async () => {
@@ -137,6 +146,9 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
       role: null,
       permissions: {},
       modules: [],
+      // Cleared with the grants: the pinned bar belongs to the person who signed out, and
+      // leaving it behind would show the next user their predecessor's tabs.
+      navTabs: [],
       error: null,
     });
   },

@@ -18,6 +18,9 @@ export async function GET() {
       role: { key: access.roleKey, name: access.roleName },
       permissions: access.permissions,
       modules: access.modules,
+      // The user's pinned bottom-nav routes, in the admin's order. The bar renders nothing
+      // when this is empty — it is presentation, not a grant, so it gates nothing.
+      navTabs: access.user?.navTabs ?? [],
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
