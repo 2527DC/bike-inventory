@@ -5,6 +5,27 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
+import { getWarehouseQtyMap, getStoreQtyMap } from "@/lib/stock-location";
+
+/**
+ * The system quantity for these products WITHIN this audit's scope (R2, §5.1).
+ *
+ * Both callers below used to compare against `Product.currentStock`, the GLOBAL total across
+ * every store. For a warehouse-scoped audit that made every line look stale the moment any
+ * other warehouse moved, and "Refresh" then overwrote `systemQty` with a number the counter
+ * could not possibly see — manufacturing a variance on every product.
+ *
+ * `currentStock` survives as the fallback for exactly one case: a legacy audit with neither
+ * FK set, whose scope is genuinely unknown.
+ */
+async function scopedQtyMap(
+  scope: { storeId: string | null; warehouseId: string | null },
+  productIds: string[]
+): Promise<Map<string, number> | null> {
+  if (scope.warehouseId) return getWarehouseQtyMap(productIds, scope.warehouseId);
+  if (scope.storeId) return getStoreQtyMap(productIds, scope.storeId);
+  return null; // legacy audit — the caller falls back to currentStock
+}
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -75,8 +96,16 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       ...(searchParams.get("limit") ? { take: parseInt(searchParams.get("limit")!) } : { take: 500 }),
     });
 
-    // Calculate stale count — items where systemQty differs from current product stock
-    const staleCount = items.filter((i) => i.systemQty !== i.product.currentStock).length;
+    // Stale = systemQty differs from what is in the SCOPE now, not from the global total.
+    const scope = await prisma.stockCount.findUnique({
+      where: { id },
+      select: { storeId: true, warehouseId: true },
+    });
+    const liveQty = scope ? await scopedQtyMap(scope, items.map((i) => i.productId)) : null;
+    const staleCount = items.filter((i) => {
+      const live = liveQty ? (liveQty.get(i.productId) ?? 0) : i.product.currentStock;
+      return i.systemQty !== live;
+    }).length;
 
     // Count totals for tabs
     const allCounts = await prisma.stockCountItem.groupBy({
@@ -107,14 +136,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const user = await requireFeature("stock_audit", "edit");
     const { id } = await params;
 
-    // ADMIN cannot save counts — only approve/reject
-    if (await userCan(user.id, "stock_audit", "approve")) return errorResponse("Admin can only approve or reject stock counts", 403);
-
-    // Clerks/Mechanic can only edit their assigned stock counts
-    if (!(await userCan(user.id, "stock_audit", "approve"))) {
-      const sc = await prisma.stockCount.findUnique({ where: { id }, select: { assignedToId: true } });
-      if (!sc) return errorResponse("Stock count not found", 404);
-      if (sc.assignedToId !== user.id) return errorResponse("You can only edit stock counts assigned to you", 403);
+    // Saving counts belongs to the ASSIGNEE, whoever they are (R2).
+    //
+    // The line that used to sit here — "if you hold approve, you cannot save counts" —
+    // blocked an approve-holder from counting an audit assigned to them, which is how an
+    // owner who assigned an audit to themselves found a screen where nothing worked. Holding
+    // `approve` is not a disqualification; the only thing it must not let you do is sign off
+    // your own count, and that is enforced on the status transition in [id]/route.ts.
+    const sc = await prisma.stockCount.findUnique({ where: { id }, select: { assignedToId: true } });
+    if (!sc) return errorResponse("Stock count not found", 404);
+    if (sc.assignedToId !== user.id) {
+      return errorResponse(
+        "Only the person this audit is assigned to can start, count or complete it",
+        403
+      );
     }
     const body = await req.json();
 
@@ -167,22 +202,31 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       if (sc.assignedToId !== user.id) return errorResponse("You can only access stock counts assigned to you", 403);
     }
 
+    const scope = await prisma.stockCount.findUnique({
+      where: { id },
+      select: { storeId: true, warehouseId: true },
+    });
+    if (!scope) return errorResponse("Stock count not found", 404);
+
     const items = await prisma.stockCountItem.findMany({
       where: { stockCountId: id },
       include: { product: { select: { currentStock: true } } },
     });
 
+    // Refresh to the SCOPED quantity. This wrote the global `currentStock` before, so on a
+    // warehouse audit Refresh replaced a correct systemQty with the sum across every store.
+    const liveQty = await scopedQtyMap(scope, items.map((i) => i.productId));
+
     let refreshed = 0;
     await prisma.$transaction(async (tx) => {
       for (const item of items) {
-        if (item.systemQty !== item.product.currentStock) {
-          const newVariance = item.countedQty !== null
-            ? item.countedQty - item.product.currentStock
-            : null;
+        const live = liveQty ? (liveQty.get(item.productId) ?? 0) : item.product.currentStock;
+        if (item.systemQty !== live) {
+          const newVariance = item.countedQty !== null ? item.countedQty - live : null;
           await tx.stockCountItem.update({
             where: { id: item.id },
             data: {
-              systemQty: item.product.currentStock,
+              systemQty: live,
               variance: newVariance,
             },
           });

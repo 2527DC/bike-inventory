@@ -4,13 +4,15 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { adjustWarehouseQty, addAnywhere } from "@/lib/stock-location";
+import { resolveWarehouse } from "@/lib/warehouses";
 
 // POST: Verify a Zoho-pulled inward transaction (adds stock)
 export async function POST(req: NextRequest) {
   try {
     const user = await requireFeature("inbound", "approve");
     const body = await req.json();
-    const { transactionId, binId } = body;
+    const { transactionId, binId, warehouseId } = body;
 
     if (!transactionId) return errorResponse("Transaction ID required", 400);
 
@@ -32,13 +34,27 @@ export async function POST(req: NextRequest) {
 
       const newStock = product.currentStock + transaction.quantity;
 
-      await tx.product.update({
-        where: { id: product.id },
-        data: {
-          currentStock: newStock,
-          ...(binId && { binId }),
-        },
-      });
+      // THE FIX (R12), and this site is NOT in the 0409 plan's table — it was found by the
+      // phase's proof grep for direct `currentStock:` writes.
+      //
+      // It is the same bug mirrored. The outward paths wrote the cache and let the ledger
+      // hand sold units back; this INWARD path wrote the cache and left the ledger short, so
+      // the next recompute made verified stock DISAPPEAR instead of reappear. Same cause,
+      // opposite symptom, so it is fixed the same way.
+      //
+      // `warehouseId` is honoured when a caller sends one (none does today); otherwise the
+      // units go where that product already lives. See addAnywhere.
+      if (warehouseId) {
+        const resolved = await resolveWarehouse(warehouseId);
+        if ("error" in resolved) throw new Error(resolved.error);
+        await adjustWarehouseQty(tx, product.id, resolved.warehouse.id, transaction.quantity);
+      } else {
+        await addAnywhere(tx, product.id, transaction.quantity);
+      }
+
+      if (binId) {
+        await tx.product.update({ where: { id: product.id }, data: { binId } });
+      }
 
       await tx.inventoryTransaction.update({
         where: { id: transactionId },

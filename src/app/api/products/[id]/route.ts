@@ -9,6 +9,7 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("api:products:id");
 import { userCan } from "@/lib/rbac";
+import { validateReorderVendor } from "@/lib/vendors/validate";
 
 export async function GET(
   _req: NextRequest,
@@ -62,10 +63,31 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireFeature("stock", "edit");
+    const user = await requireFeature("stock", "edit");
     const { id } = await params;
     const body = await req.json();
     const data = productUpdateSchema.parse(body);
+
+    // P8 added `reorderVendorId` to productSchema so the /stock/[id] edit form can set it.
+    // That would otherwise have opened a side door: this route is guarded on `stock.edit`,
+    // while the two routes built for that column (api/products/[id]/reorder and
+    // api/reorder/update-levels) demand `reorder.edit`. One column behind two permissions,
+    // depending on which URL you posted to, is not a permission.
+    //
+    // So the extra grant is required only when the field is actually present, and the vendor
+    // is validated the same way. Same shape as api/products/bulk.
+    //
+    // KNOWN INCONSISTENCY, deliberately left: `reorderLevel` and `reorderQty` remain writable
+    // here under `stock.edit` alone, as they were before P8 — this form has always sent
+    // reorderLevel. Pulling them behind `reorder.edit` would take the field away from roles
+    // that use it today, which is a change to make on purpose, not as a side effect of P8.
+    if (data.reorderVendorId !== undefined) {
+      if (!(await userCan(user.id, "reorder", "edit"))) {
+        return errorResponse("You do not have permission to set the reorder vendor", 403);
+      }
+      const vendorError = await validateReorderVendor(data.reorderVendorId);
+      if (vendorError) return errorResponse(vendorError, 400);
+    }
 
     const product = await prisma.product.update({
       where: { id },

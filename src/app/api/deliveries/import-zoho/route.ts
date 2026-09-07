@@ -5,6 +5,10 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { getBooks, getZakya, type IntegrationClient } from "@/lib/integrations";
+import {
+  storeIdForInvoice,
+  deliveryFieldsFromInvoiceDetail,
+} from "@/lib/deliveries/zoho-invoice";
 
 /*
  * Direct invoice import — fetches invoice details from Zoho and creates Delivery.
@@ -13,7 +17,11 @@ import { getBooks, getZakya, type IntegrationClient } from "@/lib/integrations";
  */
 export async function POST(req: NextRequest) {
   try {
-    await requireFeature("deliveries", "fetch");
+    // zoho.APPROVE, not deliveries.fetch. This route WRITES Delivery rows — importing is not
+    // fetching, and gating a write on a read-shaped grant meant anyone who could look could
+    // also import. Flipped in the same commit as the button, so relabelling the UI never
+    // leaves the old grant working by URL.
+    await requireFeature("zoho", "approve");
     const { invoiceIds } = (await req.json()) as { invoiceIds: string[] };
 
     if (!invoiceIds || invoiceIds.length === 0) {
@@ -31,6 +39,9 @@ export async function POST(req: NextRequest) {
     // Books preferred, Zakya as the fallback. Typed `IntegrationClient` rather than `any`:
     // getInvoice lives on the base class, so both providers satisfy it.
     const client: IntegrationClient = (zoho ?? zakya)!;
+
+    // Loaded once for prefix attribution (O8), not per invoice.
+    const stores = await prisma.store.findMany({ select: { id: true, invoicePrefix: true } });
 
     let imported = 0;
     const errors: string[] = [];
@@ -56,11 +67,12 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
-        // Skip BCC (Bharath Cycle Centre) invoices
-        if (invoiceNo.startsWith("BCC/")) {
-          errors.push(`${invoiceNo}: skipped (Centre invoice)`);
-          continue;
-        }
+        // THE `BCC/` SKIP IS GONE (O8, owner 4 Sep).
+        //
+        // This was the third of three routes hardcoding a store NAME to decide what not to
+        // import. Bharath Cycle Centre has its own GSTIN and its own stock; hiding its
+        // invoices meant its deliveries never existed and its stock never moved. The store is
+        // now resolved from Store.invoicePrefix and recorded on the row instead.
 
         // Check duplicate
         const exists = await prisma.delivery.findFirst({
@@ -71,51 +83,18 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
-        // Map line items
-        const lineItems = (inv.line_items || []).map(
-          (li: { name: string; sku?: string; quantity: number; rate: number; item_total: number }) => ({
-            name: li.name,
-            sku: li.sku || "",
-            quantity: li.quantity,
-            rate: li.rate,
-            itemTotal: li.item_total,
-          })
-        );
-
-        // Extract phone from billing/shipping address or customer
-        const phone =
-          inv.contact_persons?.[0]?.phone ||
-          inv.billing_address?.phone ||
-          inv.shipping_address?.phone ||
-          "";
-
-        const customerAddress = [
-          inv.shipping_address?.address,
-          inv.shipping_address?.street2,
-          inv.shipping_address?.city,
-          inv.shipping_address?.state,
-        ]
-          .filter(Boolean)
-          .join(", ");
+        // One shared mapper with the review-flow import (pull-review/approve), so the two
+        // paths cannot drift. They HAD drifted — only this one read the address, area,
+        // pincode and salesperson.
+        const fields = deliveryFieldsFromInvoiceDetail(inv);
 
         await prisma.delivery.create({
           data: {
+            ...fields,
             invoiceNo,
-            zohoInvoiceId: inv.invoice_id ?? null,
-            // Zoho always sends a date on an invoice, so the fallback is unreachable in
-            // practice — it exists because the field is optional on the type, not because
-            // a dateless invoice is expected. If one ever appears it files under today,
-            // which is visibly wrong rather than silently absent.
-            invoiceDate: new Date(inv.date ?? Date.now()),
-            invoiceAmount: Number(inv.total || 0),
-            customerName: inv.customer_name ?? "Unknown",
-            customerPhone: phone || null,
-            customerAddress: customerAddress || null,
-            customerArea: inv.shipping_address?.city || null,
-            customerPincode: inv.shipping_address?.zip || null,
-            salesPerson: inv.salesperson_name || "",
+            storeId: storeIdForInvoice(invoiceNo, stores),
             status: "PENDING",
-            lineItems: lineItems.length > 0 ? lineItems : undefined,
+            lineItems: fields.lineItems.length > 0 ? fields.lineItems : undefined,
           },
         });
         imported++;

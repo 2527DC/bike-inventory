@@ -129,6 +129,16 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     // "fetch")` and no `canFetch("stock")` existed anywhere — the wizard's API calls were
     // gated by `zoho.fetch`, so nothing loses access. The seeder's stale-permission sweep
     // (seed-rbac.ts) deletes the row and its grants on the next `npm run db:seed:rbac`.
+    //
+    // P4 (R1) finished the job this started. FIVE more `fetch` actions were orphaned the same
+    // way — inbound, deliveries, vendors, bills, customers and brand_ledger — because every
+    // screen that used them called a route guarded by `zoho.fetch`. A role could therefore
+    // hold the button and not the route, or the route and not the button, which is exactly
+    // how "the Fetch button does nothing" started. `zoho.fetch` / `zoho.approve` is the one
+    // truth now, and it is the ONLY surviving `fetch` action in this catalog.
+    //
+    // ⚠ RUN `npm run db:seed:rbac` AFTER DEPLOY, or the six dead permissions stay grantable
+    //   on /team/permissions and keep implying an access they no longer control.
     actions: ["view", "create", "edit", "delete"],
   },
   {
@@ -140,7 +150,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     parentKey: "stock_management",
     group: "Operations", // MUST equal the parent's — the seeder asserts it
     sortOrder: 105,
-    actions: ["view", "create", "edit", "delete", "approve", "fetch"],
+    actions: ["view", "create", "edit", "delete", "approve"],
   },
   {
     key: "deliveries",
@@ -151,7 +161,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     parentKey: "stock_management",
     group: "Operations", // MUST equal the parent's — the seeder asserts it
     sortOrder: 106,
-    actions: ["view", "create", "edit", "delete", "approve", "fetch"],
+    actions: ["view", "create", "edit", "delete", "approve"],
   },
   {
     key: "transfers",
@@ -215,7 +225,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: "/vendors",
     group: "Purchase",
     sortOrder: 200,
-    actions: ["view", "create", "edit", "delete", "fetch"],
+    actions: ["view", "create", "edit", "delete"],
   },
   {
     key: "purchase_orders",
@@ -337,7 +347,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: null,
     group: "Accounts",
     sortOrder: 300,
-    actions: ["view", "create", "edit", "delete", "approve", "fetch"],
+    actions: ["view", "create", "edit", "delete", "approve"],
   },
   {
     // route: null — hidden from the sidebar, not removed. See the note on `bills` above;
@@ -396,7 +406,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: "/customers",
     group: "Accounts",
     sortOrder: 320,
-    actions: ["view", "create", "edit", "delete", "fetch"],
+    actions: ["view", "create", "edit", "delete"],
   },
 
   // ── Brand Ledger (supplier reconciliation) ────────────────────────────────
@@ -411,7 +421,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: "/ledger",
     group: "Accounts",
     sortOrder: 340,
-    actions: ["view", "create", "edit", "delete", "fetch"],
+    actions: ["view", "create", "edit", "delete"],
   },
   {
     key: "brand_ledger_gaps",

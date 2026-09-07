@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Plus, ArrowRightLeft, ArrowRight, CheckCircle2, XCircle, Clock, Loader2, Package } from "lucide-react";
+import { Plus, ArrowRightLeft, ArrowRight, CheckCircle2, XCircle, Clock, Loader2, Package, FileCheck, ChevronRight, Truck } from "lucide-react";
 // No warehouse lookup needed: the API now returns the warehouse names on each line, so
 // the page renders what it was given instead of translating a code through a table.
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
@@ -15,6 +15,10 @@ import { SkeletonList } from "@/components/ui/skeleton";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { usePermissions } from "@/lib/use-permissions";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("transfers:list");
 
 interface TransferOrderItem {
   id: string;
@@ -36,7 +40,12 @@ function endpointLabel(bin: { code: string } | null, loc: string | null): string
 interface TransferOrder {
   id: string;
   orderNo: string;
-  status: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
+  // IN_TRANSIT and RECEIVED were added to the TransferOrderStatus enum by MIG-1a. No code
+  // writes them until P14, but this union is hand-written over an API response and `tsc`
+  // cannot check it against the enum — so a status it does not list would arrive as a value
+  // TypeScript insists is impossible, and the accent/badge below would fall through to the
+  // "unknown" branch. Listing them now is what makes that impossible.
+  status: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED" | "IN_TRANSIT" | "RECEIVED";
   notes: string | null;
   rejectionNote: string | null;
   createdAt: string;
@@ -45,9 +54,16 @@ interface TransferOrder {
   reviewedAt: string | null;
   items: TransferOrderItem[];
   _count: { items: number };
+  // The lane lives on the HEADER from P14 onward — one route per order, not one per line.
+  // Nullable because an order raised before MIG-2, or one whose items genuinely disagreed
+  // about the lane, has no header route and falls back to its first item.
+  fromWarehouse: { id: string; code: string; name: string; store: { name: string } } | null;
+  toWarehouse: { id: string; code: string; name: string; store: { name: string } } | null;
+  requiredDocType: "DELIVERY_CHALLAN" | "TAX_INVOICE" | null;
+  docUrl: string | null;
 }
 
-type StatusFilter = "all" | "PENDING" | "APPROVED" | "REJECTED";
+type StatusFilter = "all" | "PENDING" | "APPROVED" | "IN_TRANSIT" | "RECEIVED" | "REJECTED" | "CANCELLED";
 
 export default function TransfersPage() {
   const { canApprove: canApproveCheck } = usePermissions();
@@ -69,38 +85,61 @@ export default function TransfersPage() {
   } | null>(null);
   const [dataError, setDataError] = useState<string | null>(null);
 
-  const fetchData = useCallback(() => {
-    setLoading(true);
+  // apiTry, not a raw fetch. An expired session answers a bare fetch with a 307 to /login and
+  // 200 HTML, so `res.ok` is true and `.json()` throws "Unexpected token <" — which surfaced
+  // here as "Failed to load data" and sent people looking for a server fault instead of
+  // signing back in.
+  const fetchData = useCallback(async () => {
     const params = new URLSearchParams({ limit: "50" });
     if (filter !== "all") params.set("status", filter);
     if (dateFrom) params.set("dateFrom", dateFrom);
     if (dateTo) params.set("dateTo", dateTo);
 
-    fetch(`/api/transfer-orders?${params}`)
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setOrders(res.data); })
-      .catch((e) => {
-        if (typeof navigator !== "undefined" && !navigator.onLine) {
-          setDataError("You're offline. Check your connection and retry.");
-        } else {
-          setDataError(e instanceof Error ? e.message : "Failed to load data. Tap retry.");
-        }
-      })
-      .finally(() => setLoading(false));
+    const { data, error } = await apiTry<TransferOrder[]>(`/api/transfer-orders?${params}`);
+    if (error) {
+      log.warn("transfer list failed", { message: error });
+      setDataError(
+        typeof navigator !== "undefined" && !navigator.onLine
+          ? "You’re offline. Check your connection and retry."
+          : error
+      );
+    } else {
+      setOrders(data ?? []);
+      setDataError(null);
+    }
+    return true;
   }, [filter, dateFrom, dateTo]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  // The load runs INSIDE the effect behind a `cancelled` guard — P7 `inbound/[id]`. The old
+  // shape called a loader from the effect body, which set `loading` synchronously on every
+  // filter change and tripped react-hooks/set-state-in-effect. The guard also stops a slow
+  // response for the previous filter overwriting the current one.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await fetchData();
+      if (!cancelled) setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [fetchData]);
 
   async function handleAction(id: string, action: "approve" | "reject") {
     setApproving(id);
-    try {
-      const res = await fetch(`/api/transfer-orders/${id}/approve`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
-      });
-      const data = await res.json();
-      if (data.success) {
+    {
+      const { data: ok, error } = await apiTry<{ message: string }>(
+        `/api/transfer-orders/${id}/approve`,
+        { method: "POST", json: { action } }
+      );
+      if (!ok) {
+        // The refusal used to be swallowed by a bare `catch {}` and the button simply
+        // stopped spinning, which reads as "nothing happened" for a 403, a 409 and a
+        // network fault alike.
+        log.warn("transfer review failed", { action, message: error });
+        setDataError(error ?? `Could not ${action} this transfer`);
+        setApproving(null);
+        return;
+      }
+      {
         const order = orders.find((o) => o.id === id);
         setOrders((prev) =>
           prev.map((o) =>
@@ -120,7 +159,12 @@ export default function TransfersPage() {
                   value: `${endpointLabel(item.fromBin, item.fromWarehouse?.name ?? null)} → ${endpointLabel(item.toBin, item.toWarehouse?.name ?? null)} (Qty: ${item.quantity})`,
                 })),
               ],
-              details: order.notes || undefined,
+              // NOT "stock moved". Approval agrees to the transfer; dispatch is what moves
+              // it. Saying otherwise sends somebody to look for goods still in the other
+              // building — which is exactly what the old auto-approve copy did.
+              details: order.notes
+                ? `${order.notes} — approved, not yet dispatched.`
+                : "Approved — nothing has moved yet. Dispatch it when the van leaves.",
             });
           } else {
             setConfirmation({
@@ -136,14 +180,17 @@ export default function TransfersPage() {
           }
         }
       }
-    } catch { /* ignore */ }
-    finally { setApproving(null); }
+    }
+    setApproving(null);
   }
 
   const statusBadge = (status: string) => {
-    const icon = status === "APPROVED" ? <CheckCircle2 className="h-3 w-3 mr-0.5" />
+    // IN_TRANSIT gets a truck rather than a clock: "waiting for a decision" and "on a van"
+    // are different situations and looked identical before. CANCELLED had no icon at all.
+    const icon = status === "APPROVED" || status === "RECEIVED" ? <CheckCircle2 className="h-3 w-3 mr-0.5" />
+      : status === "IN_TRANSIT" ? <Truck className="h-3 w-3 mr-0.5" />
       : status === "PENDING" ? <Clock className="h-3 w-3 mr-0.5" />
-      : status === "REJECTED" ? <XCircle className="h-3 w-3 mr-0.5" />
+      : status === "REJECTED" || status === "CANCELLED" ? <XCircle className="h-3 w-3 mr-0.5" />
       : null;
     return <Badge className={`text-xs ${getStatusColor(status)}`}>{icon}{getStatusLabel(status)}</Badge>;
   };
@@ -153,7 +200,7 @@ export default function TransfersPage() {
       <div className="flex items-center justify-between mb-3">
         <div>
           <h1 className="text-lg font-bold text-slate-900">Transfer Orders</h1>
-          <p className="text-xs text-slate-500">Multi-item bin transfers</p>
+          <p className="text-xs text-slate-500">Stock moves between warehouses</p>
         </div>
         <Link href="/transfers/new">
           <Button size="sm" className="h-12 px-4 bg-purple-600 hover:bg-purple-700 text-sm">
@@ -174,7 +221,14 @@ export default function TransfersPage() {
             { key: "all", label: "All" },
             { key: "PENDING", label: "Pending" },
             { key: "APPROVED", label: "Approved" },
+            // Filterable from today even though P14 is what starts writing them. An order
+            // that reaches one of these states must not be invisible on every tab.
+            { key: "IN_TRANSIT", label: "In Transit" },
+            { key: "RECEIVED", label: "Received" },
             { key: "REJECTED", label: "Rejected" },
+            // Without this a cancelled transfer was invisible on every tab except All —
+            // the status has existed since 0_init and has never had a chip.
+            { key: "CANCELLED", label: "Cancelled" },
           ],
           onChange: (key) => setFilter(key as StatusFilter),
         }]}
@@ -185,7 +239,7 @@ export default function TransfersPage() {
         <ErrorBanner
           message={dataError}
           type={typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "error"}
-          onRetry={() => { setDataError(null); fetchData(); }}
+          onRetry={() => { setDataError(null); void fetchData(); }}
           onDismiss={() => setDataError(null)}
         />
       )}
@@ -203,11 +257,11 @@ export default function TransfersPage() {
       ) : (
         <div className="space-y-2">
           {orders.map((order) => {
-            const accent = order.status === "APPROVED"
+            const accent = order.status === "APPROVED" || order.status === "RECEIVED"
               ? "border-l-green-500"
               : order.status === "REJECTED"
               ? "border-l-red-500"
-              : order.status === "PENDING"
+              : order.status === "PENDING" || order.status === "IN_TRANSIT"
               ? "border-l-amber-400"
               : "border-l-slate-200";
             return (
@@ -219,11 +273,32 @@ export default function TransfersPage() {
                     <div className="flex items-center gap-2">
                       <p className="text-base font-semibold text-slate-900 tabular-nums truncate">{order.orderNo}</p>
                       {statusBadge(order.status)}
+                      {/* The document is attached. Worth a glance from the list, because it
+                          is what decides whether this order can be dispatched at all. */}
+                      {order.docUrl && (
+                        <FileCheck className="h-4 w-4 text-green-600 shrink-0" aria-label="Document attached" />
+                      )}
                     </div>
                     <p className="text-xs text-slate-500 mt-0.5">
                       <span className="tabular-nums">{order._count.items}</span> item{order._count.items !== 1 ? "s" : ""} | By {order.createdBy.name} | <span className="tabular-nums">{new Date(order.createdAt).toLocaleDateString("en-IN")}</span>
                     </p>
+                    {/* The route, from the HEADER. One line per order rather than one per
+                        item — which is what the lane actually is now. */}
+                    {(order.fromWarehouse || order.toWarehouse) && (
+                      <p className="text-xs text-slate-600 mt-1 flex items-center gap-1 min-w-0">
+                        <span className="truncate">{order.fromWarehouse?.name ?? "—"}</span>
+                        <ArrowRight className="h-3 w-3 text-purple-500 shrink-0" />
+                        <span className="truncate">{order.toWarehouse?.name ?? "—"}</span>
+                      </p>
+                    )}
                   </div>
+                  <Link
+                    href={`/transfers/${order.id}`}
+                    aria-label={`Open ${order.orderNo}`}
+                    className="min-h-[44px] min-w-[44px] -mr-2 -mt-2 flex items-center justify-center text-slate-300 hover:text-slate-500 focus-ring shrink-0"
+                  >
+                    <ChevronRight className="h-5 w-5" />
+                  </Link>
                 </div>
 
                 {/* Compact item preview (first 2 items) */}
@@ -235,10 +310,14 @@ export default function TransfersPage() {
                         <p className="text-sm font-medium text-slate-800 truncate">{item.product.name}</p>
                         <div className="flex items-center gap-1 text-xs text-slate-500">
                           <span className="tabular-nums">Qty: {item.quantity}</span>
-                          <span>|</span>
-                          <span>{endpointLabel(item.fromBin, item.fromWarehouse?.name ?? null)}</span>
-                          <ArrowRight className="h-2.5 w-2.5 text-purple-500" />
-                          <span>{endpointLabel(item.toBin, item.toWarehouse?.name ?? null)}</span>
+                          {!order.fromWarehouse && (
+                            <>
+                              <span>|</span>
+                              <span>{endpointLabel(item.fromBin, item.fromWarehouse?.name ?? null)}</span>
+                              <ArrowRight className="h-2.5 w-2.5 text-purple-500" />
+                              <span>{endpointLabel(item.toBin, item.toWarehouse?.name ?? null)}</span>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>

@@ -40,6 +40,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ provider: 
         organizationName: true,
         lastSyncAt: true,
         accessTokenExpiresAt: true,
+        lastAuthErrorAt: true,
       },
     });
 
@@ -53,6 +54,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ provider: 
         hasClientSecret: false,
         lastSyncAt: null,
         tokenValid: false,
+        lastAuthErrorAt: null,
       });
     }
 
@@ -74,6 +76,11 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ provider: 
       hasClientSecret: Boolean(config.clientSecret),
       lastSyncAt: config.lastSyncAt,
       tokenValid,
+      // When set, a token refresh was REFUSED (base.ts). `connected` alone cannot express
+      // that: it is only ever written by a successful connect, so a revoked refresh token
+      // leaves it true forever while every fetch quietly returns nothing. Cleared on the
+      // next successful refresh.
+      lastAuthErrorAt: config.lastAuthErrorAt,
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);

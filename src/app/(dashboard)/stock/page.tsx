@@ -16,11 +16,13 @@ import { exportToExcel, exportToPDF, type ExportColumn } from "@/lib/export";
 import { usePermissions } from "@/lib/use-permissions";
 import { createLogger } from "@/lib/logger";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
-import { apiFetch } from "@/lib/api-client";
+import { apiFetch, apiTry } from "@/lib/api-client";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
 import { isPlaceholderBrand } from "@/lib/import-placeholders";
+import { isLowStock } from "@/lib/reorder";
+import { ReorderSheet, type ReorderTarget, type ReorderSaved } from "@/components/reorder-sheet";
 import { BICYCLE_SIZES } from "@/lib/product-size";
 
 const STOCK_COLUMNS: ExportColumn[] = [
@@ -51,6 +53,8 @@ interface ProductItem {
   category: { name: string } | null;
   brand: { id: string; name: string } | null;
   bin: { code: string; location: string } | null;
+  reorderQty: number;
+  reorderVendorId: string | null;
 }
 
 interface BrandItem { id: string; name: string; _count: { products: number }; }
@@ -104,22 +108,25 @@ const log = createLogger("stock");
 
 const PAGE_SIZE = 100;
 
+// The out-of-stock branch comes FIRST in all three, so "low" here means low AND still on the
+// shelf. isLowStock alone does not say that — it is true at zero too — which is why the order
+// of these branches is behaviour, not style. The LOW_STOCK filter below deliberately differs.
 function getStockColor(p: ProductItem) {
   if (p.currentStock <= 0) return "text-red-600";
-  if (p.reorderLevel > 0 && p.currentStock <= p.reorderLevel) return "text-yellow-600";
+  if (isLowStock(p)) return "text-yellow-600";
   return "text-green-600";
 }
 
 function getStockBadge(p: ProductItem) {
   if (p.currentStock <= 0) return { variant: "danger" as const, label: "Out" };
-  if (p.reorderLevel > 0 && p.currentStock <= p.reorderLevel) return { variant: "warning" as const, label: "Low" };
+  if (isLowStock(p)) return { variant: "warning" as const, label: "Low" };
   return { variant: "success" as const, label: "OK" };
 }
 
 function getStockAccent(p: ProductItem) {
   if (p.status === "INACTIVE") return "border-l-slate-200";
   if (p.currentStock <= 0) return "border-l-red-500";
-  if (p.reorderLevel > 0 && p.currentStock <= p.reorderLevel) return "border-l-amber-400";
+  if (isLowStock(p)) return "border-l-amber-400";
   return "border-l-green-500";
 }
 
@@ -138,7 +145,15 @@ export default function StockPage() {
   const mayDeactivate = canEdit("stock");
   const mayDelete = canDelete("stock");
 
+  // reorder.edit, NOT stock.edit. PUT /api/products/[id]/reorder is guarded on reorder.edit
+  // because api/reorder/update-levels already writes these same three columns behind it
+  // (owner, 6 Sep). Gating this button on stock.edit instead would show it to people the
+  // route then answers with 403 — which is exactly the bug P7 had to fix on inbound.
+  // Consequence to grant: a role with stock.edit and no reorder.edit does not see Reorder.
+  const mayReorder = canEdit("reorder");
+
   const [rowBusy, setRowBusy] = useState<string | null>(null);
+  const [reorderTarget, setReorderTarget] = useState<ReorderTarget | null>(null);
   const [rowOutcome, setRowOutcome] = useState<{ ok: boolean; name: string; message: string } | null>(null);
 
   const [dataError, setDataError] = useState<string | null>(null);
@@ -191,7 +206,9 @@ export default function StockPage() {
   // Bulk select mode
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [bulkAction, setBulkAction] = useState<"" | "brand" | "status" | "category" | "bin">("");
+  const [bulkAction, setBulkAction] = useState<"" | "brand" | "status" | "category" | "bin" | "vendor">("");
+  const [bulkVendorId, setBulkVendorId] = useState("");
+  const [bulkVendors, setBulkVendors] = useState<Array<{ id: string; name: string; code: string }>>([]);
   const [bulkBrandId, setBulkBrandId] = useState("");
   const [bulkStatus, setBulkStatus] = useState<"ACTIVE" | "INACTIVE">("INACTIVE");
   const [bulkCategoryId, setBulkCategoryId] = useState("");
@@ -224,6 +241,7 @@ export default function StockPage() {
     setSelectMode(false);
     setSelectedIds(new Set());
     setBulkAction("");
+    setBulkVendorId("");
     setBulkMessage("");
   }
 
@@ -237,6 +255,9 @@ export default function StockPage() {
       if (bulkAction === "status") body.status = bulkStatus;
       if (bulkAction === "category" && bulkCategoryId) body.categoryId = bulkCategoryId;
       if (bulkAction === "bin" && bulkBinId) body.binId = bulkBinId;
+      // "" is a real choice here — "clear the reorder vendor on these rows" — so it is sent as
+      // null rather than skipped the way the truthy-guarded fields above are.
+      if (bulkAction === "vendor") body.reorderVendorId = bulkVendorId || null;
 
       // apiFetch, not `.then(r => r.json())`. A bulk assign is the one action here that
       // silently rewrites 500 rows, and on an expired session the raw form turned a 307 to
@@ -276,6 +297,22 @@ export default function StockPage() {
       if (catsRes.success) setCategories(catsRes.data);
     }).catch(() => {});
   }, []);
+
+  // Vendors load only when the bulk Vendor tab is first opened, not with the brands and
+  // categories above: most visits to /stock never enter select mode at all, and this list is
+  // the largest of the four.
+  useEffect(() => {
+    if (bulkAction !== "vendor" || bulkVendors.length > 0) return;
+    apiTry<Array<{ id: string; name: string; code: string }>>("/api/vendors?limit=500").then(
+      ({ data, error }) => {
+        if (data) setBulkVendors(data);
+        else {
+          log.warn("bulk vendor list unavailable", { message: error });
+          setBulkMessage("Could not load vendors");
+        }
+      }
+    );
+  }, [bulkAction, bulkVendors.length]);
 
   const activeFilterCount = [selectedBrand, selectedCategory, selectedSize, selectedBin].filter(Boolean).length;
 
@@ -424,8 +461,35 @@ export default function StockPage() {
     setSelectedBin("");
   }
 
+  /**
+   * Patch the saved row in place rather than refetching.
+   *
+   * The two neighbouring row actions (deactivate, delete) both call fetchProducts(1) instead,
+   * which throws away the current page, scroll position and search. That is tolerable for an
+   * action that removes a row from view; it is not for a badge flipping from Low to OK, where
+   * the person wants to see the change on the row they just tapped. The precedent is
+   * price-correction/page.tsx:90-101, which does exactly this after a single-row PUT.
+   */
+  function applyReorderSaved(updated: ReorderSaved) {
+    setProducts((prev) =>
+      prev.map((p) =>
+        p.id === updated.id
+          ? {
+              ...p,
+              reorderLevel: updated.reorderLevel,
+              reorderQty: updated.reorderQty,
+              reorderVendorId: updated.reorderVendorId,
+            }
+          : p
+      )
+    );
+  }
+
+  // No out-of-stock precedence here, unlike the three badge helpers above: a product at zero
+  // with a reorder level IS in this filter, because "what do I need to order" includes the
+  // things that have already run out. That difference is intentional and predates P8.
   const filtered = quickFilter === "LOW_STOCK"
-    ? products.filter((p) => p.reorderLevel > 0 && p.currentStock <= p.reorderLevel)
+    ? products.filter(isLowStock)
     : debouncedSearch
       ? products.filter((p) => fuzzySearchFields(debouncedSearch, [p.name, p.sku, p.brand?.name, p.size, p.category?.name]))
       : products;
@@ -772,6 +836,15 @@ export default function StockPage() {
                           <MapPin className="h-3 w-3" />{p.bin.code} — {p.bin.location}
                         </p>
                       )}
+                      {/* Shown only when a level is set, because 0 means "no level chosen"
+                          rather than "reorder at zero" — printing "Reorder @ 0" on most of the
+                          catalogue would read as a setting somebody made. */}
+                      {p.reorderLevel > 0 && (
+                        <p className="text-[11px] text-slate-400 mt-1 tabular-nums">
+                          Reorder @ {p.reorderLevel}
+                          {p.reorderQty > 0 ? ` · order ${p.reorderQty}` : ""}
+                        </p>
+                      )}
                     </div>
                     <div className="text-right shrink-0">
                       <p className={`text-xl font-bold tabular-nums ${getStockColor(p)}`}>{p.currentStock}</p>
@@ -779,8 +852,18 @@ export default function StockPage() {
 
                       {/* Hidden in select mode: the whole row is a checkbox target there, and
                           a button inside it would fight the row's click handler. */}
-                      {!selectMode && (mayDeactivate || mayDelete) && (
+                      {!selectMode && (mayDeactivate || mayDelete || mayReorder) && (
                         <div className="flex gap-1 justify-end mt-1.5">
+                          {mayReorder && (
+                            <RowBtn
+                              label={`Reorder settings for ${p.name}`}
+                              tone="text-blue-600"
+                              disabled={rowBusy === p.id}
+                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setReorderTarget(p); }}
+                            >
+                              <RefreshCw className="h-3.5 w-3.5" />
+                            </RowBtn>
+                          )}
                           {mayDeactivate && p.status === "ACTIVE" && (
                             <RowBtn
                               label={`Deactivate ${p.name}`}
@@ -841,6 +924,13 @@ export default function StockPage() {
           )}
         </div>
       )}
+
+      <ReorderSheet
+        open={reorderTarget !== null}
+        product={reorderTarget}
+        onClose={() => setReorderTarget(null)}
+        onSaved={applyReorderSaved}
+      />
 
       {rowOutcome && (
         <ActionConfirmation
@@ -906,6 +996,20 @@ export default function StockPage() {
               >
                 Status
               </button>
+              {/* Filter by brand, select all, set the vendor: one action per brand instead of
+                  one per product. This is how the reorder vendor column gets populated at all
+                  — and P10 derives a purchase order's vendor from it. Gated on reorder.edit
+                  because that is what the server demands for this field specifically. */}
+              {mayReorder && (
+                <button
+                  onClick={() => setBulkAction("vendor")}
+                  className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${
+                    bulkAction === "vendor" ? "bg-blue-600 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                  }`}
+                >
+                  Vendor
+                </button>
+              )}
             </div>
 
             {bulkAction === "category" && (
@@ -969,6 +1073,35 @@ export default function StockPage() {
                 <button
                   onClick={handleBulkApply}
                   disabled={!bulkBinId || bulkLoading}
+                  className="px-4 py-2 bg-blue-600 rounded-lg text-xs font-medium disabled:opacity-50"
+                >
+                  {bulkLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Apply"}
+                </button>
+              </div>
+            )}
+
+            {/* A plain <select>, not the SearchableSelect used in the reorder sheet: this bar
+                is bg-slate-900 and every control in it is white-on-slate-700, while
+                SearchableSelect is hard-coded light with no theming prop. Matching the four
+                siblings matters more here than typeahead over a list this size. */}
+            {bulkAction === "vendor" && (
+              <div className="flex gap-2">
+                <select
+                  value={bulkVendorId}
+                  onChange={(e) => setBulkVendorId(e.target.value)}
+                  className="flex-1 h-9 rounded-lg bg-slate-700 border-0 px-2 text-xs text-white focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">Clear reorder vendor</option>
+                  {bulkVendors.map((v) => (
+                    <option key={v.id} value={v.id}>{v.name} ({v.code})</option>
+                  ))}
+                </select>
+                {/* No `disabled={!bulkVendorId}`, unlike the four above: "" is the deliberate
+                    "clear it" choice here, so disabling on empty would remove the only way to
+                    undo a wrong bulk assignment. */}
+                <button
+                  onClick={handleBulkApply}
+                  disabled={bulkLoading}
                   className="px-4 py-2 bg-blue-600 rounded-lg text-xs font-medium disabled:opacity-50"
                 >
                   {bulkLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Apply"}

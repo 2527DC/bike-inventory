@@ -58,19 +58,34 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // One transaction: either the products move AND the source goes, or neither happens.
     // A half-applied merge would leave products pointing at a category the screen has
     // already stopped showing.
+    //
+    // Inbound shipments move for the same reason products do. `InboundShipment.categoryId`
+    // is a Restrict foreign key (added in MIG-1a), so leaving them behind does not orphan
+    // them — it makes the delete below FAIL, and a merge that has been refusable all along
+    // would start dying on a raw constraint string instead.
     const result = await prisma.$transaction(async (tx) => {
       const moved = await tx.product.updateMany({
         where: { categoryId: sourceId },
         data: { categoryId: targetCategoryId },
       });
+      const movedShipments = await tx.inboundShipment.updateMany({
+        where: { categoryId: sourceId },
+        data: { categoryId: targetCategoryId },
+      });
       await tx.category.delete({ where: { id: sourceId } });
-      return { moved: moved.count, from: source.name, into: target.name };
+      return {
+        moved: moved.count,
+        movedShipments: movedShipments.count,
+        from: source.name,
+        into: target.name,
+      };
     });
 
     log.info("categories merged", {
       sourceId,
       targetCategoryId,
       moved: result.moved,
+      movedShipments: result.movedShipments,
     });
 
     return successResponse({

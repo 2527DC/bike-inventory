@@ -30,6 +30,9 @@ interface StoreRow {
   name: string;
   address: string | null;
   phone: string | null;
+  invoicePrefix: string | null;
+  gstin: string | null;
+  stateCode: string | null;
   sortOrder: number;
   warehouses: WarehouseRow[];
 }
@@ -42,7 +45,7 @@ interface DeleteOutcome {
 }
 
 type Draft =
-  | { kind: "store"; id: string | null; code: string; name: string; address: string; phone: string }
+  | { kind: "store"; id: string | null; code: string; name: string; address: string; phone: string; invoicePrefix: string; gstin: string; stateCode: string }
   | { kind: "warehouse"; id: string | null; storeId: string; code: string; name: string };
 
 export default function StoresPage() {
@@ -95,6 +98,9 @@ export default function StoresPage() {
         const body = {
           code: draft.code, name: draft.name,
           address: draft.address || undefined, phone: draft.phone || undefined,
+          // Always sent, even when blank: the route turns "" into null, which is how a
+          // prefix is CLEARED. Sending undefined would silently keep the old one.
+          invoicePrefix: draft.invoicePrefix,
         };
         if (draft.id) await apiFetch(`/api/stores/${draft.id}`, { method: "PUT", json: body });
         else await apiFetch("/api/stores", { method: "POST", json: body });
@@ -151,7 +157,7 @@ export default function StoresPage() {
           <Button
             size="sm"
             className="bg-blue-600 hover:bg-blue-700"
-            onClick={() => setDraft({ kind: "store", id: null, code: "", name: "", address: "", phone: "" })}
+            onClick={() => setDraft({ kind: "store", id: null, code: "", name: "", address: "", phone: "", invoicePrefix: "", gstin: "", stateCode: "" })}
           >
             <Plus className="h-3.5 w-3.5 mr-1" />New store
           </Button>
@@ -199,6 +205,30 @@ export default function StoresPage() {
                     onChange={(e) => setDraft({ ...draft, phone: e.target.value })}
                     className={inputCls}
                   />
+                  <Input
+                    placeholder="Invoice prefix (e.g. BCH/)"
+                    value={draft.invoicePrefix}
+                    onChange={(e) => setDraft({ ...draft, invoicePrefix: e.target.value })}
+                    className={`${inputCls} font-mono`}
+                  />
+                  {/* Upper-cased as you type: the schema's GSTIN pattern is uppercase-only, so
+                      a lower-case entry would be refused on save rather than accepted. Same
+                      thing /vendors/new does for the vendor GSTIN. */}
+                  <Input
+                    placeholder="GSTIN (e.g. 29ABCDE1234F1Z5)"
+                    value={draft.gstin}
+                    maxLength={15}
+                    onChange={(e) => setDraft({ ...draft, gstin: e.target.value.toUpperCase() })}
+                    className={`${inputCls} font-mono`}
+                  />
+                  <Input
+                    placeholder="State code (e.g. 29)"
+                    value={draft.stateCode}
+                    inputMode="numeric"
+                    maxLength={2}
+                    onChange={(e) => setDraft({ ...draft, stateCode: e.target.value.replace(/[^0-9]/g, "").slice(0, 2) })}
+                    className={`${inputCls} tabular-nums`}
+                  />
                 </>
               )}
             </div>
@@ -207,6 +237,18 @@ export default function StoresPage() {
               <code className="font-mono">/stock/by-location/{draft.code || "CODE"}</code>. The name
               can be changed freely.
             </p>
+            {draft.kind === "store" && (
+              <p className="text-[11px] text-slate-500">
+                The <strong>invoice prefix</strong> decides which store a sale takes stock from.
+                An invoice numbered <code className="font-mono">BCH/0042</code> deducts from the
+                store whose prefix is <code className="font-mono">BCH/</code>.{" "}
+                <strong>Leave it blank and this store&rsquo;s sales deduct from the first store
+                instead.</strong>{" "}
+                The <strong>GSTIN</strong> is what decides a transfer document: two stores with
+                different GSTINs need a tax invoice, movement inside one store needs only a
+                delivery challan.
+              </p>
+            )}
             <div className="flex gap-2">
               <Button size="sm" onClick={() => void save()} disabled={busy || !draft.code || !draft.name}>
                 <Check className="h-3.5 w-3.5 mr-1" />{busy ? "Saving…" : "Save"}
@@ -250,11 +292,31 @@ export default function StoresPage() {
                         <Badge variant="info" className="text-[10px] tabular-nums">
                           {s.warehouses.length} warehouse{s.warehouses.length === 1 ? "" : "s"}
                         </Badge>
+                        {/* A missing prefix is not cosmetic — this store's sales silently
+                            deduct from the first store until it is set (R12). Say so on the
+                            row, not only inside the edit form nobody has opened. */}
+                        {s.invoicePrefix ? (
+                          <Badge variant="default" className="font-mono text-[10px]">{s.invoicePrefix}</Badge>
+                        ) : (
+                          <Badge variant="warning" className="text-[10px]">No invoice prefix</Badge>
+                        )}
                       </div>
                       {(s.address || s.phone) && (
                         <p className="text-[11px] text-slate-500 mt-0.5">
                           {[s.address, s.phone].filter(Boolean).join(" · ")}
                         </p>
+                      )}
+                      {/* Under the address, per the plan. Amber when absent, because P14
+                          refuses an inter-store transfer without it rather than guessing the
+                          document type — so a blank GSTIN is a thing to go and fix, not a
+                          neutral empty field. */}
+                      {s.gstin ? (
+                        <p className="text-[11px] text-slate-400 mt-0.5 font-mono">
+                          {s.gstin}
+                          {s.stateCode ? <span className="text-slate-300"> · state {s.stateCode}</span> : null}
+                        </p>
+                      ) : (
+                        <p className="text-[11px] text-amber-600 mt-0.5">No GSTIN</p>
                       )}
                     </div>
                     <div className="flex gap-1 shrink-0">
@@ -263,7 +325,11 @@ export default function StoresPage() {
                           label={`Edit ${s.name}`}
                           onClick={() => setDraft({
                             kind: "store", id: s.id, code: s.code, name: s.name,
-                            address: s.address ?? "", phone: s.phone ?? "",
+                            address: s.address ?? "", phone: s.phone ?? "", invoicePrefix: s.invoicePrefix ?? "",
+                            // Seeded from the row, NOT left blank. The form submits every field
+                            // it holds, so an unseeded one would arrive as "" and clear a
+                            // GSTIN somebody had already entered — on the second save, silently.
+                            gstin: s.gstin ?? "", stateCode: s.stateCode ?? "",
                           })}
                         >
                           <Pencil className="h-3.5 w-3.5" />

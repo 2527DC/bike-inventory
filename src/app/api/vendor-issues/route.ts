@@ -10,6 +10,8 @@ import {
 } from "@/lib/api-utils";
 import { vendorIssueSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { nextSequence } from "@/lib/sequence";
+import { issSeedSql } from "@/lib/vendor-issues/sequence";
 
 export async function GET(req: NextRequest) {
   try {
@@ -101,28 +103,10 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const data = vendorIssueSchema.parse(body);
 
-    // Auto-generate issueNo: ISS-YYYYMM-NNNN
-    const now = new Date();
-    const yearMonth = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const prefix = `ISS-${yearMonth}-`;
-
-    const lastIssue = await prisma.vendorIssue.findFirst({
-      where: { issueNo: { startsWith: prefix } },
-      orderBy: { issueNo: "desc" },
-      select: { issueNo: true },
-    });
-
-    let seq = 1;
-    if (lastIssue) {
-      const lastSeq = parseInt(lastIssue.issueNo.split("-").pop() || "0", 10);
-      seq = lastSeq + 1;
-    }
-
-    const issueNo = `${prefix}${String(seq).padStart(4, "0")}`;
-
     const isClient = data.issueSource === "CLIENT";
 
-    // Validate: vendor issues need vendorId, client issues need clientName
+    // Validate: vendor issues need vendorId, client issues need clientName.
+    // Checked BEFORE the number is allocated — a rejection here must not burn one.
     if (!isClient && !data.vendorId) {
       return errorResponse("Vendor is required for vendor issues", 400);
     }
@@ -130,25 +114,47 @@ export async function POST(req: NextRequest) {
       return errorResponse("Client name is required for client issues", 400);
     }
 
-    const issue = await prisma.vendorIssue.create({
-      data: {
-        issueSource: data.issueSource || "VENDOR",
-        vendorId: isClient ? null : data.vendorId,
-        clientName: isClient ? data.clientName : null,
-        clientPhone: isClient ? (data.clientPhone || null) : null,
-        issueNo,
-        ticketNo: data.ticketNo?.trim() || null,
-        serviceLocation: data.serviceLocation || null,
-        issueType: data.issueType,
-        description: data.description,
-        priority: data.priority || "MEDIUM",
-        billId: data.billId || null,
-        photoUrls: data.photoUrls || [],
-        docLink: data.docLink || null,
-        suggestedResolution: data.suggestedResolution || null,
-        createdById: user.id,
-      },
-      include: { vendor: { select: { name: true } } },
+    // issueNo: ISS-YYYYMM-NNNN.
+    //
+    // This used to be a read-then-write ordered by `issueNo` DESCENDING AS A STRING, which is
+    // wrong twice over: two people clicking together were handed the same number (and
+    // `issueNo` is @unique, so one of them lost their work), and once the month passed
+    // ISS-…-0009 the string sort ranked "…-0009" above "…-0010" and the allocator started
+    // reissuing numbers that already existed.
+    //
+    // `nextSequence` is one INSERT … ON CONFLICT DO UPDATE, so concurrent callers serialise
+    // on the counter row and there is no window to lose. It shares its seed query with the
+    // goods-desk allocator in api/inbound/[id]/issues — one definition of "the current
+    // maximum", because two allocators disagreeing about that on a unique series is the
+    // hazard itself.
+    const now = new Date();
+    const key = `ISS-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+    // Allocation and create in the same transaction: a failed create rolls the number back
+    // rather than leaving a gap.
+    const issue = await prisma.$transaction(async (tx) => {
+      const issueNo = `${key}-${await nextSequence(tx, key, 4, issSeedSql(key))}`;
+
+      return tx.vendorIssue.create({
+        data: {
+          issueSource: data.issueSource || "VENDOR",
+          vendorId: isClient ? null : data.vendorId,
+          clientName: isClient ? data.clientName : null,
+          clientPhone: isClient ? (data.clientPhone || null) : null,
+          issueNo,
+          ticketNo: data.ticketNo?.trim() || null,
+          serviceLocation: data.serviceLocation || null,
+          issueType: data.issueType,
+          description: data.description,
+          priority: data.priority || "MEDIUM",
+          billId: data.billId || null,
+          photoUrls: data.photoUrls || [],
+          docLink: data.docLink || null,
+          suggestedResolution: data.suggestedResolution || null,
+          createdById: user.id,
+        },
+        include: { vendor: { select: { name: true } } },
+      });
     });
 
     return successResponse(issue, 201);

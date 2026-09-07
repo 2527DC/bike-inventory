@@ -11,6 +11,7 @@ import { successResponse, errorResponse, paginatedResponse, parseSearchParams } 
 import { outwardSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { maybeNotifyBelowReorder, type ReorderCrossing } from "@/lib/notify/stock";
+import { deductFromStore } from "@/lib/stock-location";
 
 export async function GET(req: NextRequest) {
   try {
@@ -76,11 +77,25 @@ export async function POST(req: NextRequest) {
       const previousStock = product.currentStock;
       const newStock = previousStock - data.quantity;
 
-      // Update product stock
-      await tx.product.update({
-        where: { id: data.productId },
-        data: { currentStock: newStock },
-      });
+      // WHICH STORE this leaves (R12). This route has never had a location field of any
+      // kind, so an unspecified store means the primary one: active, lowest sortOrder — the
+      // same ordering every picker uses.
+      const storeId =
+        data.storeId ??
+        (
+          await tx.store.findFirst({
+            where: { isActive: true },
+            orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+            select: { id: true },
+          })
+        )?.id;
+      if (!storeId) throw new Error("No active store is configured to take stock out of.");
+
+      // THE FIX (R12). Was `tx.product.update({ data: { currentStock: newStock } })`, which
+      // moved the cache and left StockLevel alone — so the next receipt, applied audit or
+      // transfer recomputed the total from a ledger that never saw this outward and put the
+      // units back.
+      await deductFromStore(tx, data.productId, storeId, data.quantity, product.name);
       crossings.push({ productId: data.productId, previousStock, newStock }); // collect only (§F.0)
 
       // Build notes with bin info

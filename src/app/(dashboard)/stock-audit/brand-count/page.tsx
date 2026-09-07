@@ -39,6 +39,7 @@ function clearBrandCountDraft() {
 
 export default function BrandCountPage() {
   const { warehouses } = useWarehouses();
+  const selectedWarehouseFor = (id: string | null | undefined) => warehouses.find((w) => w.id === id) ?? null;
   const locationName = (id: string | null | undefined) =>
     warehouses.find((w) => w.id === id)?.name ?? "—";
   const { data: session } = useSession();
@@ -242,6 +243,8 @@ export default function BrandCountPage() {
     if (!selectedBrand) return;
     if (BIN_TRACKING_ENABLED && !selectedBin) return;
     if (!BIN_TRACKING_ENABLED && !selectedLocation) { setError("Select a location first"); return; }
+    const selectedWarehouse = selectedWarehouseFor(selectedLocation);
+    if (!BIN_TRACKING_ENABLED && !selectedWarehouse) { setError("That warehouse is no longer available — pick another"); return; }
     const counted = Object.entries(counts).filter(([, c]) => c.qty !== null);
     if (counted.length === 0) { setError("Count at least one item"); return; }
 
@@ -260,9 +263,13 @@ export default function BrandCountPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title,
+          // Scope as store + warehouse (R2). `selectedLocation` is already a warehouse ID
+          // and `useWarehouses()` returns `storeId` on each row, so the store comes from the
+          // warehouse rather than being asked for a second time. A brand count is always
+          // warehouse-scoped, which is also what makes it correctable.
           ...(BIN_TRACKING_ENABLED && selectedBin
-            ? { binId: selectedBin.id, location: selectedBin.location }
-            : { location: selectedLocation }),
+            ? { binId: selectedBin.id, storeId: selectedWarehouse?.storeId }
+            : { storeId: selectedWarehouse?.storeId, warehouseId: selectedLocation }),
           productIds: products.map((p) => p.id),
           assignedToId: userId,
           selfCount: true,

@@ -6,6 +6,7 @@ import { ArrowLeft, AlertTriangle, Search, Package, ShoppingCart, Loader2, Share
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { apiTry } from "@/lib/api-client";
 
 interface BrandStockItemData {
   id: string;
@@ -64,6 +65,8 @@ export default function BrandStockReviewPage({ params }: { params: Promise<{ id:
   const [, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [actionError, setActionError] = useState("");
+  const [skipped, setSkipped] = useState<Array<{ sku: string; name: string; reason: string }> | null>(null);
+  const [generatedPo, setGeneratedPo] = useState<{ id: string; poNumber: string } | null>(null);
 
   useEffect(() => {
     fetch(`/api/brand-stock/uploads/${id}`)
@@ -114,16 +117,42 @@ export default function BrandStockReviewPage({ params }: { params: Promise<{ id:
     await handleSave();
     setGenerating(true);
     setActionError("");
-    try {
-      const res = await fetch(`/api/brand-stock/uploads/${id}/generate-po`, { method: "POST" });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        setActionError(json.error || "PO generation failed");
+    setSkipped(null);
+
+    // NOTE: this button returned HTTP 500 on every valid press until P9. The route passed an
+    // `hsnCode` that PurchaseOrderItem does not have, so Prisma rejected the create before any
+    // SQL ran. It is routed through the shared creator now.
+    const { data: result, error, errorData, status } = await apiTry<{
+      po: { id: string; poNumber: string };
+      skipped: Array<{ sku: string; name: string; reason: string }>;
+    }>(`/api/brand-stock/uploads/${id}/generate-po`, { method: "POST" });
+    setGenerating(false);
+
+    if (!result) {
+      if (status === 409 && errorData && typeof errorData === "object" && "conflicts" in errorData) {
+        // The duplicate rule fires here more than anywhere else — re-ordering a brand sheet is
+        // exactly the thing it exists to catch. Name the POs rather than printing one sentence.
+        const conflicts = (errorData as { conflicts: Array<{ poNumber: string; productNames: string[] }> }).conflicts;
+        setActionError(
+          `Already on ${conflicts.map((c) => c.poNumber).join(", ")}: ` +
+            conflicts.flatMap((c) => c.productNames).slice(0, 6).join(", ") +
+            (conflicts.flatMap((c) => c.productNames).length > 6 ? " and more" : "")
+        );
         return;
       }
-      window.location.href = `/purchase-orders/${json.data.po.id}`;
-    } catch { setActionError("PO generation failed"); }
-    finally { setGenerating(false); }
+      setActionError(error ?? "PO generation failed");
+      return;
+    }
+
+    // Rows with no price are left OFF the order rather than failing the whole sheet (owner,
+    // 6 Sep). Saying so is the point — a silently shorter PO is worse than a refusal.
+    if (result.skipped.length > 0) {
+      setSkipped(result.skipped);
+      setGeneratedPo(result.po);
+      return;
+    }
+
+    window.location.href = `/purchase-orders/${result.po.id}`;
   };
 
   const handleShareWhatsApp = () => {
@@ -213,6 +242,71 @@ export default function BrandStockReviewPage({ params }: { params: Promise<{ id:
           <p className="text-[10px] text-slate-500">{data.fileName} · {new Date(data.createdAt).toLocaleDateString("en-IN")}</p>
         </div>
       </div>
+
+      {/* The PO was created; some rows were left off it. Shown instead of navigating away,
+
+          because a buyer who does not learn what was skipped will assume it was all ordered. */}
+
+      {skipped && generatedPo && (
+
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
+
+          <p className="text-sm font-semibold text-amber-900">
+
+            {generatedPo.poNumber} created — {skipped.length}{" "}
+
+            {skipped.length === 1 ? "row was" : "rows were"} left off
+
+          </p>
+
+          <p className="text-xs text-amber-700 mt-1">
+
+            No price on the sheet and no cost price on the product. Set a price and run it again
+
+            to order these.
+
+          </p>
+
+          <ul className="mt-2 space-y-0.5">
+
+            {skipped.slice(0, 8).map((r) => (
+
+              <li key={r.sku} className="text-xs text-amber-800 break-words">
+
+                {r.sku} — {r.name}
+
+              </li>
+
+            ))}
+
+            {skipped.length > 8 && (
+
+              <li className="text-xs text-amber-600">and {skipped.length - 8} more</li>
+
+            )}
+
+          </ul>
+
+          <div className="flex flex-wrap gap-2 mt-3">
+
+            <a href={`/purchase-orders/${generatedPo.id}`} className="min-h-[44px] px-3 flex items-center rounded-lg bg-amber-600 text-white text-xs font-medium">
+
+              Open {generatedPo.poNumber}
+
+            </a>
+
+            <button type="button" onClick={() => { setSkipped(null); setGeneratedPo(null); }} className="min-h-[44px] px-3 rounded-lg border border-amber-300 text-amber-800 text-xs font-medium">
+
+              Stay here
+
+            </button>
+
+          </div>
+
+        </div>
+
+      )}
+
 
       {actionError && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-2.5 mb-3 text-xs text-red-700">

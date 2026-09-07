@@ -76,6 +76,10 @@ export async function sendEmail(to: EmailRecipient, msg: EmailMessage): Promise<
   // Size, not content: the number tells you whether a template ballooned; the body would put
   // customer names and stock figures in the log.
   const bytes = Buffer.byteLength(msg.text, "utf8") + Buffer.byteLength(html, "utf8");
+  // Attachment SIZE and COUNT only — never the filename unqualified and never the content. A
+  // Buffer passed as a log value would be walked by redact() as an object of numeric indices
+  // and dumped as byte noise.
+  const attachmentBytes = (msg.attachments ?? []).reduce((n, a) => n + a.content.byteLength, 0);
   const started = Date.now();
 
   log.debug("-> SMTP send", {
@@ -84,6 +88,9 @@ export async function sendEmail(to: EmailRecipient, msg: EmailMessage): Promise<
     secure: settings.secure,
     to: masked,
     bytes,
+    ...(msg.attachments?.length
+      ? { attachments: msg.attachments.length, attachmentBytes }
+      : {}),
   });
 
   try {
@@ -100,6 +107,11 @@ export async function sendEmail(to: EmailRecipient, msg: EmailMessage): Promise<
       // show; HTML is what a phone shows. Sending only HTML also scores worse with spam filters.
       text: msg.text,
       html,
+      // Spread only when present, so an ordinary notification's payload is byte-identical to
+      // what it was before attachments existed.
+      ...(msg.cc ? { cc: msg.cc } : {}),
+      ...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
+      ...(msg.attachments?.length ? { attachments: msg.attachments } : {}),
     });
     const ms = Date.now() - started;
 
@@ -165,6 +177,37 @@ export async function sendTestEmail(to: EmailRecipient): Promise<SendResult> {
  * the mail went without the full address landing in a log store. Anything without an "@"
  * (or with nothing before it) is not an address we should echo at all, so it becomes "***".
  */
+/**
+ * Can this app send an email right now, and if not, why?
+ *
+ * Exists because `GET /api/notifications/config` is gated on `settings_notifications.view`,
+ * which a purchasing clerk does not hold — so the screen that needs to grey out a "Send to
+ * vendor" button cannot ask the route that knows the answer.
+ *
+ * It reuses `loadSettings` rather than re-listing its nine conditions, because two copies of
+ * "is email configured" drift and then the button and the send disagree.
+ *
+ * A DATABASE FAULT IS NOT "not configured". `loadSettings` rethrows a Prisma error raw, and
+ * that is deliberately allowed to escape here too: answering `{ emailReady: false, reason:
+ * "not configured" }` when the database is down would send somebody to Settings to fix a
+ * connection problem.
+ *
+ * The reason strings are written for an admin ("open Settings → Notifications and fill in the
+ * SMTP details"). They are not secret — none of them names a credential — but a clerk cannot
+ * act on them, so the UI shows its own shorter line and keeps this for the tooltip.
+ */
+export async function checkEmailReady(): Promise<{ emailReady: boolean; reason: string | null }> {
+  try {
+    await loadSettings();
+    return { emailReady: true, reason: null };
+  } catch (err) {
+    if (err instanceof NotConfiguredError) {
+      return { emailReady: false, reason: err.message };
+    }
+    throw err;
+  }
+}
+
 export function maskEmail(address: string): string {
   const at = address.indexOf("@");
   if (at <= 0) return "***";

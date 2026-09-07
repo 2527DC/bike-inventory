@@ -44,6 +44,11 @@ export const productSchema = z.object({
   maxStock: z.number().int().min(0).optional(),
   reorderLevel: z.number().int().min(0).optional(),
   reorderQty: z.number().int().min(0).optional(),
+  // Nullable, not just optional: "" and null both mean "no reorder vendor", and clearing the
+  // field is how a wrong one gets undone. The column has been there since MIG-1a
+  // (schema.prisma:514) — only this schema was missing, so a reorderVendorId sent to
+  // PUT /api/products/[id] was silently STRIPPED by productUpdateSchema.partial().
+  reorderVendorId: z.string().nullable().optional(),
   size: z.string().optional(),
   color: z.string().optional(),
   imageUrls: z.array(z.string().url()).optional(),
@@ -52,6 +57,47 @@ export const productSchema = z.object({
 });
 
 export const productUpdateSchema = productSchema.partial();
+
+/**
+ * The three columns the reorder sheet writes, and nothing else.
+ *
+ * This exists so the sheet does NOT post to PUT /api/products/[id]. That route parses the
+ * whole `productUpdateSchema` and spreads it into `prisma.product.update` behind a bare
+ * `stock.edit` grant (api/products/[id]/route.ts:65-74), so wiring a reorder sheet to it
+ * would hand every `stock.edit` holder a write on `costPrice`, `sellingPrice` and `sku` —
+ * while READING cost price needs `cost_price.view`. A narrow schema on a narrow route is
+ * what keeps the sheet from being an accidental price editor.
+ */
+export const reorderSettingsSchema = z.object({
+  reorderLevel: z.number().int().min(0, "Reorder level cannot be negative"),
+  reorderQty: z.number().int().min(0, "Reorder quantity cannot be negative"),
+  reorderVendorId: z.string().nullable().optional(),
+});
+
+/**
+ * The /reorder screen's batch save (PUT /api/reorder/update-levels).
+ *
+ * The route had NO validation at all: it read `body.items`, checked `Array.isArray`, and
+ * looped. That meant an unbounded array — one request could open a transaction over every
+ * product in the catalogue — and a `reorderVendorId` written straight through, where a bad
+ * id surfaced as a raw foreign-key violation instead of a sentence.
+ *
+ * The 500 cap matches `api/products/bulk` (bulk/route.ts:32), which is the other route that
+ * rewrites many product rows at once.
+ */
+export const reorderLevelsSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        id: z.string().min(1, "Product id is required"),
+        reorderLevel: z.number().int().min(0, "Reorder level cannot be negative"),
+        reorderQty: z.number().int().min(0, "Reorder quantity cannot be negative").optional(),
+        reorderVendorId: z.string().nullable().optional(),
+      })
+    )
+    .min(1, "Nothing to update")
+    .max(500, "Too many products in one request (max 500)"),
+});
 
 export const inwardSchema = z.object({
   productId: z.string().min(1, "Product is required"),
@@ -65,6 +111,11 @@ export const outwardSchema = z.object({
   quantity: z.number().int().min(1, "Quantity must be at least 1"),
   referenceNo: z.string().optional(),
   notes: z.string().optional(),
+  // WHICH STORE the stock leaves (R12). Optional, because no caller sends it today and this
+  // route has never had a location field of any kind — the route defaults to the primary
+  // store. It is here so a caller that knows the store can say so, rather than having the
+  // deduction silently attributed to whichever store sorts first.
+  storeId: z.string().optional(),
 });
 
 export const categorySchema = z.object({
@@ -104,12 +155,33 @@ export const binSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
+/**
+ * A stock audit's SCOPE (R2). Replaces the free-text `location` plus a product type — an
+ * assigned audit used to open on an empty page because neither told the counter where to go.
+ *
+ * Two fields, three states (§5.1):
+ *
+ *   storeId set, warehouseId null  -> the whole store. VERIFY ONLY: a whole-store count
+ *                                     yields one number per product while StockLevel is per
+ *                                     warehouse, so any split of the variance would invent a
+ *                                     location.
+ *   both set                       -> that one warehouse. Corrections allowed.
+ *   both null                      -> a legacy audit whose old `location` did not resolve.
+ *                                     Verify only. Not reachable from this schema — it exists
+ *                                     only for rows that predate MIG-1a.
+ *
+ * `storeId` is REQUIRED for a new audit. That is the point of the phase: an audit with no
+ * scope is the bug being fixed, so the API refuses to create another one.
+ */
 export const stockCountSchema = z.object({
   title: z.string().min(1, "Title is required"),
   assignedToId: z.string().optional(),
   dueDate: z.string().min(1, "Due date is required"),
   notes: z.string().optional(),
   productIds: z.array(z.string()).optional(),
+  storeId: z.string().min(1, "Choose a store"),
+  /** Omit for a whole-store (verify-only) audit. Must belong to `storeId` — the route checks. */
+  warehouseId: z.string().min(1).optional(),
 });
 
 export const stockCountUpdateSchema = z.object({
@@ -285,12 +357,62 @@ export const purchaseOrderSchema = z.object({
   expectedDate: z.string().optional(),
   deliveryAddress: z.string().optional(),
   notes: z.string().optional(),
+  /**
+   * true (the default) submits for approval; false saves a draft.
+   *
+   * Defaulting to true is deliberate: a PO nobody submits is invisible work, and the previous
+   * behaviour — every PO landing in DRAFT with no way to advance it except an Approve button
+   * that skipped the review step entirely — is what made the approval state meaningless.
+   */
+  submit: z.boolean().default(true),
   items: z.array(z.object({
     productId: z.string().min(1, "Product is required"),
     quantity: z.number().int().min(1, "Quantity must be at least 1"),
-    unitPrice: z.number().min(0, "Price must be positive"),
+    // Still min(0) here, NOT min(0.01). The zero rule is enforced in createPurchaseOrder,
+    // because it is not the same rule for both callers: /purchase-orders/new refuses a ₹0 line
+    // (a blank rate there is a typo), while the brand-stock sheet skips priceless rows and
+    // reports them (a blank price cell there is missing data — owner, 6 Sep). A schema cannot
+    // express "depends who is asking", and putting min(0.01) here would make the message
+    // "Price must be positive" on a screen where the right answer is to leave the line out.
+    unitPrice: z.number().min(0, "Price cannot be negative"),
     gstRate: z.number().min(0).max(100).optional(),
   })).min(1, "At least one item is required"),
+});
+
+/**
+ * The header fields a PO's PUT may change.
+ *
+ * `status` is accepted but heavily constrained by PO_TRANSITIONS: APPROVED and
+ * SENT_TO_VENDOR are refused here with a sentence pointing at the route that owns them,
+ * because both have side effects (an authoriser on record; the send columns) that a bare
+ * status write would skip.
+ */
+export const purchaseOrderUpdateSchema = z.object({
+  status: z.enum([
+    "DRAFT",
+    "PENDING_APPROVAL",
+    "APPROVED",
+    "SENT_TO_VENDOR",
+    "PARTIALLY_RECEIVED",
+    "RECEIVED",
+    "CANCELLED",
+  ]).optional(),
+  notes: z.string().optional(),
+  expectedDate: z.string().nullable().optional(),
+}).refine((v) => Object.keys(v).length > 0, { message: "Nothing to update" });
+
+/** The query filter on GET /api/purchase-orders. Exists because that param used to be cast
+ *  with `as never` and passed to Prisma unvalidated. */
+export const purchaseOrderListQuerySchema = z.object({
+  status: z.enum([
+    "DRAFT",
+    "PENDING_APPROVAL",
+    "APPROVED",
+    "SENT_TO_VENDOR",
+    "PARTIALLY_RECEIVED",
+    "RECEIVED",
+    "CANCELLED",
+  ]).optional(),
 });
 
 export const vendorBillSchema = z.object({
@@ -459,6 +581,33 @@ export const deliveryUpdateSchema = z.object({
 
 // ─── Inbound Tracking ───────────────────────
 
+/**
+ * Receiving ONE line of a shipment (R3).
+ *
+ * `deliveredQty` must equal the line's billed quantity — the blue button means "receive the
+ * full bill qty" (owner decision D6) and shortages are raised through Report Issue instead.
+ * The route enforces the equality; this only guarantees a positive integer arrived.
+ *
+ * `warehouseId` is required. The old handler defaulted a missing warehouse through
+ * `resolveWarehouse(body.warehouseId ?? body.location)`, so stock could land somewhere nobody
+ * chose.
+ */
+export const inboundReceiveLineSchema = z.object({
+  lineItemId: z.string().min(1, "Line item is required"),
+  deliveredQty: z.number().int().min(1, "Quantity must be at least 1"),
+  warehouseId: z.string().min(1, "Choose where the stock is going"),
+});
+
+/**
+ * The Cycles / Spares / Accessories choice that gates receiving (R3).
+ *
+ * It lived in ONE phone's localStorage, so the shipment looked uncategorised to everybody
+ * else and lost the value when that browser cleared. It is a property of the shipment.
+ */
+export const inboundCategorySchema = z.object({
+  categoryId: z.string().min(1, "Choose a category"),
+});
+
 export const inboundShipmentSchema = z.object({
   brandId: z.string().min(1, "Brand is required"),
   billNo: z.string().min(1, "Bill number is required"),
@@ -478,6 +627,46 @@ export const inboundShipmentSchema = z.object({
     hsn: z.string().optional(),
   })).min(1, "At least one line item is required"),
 });
+
+/**
+ * Report Issue on a receiving line (`POST /api/inbound/[id]/issues`).
+ *
+ * The person at the goods desk names the LINE, not the vendor: the route resolves the vendor
+ * from the shipment's bill (or its brand) itself. The old client-side call sent a `vendorId`
+ * read from `shipment.vendorBill`, so every shipment without a Zoho bill sent `undefined` and
+ * was refused with 400.
+ *
+ * `issueType` is the full `IssueType` enum from the schema, unchanged — this endpoint is one
+ * more way to raise the same VendorIssue, not a second vocabulary.
+ *
+ * `issueQty` is optional for the enum as a whole but required for SHORTAGE and DAMAGE, which
+ * are the two that read a count back to the brand ("Short by 3 of 10"). The refine keeps that
+ * rule in one place rather than in the route and the form separately.
+ */
+export const inboundIssueSchema = z
+  .object({
+    lineItemId: z.string().min(1, "Line item is required"),
+    issueType: z.enum([
+      "QUALITY",
+      "SHORTAGE",
+      "DAMAGE",
+      "WRONG_ITEM",
+      "BILLING_ERROR",
+      "DELIVERY_DELAY",
+      "OTHER",
+    ]),
+    issueQty: z.number().int().min(1, "Quantity must be at least 1").optional(),
+    notes: z.string().optional(),
+  })
+  .refine(
+    (d) =>
+      (d.issueType !== "SHORTAGE" && d.issueType !== "DAMAGE") ||
+      d.issueQty !== undefined,
+    {
+      message: "Quantity is required for a shortage or damage issue",
+      path: ["issueQty"],
+    }
+  );
 
 export const preBookingSchema = z.object({
   customerName: z.string().min(1, "Customer name is required"),
@@ -807,6 +996,45 @@ export const storeSchema = z.object({
   address: z.string().max(300).optional(),
   phone: z.string().max(30).optional(),
   sortOrder: z.number().int().min(0).optional(),
+  /**
+   * The prefix this store's sales invoices carry — "BCH/", "BCC/" (R12).
+   *
+   * `storeIdForInvoice()` matches an invoice number against these to decide which store's
+   * stock a sale comes out of. **Until it is set, every sale deducts from the primary store**,
+   * so a BCC sale would take BCH stock. Unique at the database level.
+   *
+   * Empty string is accepted and normalised to null by the route: clearing the field in the
+   * form has to mean "no prefix", not "a prefix that is the empty string", which would match
+   * every invoice.
+   */
+  invoicePrefix: z.string().max(20).optional(),
+  /**
+   * The store's own GSTIN. Every store has one (owner) — BCH and BCC are separate registrations.
+   *
+   * Same regex as `vendorSchema.gstin` above, deliberately: one definition of what a GSTIN
+   * looks like, or the two forms will drift and a number valid on one screen will be refused
+   * on the other. It is uppercase-only, so the form upper-cases on input the way
+   * /vendors/new already does.
+   *
+   * "" is accepted and normalised to null by the route — a store that has not had its GSTIN
+   * entered yet is a real state, and P14 refuses an inter-store transfer while it is missing
+   * rather than guessing a document type.
+   */
+  gstin: z
+    .string()
+    .regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/, "That does not look like a GSTIN")
+    .optional()
+    .or(z.literal("")),
+  /**
+   * The first two digits of the GSTIN — "29" for Karnataka. Stored separately because P14
+   * compares state codes to decide TAX INVOICE vs DELIVERY CHALLAN, and reading two characters
+   * out of a nullable string at every comparison is how that check ends up wrong once.
+   */
+  stateCode: z
+    .string()
+    .regex(/^[0-9]{2}$/, "State code is the first two digits of the GSTIN, e.g. 29")
+    .optional()
+    .or(z.literal("")),
 });
 
 export const storeUpdateSchema = storeSchema.partial().extend({
@@ -822,4 +1050,32 @@ export const warehouseSchema = z.object({
 
 export const warehouseUpdateSchema = warehouseSchema.partial().extend({
   isActive: z.boolean().optional(),
+});
+
+/**
+ * The body of POST /api/zoho/trigger-pull (R1).
+ *
+ * There was no schema here at all — the route did `const { step, pullId, fromDate, searchText }
+ * = body as {...}`, a bare cast. That is precisely why a client sending `days` or `toDate` was
+ * silently ignored: the cast named four fields, the other two fell on the floor, and the
+ * screen's date chips appeared to do nothing. A schema makes an unknown field a visible
+ * decision rather than an invisible drop.
+ */
+export const zohoPullSchema = z.object({
+  step: z.enum(["init", "bills", "invoices", "finalize"]),
+  pullId: z.string().optional(),
+  /** Rolling window INCLUDING today. Ignored when fromDate is given. */
+  days: z.number().int().min(1).max(400).optional(),
+  fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "From date must look like 2026-09-04").optional(),
+  toDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "To date must look like 2026-09-04").optional(),
+  /** Free-text search. When present the date window is not applied at all. */
+  searchText: z.string().max(100).optional(),
+
+  // finalize-only tallies, carried by the client across the steps.
+  itemsNew: z.number().int().min(0).optional(),
+  contactsNew: z.number().int().min(0).optional(),
+  billsNew: z.number().int().min(0).optional(),
+  invoicesNew: z.number().int().min(0).optional(),
+  apiCalls: z.number().int().min(0).optional(),
+  allErrors: z.array(z.string()).optional(),
 });

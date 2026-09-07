@@ -10,6 +10,14 @@ import { PLACEHOLDER_CATEGORY } from "@/lib/import-placeholders";
 // Type-only. The clients themselves are still loaded through a dynamic import inside the
 // handler, so importing the type here adds nothing to the module graph at runtime.
 import type { BooksClient } from "@/lib/integrations";
+import {
+  storeIdForInvoice,
+  deliveryFieldsFromInvoiceDetail,
+  type DeliveryFieldsFromInvoice,
+} from "@/lib/deliveries/zoho-invoice";
+import { logActivity } from "@/lib/activity-log";
+import { nextSequence } from "@/lib/sequence";
+import { ibSeedSql } from "@/lib/inbound/sequence";
 
 // This route had no logger at all — a 499-line import handler whose only record of what it
 // did was the response body, which a 504 never delivers.
@@ -80,7 +88,14 @@ export async function POST(req: NextRequest) {
     // Products ARE still created here, by the BILL branch, when a bill line names a SKU the
     // catalog does not have. That is deliberate and was decided explicitly: an inbound
     // shipment must be able to receive something the catalog has not met yet.
-    const results = { contacts: 0, items: 0, bills: 0, invoices: 0, errors: [] as string[] };
+    // `skipped` is new: an already-imported record is a normal outcome, not an error and not a
+    // silent nothing. Before this a re-import reported "0 imported" with no explanation.
+    const results = { contacts: 0, items: 0, bills: 0, invoices: 0, skipped: 0, errors: [] as string[] };
+
+    // Every store, for invoice-prefix attribution (O8). Two rows; loaded once, not per record.
+    const stores = await prisma.store.findMany({
+      select: { id: true, invoicePrefix: true },
+    });
 
     // Imported records are attributed to a system-role account when one exists, so the audit
     // trail doesn't credit whoever happened to click Approve.
@@ -135,7 +150,9 @@ export async function POST(req: NextRequest) {
             select: { id: true, shipmentNo: true },
           });
           if (existsShipment) {
-            results.errors.push(`${d.billNumber}: already has shipment ${existsShipment.shipmentNo}`);
+            // Not an error — a re-fetched window whose bills are already in is normal.
+            results.skipped++;
+            log.debug("bill already has a shipment", { billNo: String(d.billNumber), shipmentNo: existsShipment.shipmentNo });
             await prisma.zohoPullPreview.update({ where: { id: preview.id }, data: { status: "APPROVED", reviewedAt: new Date(), reviewedById: user.id } });
             continue;
           }
@@ -303,18 +320,16 @@ export async function POST(req: NextRequest) {
           const expectedDeliveryDate = new Date(billDate);
           expectedDeliveryDate.setDate(expectedDeliveryDate.getDate() + leadDays);
 
-          // Generate shipment number: IB-YYYYMM-0001
+          // Shipment number: IB-YYYYMM-0001, allocated atomically (§4 Counter).
+          //
+          // This is the worse of the two IB- allocators it replaces: a read-then-write
+          // running INSIDE a loop that imports a whole batch within one 60-second function.
+          // Every bill in the batch re-read "the last shipment number", so two concurrent
+          // imports — or one import racing a manual create on /inbound — collided on a
+          // unique column. Both allocators switch in the same change.
           const now = new Date();
           const prefix = `IB-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
-          const lastShipment = await prisma.inboundShipment.findFirst({
-            where: { shipmentNo: { startsWith: prefix } },
-            orderBy: { shipmentNo: "desc" },
-            select: { shipmentNo: true },
-          });
-          const seq = lastShipment
-            ? parseInt(lastShipment.shipmentNo.split("-").pop() || "0") + 1
-            : 1;
-          const shipmentNo = `${prefix}-${String(seq).padStart(4, "0")}`;
+          const shipmentNo = `${prefix}-${await nextSequence(prisma, prefix, 4, ibSeedSql(prefix))}`;
 
           const totalAmount = matchedProducts.reduce((s, { li }) => s + (li.itemTotal || li.rate * li.quantity), 0);
 
@@ -378,48 +393,86 @@ export async function POST(req: NextRequest) {
 
           results.bills++;
         } else if (preview.entityType === "invoice") {
-          let lineItems = (d.lineItems as Array<{ name: string; sku: string; quantity: number; rate: number; itemTotal: number }>) || [];
-          let salesPerson = String(d.salesPerson || "");
+          const invoiceNo = String(d.invoiceNumber);
 
-          // Fetch invoice detail from Zoho for line items + salesperson
-          if ((lineItems.length === 0 || !salesPerson) && preview.zohoId) {
+          // DEDUP FIRST, and it is no longer silent.
+          //
+          // This used to be a bare `continue` AFTER the detail fetch, which had three
+          // consequences: a wasted Zoho round trip per duplicate, `results.invoices` never
+          // incremented so re-imports were under-reported as "0 imported", and — worst — the
+          // `continue` skipped the `preview.update` below, so the preview stayed PENDING
+          // FOREVER and the pull could never leave PARTIAL.
+          const exists = await prisma.delivery.findFirst({ where: { invoiceNo } });
+          if (exists) {
+            results.skipped++;
+            log.debug("invoice already imported", { invoiceNo, deliveryId: exists.id });
+            await prisma.zohoPullPreview.update({
+              where: { id: preview.id },
+              data: { status: "APPROVED", reviewedAt: new Date(), reviewedById: user.id },
+            });
+            continue;
+          }
+
+          let fields: DeliveryFieldsFromInvoice | null = null;
+
+          // ALWAYS fetch the detail, and ask the SAME provider that found it.
+          //
+          // Only `getBooks()` was tried before, so on a Zakya-only setup the detail call
+          // returned nothing and every imported delivery arrived with no line items, no
+          // address, no area and no pincode — the dispatch clerk had nothing to route by.
+          // `provider` is written into the preview by trigger-pull (named `provider`, not
+          // `source`, because this route already has a `source` body field meaning something
+          // else entirely).
+          if (preview.zohoId) {
             try {
-              // Third and last per-record construction in this loop — same shared client.
-              const { getBooks } = await import("@/lib/integrations");
-              const zoho = await getBooks();
+              const { getBooks, getZakya } = await import("@/lib/integrations");
+              const provider = String(d.provider || "");
+              const zoho =
+                provider === "pos"
+                  ? (await getZakya()) ?? (await getBooks())
+                  : provider === "books"
+                    ? (await getBooks()) ?? (await getZakya())
+                    : (await getZakya()) ?? (await getBooks());
               if (zoho) {
                 const detail = await zoho.getInvoice(preview.zohoId);
-                const inv = detail.invoice;
-                if (inv) {
-                  if (lineItems.length === 0 && inv.line_items?.length) {
-                    lineItems = inv.line_items.map((li) => ({
-                      name: li.name, sku: li.sku || "", quantity: li.quantity, rate: li.rate, itemTotal: li.item_total,
-                    }));
-                  }
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  if (!salesPerson) salesPerson = (inv as any).salesperson_name || "";
-                }
+                if (detail.invoice) fields = deliveryFieldsFromInvoiceDetail(detail.invoice);
+              } else {
+                results.errors.push(`Invoice ${invoiceNo}: no Zoho client to fetch details`);
               }
             } catch (e) {
-              results.errors.push(`Invoice ${d.invoiceNumber}: failed to fetch details — ${e instanceof Error ? e.message : "Unknown"}`);
+              results.errors.push(`Invoice ${invoiceNo}: failed to fetch details — ${e instanceof Error ? e.message : "Unknown"}`);
             }
           }
 
-          // Dedup
-          const exists = await prisma.delivery.findFirst({ where: { invoiceNo: String(d.invoiceNumber) } });
-          if (exists) continue;
+          // WHICH STORE sold it (O8). Resolved at pull time and stored on the preview; the
+          // prefix rule is re-applied here as a fallback so a preview written before the
+          // stores had prefixes still lands on the right store when they are filled in.
+          const storeId =
+            (d.storeId ? String(d.storeId) : null) ?? storeIdForInvoice(invoiceNo, stores);
 
+          const previewLineItems =
+            (d.lineItems as Array<{ name: string; sku: string; quantity: number; rate: number; itemTotal: number }>) || [];
+
+          // The detail supplies the rich fields; the PREVIEW wins on the four it already knows
+          // authoritatively, because those came from the listing this import is approving.
           await prisma.delivery.create({
             data: {
-              invoiceNo: String(d.invoiceNumber),
+              ...(fields ?? {}),
+              invoiceNo,
               zohoInvoiceId: preview.zohoId,
               invoiceDate: new Date(String(d.date)),
               invoiceAmount: Number(d.total || 0),
               customerName: String(d.customerName),
-              customerPhone: String(d.phone || "") || null,
-              salesPerson: salesPerson || null,
+              customerPhone: fields?.customerPhone ?? (String(d.phone || "") || null),
+              salesPerson: fields?.salesPerson || String(d.salesPerson || "") || null,
+              storeId,
               status: "PENDING",
-              lineItems: lineItems.length > 0 ? lineItems : undefined,
+              lineItems:
+                fields && fields.lineItems.length > 0
+                  ? fields.lineItems
+                  : previewLineItems.length > 0
+                    ? previewLineItems
+                    : undefined,
             },
           });
           results.invoices++;
@@ -455,10 +508,17 @@ export async function POST(req: NextRequest) {
       items: results.items,
       bills: results.bills,
       invoices: results.invoices,
+      skipped: results.skipped,
       errors: results.errors.length,
       remainingPending,
       status: newStatus,
       ms: Date.now() - startedAt,
+    });
+
+    await logActivity(prisma, {
+      module: "zoho", action: "imported", entityType: "ZohoPull", entityId: pullId, entityRef: pullId,
+      details: `${results.invoices} deliveries, ${results.bills} shipments, ${results.skipped} skipped`,
+      userId: user.id, userName: user.name,
     });
 
     return successResponse({

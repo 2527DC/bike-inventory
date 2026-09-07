@@ -8,6 +8,8 @@ export interface WarehouseRef {
   code: string;
   name: string;
   storeId: string;
+  /** The owning store's tax identity, for P14's document derivation. */
+  store: { gstin: string | null; stateCode: string | null };
 }
 
 /**
@@ -17,9 +19,24 @@ export interface WarehouseRef {
  * import loop asks for the set repeatedly within one request; without the cache that is one
  * query per ask, which is the same defect the Zoho pull was fixed for.
  *
- * The cache lives for the module's lifetime in a serverless invocation, which is effectively
- * the request. It is deliberately NOT invalidated: a warehouse created mid-request is not a
- * case worth designing for, and a stale entry cannot outlive the invocation.
+ * ⚠ THE COMMENT THAT USED TO BE HERE WAS WRONG, and it cost a real bug.
+ *
+ * It said the cache "lives for the module's lifetime in a serverless invocation, which is
+ * effectively the request", and that "a stale entry cannot outlive the invocation". Neither is
+ * true. `next start` is ONE long-lived Node process, so module scope lives until the next
+ * deploy; on Vercel a warm lambda serves many requests over minutes. This repo's own
+ * `notify/email.ts` says so explicitly about its transport.
+ *
+ * What that bought: add a warehouse on /stores, and the pickers show it immediately (they read
+ * uncached force-dynamic routes) — but the SUBMIT is refused. `resolveWarehouse` consults this
+ * stale array and answers "…is not an active warehouse", so the server denies a choice it just
+ * offered. Same on inwards-verify, on transfer creation, and as a 404 on /stock/by-location.
+ *
+ * So it IS invalidated now: every route that creates, edits or deactivates a warehouse calls
+ * `clearWarehouseCache()`. That is correct on a single process. On several instances the other
+ * instances stay stale until they recycle — the honest fix for that is request-scoped
+ * `cache()` from React, which four sibling modules already use (`rbac.ts`, `auth-helpers.ts`,
+ * `integrations/index.ts`). Worth doing; not done here, because it changes every call site.
  */
 let cache: WarehouseRef[] | null = null;
 
@@ -28,7 +45,15 @@ export async function listWarehouses(): Promise<WarehouseRef[]> {
   if (cache) return cache;
   cache = await prisma.warehouse.findMany({
     where: { isActive: true },
-    select: { id: true, code: true, name: true, storeId: true },
+    // The store's GSTIN and state code ride along so P14's document derivation — TAX INVOICE
+    // between two GSTINs, DELIVERY CHALLAN within one — does not need a second query per lane.
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      storeId: true,
+      store: { select: { gstin: true, stateCode: true } },
+    },
     orderBy: [{ store: { sortOrder: "asc" } }, { sortOrder: "asc" }, { name: "asc" }],
   });
   log.debug("warehouse set loaded", { count: cache.length });
@@ -73,7 +98,12 @@ export async function resolveWarehouse(
   return { warehouse: hit };
 }
 
-/** Test-only escape hatch; also used by the seed when it creates warehouses mid-process. */
+/**
+ * Drop the cached set.
+ *
+ * Called by every route that changes the warehouse list — create, edit, deactivate. The old
+ * comment claimed the seed used it too; nothing did, which is exactly why the cache was stale.
+ */
 export function clearWarehouseCache() {
   cache = null;
 }

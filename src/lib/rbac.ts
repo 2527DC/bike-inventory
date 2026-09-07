@@ -78,7 +78,22 @@ export interface ResolvedAccess {
    * `null` when the user does not exist, is deactivated, or sits on a deactivated role —
    * exactly the cases where getCurrentUser() returns null.
    */
-  user: { id: string; name: string; email: string; isActive: boolean } | null;
+  user: {
+    id: string;
+    name: string;
+    email: string;
+    isActive: boolean;
+    /**
+     * The site this user is pinned to, or null for somebody who works across all of them.
+     *
+     * `User.warehouseId` has existed for a long time and NOTHING has ever read it. P14 is the
+     * first site scoping in the application: a clerk pinned to one warehouse may dispatch only
+     * from it and receive only into it. It rides along here rather than in a second query for
+     * the reason the identity fields do — this statement already touches the row, and the
+     * codebase deliberately consolidated to ONE User read per guarded request.
+     */
+    warehouseId: string | null;
+  } | null;
   /** module key -> { action -> true }. Absent action means "not granted". */
   permissions: Record<string, Partial<Record<PermAction, boolean>>>;
   /** Only modules the user can view, ordered for the sidebar. */
@@ -114,6 +129,8 @@ export const getAccess = cache(async (userId: string): Promise<ResolvedAccess> =
       name: true,
       email: true,
       isActive: true,
+      // See ResolvedAccess.user.warehouseId — site scoping, read once per request.
+      warehouseId: true,
       role: {
         select: {
           id: true,
@@ -198,7 +215,13 @@ export const getAccess = cache(async (userId: string): Promise<ResolvedAccess> =
     roleId: user.role.id,
     roleKey: user.role.key,
     roleName: user.role.name,
-    user: { id: user.id, name: user.name, email: user.email, isActive: user.isActive },
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      isActive: user.isActive,
+      warehouseId: user.warehouseId,
+    },
     permissions,
     modules,
   };

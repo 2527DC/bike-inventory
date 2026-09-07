@@ -8,6 +8,11 @@ import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { FilterSheet } from "@/components/filter-sheet";
 import { usePermissions } from "@/lib/use-permissions";
 import { SkeletonList } from "@/components/ui/skeleton";
+import { ErrorBanner } from "@/components/ui/error-banner";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("stock-audit");
 
 interface StockCountItem {
   id: string;
@@ -21,6 +26,8 @@ interface StockCountItem {
   totalItems: number;
   countedItems: number;
   assignedTo: { name: string };
+  /** Built by the API so every screen words the three scope states identically (section 5.1). */
+  scopeLabel: string;
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -36,6 +43,7 @@ export default function StockAuditPage() {
   const canCreate = canCreateCheck("stock_audit");
   const [counts, setCounts] = useState<StockCountItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [filter, setFilter] = useState("ALL");
   const [confirmation, setConfirmation] = useState<{
     type: "success" | "warning" | "error" | "info";
@@ -46,13 +54,28 @@ export default function StockAuditPage() {
   } | null>(null);
 
   useEffect(() => {
-    setLoading(true);
-    const q = filter !== "ALL" ? `?status=${filter}` : "";
-    fetch(`/api/stock-counts${q}`)
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setCounts(res.data); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    // Inside the async function, not in the effect body: calling setState synchronously
+    // during an effect triggers a cascading render, which react-hooks/set-state-in-effect
+    // flags as an error. (It was an error here before this change too.)
+    (async () => {
+      setLoading(true);
+      setLoadError("");
+      const q = filter !== "ALL" ? `?status=${filter}` : "";
+      // apiTry, not raw fetch (CLAUDE.md). The old `.catch(() => {})` swallowed everything,
+      // so an expired session left the page reading "No stock audits found" — which says
+      // "you have none" when it means "you are signed out".
+      const { data, error } = await apiTry<StockCountItem[]>(`/api/stock-counts${q}`);
+      if (cancelled) return;
+      if (error) {
+        log.error("could not load stock audits", { message: error });
+        setLoadError(error);
+      } else {
+        setCounts(data ?? []);
+      }
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
   }, [filter]);
 
   // Sort: overdue first, then by created date desc
@@ -112,9 +135,17 @@ export default function StockAuditPage() {
         }]}
       />
 
+      {loadError && (
+        <ErrorBanner
+          message={loadError}
+          onRetry={() => setFilter((f) => f)}
+          onDismiss={() => setLoadError("")}
+        />
+      )}
+
       {loading ? (
         <SkeletonList count={6} type="card" />
-      ) : sortedCounts.length === 0 ? (
+      ) : loadError ? null : sortedCounts.length === 0 ? (
         <div className="text-center py-12">
           <ClipboardCheck className="h-10 w-10 text-slate-300 mx-auto mb-2" />
           <p className="text-sm text-slate-400">No stock audits found</p>
@@ -153,6 +184,9 @@ export default function StockAuditPage() {
                       </div>
                       <p className="text-xs text-slate-500">
                         Assigned: {c.assignedTo.name} <span className="tabular-nums">| Due: {new Date(c.dueDate).toLocaleDateString("en-IN")}</span>
+                        {/* WHERE. A list of audits that does not say which store or
+                            warehouse each one covers cannot be acted on. */}
+                        {c.scopeLabel && <span> | {c.scopeLabel}</span>}
                       </p>
                     </div>
                     <Badge variant={STATUS_STYLE[c.status] as "warning" | "info" | "success" | "danger"}>

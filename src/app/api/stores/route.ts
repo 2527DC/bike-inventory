@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireAuth, requireFeature, AuthError } from "@/lib/auth-helpers";
 import { storeSchema } from "@/lib/validations";
+import { clearStoreCache } from "@/lib/stores";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("api:stores");
@@ -40,6 +41,11 @@ export async function GET() {
         name: true,
         address: true,
         phone: true,
+        invoicePrefix: true,
+        // Printed on every invoice and on P14's transfer documents — not sensitive, which is
+        // why this route stays requireAuth (see the comment above).
+        gstin: true,
+        stateCode: true,
         sortOrder: true,
         warehouses: {
           where: { isActive: true },
@@ -71,6 +77,21 @@ export async function POST(req: NextRequest) {
     const clash = await prisma.store.findUnique({ where: { code }, select: { name: true } });
     if (clash) return errorResponse(`Code "${code}" is already used by ${clash.name}`, 409);
 
+    // Unique in the database — name the other store rather than returning a raw P2002.
+    const prefix = data.invoicePrefix?.trim() || null;
+    if (prefix) {
+      const prefixClash = await prisma.store.findFirst({
+        where: { invoicePrefix: prefix },
+        select: { name: true },
+      });
+      if (prefixClash) {
+        return errorResponse(
+          `Invoice prefix "${prefix}" is already used by ${prefixClash.name}. Each store needs its own.`,
+          409
+        );
+      }
+    }
+
     const store = await prisma.store.create({
       data: {
         code,
@@ -78,8 +99,19 @@ export async function POST(req: NextRequest) {
         address: data.address?.trim() || null,
         phone: data.phone?.trim() || null,
         sortOrder: data.sortOrder ?? 0,
+        invoicePrefix: prefix,
+        // "" normalises to null: a store whose GSTIN has not been entered is a real state, and
+        // an empty string would satisfy a "has a GSTIN" check while carrying no number.
+        gstin: data.gstin?.trim().toUpperCase() || null,
+        stateCode: data.stateCode?.trim() || null,
       },
     });
+
+    // The module-level cache in src/lib/stores.ts holds a list that no longer matches the
+    // database. It has an invalidator and, until now, nobody called it — so a store created
+    // here stayed invisible to resolveStoreParam() for the life of the process, and
+    // /api/analytics/dashboard?store=NEW answered "unknown store".
+    clearStoreCache();
 
     log.info("store created", { storeId: store.id, code: store.code });
     return successResponse(store, 201);

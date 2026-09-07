@@ -3,6 +3,8 @@
 import { use, useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { isLowStock } from "@/lib/reorder";
+import { apiTry } from "@/lib/api-client";
 import Link from "next/link";
 import { ArrowLeft, QrCode, MapPin, Tag, IndianRupee, Pencil, Save, X, Power } from "lucide-react";
 import { LabelPrintButton } from "@/components/label-print";
@@ -41,6 +43,8 @@ interface ProductDetail {
   currentStock: number;
   reservedStock: number;
   reorderLevel: number;
+  reorderQty: number;
+  reorderVendorId: string | null;
   maxStock: number;
   costPrice: number;
   sellingPrice: number;
@@ -91,7 +95,8 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [editData, setEditData] = useState<Record<string, unknown>>({ name: "", color: "", size: "", sellingPrice: 0, mrp: 0, reorderLevel: 0, brandId: "", binId: "" });
+  const [editData, setEditData] = useState<Record<string, unknown>>({ name: "", color: "", size: "", sellingPrice: 0, mrp: 0, reorderLevel: 0, reorderQty: 0, reorderVendorId: "", brandId: "", binId: "" });
+  const [vendors, setVendors] = useState<Array<{ id: string; name: string; code: string }>>([]);
   const [brands, setBrands] = useState<{ id: string; name: string }[]>([]);
   const [bins, setBins] = useState<{ id: string; code: string; name: string; location: string }[]>([]);
 
@@ -104,6 +109,15 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
       if (binRes.success) setBins(binRes.data);
     }).catch(() => {});
   }, []);
+
+  // Loaded when the form opens rather than with the product: most visits to this page are
+  // to read it, and the vendor list is only needed by the one select in the edit form.
+  useEffect(() => {
+    if (!editing || vendors.length > 0) return;
+    apiTry<Array<{ id: string; name: string; code: string }>>("/api/vendors?limit=500").then(
+      ({ data }) => { if (data) setVendors(data); }
+    );
+  }, [editing, vendors.length]);
 
   useEffect(() => {
     fetch(`/api/products/${id}`)
@@ -140,6 +154,8 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
       sellingPrice: product!.sellingPrice,
       mrp: product!.mrp,
       reorderLevel: product!.reorderLevel,
+      reorderQty: product!.reorderQty ?? 0,
+      reorderVendorId: product!.reorderVendorId || "",
       brandId: product!.brandId || "",
       binId: product!.binId || "",
     });
@@ -156,6 +172,11 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
       for (const [k, v] of Object.entries(editData)) {
         if (v !== "" && v !== undefined) payload[k] = v;
       }
+      // reorderVendorId is the one field where "" is a CHOICE — "No vendor" — not an
+      // untouched box. The loop above drops empty strings, which is right for text fields and
+      // wrong here: it would make clearing a vendor silently do nothing. Sent as null, which
+      // is what the schema and the column both take.
+      if (editData.reorderVendorId === "") payload.reorderVendorId = null;
       const res = await fetch(`/api/products/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -279,6 +300,28 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
                     <Input type="number" value={editData.reorderLevel as number} onChange={(e) => setEditData({ ...editData, reorderLevel: Number(e.target.value) })} />
                   </div>
                 </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[11px] text-slate-500">Reorder Qty</label>
+                    <Input type="number" value={editData.reorderQty as number} onChange={(e) => setEditData({ ...editData, reorderQty: Number(e.target.value) })} />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500">Reorder Vendor</label>
+                    {/* A plain select, matching the Brand and Bin pickers three fields up.
+                        The typeahead lives in the /stock sheet, where the person is scanning a
+                        list; here they already have the product open. */}
+                    <select
+                      value={editData.reorderVendorId as string}
+                      onChange={(e) => setEditData({ ...editData, reorderVendorId: e.target.value })}
+                      className="w-full min-h-[44px] rounded-lg border border-slate-300 px-2 text-sm"
+                    >
+                      <option value="">No vendor</option>
+                      {vendors.map((v) => (
+                        <option key={v.id} value={v.id}>{v.name} ({v.code})</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
               </>
             )}
 
@@ -314,7 +357,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
             <div>
               <p className={`text-2xl font-bold tabular-nums ${
                 product.currentStock <= 0 ? "text-red-600" :
-                product.reorderLevel > 0 && product.currentStock <= product.reorderLevel ? "text-yellow-600" : "text-green-600"
+                isLowStock(product) ? "text-yellow-600" : "text-green-600"
               }`}>{product.currentStock}</p>
               <p className="text-xs text-slate-500">In Stock</p>
               {product.reservedStock > 0 && (

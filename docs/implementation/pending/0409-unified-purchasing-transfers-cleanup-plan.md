@@ -2,11 +2,10 @@
 
 > **To continue this work:** read **[▶ RESUME HERE](#-resume-here--the-only-place-that-holds-current-state)** below. It is the only section that holds current state — branch, database, what is done, what is next. Everything else is design or history.
 
-Status: in-progress — 4 Sep 2026, P2 + P3 done (R4 complete, on one branch); P1 next
-Branch: **`chore/remove-type-ui-moving-level-customer-add`** — carries **P2 + P3 together** (R4).
-One branch and one PR per phase in the order of §0.6, each cut from the **reference branch
-`feat/notifications-and-settings-rbac`** (owner, 4 Sep — NOT `main`; local `main` is stale) after
-the previous phase merged. Update this line as work moves. See the Progress log at the end.
+Status: **BUILD COMPLETE** — 7 Sep 2026. **Every phase is built** (P11 dropped 6 Sep by the owner). R1–R6, R8, R10, R11, R12, R13 all closed. Nothing is merged: the owner opens every PR, and asked for the conflicts to be resolved here when they merge to `main`.
+Branch: **`feat/purchasing-transfers-p5-p15`** — cut from `feat/inbound-receiving` @ `df12868`,
+one commit per phase from here. Nothing is merged; the owner opens every PR. Update this line as
+work moves, and keep the detail in ▶ RESUME HERE, not here.
 
 Written 4 Sep 2026. Merges and **replaces** two plans written the same day:
 `0409-purchasing-deliveries-transfers-plan.md` (PLAN-1: §A–§G) and
@@ -23,12 +22,32 @@ Plan files are named `ddmm-<name>-plan.md` from now on.
 `Clarifications` sections at the end are decision history and explain *why*, not *where we are*.
 Update THIS section as work moves, and nowhere else.
 
-Last updated: **5 Sep 2026**, session 3.
+Last updated: **7 Sep 2026**, session 4 — the build is finished.
 
 ### 1. Where the code is
 
-**Branch: `chore/remove-type-ui-moving-level-customer-add`**, cut from the reference branch
-`feat/notifications-and-settings-rbac`. **Nothing on `main`.**
+**SEVEN branches. Six stacked one per phase, then one branch for everything left. Nothing on
+`main`. The owner opens and merges every PR — Claude commits and pushes only.**
+
+| Branch | Cut from | Carries |
+|---|---|---|
+| `chore/remove-type-ui-moving-level-customer-add` | `feat/notifications-and-settings-rbac` | R4 = P2 + P3 — **pushed** |
+| `feat/activity-log-counter-and-scope-columns` | the branch above | P1 — **pushed** |
+| `feat/stock-ledger-integrity` | the branch above | P1b — **pushed** |
+| `feat/zoho-fetch-window` | the branch above | P4 — **pushed** |
+| `feat/stock-audit-scope` | the branch above | P6 — **pushed** |
+| `feat/inbound-receiving` | the branch above | P7 — **pushed** |
+| `feat/purchasing-transfers-p5-p15` | the branch above | **P5 + P8 + P9 + P10a + P10b + the mark-sent fix + P13 + P12a/b/c + P14 + P15 — everything left** — one commit per phase, except P10 and P12 which were split |
+
+**Branch rule confirmed by the owner, 5 Sep:** keep stacking each phase on the previous
+phase's tip, **and ask before creating each branch**. Claude cut P1 and P1b on its own
+judgement before being asked to stop doing that.
+
+**Why P1 stacks on P3 instead of being cut from the reference branch:** `bch-local` already
+has MIG-1b applied. A branch without that folder puts Prisma in drift the moment a migration
+command runs, and the fix would be resetting the one database holding the 5,739 products and
+the only copy of the Zoho credentials. Stacking is what the plan's "cut after the previous
+phase merged" means while the previous phase has not merged yet. Merge in branch order.
 
 | Commit | Contains |
 |---|---|
@@ -36,6 +55,14 @@ Last updated: **5 Sep 2026**, session 3.
 | `61e03cd` | perf — `turbopack.root` pinned (unrelated to R4; separate so it can be dropped) |
 | `730ad5a` | **P2** — screens stop reading product type, `movingLevel`, customer quick-add (15 files) |
 | `1287226` | **P3** — the migration folder + 26 files; `.gitignore` gains `backups/` |
+| `8e4e2cf` | docs — RESUME updated for P3 |
+| `2ccbe10` | **P1** — MIG-1a, `ActivityLog`, `counter`, `PurchaseOrderSend`, both helpers, `db:snapshot`, three Restrict-FK delete-path fixes (12 files) |
+| `a156c13` | docs — RESUME updated for P1 |
+| `be0b6e1` | **P1b** — the stock ledger fix, `deductFromStore`/`deductAnywhere`/`addAnywhere`, `storeIdForInvoice()`, `/stores` invoice prefix (13 files) |
+| `109edc4` | docs — RESUME updated for P1b |
+| `97d2759` | **P4** — Zoho window + failures visible + inline panel; `date-window.ts`, `zoho-fetch-panel.tsx`, `inbound/sequence.ts`, RBAC `fetch` cleanup (20 files) |
+| `38d7176` | docs — RESUME updated for P4 |
+| `c1cb3fe` | **P6** — audit scope + assignee gates, `getStoreQtyMap`, `my-stock-audits.tsx`, the global-`currentStock` fix (11 files) |
 
 ### 2. ⚠ Which database — read before running any Prisma command
 
@@ -77,10 +104,751 @@ production deploy gap that justified splitting them does not exist).
 **R13 is complete** and shipped ahead of P1, so **P1 is smaller than §7 describes** — it no longer
 builds the Vercel wiring.
 
-Two behaviour changes for the PR body:
+Two behaviour changes for the R4 PR body:
 1. **Non-editors lose the pencil on `/stock/[id]`** — `canEditType` was hardcoded `true`; product
    type was the only field it unlocked, so the button now follows `canEdit("stock")`.
 2. **`products/[id]` PATCH is status-only** — a body without `status` now returns 400.
+
+**P1 is complete** (MIG-1a + helpers), on its own branch.
+
+- Migration `20260905170804_add_activity_log_counter_and_scope_columns` applied to `bch-local`.
+  **Additive except one statement.** `ActivityLog` replaces `OpsActivityLog`; the `DROP TABLE`
+  is safe by measurement, not assumption — `SELECT count(*)` returned **0**, its only writer
+  (`api/ops-activity-logs/route.ts`) is deleted in the same commit, and no client called it
+  (`/activity` reads `/api/activity`). **5,739 products intact.**
+- Also created: `counter`, `PurchaseOrderSend`, five enums, the two `TransferOrderStatus`
+  values, and the nullable scope / lane / send / brand-stock columns from §4 MIG-1a.
+- Two hand-written backfills below the generated SQL, both no-ops on `bch-local` (0 rows in
+  both tables) and both written for the databases where they are not: the `StockCount.location`
+  → `warehouseId`/`storeId` resolution, and the 4→5 digit `poNumber` normalisation.
+- `src/lib/activity-log.ts` and `src/lib/sequence.ts` created. `db:snapshot` built and **proved
+  by running it** — `pg_restore -l` lists the new tables in the dump.
+- `transfers/page.tsx` status union, `StatusFilter`, badge icon and row accent extended to
+  `IN_TRANSIT`/`RECEIVED`. `status-colors.ts` already knew both.
+
+**Three latent bugs found and fixed in P1** — all the same shape: a new `Restrict` FK made a
+delete that used to return a readable sentence start failing on a raw constraint string.
+1. `api/categories/[id]/merge` deletes the source category **inside a transaction**. With
+   `InboundShipment.categoryId` Restrict it would abort the merge; it now moves shipments to
+   the target alongside the products.
+2. `api/categories/[id]` DELETE now counts `inboundShipments` as a blocker.
+3. `api/stores/[id]` DELETE now counts `deliveries` + `stockCounts`; `api/warehouses/[id]`
+   DELETE now counts `stockCounts` + both transfer-header lanes.
+
+**P1b is complete** (R12 — the stock ledger fix), on its own branch. No migration: MIG-1a
+already added `Delivery.storeId` and `Store.invoicePrefix`.
+
+**Proven, not asserted.** The plan's own acceptance scenario was run against `bch-local`
+inside a transaction that rolls back, importing the real helper:
+
+```
+start                 : currentStock=10 StockLevel=10   PASS
+after selling 3       : currentStock=7  StockLevel=7    PASS   <- ledger moved, not just cache
+after receiving 5     : currentStock=12 StockLevel=12   PASS   <- THE FIX
+oversell refused      : Insufficient stock ... Available: 12, Needed: 9999.
+after refused oversell: currentStock=12 StockLevel=12   PASS   <- no partial deduction
+
+--- reproducing the OLD code path (cache-only write) ---
+old: after selling 3  : currentStock=7  StockLevel=10
+old: after receiving 5: currentStock=15 StockLevel=15   <- 15, not 12. This is R12.
+```
+
+The scaffolding was deleted afterwards; the repo has no test infrastructure and the plan did
+not ask for a committed script. **If this should become a permanent regression test, say so** —
+a silent return of this bug is exactly the risk, and nothing currently guards it.
+
+- New in `stock-location.ts`: `deductFromStore` (store-scoped, cascades across the store's
+  warehouses in `sortOrder`), `deductAnywhere` and `addAnywhere` (reversals, which have no
+  recorded warehouse), over one shared core. **The up-front sum is load-bearing**:
+  `adjustWarehouseQty` clamps at zero, so deducting 3 from a warehouse holding 0 would write 0
+  and report success — the original bug in a new costume.
+- New `src/lib/deliveries/zoho-invoice.ts`: `storeIdForInvoice()` (pure, longest-prefix wins,
+  case-insensitive) and `resolveStoreIdOrPrimary()`, which falls back to the primary store and
+  **logs a warning every time**, so a guessed attribution is visible.
+- Fixed: `deliveries/[id]`, `deliveries/batch`, `inventory/outwards` (+ optional `storeId` on
+  `outwardSchema`), `inbound/[id]` DELETE, `stock-reset` (zeroes `StockLevel` too, or the next
+  recompute undid the reset), `inventory/cleanup`.
+- `/stores` gains the **invoice prefix** field (owner's option B): `storeSchema`, both routes
+  (each naming the other store on a 409 rather than leaking a raw P2002), the form input, and
+  an amber **"No invoice prefix"** badge on any store still missing one — because a blank
+  prefix silently sends that store's sales to the primary store. `""` normalises to null; a
+  stored empty string would prefix-match every invoice. The GET `select:` had to be extended
+  too, or every row would have rendered the warning badge regardless.
+
+**One site the plan's table MISSED**, found by the phase's own proof grep:
+`inventory/inwards/verify/route.ts:38`. It is the same bug mirrored — an INWARD writing only
+the cache, so the next recompute made verified stock *disappear* rather than reappear. Fixed
+the same way, and it now accepts an optional `warehouseId`.
+
+**P4 is complete** (R1 — the Zoho fetch window and the deliveries panel). No migration:
+MIG-1a already added `IntegrationConfig.lastAuthErrorAt`.
+
+All five root causes in §7 P4's table are closed:
+
+| # | Was | Now |
+|---|---|---|
+| 5 | Client did IST-local arithmetic then `toISOString()`; server used its own UTC date. "3 days" on 3 Sep at 02:00 IST fetched 30 Aug–2 Sep — an extra day at the front, today's bills missing | `src/lib/zoho/date-window.ts`, pure, `Date.UTC` only. **12 spot-checks pass**, including the plan's four. The FY floor is DERIVED, not the literal `"2026-04-01"` that goes wrong next 1 April |
+| 1 | Disconnected Zoho → HTTP 200 `invoicesNew: 0` → "No new invoices found" | **409 with a sentence.** `lastAuthErrorAt` separates "never connected" from "token refused" |
+| 2 | `init` created the `running` SyncLog row BEFORE the source check, so a refusal wedged the next attempt for 2 minutes | Source check moved first; `closeRunningSync()` on every early exit |
+| 3 | `if (previewRes.success)` with **no else** — the panel stuck in "fetching", button grey, nothing said | Every branch sets state; `apiFetch` throws, so there is no silent path |
+| 4 | Provider exception swallowed into `errors[]` beside `success: true`, which no client read | **502 `Zoho <source>: <message>`** |
+
+Also: already-imported records moved out of `errors[]` into `skipped` (§5.2) — a normal
+re-fetch no longer reports itself as a partial failure; the inbound screen renders them as a
+neutral card linking to each shipment. `zohoPullSchema` replaces the bare cast that silently
+dropped `days` and `toDate`. `apiFetch` gained `timeoutMs` + `ApiError.isTimeout`; the four
+screens use it and the hand-rolled `fetchWithTimeout` on `/inbound` is gone. Import runs in
+chunks of 25 with the un-imported rows left selected on a mid-chunk failure.
+
+**The `BCC/` skip is gone from all three routes** (O8): `trigger-pull`, `search-zoho`,
+`import-zoho`. A store name hardcoded in three filters had made a store with its own GSTIN
+invisible — its invoices never imported, so its stock never moved. Invoices now carry
+`storeId`, resolved from `Store.invoicePrefix`, and unmatched ones are counted rather than
+dropped. `deliveryFieldsFromInvoiceDetail` is shared, so the review-flow import finally gets
+the address, area, pincode and salesperson that only the single-invoice path used to read.
+
+**`pull-review/approve`:** picks the client by the preview's `provider` (a Zakya-only setup
+got no detail at all before, because only `getBooks()` was tried); the silent dedup `continue`
+became `results.skipped++` **and** marks the preview APPROVED — it used to leave it PENDING
+forever, so the pull could never leave PARTIAL. Both `IB-` allocators now use `nextSequence`.
+
+**Permissions (Option B), server and client flipped in one commit:** `search-zoho` →
+`zoho.fetch`, `import-zoho` → `zoho.approve` (it WRITES Delivery rows and was gated on a
+read-shaped grant), four screens → `canFetch("zoho")`, and the Import button gained the client
+gate it never had.
+
+**⚠ The plan expected FOUR orphaned `fetch` actions; there were SIX.** `vendors.fetch` and
+`brand_ledger.fetch` are orphaned too — proven by grep: no route guards any module `fetch`
+except `zoho`, and no client reads one. All six are removed under the plan's own rule
+("delete the action when no route guards on it"); `zoho.fetch` is the only survivor.
+**`npm run db:seed:rbac` after deploy** or the six stay grantable and keep implying access.
+
+**P7 is complete** (R3 — inbound per-line receiving, saved category, Report Issue). No
+migration: MIG-1a already added `InboundShipment.categoryId`.
+
+R3's three complaints, all closed:
+
+| Was | Now |
+|---|---|
+| **"Report Issue never creates anything."** Three compounding causes: the button is gated on `inbound.edit` but the endpoint demanded `vendor_issues.create`, which no seeded role holds (403); a shipment with no Zoho bill sent no `vendorId` (400); so nothing was ever written | New `api/inbound/[id]/issues`, guarded on **`inbound.edit`** — reporting what arrived is part of receiving. The vendor is resolved SERVER-SIDE (bill → brand name → create), so the client cannot omit it. Creates a real `VendorIssue`, visible on `/vendor-issues` |
+| **The Cycles/Spares/Accessories choice lived in one phone's `localStorage`** (`inbound-shiptype-<id>`), so the shipment read as uncategorised to everyone else and lost the value when that browser cleared | A `categoryId` column, set through a searchable picker over the real Category tree, and **receiving is refused until it is set**. Refused to change once any line is received |
+| **Receiving was Mark All / Partial / Undo** | One blue `Receive ×N` per line behind a confirm sheet, then green `Received ×N ✓`. The shipment finishes itself |
+
+**FIVE latent bugs found and fixed:**
+
+1. **A double-tap doubled the stock.** `wasDelivered` was read OUTSIDE the transaction, so two
+   taps both saw `false` and both added the quantity. Now an idempotent claim —
+   `updateMany({ where: { id, isDelivered: false } })` — so the database decides and exactly
+   one caller wins.
+2. **The per-line route had NO approval gate.** Stock could be received into a shipment nobody
+   had approved, leaving `approvedAt`/`approvedBy` null with no authoriser on record.
+3. **"Undo" undid the label, not the stock.** `handleRevert` set the shipment back to
+   IN_TRANSIT without touching a line item or removing anything — the shipment then read as
+   unreceived while its stock sat on the shelves. Gone with `api/inbound/[id]/status`.
+4. **Mark All wrote a status over untouched lines**, so a shipment could read DELIVERED with
+   every line unreceived. State is derived from the lines now, not asserted over them.
+5. **Two `ISS-` allocators disagreed** — a read-then-write with a string sort. Both now share
+   `issSeedSql` + `nextSequence`, and validation moved BEFORE allocation so a rejection does
+   not burn a number.
+
+`finaliseDelivered` claims the DELIVERED transition the same way. That claim count is the
+idempotency key and it is load-bearing: with receiving per line, two people finishing the last
+two lines at once would otherwise both fire the side effects — **two notifications and two
+purchase bills pushed to Zoho Books for one shipment**. `scheduleDeliveredSideEffects` runs
+strictly AFTER the transaction resolves, because `after()` fires even when the response throws
+and a rollback cannot recall a bill from someone else's accounts. It also skips the push when
+`zohoBillId` is set — a shipment that came FROM a Books bill must not create a second one.
+
+**⚠ A BEHAVIOUR CHANGE THE PR MUST NAME:** the Zoho Books push was INLINE in the request and is
+now deferred. A push failure no longer fails the response — it is logged and the receipt still
+succeeds. The right trade (the stock is in the building either way), but nobody sees a Zoho
+error at the goods desk any more.
+
+**Two corrections to the plan's letter:** it says `finaliseDelivered` sets pre-bookings to
+`READY`, but that value is not in `PreBookingStatus` — the real transition is `FULFILLED` with
+`fulfilledAt`, matching the route being replaced. And `api/categories` is gated on `stock.view`,
+so **a receiving role without it gets an empty category picker and cannot receive at all** —
+check that role's grants on `/team/permissions` before release.
+
+Also: new `src/components/ui/searchable-select.tsx` (no combobox existed; the pattern was
+hand-rolled inline in `vendor-issues/new`). The issue modal now shows its error INSIDE itself —
+the page-level banner rendered behind the open modal, so a failed report looked like a dead
+button. And the confirmation no longer says "Sravan will be notified": nothing notifies anyone.
+
+**P6 is complete** (R2 — stock audit scope and assignee). No migration: MIG-1a already added
+`StockCount.storeId`/`warehouseId` and the indexes.
+
+R2's two complaints, both closed:
+
+| Was | Now |
+|---|---|
+| **"An assigned audit shows an empty page."** Two separate causes: the item list was wrapped in `status !== "PENDING"`, so a new audit opened on a title and a due date and nothing else; and Start was gated on `!isAdmin`, so anyone holding `stock.edit` — the owner — could not begin their own audit | Rows render read-only until Start. Every start/count/complete gate keys off **`isAssignee`**, not a permission. Holding `approve` no longer takes anything away; the only thing it still cannot do is approve your own count |
+| **Scoped by free-text `location` + a product type** | `storeId` + optional `warehouseId`, validated (the warehouse must belong to the store). Two-step picker: store chips → "Whole store" \| one chip per warehouse, with the verify-only caption from §5.1 |
+
+**THREE LATENT BUGS found on the way** — the first is the one §5.1 predicted:
+
+1. **`applyToStock` wrote `Product.currentStock` GLOBALLY.** It resolved its target *inside*
+   the transaction via `warehouseByCode(existing.location)` — root client, module cache,
+   free-text code — and when that returned null it set `isLocCount = false`, at which point
+   both branches overwrote the product's total across every store, while the comment directly
+   above them claimed the count "is NOT applied to stock". Resolved before the transaction
+   now, and a whole-store audit gets the §5.1 400 instead of a silent global write.
+   `applyToStock` + a nullable warehouse collapsed into ONE `correctionTarget`, so "correct
+   stock, but nowhere" stopped being a representable state.
+2. **Stale and Refresh compared against the global `currentStock`.** On a warehouse audit
+   every line looked stale as soon as any *other* warehouse moved, and Refresh then
+   overwrote `systemQty` with the cross-store sum — manufacturing a variance on every row.
+   Both now use the scoped quantity; `currentStock` survives only as the legacy fallback.
+3. **`countNo` was a read-then-write with a STRING sort** — `SC-202609-0002` outranks
+   `SC-202609-00010`. Now `nextSequence` inside the transaction, with `logActivity`.
+
+Also: `getStoreQtyMap` added beside `getWarehouseQtyMap`; the **`0 ✓` pill** on both row
+renderers (baseline has ended, so Complete needs every item counted, and neither − nor +
+can express "I looked and there are none"); Complete's `confirm()` replaced by an inline
+message that points at that pill; the delete icon **gained a permission gate — it had none**;
+`/stock-audit` moved to `apiTry` with an error banner (its `.catch(() => {})` rendered "No
+stock audits found" for an expired session); a new **`MyStockAudits`** dashboard widget
+("Your stock audits" via `?mine=1`, plus "Awaiting your approval" for approvers), which
+renders nothing when there is nothing to do; and the detail screen's auto-save now reports
+failure — it was `if (data.success)` with no else, so a rejected auto-save left the counter
+believing their numbers were stored.
+
+**The panel is INLINE** (R1, "no popup modal"). `zoho-fetch-panel.tsx` is split out as a pure
+presentational picker; `zoho-import-flow.tsx` keeps the request state and renders trigger →
+panel → progress → error → summary → results as siblings. The `BottomSheetModal` wrapper,
+`sheetOpen`, `handleOpenSheet/CloseSheet` and the two-tab bar are gone from this component;
+the two tabs became one segmented toggle over a single panel.
+
+That last part removed a real defect, not just markup: each tab carried **its own copy** of
+the error banner, the progress strip and the result card, so a message could be sitting on the
+tab nobody was looking at. There is now one of each. Four near-identical progress strips
+collapsed into one, and both banners gained a **retry that re-runs the request** — they only
+offered "dismiss" before.
+
+`deliveries/page.tsx`'s header is `flex flex-wrap … gap-y-2` and that is load-bearing: the
+panel, banners and result cards are `w-full` flex items, so each wraps onto its own line under
+the title instead of being squeezed into the header row. `BottomSheetModal` itself stays — the
+page's delete and pre-book sheets still use it, as §7 P4 requires.
+
+**⚠ One limitation, deliberately not solved here.** Undoing an inbound receipt cannot deduct
+from *the warehouse the receipt went into*, as §7 P1b specifies, because nothing records it:
+`inbound/[id]/route.ts` takes the warehouse from the request body at receive time and
+`InboundLineItem` has no column for it. Storing it is a schema change and P1b carries no
+migration. `deductAnywhere` reverses against the rows that exist, largest first — exactly
+equivalent today, when each store has one warehouse. **The precise fix is
+`InboundLineItem.warehouseId`, written at receive time; it needs a migration and a phase.**
+
+**P5 is complete** (R11's second half — the activity feed). No migration: P1 already created
+`ActivityLog`. R11 is now closed.
+
+P1 built the table and `logActivity`, and seven routes write to it. **Nothing read it** —
+`/api/activity` still inferred the whole feed from timestamp columns on seven other tables. P5
+makes the log the eighth source and fixes the day it is all filed under.
+
+| Was | Now |
+|---|---|
+| The day window was `setHours(0,0,0,0)` — midnight in the SERVER's zone. Vercel is UTC, so the day ran 05:30 IST to 05:30 IST and everything done between midnight and dawn filed under yesterday | `istDayBounds(dateStr?)` in `services/timezone.ts`, returning the day's name with its two UTC bounds |
+| The response echoed `dayStart.toISOString()`, i.e. the same wrong day — so the screen agreed with itself and the gap was invisible from the UI | Returns the window's own IST day name |
+| The log's modules had no feed category | `AUDIT · ISSUE · ZOHO · MASTER_DATA` added to the `Activity` union and `CATEGORY_CONFIG` in **both** activity pages, and to `catEmoji` in the dashboard's WhatsApp report — which lives in `(dashboard)/page.tsx`, not in either activity page, and printed "• MASTER_DATA: 3" until it was told |
+| Rows showed a bare time in the VIEWER's zone | `formatIST` — "3 Sep, 11:42 pm", and carrying the day, because a row near either midnight is otherwise unplaceable |
+| `/api/team` and `/api/activity` were raw `fetch().then(r => r.json())` with `.catch(() => {})` | `apiTry`, plus an error banner with Retry on both pages |
+| The dashboard computed "today" as `new Date().toISOString()` in **six** places | `getTodayIST()` in all six |
+
+**Proven against `bch-local`**, in a transaction that rolls back, with a row written at 02:00 IST
+on 4 Sep (= 20:30 UTC on 3 Sep):
+
+```
+ask for 4 Sep -> NEW window finds it : 1   <- the fix
+ask for 4 Sep -> OLD window finds it : 0   <- the bug, reproduced alongside
+ask for 3 Sep -> NEW window leaks it : 0
+response date NEW = 2026-09-04            OLD = 2026-09-04  <- echoed back, so the UI agreed with itself
+```
+
+`istDayBounds` itself: **10/10** cases, including 29 Feb 2028, and the malformed ones
+(`2026-02-31`, `2026-13-01`, `2026-9-3`, `garbage`) which all fall back to today rather than
+reaching Prisma as an Invalid Date.
+
+**A trap worth naming.** `src/lib/analytics/time.ts` already exports `calendarDayRange(date)`,
+which looks exactly like the helper this phase needed. It is not: `toDateColumn` builds
+`T00:00:00.000Z`, so it is a **UTC**-midnight range for Postgres `@db.Date` columns, and against a
+real timestamp column it is wrong by 5h30m in a way that reads as correct. The comment on
+`istDayBounds` says so, because the next person will find `calendarDayRange` first.
+
+**Dedupe, and why it covers phases that have not happened yet.** Six of the seven inferred
+sources describe events the log now records, so without suppression each shows twice. Today only
+inbound approved/delivered actually collide (P7 made those routes log). The guard is also wired
+for `PurchaseOrder` created/approved and `TransferOrder` created/approved|rejected, which
+**P9 and P14 will start writing** — the duplicate would otherwise appear the day those phases
+land, in a file neither of them touches.
+
+**Two judgement calls the PR should name:**
+1. **An unchanged save writes no log row.** Both edit sheets submit every field they render, so
+   keying off `Object.keys(body)` would file "changed name, description, parent" against a save
+   where nothing moved. Changed fields are computed against the stored row instead.
+2. **The customer row carries the customer's NAME but never a field VALUE.** §5.3 says field
+   names only, and the values stay out — the feed is readable by anyone holding `activity.view`,
+   a wider audience than `customers.view`, so an old and new phone number there would publish
+   contact details to people with no grant to read them. The name is the deliberate exception:
+   the feed already prints it on every delivery row, so it discloses nothing new, and without it
+   the row reads "someone changed a customer's phone" and names no customer.
+
+**Unknown modules are rendered, not dropped** — with a humanised label and one `log.warn` naming
+them. A module missing from the feed's map is someone's work going invisible, and the warn is how
+that gets found by reading logs rather than by a person noticing their day looks empty.
+
+**P8 is complete** (R5 — one-tap reorder on `/stock`, and the `₹NaN` search fix). No
+migration: `reorderVendorId` and its index have been in the schema since MIG-1a
+(schema.prisma:514-515, :538) — only Zod and the UI were missing.
+
+**Researched before it was built**, by four parallel read-only agents (owner asked for this on
+6 Sep). That was the right call: **the plan's P8 section was substantially stale**, and two of
+its instructions would have produced a bug.
+
+| The plan said | The code said |
+|---|---|
+| Lift the "focus trap" from `filter-sheet.tsx` | **There is no focus trap** — not in that file, not anywhere; no Tab handler exists in the repo. And `filter-sheet` is a right-hand DRAWER used by **12 screens** |
+| "Two sheet patterns in two phases was the earlier draft's mistake" | **15 overlay sites**, 4 named components, 3 layout shapes, 2 z-tiers already exist |
+| Use a vendor `<select>` | The plan predates P7's `SearchableSelect`, which was built for this (its `hint` prop is documented as "vendor code, city") |
+| `userCan("cost_price","view")` | Not callable — the signature is `userCan(userId, module, action)`, and the search route discarded `requireFeature`'s return |
+| `costPrice` may be a `Decimal` whose serialisation causes the NaN | It is `Float` (schema.prisma:491). The NaN had exactly one cause: the field was absent from the select |
+| Nine low-stock copies at listed lines | **14 copies**, and every line number was stale. It missed the three `suggestedOrderQty` copies and two `isLowStock` sites |
+
+**Decisions taken with the owner, 6 Sep:**
+
+1. **`PUT /api/products/[id]/reorder` is guarded on `reorder.edit`, not `stock.edit`** —
+   `api/reorder/update-levels` already writes the same three columns behind it, and one column
+   behind two permissions depending on the URL is not a permission. **Consequence to grant
+   before release: the `/stock` Reorder button is gated on `canEdit("reorder")`, so a role
+   holding only `stock.edit` does not see it.** Gating the button and the route differently is
+   the exact bug P7 had to fix on inbound.
+2. **"Low stock" keeps its two meanings, documented rather than unified.** `api/dashboard/stats`
+   counts `currentStock - reservedStock`; everything else counts on hand. So the dashboard tile
+   and `/reorder` disagree whenever anything is reserved. Fixing that is a decision about what
+   the shop means by "low" and it moves a number people already read — filed, not fixed.
+3. **No shared sheet primitive.** `reorder-sheet.tsx` reuses the shape
+   `customer-edit-sheet.tsx` already proved, and adds the two things it lacks (`pb-safe`, focus
+   return). Collapsing the 15 overlays is its own phase.
+
+**The unification is proven behaviour-preserving.** `isLowStock` and `suggestedOrderQty`
+replaced 14 inline copies; **26,784 assertions over 4,464 input combinations found zero
+differences** (coverage: 1,860 low, 1,860 OK, 744 out-of-stock). Note the first run, over the
+real 5,739 products, was worthless as evidence — **every product in `bch-local` has
+`reorderLevel = 0` and `currentStock = 0`**, so it exercised one degenerate case. The matrix is
+the proof.
+
+**Six copies were deliberately NOT converted**, each commented at its own site and listed in
+`src/lib/reorder.ts`'s header: the notifier's downward-CROSSING detector
+(`lib/notify/stock.ts:48` — replacing it re-notifies on every later sale), `desktop/stock`'s
+hardcoded `<= 5`, the two brand-stock shortfalls (floor 0, and 0 is a "not selected" SIGNAL),
+`brand-stock/[id]`'s nullable snapshot column, and four raw-SQL copies a TypeScript helper
+cannot reach.
+
+**FOUR bugs found and fixed on the way, none of them in the plan:**
+
+1. **The sheet would have shown the wrong numbers and then erased them.** `api/products` (list)
+   selected neither `reorderQty` nor `reorderVendorId`, so the sheet — which opens pre-filled
+   from the row — would have shown 0 and no vendor for a product that had both, and saving
+   would have written those zeros back.
+2. **A side door.** Adding `reorderVendorId` to `productSchema` made it writable through
+   `PUT /api/products/[id]`, which is guarded on `stock.edit` — bypassing the `reorder.edit`
+   decision entirely. That route now demands `reorder.edit` and validates the vendor when the
+   field is present.
+3. **A cleared vendor would not clear.** `/stock/[id]`'s save drops empty strings before
+   sending — right for text fields, wrong for "No vendor". Sent as an explicit null now.
+4. **A cost-price leak.** `api/reorder/route.ts:36` selected `costPrice` unconditionally behind
+   only `reorder.view`, so anyone who could open `/reorder` could read every product's cost —
+   past the `cost_price` module that exists to gate exactly that.
+
+**`api/reorder/update-levels` had no Zod, no logger and no batch cap.** Its `Number(x) || 0`
+also turned a typo into 0, and 0 switches low-stock detection OFF for that product
+(`isLowStock` requires `reorderLevel > 0`). All three added.
+
+**`api/products/bulk` moved `stock.create` → `stock.edit`**, and additionally requires
+`reorder.edit` **only when the body carries `reorderVendorId`** — so the four original bulk
+actions keep working on the grants roles already hold. Its "nothing to update" guard had to
+change too, or a vendor-only body 400s; and `reorderVendorId` is tested with `!== undefined`
+rather than truthiness, because null is a real request there ("clear the vendor on these 40").
+
+**`₹NaN` was worse than reported: five render sites**, not one — the dropdown row before the
+item is even added, the line total, and all three of subtotal, GST and grand total. The two
+missing fields also flowed into the line item as `unitPrice`/`gstRate`, so the PO was built on
+them. `ProductOption` declared both as non-optional `number`, which is why nothing ever
+complained; they are optional now, because `costPrice` is genuinely absent for a caller without
+`cost_price.view`.
+
+**Deliberately not changed:** `RowBtn` is `min-h-[32px]`, under the 44px rule that holds in 158
+places. The Reorder button inherits it to match its three siblings; raising one of four would
+look broken. The sheet's own controls are 44px.
+
+**P9 is complete** (R8 — the PO state machine, numbers, duplicates and approval). No
+migration: every column it writes has been in the schema since MIG-1a.
+
+**Researched first, by four parallel agents.** As with P8 the plan's own section was
+substantially wrong, and this time two of its instructions would not even have run.
+
+| The plan said | The code said |
+|---|---|
+| enum `PurchaseOrderStatus` | It is **`POStatus`** (schema.prisma:132-140). No such enum exists |
+| `nextSequence(tx, "PO", 5)` | **Would not compile** — `seedSql` is a required 4th parameter, and `src/lib/purchase-orders/` did not exist |
+| `SELECT pg_advisory_xact_lock(...)` | Must be `$executeRaw`; the function returns `void` and nothing here has ever deserialised one |
+| The xact lock is needed because of the 6543 pgbouncer pooler | Right conclusion, **wrong reason**. `.env` points at `localhost:5432`; the load-bearing reason is Prisma's OWN pool (`src/lib/db.ts`), which leaks a session lock on every topology. As written, the PR note the plan asks to preserve would have taught the next reader that session locks are fine off the pooler |
+| (implied) no PO transition logic exists | **Three** ad-hoc guards existed, and they disagreed |
+| `errorResponse(msg, 409, {conflicts})` | Not possible — two parameters, on a function every route in the app uses |
+| "P9 adds `ApiError.data`" | Necessary but **not sufficient**: four changes, or the conflicts array is dropped inside `api-client.ts` |
+
+**Five live defects P9 repairs, none of them in the plan's stated scope:**
+
+1. **`brand-stock/uploads/[id]/generate-po` has NEVER worked.** It passed `hsnCode` into a
+   `PurchaseOrderItem` create and that column does not exist, so every valid request threw and
+   returned 500. It survived because the objects came out of a `.map()` rather than a fresh
+   literal, so TypeScript's excess-property check never fired — clean `tsc`, clean build,
+   guaranteed runtime failure. Its numbering was broken too: string-sorted `poNumber`, so once
+   `PO-00010` existed it read `PO-0002` as the maximum and would have re-issued a used number.
+2. **`PUT` could set `APPROVED` directly**, bypassing the approve route entirely: no
+   `purchase_orders.approve` grant needed, and `approvedById`/`approvedAt` left null — an
+   approved purchase order with no authoriser on record.
+3. **Every other transition was free.** `RECEIVED → DRAFT`, `CANCELLED → APPROVED` and
+   `DRAFT → RECEIVED` all succeeded.
+4. **Approve fired on DRAFT**, so nothing was ever approved FROM the pending state — the review
+   step did not exist in practice.
+5. **A ₹0 purchase order was creatable end to end** — no client guard, and
+   `unitPrice: z.number().min(0)` accepts 0. P12 would have emailed that PDF to the vendor.
+
+Plus: the whole `purchase-orders` tree had **zero client permission checks**, and both action
+handlers used bare `fetch` with no `!success` branch — so a 403 did nothing at all and the
+error banner was unreachable code. `GET` passed an unvalidated `status` param to Prisma via
+`as never`. And `sentAt` / `sentById` / `sentVia` / `sendCount` had existed since MIG-1a and
+were written by **nothing**, so a PO could read SENT_TO_VENDOR with every send column null.
+
+**A bug the proof caught before it shipped.** The first run of the advisory-lock statement
+failed with `42883: function pg_advisory_xact_lock(bigint, integer) does not exist`. Prisma
+binds a JS number as **bigint**, so the namespace argument needs an explicit `::int4` — without
+it **every purchase order creation would have been a 500**, which is exactly the failure mode of
+the route this phase is repairing. Reasoning about the SQL literal misses what the parameter
+binder does to it; only running it finds this.
+
+**Proven against Postgres** (`bch-local`; the proof counter row was removed afterwards):
+
+```
+pg_advisory_xact_lock(::int4, hashtext(text)) executes via $executeRaw   PASS
+uncast namespace fails with 42883 — the cast is load-bearing            PASS
+same key acquired 3x in sequence, no hang — released by COMMIT          PASS
+no advisory locks left held                                             PASS
+SAME vendor serialises:              A-in A-out B-in                    PASS
+DIFFERENT vendors run concurrently:  X-in Y-in X-out                    PASS
+the SHIPPED seed query runs (read from sequence.ts, not retyped)        PASS
+PO-0042 and PO-00042 both read as 42 — legacy padding collapses         PASS
+20 concurrent allocations gave 20 DISTINCT numbers                      PASS
+```
+
+The transition table was checked exhaustively: **no self-transitions, every target a real
+status, RECEIVED and CANCELLED the only terminal states, cancellable from all five non-terminal
+states**, and the whole happy path walkable — `DRAFT → PENDING_APPROVAL` (PUT), `→ APPROVED`
+(approve route), `→ SENT_TO_VENDOR` (mark-sent), `→ PARTIALLY_RECEIVED → RECEIVED` (PUT).
+APPROVED and SENT_TO_VENDOR are deliberately **unreachable by PUT**, so each keeps its own
+permission and its own side effects.
+
+**Decisions taken with the owner, 6 Sep:**
+
+1. **₹0 lines: reject on `/purchase-orders/new`, SKIP and report on the brand-stock sheet.**
+   `brandPrice || costPrice || 0` legitimately yields 0 when a sheet leaves a price cell blank,
+   and failing forty rows because three had no price would make that screen unusable. On the
+   manual screen a blank rate is a typo, so it is refused. One creator, one option:
+   `onPricelessLine: "reject" | "skip"`.
+2. **Brand-stock POs now land in PENDING_APPROVAL**, like every other route to a vendor. They
+   used to land in DRAFT, so the approval gate could be sidestepped by ordering from a sheet.
+
+**A new route, `POST /[id]/mark-sent`.** Not scope creep: once the state machine refuses
+`SENT_TO_VENDOR` on the PUT, the existing Mark Sent button would simply stop working. It also
+writes the five send columns and a `PurchaseOrderSend` row, which the bare status write never
+did.
+
+**⚠ Two things the PR must name:**
+
+- **"Send via WA" now records the send.** It was a bare `wa.me` link, so a PO sent that way
+  stayed APPROVED for ever.
+- **One known degradation.** `prisma migrate deploy` runs against live traffic; an
+  `ALTER TABLE "PurchaseOrder"` takes ACCESS EXCLUSIVE, and a PO creation blocked behind it now
+  holds the vendor advisory lock while it waits, so other creates for that vendor queue behind
+  it and hit the 15 s timeout as P2028. Before P9 they would have failed independently.
+
+**Deliberately NOT done:** no index on `(vendorId, status)` for the duplicate check — separate
+indexes on each already exist and PO volume is tiny, and adding one would make this MIG-3 and
+force a snapshot before merge. And **no upload → PO link**: re-running a brand sheet can still
+duplicate once the first PO is received or cancelled, because nothing ties an upload to its PO
+(no FK either way, and no `BrandStockUploadStatus` value meaning "ordered"). Both are filed,
+not fixed.
+
+**P10a is complete** (R6, first half — vendor resolution, the vendor-brand editor, and the
+server side of deriving a PO's vendor). No migration. **P10b — the per-vendor sections on
+`/purchase-orders/new` — is the next commit** (owner, 6 Sep: split P10 in two).
+
+**Researched first, by four parallel agents**, and the plan's section was wrong again in ways
+that would have shipped defects:
+
+| The plan said | The code said |
+|---|---|
+| `BrandVendor` is at `schema.prisma:2447-2461` and is "read by nothing today" | It is at **`2738-2752`**, and it has **four readers** (both ledger routes, both ledger screens — `/ledger` already renders brand chips). What it has is **no WRITER**, which is the part that mattered |
+| A vendor-scoped `deleteMany + createMany` maintains `isPrimary` | **It cannot.** "Primary" is an invariant across vendors, not within one: marking brand X primary on vendor A must clear it on vendor B, and a vendor-scoped transaction never sees vendor B's row. There is no DB constraint either — no partial unique index |
+| Add a vendor `OR` to the product search | The top-level `OR` is **already occupied** by the text search. A second `OR` key silently REPLACES the first in JavaScript — it compiles, returns rows, and quietly drops the text match. It must be `AND: [{OR},{OR}]` |
+| The create-time vendor check is safe to add | **It would refuse every brand-stock PO on day one**, because `generate-po` picks its vendor by fuzzy name match |
+| Adding brand chips is a UI change | `GET /api/vendors/[id]` did not include `brands`, and the `Vendor` type had no such field. Neither was mentioned |
+| Vendor `<select>` cap "at L34" | It is at `new/page.tsx:49` |
+
+**The resolver is proven, 8/8 cases**, including the two that decide whether it is trustworthy:
+a **deactivated** product vendor falls through to the brand rather than putting a dead vendor on
+an order, and **two competing primaries return AMBIGUOUS** rather than picking one.
+
+**⚠ AND IT RESOLVES NOTHING TODAY.** Measured against `bch-local`:
+
+```
+brand_vendors rows      : 0
+active products         : 5739
+  with a reorder vendor : 0
+brands                  : 3
+```
+
+Every active product resolves to `NO_VENDOR`. That is the honest state, not a defect: tiers 2
+and 3 read a table nothing could write until this commit. **The data step is small** — there
+are only 3 brands, so linking them on `/vendors/[id]` is minutes, and P8's bulk "Vendor" tab on
+`/stock` sets `reorderVendorId` brand by brand for the rest. **Until that is done, `/reorder`'s
+Create PO is blocked for every selection**, which is a deliberate refusal rather than a silent
+wrong vendor — but it does mean P10 makes that path *less* usable until somebody enters the
+data.
+
+**Three defects fixed that were not in the plan's scope:**
+
+1. **Brand merge silently destroyed vendor links.** `BrandVendor.brandId` is `ON DELETE
+   CASCADE`, so merging a brand deleted every vendor mapping it had, with nothing to show it
+   had happened. Harmless while the table was empty; from P10 it decides who supplies a
+   product. Now the links move to the target first, skipping any the target already holds
+   (`@@unique([brandId, vendorId])`), and the target's own primary wins so a merge can never
+   manufacture the two-primaries state the resolver refuses to guess about. Same shape as the
+   category-merge fix in P1.
+2. **Every purchase order raised from `/reorder` has carried 0% GST.** The handoff consumer
+   hardcoded `gstRate: 0`. The v2 handoff carries ids and quantities only, and `prepare`
+   supplies the product's real GST.
+3. **The ₹NaN I left in P8.** `/reorder`'s handoff sent `unitPrice: p.costPrice`, and P8 made
+   that key absent for anyone without `cost_price.view` while `ReorderProduct` still typed it
+   `number` — the same lie `ProductOption` was telling, fixed on the search path and missed
+   here. The v2 handoff removes it by construction: no price crosses the boundary at all.
+
+**The v2 handoff had a trap worth naming.** The old consumer called `.map()` on the parsed
+value, so a v2 object threw a `TypeError`, the `catch { /* ignore */ }` swallowed it, and
+`removeItem` was never reached — the key stayed wedged and every later visit to the screen threw
+again. The new consumer removes the key FIRST, before anything can throw, and reads both shapes
+so a session holding a v1 payload still works.
+
+**`/reorder` had no permission checks at all** — every action was shown to anyone holding
+`reorder.view`, while the routes behind them demand `purchase_orders.create` and `reorder.edit`.
+Both gates added, and the amber "No vendor · Set" affordance opens P8's `ReorderSheet` rather
+than being a dead label.
+
+**Deliberately not done:** no backfill of `brand_vendors` from existing
+`Product.reorderVendorId` × `brandId` pairs. It would be derivable and reversible, but it writes
+business data on an assumption ("this vendor supplies this brand because one product says so"),
+and with 3 brands the manual route is minutes. Raise it if the brand count grows.
+
+**P10b is complete** (R6 closed — the per-vendor purchase-order screen). No migration.
+
+One section per vendor on `/purchase-orders/new`, each with its own lines, totals, refusal
+and outcome, plus a `Create all (N)` that runs them in order.
+
+**It is a rewrite of that screen, not an addition**, and the agents said so before it was
+attempted: every piece of state except the date and notes became per-section, the index
+arithmetic in `addItem`/`updateItem`/`removeItem` could not address a `(group, index)` pair,
+and the global de-dupe was wrong under groups because the duplicate rule is per vendor.
+The line-item card, the totals block and the conflict card survived as markup; the wiring
+did not. `VendorSection` is the extracted component.
+
+**Three decisions worth keeping:**
+
+1. **The screen does NOT navigate away when orders are created.** It used to `router.push`
+   on success. After a partial run that would destroy the only record of which vendors got
+   an order and which were refused — and nothing rolls back, because by then a real
+   purchase order exists. The report stays, with a link per PO and an explicit line saying
+   the created ones are not undone.
+2. **`Create all` is sequential, not parallel.** Each create takes a per-vendor advisory
+   lock and re-reads that vendor's open orders, so parallel calls would serialise in the
+   database anyway — and a failure in the middle of a parallel run is far harder to report
+   honestly.
+3. **The product search belongs to the manual section only.** Adding by hand to a derived
+   section would put a product on a vendor that does not supply it, which P10a's
+   create-time check would then refuse — a dead end built into the UI.
+
+**`ActionConfirmation` was NOT used for the report**, though the plan named it. Its
+`referenceId` is a required single string rendered as the hero line, and its `items` list
+takes `string` values only — so N purchase orders have no honest reference and no PO could
+be linked. A plain report block with real links is the smaller lie.
+
+**A real fix rather than a suppression:** the product search effect used to call
+`setProductResults([])` synchronously to drop stale matches. The visible list is derived
+from the query length instead — same behaviour, no cascading render, no stale window.
+
+**P13 is complete** (R10, first third — stores carry a GSTIN and a state code; the legacy
+transfers API is gone). No migration: `Store.gstin` and `stateCode` have existed since MIG-1a
+and were written by nothing.
+
+**Researched first, by three agents**, and **three of this phase's own bullets were already
+satisfied**:
+
+| The plan said | The code said |
+|---|---|
+| P13 drops `Warehouse.kind`, the `<CODE>_FLOOR` seeding, and every kind-label in the pickers | **All three already gone.** No `kind` field, no `WarehouseKind` enum, `_FLOOR` appears only in this plan document. The plan's own changelog records the removal from MIG-1a — §P13 was never updated after that rescope |
+| `clearWarehouseCache()` must be added | **It already existed** (`warehouses.ts:77`). Only the CALL was missing |
+| `reports/daily/route.ts` must be repointed before the delete | **Not a caller at all.** It already queries `prisma.transferOrder` by `reviewedAt` and never touched the legacy route |
+| `storeSchema` at `validations.ts:823`; GSTIN regex at `:270` | `:993` and `:323` |
+| `stores/page.tsx:104` → `POST /api/warehouses` | `:104` is `POST /api/stores`; the warehouse create is `:108` |
+| `Warehouse.storeId` at `schema.prisma:289` | `:287` |
+
+**THE CACHE BUG IS REAL BUT THE PLAN AIMED IT AT THE WRONG THING.**
+
+The plan's verification — "adding a warehouse makes it appear in the audit and receiving pickers
+in the same session" — **already passes today**, because all three pickers read uncached
+`force-dynamic` routes. Shipping the fix would change nothing observable there.
+
+The actual break is one step later and worse: the picker **shows** the new warehouse, somebody
+selects it, and the **submit** is refused — `resolveWarehouse` consults the stale module cache
+and answers *"…is not an active warehouse"*, so the server denies a choice it just offered.
+Same on inwards-verify, on transfer creation, and as a 404 on `/stock/by-location`.
+
+And the comment that justified the staleness was wrong in a way worth recording:
+
+> *"The cache lives for the module's lifetime in a serverless invocation, which is effectively
+> the request… a stale entry cannot outlive the invocation."*
+
+Neither half is true. `next start` is one long-lived process, and a warm Vercel lambda serves
+many requests over minutes — this repo's own `notify/email.ts` says exactly that about its SMTP
+transport. The comment has been replaced with the truth.
+
+**`src/lib/stores.ts` had the identical bug and the plan never mentioned it** — same shape, same
+uncalled invalidator, same wrong "request-scoped" comment. A store created on `/stores` stayed
+unknown to `resolveStoreParam()` for the life of the process, so
+`/api/analytics/dashboard?store=NEW` answered "unknown store". Fixed too.
+
+**Six invalidation points, each in a mutating handler, after its write**: warehouse create /
+update / delete, store create / update / delete. Not on any GET, and not in the delete routes'
+*refusal* branches — an early pass put them there and it was wrong twice over: clearing on a
+read defeats the cache, and clearing on a refusal clears nothing that changed.
+
+The honest limit, recorded rather than hidden: this is correct on one process. Across several
+instances the others stay stale until they recycle. The real fix is request-scoped `cache()`
+from React, which four sibling modules already use (`rbac.ts`, `auth-helpers.ts`,
+`integrations/index.ts`) — worth doing, not done here, because it changes every call site.
+
+**THE DELETE WAS CHECKED, NOT ASSUMED.** `src/app/api/transfers/**` stored transfer status as a
+substring inside `InventoryTransaction.notes` (`[PENDING]`, `[APPROVED]`) with the bin ids
+regex-parsed back out, and its approve route was **the only code in the repo that could resolve
+a pending one**. Deleting it with pending rows present would have made them permanently
+un-actionable through the app. Measured against `bch-local` before removing anything:
+
+```
+legacy InventoryTransaction rows of type TRANSFER
+  total     : 0
+  [PENDING] : 0
+  [APPROVED]: 0
+TransferOrder rows (the new table): 0
+```
+
+Nothing stranded. **Run the same check against any other database before this merges** — it is
+three counts and it is the difference between a safe delete and orphaned records.
+
+**The one real prerequisite, and it fixes three bugs.** `(dashboard)/page.tsx` was the only
+caller. Left alone, deleting the route would have thrown inside its `Promise.all` and killed
+**the whole Inwards EOD report**, including the two inwards sections that have nothing to do
+with transfers. Repointing it to `/api/transfer-orders` also fixed: `dateFrom` was **silently
+ignored** by the old route (so "Transfers: N today" was really the last 100 rows of all time),
+`t.transferNo` did not exist, and `t.status` did not exist — so **every line printed
+"PENDING"** regardless of the truth.
+
+**One trap avoided on the way in:** `StoreRow` and BOTH draft seeds needed the new fields. Miss
+the *edit* seed and the form submits `gstin: ""` — silently clearing a GSTIN somebody had
+already entered, on the second save. That is a build-clean, data-destroying omission.
+
+**Not done, deliberately:** `reports/daily` still counts only `status: "APPROVED"`. Once P14
+adds the in-transit flow, an order past APPROVED drops out of the daily count — a real
+improvement, but P14-facing, and not a prerequisite for anything here. **Done in P14.**
+
+---
+
+**P14 + P15 are complete** (R10 closed — transfers carry a header lane, a derived document
+policy, and a real in-transit flow). Shipped together, as §9 said to.
+
+**MIG-2 turned out to be one line of DDL and four backfills.** Every column P14 and P15 write
+already existed — MIG-1a front-loaded all of them on 5 Sep — so the only generated statement is
+`ALTER TABLE "StockCount" DROP COLUMN "location"`. Two things about that drop:
+
+- **P6 left a writer behind.** The plan and §7 P6 both say nothing reads `location` any more,
+  and that is true — but `api/stock-counts/route.ts` still *wrote* `location: null` on every
+  create. Dropping the column without deleting that line is a failed build, and because O11
+  runs `migrate deploy` **inside** the Vercel build, it would be a failed build against a
+  database that had already lost the column. The line and the migration ship in one commit.
+- The four backfills are idempotent and were all no-ops locally (`TransferOrder`: 0 rows).
+  They are therefore **untested against real data** — plan §10 BL6 (restore a production
+  snapshot) is still open.
+
+**Backfill 3 is the one that matters.** Under the old code, approving a transfer MOVED THE
+STOCK — source down, destination up, inside the approve route. Under P14, APPROVED means
+"agreed, nothing has moved yet" and dispatch performs the movement. So a legacy APPROVED row
+left alone is a trap: its stock has already moved, and the new Dispatch button would deduct it
+a **second** time. MIG-2 reads those rows as RECEIVED, with `reviewedAt` standing in for both
+dispatch and receipt.
+
+**A live TOCTOU hole is closed.** Both the old create route and the old approve route called
+`adjustWarehouseQty` **raw**, with the availability check read **outside** the transaction. That
+helper clamps at zero and reports success — so two people approving overlapping orders both
+passed a check against the same stale pre-image and the second silently wrote 0. Units gone, no
+error anywhere. `moveOutOfWarehouse` sums and refuses **inside** the transaction instead. Proved
+both ways: `adjustWarehouseQty(-25)` on a warehouse holding 10 returns 0 and "succeeds";
+`moveOutOfWarehouse` throws and leaves the row at 10.
+
+**The plan's shortfall instruction would have been a bug.** §P14 says receive writes
+`ADJUSTMENT −shortfall`. Follow the arithmetic: dispatch already took `quantity` out of the
+global total and receipt only puts `receivedQty` back, so the net change is **already** minus
+the shortfall. A second deducting adjustment would remove the missing units twice and
+understate stock by the size of every shortfall ever recorded. The `[TRANSIT SHORTFALL]` row is
+written with `previousStock === newStock` — it **records** the loss rather than causing it.
+Proved: 10 dispatched, 7 received, global total 7; the deducting version would have given 4.
+
+**`previousStock === newStock` stops being true.** Every TRANSFER ledger row before P14 has
+them equal, correctly — approval moved stock out of one warehouse and into another in one step,
+so the global figure never changed. Dispatch and receipt are separate events now and the total
+genuinely falls and rises. Copying the old row shape would have made the movement report claim
+nothing happened, twice.
+
+**`User.warehouseId` gets its first reader in the entire application.** The column has existed
+for a long time and nothing has ever enforced it. Dispatch is scoped to the source warehouse,
+receipt to the destination; unpinned users (all of them today) pass. It rides on `getAccess`'s
+existing query rather than a second read — `CurrentUser` and `ResolvedAccess.user` both gained
+the field.
+
+**Four plan claims were wrong and are recorded here rather than silently worked around:**
+
+| Plan said | Actually |
+|---|---|
+| Follow `inbound/[id]` "as rewritten in P7" for a **per-line receive stepper** | Inbound has **no stepper** — it receives a whole line in one tap and its confirm sheet says short receipts are a Report Issue. That is right for inbound, where a shortfall is a dispute with a vendor. A transfer has no vendor: both ends are ours, so the shortfall must be recordable at receipt or the only options are to lie or strand the order. Built fresh |
+| Follow `inbound/[id]` for a **bottom action bar** | Inbound has no bar; every action is inline. The in-repo template is `transfers/new/page.tsx:428`, the same fixed-bar string used in 8 places |
+| "Remove the per-row selects at `/transfers/new` L366-389" | That is only the live half of a `BIN_TRACKING_ENABLED` ternary. The dormant bin selects, the route preview, the `updateItem` same-lane fixup, the item type, the defaults and the validation all carried the lane too — a rewrite of the item model, not a deletion |
+| "P8's `ui/bottom-sheet.tsx` hosts the dispatch sheet" | That file was never created; both `reorder-sheet.tsx` and `send-to-vendor-sheet.tsx` document why. The dispatch sheet follows **send-to-vendor-sheet** — `max-h-[90dvh]` survives the soft keyboard, and it stays open on failure with the error inside, which is what a refused dispatch needs |
+
+**A pre-existing bug in P9 was found by P14's proof, and it was a 500 on every purchase
+order.** `Prisma.sql` is a tagged template that reads the COOKED strings, so `'\D'` cooks to a
+bare `'D'` — the query Postgres receives strips the letter D and nothing else. Four of the five
+seed queries got away with it because they `split_part` the numeric tail off first; `poSeedSql`
+strips the whole string, so it received `"PO-00042"` unchanged and threw `22P02, invalid input
+syntax for type integer`. `nextSequence` runs the seed on **every** call, so once a single PO
+row existed every purchase-order creation would have failed. It went unnoticed because
+`bch-local` had no PO rows, and `MAX()` over an empty table returns NULL so the cast never ran.
+All five sites now use `'\\D'`; the trap is documented in `sequence.ts`.
+
+**Also fixed while in the files:** `reports/daily` counts all three post-approval statuses (it
+would have fallen toward zero on a normal day and then hidden its own card), and its label says
+"approved" rather than "completed" — which was already wrong before P14; the dashboard and the
+activity feed render `getStatusLabel` instead of printing `IN_TRANSIT` into a WhatsApp message;
+`/transfers` gained the CANCELLED filter chip it never had, so a cancelled order is no longer
+invisible on every tab but All; `useWarehouses` declares `store.gstin`/`stateCode`, which the
+API has always returned; and `GET /api/transfer-orders` uses IST day bounds, so the EOD summary
+no longer drops every transfer raised before 05:30.
 
 ### 4. What is VERIFIED, and what is not
 
@@ -89,10 +857,38 @@ Two behaviour changes for the PR body:
 | `npx tsc --noEmit` | **green** (61 errors -> 0) |
 | Proof greps, §7 P2 and P3 | **clean** — only explanatory comments remain |
 | `npx eslint` on every changed file | **zero issues.** 7 exist repo-wide, all pre-existing in untouched files, confirmed by linting HEAD's copy |
-| `npx prisma migrate status` | up to date, 2 migrations |
+| `npx prisma migrate status` | **up to date, 3 migrations** (`0_init`, MIG-1b, MIG-1a) |
 | Product created from brand + category alone | **PASSES** — P3's acceptance criterion |
-| `npm run build` | **PASSES** (5 Sep). Full route table printed, exit 0, and **no `/product-types` route in it** |
-| Browser walk | **NOT DONE for either phase** — the one check still outstanding |
+| `npm run build` | **PASSES for R4, P1, P1b, P4, P6, P7, P5, P8 and P9** (P9 run 6 Sep over the final tree). Full route table; **no `/product-types` and no `/api/ops-activity-logs` in it** |
+| P6 | tsc + eslint clean; the whole-store 400 and the assignee gates are code-verified, NOT browser-walked |
+| P7 | tsc + eslint clean; the build manifest carries `/api/inbound/[id]/issues` and **no `/api/inbound/[id]/status`** — the deleted route is gone from the built app, not just from the tree. The idempotent claim, the approval gate and the deferred Books push are code-verified, NOT browser-walked |
+| P5 | tsc + eslint clean. `istDayBounds` **10/10** cases; the day window and the dedupe **proved against `bch-local`** in a rolled-back transaction, with the old behaviour reproduced beside the new. NOT browser-walked |
+| P8 | tsc clean; eslint 0 errors. The 14-copy unification proved behaviour-preserving by **26,784 assertions over 4,464 combinations, 0 differences**. NOT browser-walked |
+| P9 | tsc clean; eslint 0 new errors. Advisory lock, seed SQL and counter concurrency **proven against Postgres**; the transition table checked exhaustively. NOT browser-walked |
+| P10a | tsc + eslint clean. Vendor resolution **8/8 cases**, including a deactivated product vendor falling through to the brand and two competing primaries returning AMBIGUOUS. NOT browser-walked |
+| P10b | tsc + eslint clean. The per-vendor sections, the sequential run and the outcome report are code-verified, NOT browser-walked — and the walk needs a MIXED-vendor selection, which needs at least two brands linked to two different vendors |
+| P13 | tsc + eslint clean. The legacy-route delete was **measured, not assumed** — 0 legacy transfer rows, 0 pending, so nothing is stranded. NOT browser-walked |
+| P14 + P15 | tsc clean. **27 assertions proved against `bch-local`**: the TRF seed reads `TRF-202609-0007` as 7 (a whole-string strip gives 2026090007); concurrent allocations do not collide; the document policy across all four GSTIN cases; six transition pairs; and the dispatch/receive arithmetic end to end. NOT browser-walked |
+| P14/P15 eslint | **5 errors found, 4 fixed, 0 introduced.** All five were `react-hooks/set-state-in-effect`. Two were mine and are gone; two more were pre-existing in files this phase rewrote and were fixed rather than suppressed, following P10b’s precedent — the effective transfer route and the visible search list are now DERIVED during render, and both loaders moved inside their effect behind a `cancelled` guard (P7 `inbound/[id]`, the only detail-page shape in the repo that lints clean). **Two pre-existing errors remain, neither in a line this phase wrote:** `transfers/new/page.tsx:148` (restoring a sessionStorage draft — it cannot move into a `useState` initialiser, which runs during the server render where `sessionStorage` does not exist, so the alternative is a hydration mismatch) and `reports/daily/page.tsx:35` (untouched; this phase changed only two words of copy in that file) |
+| ⚠ `reports/daily/page.tsx` | Still calls `fetch().then(r =&gt; r.json())` from the browser, which CLAUDE.md bans — an expired session returns 200 HTML and this reports it as a data error. **Pre-existing and deliberately left**: this phase changed two words of copy in that file and rewriting its loader is not P14 work. Worth a follow-up |
+| P14 clamp-vs-refuse | **Proved both ways on the real table.** `adjustWarehouseQty(-25)` against a warehouse holding 10 returns 0 and reports success; `moveOutOfWarehouse` throws with "Available: 10" and leaves the row at 10 |
+| P14 shortfall arithmetic | **Proved.** 10 dispatched, 7 received -> global total 7. The plan’s literal `ADJUSTMENT −shortfall` would have given 4 |
+| ⚠ P14 MIG-2 | Applied to `bch-local`; `prisma migrate status` says **up to date, 4 migrations**. All four backfills were **no-ops locally** (0 `TransferOrder` rows), so they are untested against real data — plan §10 BL6 is still open. `npm run db:snapshot` before the PR merges |
+| **Seed-query escaping (all five)** | **Fixed and proved.** `poSeedSql` threw `22P02` the moment one PO row existed — a 500 on every purchase order. `PO-00042`->42, `TRF-202609-0007`->7, `IB-202609-0003`->3, plus the ISS and SC queries running clean. See §3 P14 for why |
+| ⚠ P13 before merge | Re-run the stranded-rows check against any database this merges into: three counts on `InventoryTransaction` where `type = 'TRANSFER'` and `notes LIKE '%[PENDING]%'`. Non-zero means those rows become permanently un-actionable, because the deleted approve route was the only code that could resolve them |
+| ⚠ P10a data state | Measured on `bch-local`: **0 `brand_vendors` rows, 0 of 5,739 active products with a reorder vendor, 3 brands.** Every product resolves to NO_VENDOR, so `/reorder`'s Create PO is blocked for every selection until the data is entered. Correct behaviour, but P10 is INERT until then — and with 3 brands it is minutes of work on `/vendors/[id]` |
+| ⚠ P9 lint-method note | The `pre-existing` comparisons for P5 and P8 put HEAD's copy in a temp dir OUTSIDE `src/app/`, where path-scoped rules do not apply, so those comparisons were weaker than stated. P9 was checked correctly, with HEAD's copy placed BESIDE the real file. Use that method from here |
+| P8 eslint caveat | `stock/page.tsx` (2) and `stock/[id]/page.tsx` (1) report warnings only, all **pre-existing** — HEAD's copies give the identical 3, confirmed by linting them. One error P8 DID introduce (a hook below an early return) was found and fixed |
+| ⚠ P8 proof caveat | The first proof ran over the real 5,739 products and said IDENTICAL — **worthless as evidence**: every product in `bch-local` has `reorderLevel = 0` and `currentStock = 0`, so it tested one degenerate case. The synthetic matrix is the proof. **Any future reorder work needs seeded levels to test against** |
+| P5 eslint caveat | `(dashboard)/activity/page.tsx` and `desktop/activity/page.tsx` each report 1 error + 1 warning (`react-hooks/set-state-in-effect`, unused `session`). **Pre-existing** — HEAD's copies produce the identical 4 problems, confirmed by linting them. P5 adds none and fixes none |
+| P4 date-window spot-checks | **12/12 PASS**, including the plan`s four and the owner`s "3 days on 4 Sep" case |
+| P1b acceptance scenario | **PASSES** — 10 → sell 3 → 7 → receive 5 → **12**; the old path reproduced alongside gives **15**. Ran against `bch-local` in a rolled-back transaction |
+| `npm run db:snapshot` | **PASSES** — ran it; `pg_restore -l` lists `ActivityLog`, `counter`, `PurchaseOrderSend`, and no `OpsActivityLog` |
+| Browser walk | **NOT DONE for any phase** — the one check still outstanding |
+
+P1 additionally: `tsc --noEmit` **green**, `eslint` on all 7 changed files **zero issues**,
+`migrate deploy` applied cleanly, and the new tables confirmed present in Postgres with the
+5,739 products untouched.
 
 One straggler found on 5 Sep and folded into `1287226`: the Stock Management hub subtitle
 (`(dashboard)/stock-management/page.tsx:47`) still read "Stock, product types, categories, …".
@@ -111,16 +907,116 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
    - `/receivables/new` — no quick-add; the hint shows
    - `/stock-audit/brand-count` — walk to the product list
    - `/product-types` -> **404**  ·  `/reports/stock-value` -> **two** tabs
-2. **Open the PR for R4** (P2 + P3) against the reference branch. The branch is pushed; the
-   commits are `730ad5a` and `1287226`. *The owner merges on GitHub; Claude never merges
-   locally, and asks which branch to use as reference before creating one.*
-   PR body must carry: the two behaviour changes in §3, and **run `npm run db:seed:rbac`
-   after merge** or the sidebar keeps a "Product Types" entry that 404s.
-3. **Then P1** — MIG-1a, `ActivityLog`, `counter`, `src/lib/activity-log.ts`,
-   `src/lib/sequence.ts`, delete `src/app/api/ops-activity-logs/route.ts`. Migration folder name:
-   `add_activity_log_counter_and_scope_columns`.
-4. **Then P1b** — the stock ledger fix (R12), which now also carries `storeIdForInvoice()` and the
-   `/stores` `invoicePrefix` field (owner chose option B).
+   Then walk P1's screens too — nothing there should have changed: `/transfers` (two new
+   filter tabs, no order in them yet), `/stores`, `/warehouses`, `/categories` delete + merge,
+   `/purchase-orders`, `/stock-audit`.
+   Then the screens the later phases rewrote, none of which has been opened in a browser:
+   - `/deliveries` (P4) — the inline panel wraps under the header; a disconnected Zoho shows
+     the 409 sentence and the retry works immediately; `/stores` shows the invoice prefix
+   - `/stock-audit` + `/stock-audit/[id]` (P6) — the store → warehouse picker; an assignee
+     holding `approve` sees Start; whole-store + correct-stock gives a readable 400; the
+     `0 ✓` pill; "Your stock audits" on the dashboard
+   - `/inbound/[id]` (P7) — the category picker refuses receiving until it is set; `Receive ×N`
+     per line then `Received ×N ✓`; a double-tap adds the stock once; Report Issue on a
+     shipment with **no** Zoho bill creates `ISS-…` and it appears on `/vendor-issues`
+   - `/activity` and `/desktop/activity` (P5) — rows read "3 Sep, 11:42 pm"; renaming a
+     category gives ONE row with `from → to`; editing a customer names the fields and never a
+     value; approving a shipment gives exactly one row, not two; an expired session shows the
+     error banner with Retry instead of "No activity recorded". **The 02:00 IST case is the
+     one that needs a real clock** — the proof script covers the query, not the screen
+   - the dashboard (P5) — "today" is the IST today in all six places, checked between
+     midnight and 05:30 IST or by moving the machine clock
+   - `/stock` (P8) — at 375 px: Reorder → sheet → Save → the badge flips WITHOUT a reload and
+     the card link does not fire; "Reorder @ N" appears only where a level is set; select
+     mode → Vendor tab → Apply. **Grant `reorder.edit` first or the button is invisible.** A
+     role with `reorder.edit` but no `vendors.view` must still save level and quantity, with
+     the picker hidden and a note in its place
+   - `/stock/[id]` (P8) — Reorder Qty and Vendor save; "No vendor" actually CLEARS it
+   - `/purchase-orders/new` (P8) — type 2+ characters: no `₹NaN` in the dropdown row, the
+     line total or any of the three totals. Then repeat as a role WITHOUT `cost_price.view`:
+     the cost is absent from the row and the line opens at ₹0, still no NaN
+   - `/reorder` (P8) — the low-stock filter, select-all and the WhatsApp share list the same
+     products as before. **Seed some reorder levels first** — every product in `bch-local`
+     currently has 0, so the screen has nothing to show either way
+2. **PRs — the owner's job, not Claude's** (owner, 5 Sep: "u dont do anything related to pr").
+   Six branches are pushed; `feat/purchasing-transfers-p5-p15` is the seventh and stays local
+   until P8–P15 are on it, or until you ask for it. **Merge in stacking order:
+   R4 → P1 → P1b → P4 → P6 → P7 → P5-to-P15.**
+   - **R4** — the two behaviour changes in §3, and **run `npm run db:seed:rbac` after merge**
+     or the sidebar keeps a "Product Types" entry that 404s.
+   - **P1** — the three Restrict-FK delete-path fixes in §3, and **`npm run db:snapshot`
+     before merging**: it carries a migration and Prisma has no down migrations.
+   - **P1b** — a live data-integrity fix; the before/after numbers are in §3.
+   - **P4** — **`npm run db:seed:rbac` after merge as well**, or six dead `fetch` permissions
+     stay grantable on `/team/permissions`. Then grant **Settings › Integrations: fetch +
+     approve** to every role that had **Deliveries: fetch**, or their Fetch button vanishes.
+   - **P6** — say in the body that the global `currentStock` overwrite was a live
+     data-integrity bug, not a scoping choice, and that this lands **before any store gains a
+     second warehouse** or the new whole-store 400 reads as a regression. Existing audits
+     have `storeId` null and are treated as legacy: verify-only, header "Legacy audit — no
+     location". No data step.
+   - **P7** — name the deferred Zoho Books push in the body: a bill-push failure no longer
+     fails the receipt, so nobody sees a Zoho error at the goods desk any more. And **check
+     the receiving role holds `stock.view`** on `/team/permissions` before release —
+     `api/categories` is gated on it, so without it the category picker is empty and the
+     shipment cannot be received at all. No data step, no migration.
+3. **Data step for P10, and it is the difference between P10 working and doing nothing:**
+   on `/vendors/[id]` → Brands supplied, link each of the **3 brands** to the vendor that
+   supplies it and star the primary. Then use `/stock` → select → **Vendor** (built in P8) to
+   set a reorder vendor brand by brand. Until one of those is done, **0 of 5,739 products
+   resolve to a vendor** and `/reorder`'s Create PO refuses every selection.
+
+3. **Data step, as soon as P1b is merged:** on `/stores`, set the **invoice prefix** to `BCH/`
+   and `BCC/`. **Until that is done every sale deducts from the primary store** — a BCC sale
+   takes BCH stock. Two things make that impossible to miss rather than silent: the row shows
+   an amber **"No invoice prefix"** badge until it is set, and `resolveStoreIdOrPrimary` logs
+   a `warn` on every invoice that falls back. The input is built (P1b) — it is one field on
+   the store form.
+4. **Then P12–P15**, continuing on `feat/purchasing-transfers-p5-p15` (cut 6 Sep from
+   `feat/inbound-receiving` @ `df12868`), one commit per phase, in the order of §0.6:
+   P12, P14, P15. **P11 was dropped by the owner on 6 Sep** — see §7 P11 for
+   what that gives up and for the two pieces of it that moved into P10.
+   - `/purchase-orders` (P9) — the CANCELLED chip filters; labels read "Pending approval"
+   - `/purchase-orders/new` (P9) — the rate box is EMPTY and amber until typed; both buttons
+     refuse while any line has no rate; Submit lands the PO in PENDING_APPROVAL and Save
+     draft in DRAFT; adding a product already on an open PO for that vendor shows the 409
+     card, "Open PO-xxxxx" links, and "Remove those lines and continue" leaves the rest
+   - `/purchase-orders/[id]` (P9) — walk DRAFT → Submit → Approve → Mark sent, and check the
+     buttons change at each step; Re-open clears the approver; Cancel appears on every
+     non-terminal state. **As a role WITHOUT purchase_orders.approve**, Approve must be
+     visible but DISABLED, and every other action must report failure rather than doing
+     nothing — that is the bug this phase fixes
+   - `/brand-stock/[id]` (P9) — Create PO **used to return 500 every time**; it should now
+     create a PENDING_APPROVAL PO. With some rows priceless it must stay on the page and
+     list what was left off rather than navigating away
+   - `/vendors/[id]` (P10a) — Brands supplied: add a brand, star it, remove it; the star
+     must MOVE when another vendor already held that brand, and the note must say so.
+     The Email field saves and clears
+   - `/reorder` (P10a) — every row shows its vendor and where it came from, in all three
+     grouping modes; a row with none shows amber "No vendor · Set" and opens the reorder
+     sheet; Create PO refuses while anything selected is unresolved and names them.
+     **Link a brand to a vendor first or every row is unresolved**
+   - `/purchase-orders/new` from /reorder (P10a) — GST is the product's, NOT 0 (every PO
+     from this path has carried 0% until now); a mixed-vendor selection offers a vendor to
+     order first rather than truncating silently
+
+   **Research each phase against the code before building it** (owner, 6 Sep). P8 proved why:
+   its plan section had stale line numbers throughout, missed five of the fourteen call sites
+   it was meant to unify, and gave two instructions that would have produced bugs — a focus
+   trap to lift from a file that has none, and an uncallable `userCan` signature. The rules for that branch are in §3 "Branching
+   changed 5 Sep". P14 carries MIG-2, the last migration folder — `npm run db:snapshot`
+   before that PR merges.
+
+   **On running these in parallel (owner asked, 6 Sep):** only **P8, P9 and P13** are pairwise
+   independent; P10 and P11 wait on P8+P9, P12 on P9, and P14/P15 on P13. One branch with one
+   commit per phase serialises them by construction, and parallel writers would collide in the
+   shared files §5.4 names — `validations.ts`, `rbac-catalog.ts`, `api-utils.ts` (P9 changes
+   `errorResponse`'s signature), `api-client.ts`. Parallelism pays for **read-only
+   verification**, not for writing. If one lane is split off, **P13 is the clean candidate** —
+   it touches stores and nothing P8–P12 touches — and it needs its own worktree and branch.
+   The machine is the nearer limit anyway: a build is 8–10 minutes and two at once on the
+   5400rpm HDD is slower than one after another, so §6's Defender exclusions and moving
+   `.next` to the SSD buy more than any agent does.
 
 ### 6. Owner actions still outstanding
 
@@ -129,7 +1025,8 @@ Both now read "Stock, categories, audits, inbound, dispatch and transfers."
 - Dev speed: Defender exclusions, and moving `.next` (1.9 GB) off the 5400rpm HDD onto the SSD.
 - **BL12** — create a non-admin test role. Every phase's gate walk needs one; ADMIN holds every
   permission, so testing as admin proves no gate works.
-- **Q5** a real vendor `.xlsx` before P11 · **BL8** Gmail App Password before P12 · **BL9** vendor
+- ~~**Q5** a real vendor `.xlsx` before P11~~ — **moot, P11 dropped 6 Sep.** (A real
+  workbook did arrive: `docs/asset/Stock as on 04.09.2026 …xlsx`, untracked and unused) · **BL8** Gmail App Password before P12 · **BL9** vendor
   data before P10.
 
 ---
@@ -162,7 +1059,7 @@ scope creep and comes out. If a requirement is dropped, the phases in its row go
 | **R5** | **One-tap reorder level on `/stock`** — set reorder level, reorder qty and optionally the vendor from a sheet on the row, without opening the product. | P8 |
 | **R8** | **A purchase order cannot be raised twice for the same thing.** Sequential PO numbers with no race, a real state machine, a 409 naming the existing PO, and approval by whoever holds the permission (self-approval allowed and logged). | P9 |
 | **R6** | **The PO vendor is derived from the product and shown read-only** — product's reorder vendor, else the brand's primary vendor, else the brand's only vendor. Mixed vendors in one selection produce one PO per vendor. | P10 |
-| **R7** | **The vendor's colour-coded availability sheet decides what can be ordered.** **No AI and no API key** (owner decision, 4 Sep — see §6): a row's fill colour is a stored property of the `.xlsx` and is read deterministically with `exceljs`. The app never interprets a colour; the user labels each colour once (Available / Not available / Ignore) and the legend is remembered per brand. AI remains only for PDF/image sheets. | P11 |
+| ~~**R7**~~ | **DROPPED by the owner, 6 Sep 2026.** The vendor's colour-coded availability sheet. Dropped because the implementation needs to change, not because the need went away — so it is removed rather than deferred, per this section's own rule that a dropped requirement takes its phases with it. **P11 goes with it.** The original wording and the reasoning behind the no-AI decision are kept in §7 P11 and in the Clarifications, so re-raising it later starts from the record rather than from scratch. |
 | **R9** | **An approved PO is emailed to the vendor with the PO PDF attached**, over the Gmail App Password already in Settings › Notifications. No Google Cloud project, no OAuth, no AI. "Mark sent" is kept for WhatsApp and other channels. | P12 |
 
 ### 0.4 Stock transfers
@@ -194,7 +1091,7 @@ R11 P5   activity feed
 R5  P8   one-tap reorder + search fix
 R8  P9   PO state machine, numbers, duplicates, approval
 R6  P10  vendor derived from product
-R7  P11  colour-coded availability sheet
+R7  P11  colour-coded availability sheet                             DROPPED 6 Sep
 R9  P12  PO email with PDF
 R10 P13  stores: GSTIN + state code
 R10 P14  transfer lane, in-transit flow                                 (MIG-2)
@@ -207,7 +1104,7 @@ folder after `0_init`; MIG-1a (P1) then applies on top. The two are independent 
 between them is free — what is *not* free is P2 before P3, because a screen still reading
 `product.type` after the column is dropped throws (`brand-count/page.tsx:584`).
 
-**Unchanged dependencies:** P1 → P1b, P5, P6, P9. P3 → P6, P8. P8 + P9 → P10 → P11. P9 → P12.
+**Unchanged dependencies:** P1 → P1b, P5, P6, P9. P3 → P6, P8. P8 + P9 → P10 (P11 dropped 6 Sep, and nothing depended on it — it was a leaf). P9 → P12.
 P13 → P14 → P15 (promote P14 and P15 together). P4, P5, P6, P7 remain pairwise independent.
 
 ---
@@ -283,11 +1180,46 @@ the Vercel build in P1 and no migration is applied by hand (O11).
 The full list of open questions and blockers, each with a recommended answer and its current
 status, is **§10**.
 
-## 3. Phases — small, one PR each
+## 3. Phases — one branch per phase up to P7, ONE branch for the rest
 
 Size: S ≤ 8 files, M ≤ 15, L > 15. `npm run build` takes >10 minutes, so each phase is verified
 with `npx tsc --noEmit` + opening the affected screens, and the full build runs once per phase
 before the PR. Bugs first, removals second, features third, transfers last.
+
+### Branching changed 5 Sep (owner decision)
+
+**P0–P7 each had their own branch. Every phase from here does not.** The remaining work —
+**P5, P8, P9, P10, P11, P12, P13, P14, P15** — is built on a **single branch**, with **one commit
+per phase**:
+
+```
+feat/purchasing-transfers-p5-p15        ← name is a proposal; owner may rename before it is cut
+```
+
+Rules for that branch, which replace the per-phase branch column below:
+
+1. **Cut it once**, from the reference branch the owner names (ask — never assume `main`, and
+   never assume the local `main` is current).
+2. **One commit per phase, in dependency order**, each message opening with the phase tag so the
+   log reads as the roadmap: `feat(stock): P8 one-tap reorder level on /stock`. A phase is one
+   commit — not three "fix typo" commits after it.
+3. **`npx tsc --noEmit` must be green at every phase commit.** The point of one commit per phase
+   is that each commit is a working tree; a commit that does not compile destroys that. Never
+   commit a phase mid-edit to "save progress".
+4. **A phase carrying a migration commits `prisma/schema.prisma` and the
+   `prisma/migrations/<timestamp>_<name>/` folder in the SAME commit** — P14 (MIG-2) is the only
+   one left. That rule is from CLAUDE.md and one branch does not relax it.
+5. **`npm run db:snapshot` before the PR is merged**, because P14 carries a migration and Prisma
+   has no down migrations.
+6. **Still never commit or push to `main`.** The branch is merged by pull request only.
+
+**The trade being accepted, stated plainly:** nine phases on one branch is one large PR instead of
+nine reviewable ones, and a revert of one phase means reverting a commit out of the middle rather
+than dropping a branch. One commit per phase is what keeps that possible at all — it is the only
+thing preserving per-phase granularity once the branches are gone, which is why rules 2 and 3 are
+not negotiable.
+
+**The Branch column in the table below is historical for P0–P7 and superseded for the rest.**
 
 | # | Branch | Goal | Source | Migration | Size | Needs | Key verification |
 |---|---|---|---|---|---|---|---|
@@ -297,17 +1229,17 @@ before the PR. Bugs first, removals second, features third, transfers last.
 | P2 | `chore/remove-type-ui-moving-level-customer-add` | Screens stop reading `product.type`, `movingLevel`, and the customer quick-add | PLAN-2 Parts 5 (screens), 6, 7 | none | M (11) | none | `/stock` no type tabs, `/customers` no Add, `/categories` edit = name only |
 | P3 | `chore/drop-product-type-and-moving-level` | Schema drops + MIG-1b; delete product-type routes/page/lib; every API reader; catalog; import script | PLAN-2 Parts 5 (API), 6 | MIG-1b | L by count (~23 mechanical deletions) | P1, P2 | proof greps clean; bill import creates a product with brand + category |
 | P4 | `fix/zoho-fetch-window-and-deliveries-panel` | Deliveries fetch root causes; shared IST date window; merged `trigger-pull`; `skipped` shape; approve invoice branch; permission gating; `apiFetch timeoutMs`; deliveries modal → inline panel; inbound/bills/receivables panel fixes | PLAN-1 §F, PLAN-2 Part 4 + zoho activity row | none | M (14) | P1, P3 | Zoho disconnected → 409 sentence, immediate retry works; "3 days" on 4 Sep = 2–4 Sep |
-| P5 | `feat/activity-log-feed` | `/api/activity` IST day + `ActivityLog` source + dedupe; clients; category/customer edit rows | PLAN-2 Part 1 feed | none | S (7) | P1 | rename a category → one row with from → to; 02:00 IST rows file under yesterday |
+| P5 | **one branch — §3** | `/api/activity` IST day + `ActivityLog` source + dedupe; clients; category/customer edit rows | PLAN-2 Part 1 feed | none | S (7) | P1 | rename a category → one row with from → to; 02:00 IST rows file under yesterday |
 | P6 | `fix/stock-audit-scope-and-assignee` | Store/warehouse scope, assignee gates, verify-only whole-store rule, `0 ✓`, dashboard card | PLAN-2 Part 2 + §5.1 | none | M (12) | P1, P3 | assignee holding `approve` sees Start; whole-store correct-stock → readable 400 |
 | P7 | `feat/inbound-per-line-receiving` | Shared finalisation, per-line receive, saved category, delete status route, Report Issue route, `SearchableSelect`, page | PLAN-2 Part 3 + `Counter` for ISS | none | M (10) | P1 | Report Issue without a Zoho bill creates ISS-…; double-tap adds stock once |
-| P8 | `feat/stock-reorder-action` | `isLowStock`; reorder sheet on `/stock`; `reorderVendorId` on product PUT; search returns cost/GST (the `₹NaN` fix) | PLAN-1 §A + search half of §B | none | M (10) | P3 | 375 px: Reorder → sheet → OK → badge flips; card link not triggered |
-| P9 | `feat/po-state-machine-and-numbers` | PO transitions, `nextSequence("PO")`, duplicate 409 with advisory lock, approval on PENDING_APPROVAL, `generate-po` fixes, detail/list buttons | PLAN-1 §D | none | M (12) | P1 | two tabs create at once → distinct numbers; duplicate → 409 card |
-| P10 | `feat/po-vendor-resolution` | `resolveVendors`, `/reorder` groups + v2 handoff, `prepare`, read-only vendor sections, vendor-scoped search, `vendors/[id]/brands` | PLAN-1 §B | none | M (10) | P8, P9 | two vendors selected → two read-only sections; unresolved item blocks |
-| P11 | `feat/brand-stock-colour-availability` | `exceljs` parser with `rowColor`, legend card + route, `getVendorAvailability`, badges, `generate-po` exclusions | PLAN-1 §C | none | M (12) | P10 | colour-coded `.xlsx` → legend → confirm → unavailable excluded |
-| P12 | `feat/po-send-to-vendor` | Mailer attachments, PDF renderer, `/pdf`, `/send`, `/mark-sent`, `notifications/status`, bottom sheet | PLAN-1 §E | none | M (14) | P9 | send to own address → PDF attached, status flips only after SMTP accepts |
-| P13 | `feat/stores-gstin` | `Store.gstin/stateCode` UI, `clearWarehouseCache()` on warehouse create, legacy `/api/transfers` removal. **No floor/godown — rescoped 4 Sep** | PLAN-1 §G (stores) | none | S (~5) | P1 | `/stores` saves GSTIN; a warehouse added to a store appears in the pickers same session |
-| P14 | `feat/transfer-in-transit-flow` | MIG-2; header lane, derived type/doc, approve = check only, dispatch/receive/cancel, detail page, list filters | PLAN-1 §G (flow) | MIG-2 | M (15) | P13 | legacy APPROVED read RECEIVED; dispatch −qty; receive with shortfall |
-| P15 | `feat/transfer-documents` | `transfers/` upload prefix + PDF, document route, dispatch gate, Document card | PLAN-1 §G (documents) | none | S (6) | P14 | floor → godown says delivery challan; BCH → BCC says tax invoice; dispatch 400 until the right document |
+| P8 | **one branch — §3** | `isLowStock`; reorder sheet on `/stock`; `reorderVendorId` on product PUT; search returns cost/GST (the `₹NaN` fix) | PLAN-1 §A + search half of §B | none | M (10) | P3 | 375 px: Reorder → sheet → OK → badge flips; card link not triggered |
+| P9 | **one branch — §3** | PO transitions, `nextSequence("PO")`, duplicate 409 with advisory lock, approval on PENDING_APPROVAL, `generate-po` fixes, detail/list buttons | PLAN-1 §D | none | M (12) | P1 | two tabs create at once → distinct numbers; duplicate → 409 card |
+| P10 | **one branch — §3** | `resolveVendors`, `/reorder` groups + v2 handoff, `prepare`, read-only vendor sections, vendor-scoped search, `vendors/[id]/brands` | PLAN-1 §B | none | M (10) | P8, P9 | two vendors selected → two read-only sections; unresolved item blocks |
+| ~~P11~~ | — | **DROPPED 6 Sep 2026 (owner).** `exceljs` colour reading, legend card, `getVendorAvailability`, availability badges, `generate-po` exclusions | PLAN-1 §C | none | — | — | **Nothing depended on P11** — it was the only leaf in the graph, so dropping it blocks no other phase |
+| P12 | **one branch — §3** | Mailer attachments, PDF renderer, `/pdf`, `/send`, `/mark-sent`, `notifications/status`, bottom sheet | PLAN-1 §E | none | M (14) | P9 | send to own address → PDF attached, status flips only after SMTP accepts |
+| P13 | **one branch — §3** | `Store.gstin/stateCode` UI, `clearWarehouseCache()` on warehouse create, legacy `/api/transfers` removal. **No floor/godown — rescoped 4 Sep** | PLAN-1 §G (stores) | none | S (~5) | P1 | `/stores` saves GSTIN; a warehouse added to a store appears in the pickers same session |
+| P14 | **one branch — §3** | MIG-2; header lane, derived type/doc, approve = check only, dispatch/receive/cancel, detail page, list filters | PLAN-1 §G (flow) | MIG-2 | M (15) | P13 | legacy APPROVED read RECEIVED; dispatch −qty; receive with shortfall |
+| P15 | **one branch — §3** | `transfers/` upload prefix + PDF, document route, dispatch gate, Document card | PLAN-1 §G (documents) | none | S (6) | P14 | floor → godown says delivery challan; BCH → BCC says tax invoice; dispatch 400 until the right document |
 
 **Dependencies.** P2 needs nothing and runs first. P1 → P1b, P5, P6, P9. P2 → P3 (a screen reading
 `type` after the drop throws: `brand-count`). P3 → P6, P8. **P4, P5, P6, P7 are pairwise
@@ -597,13 +1529,14 @@ Saving individual counts is deliberately not logged. PO and transfer rows use th
 | `src/lib/activity-log.ts` | `logActivity(db, entry)` with `as const` unions; throws inside a tx, `log.error`s on the root client | P1 |
 | `src/lib/sequence.ts` | `nextSequence(tx, key, pad, seedFrom?)` | P1 |
 | `src/lib/zoho/date-window.ts` | `resolveBillWindow({ days?, fromDate?, toDate? }, todayIST) → { from, to, clampedToFy }` — pure, `Date.UTC` arithmetic, FY floor derived (1 Apr of the Indian FY containing today), `from > to` throws | P4 |
-| `src/lib/services/timezone.ts` (extend) | `istDayBounds(dateStr?)` beside `getTodayIST` (does not exist yet; `src/lib/analytics/time.ts` is a second IST module — do not add a third) | P5 |
+| `src/lib/services/timezone.ts` (extend) | `istDayBounds(dateStr?) → { dayStr, start, end }` beside `getTodayIST`. **Built.** Note `analytics/time.ts`'s `calendarDayRange` is NOT this: it anchors at UTC midnight for `@db.Date` columns and is wrong by 5h30m against a timestamp column | P5 |
 | `src/lib/deliveries/zoho-invoice.ts` | prefix rule as data; `deliveryFieldsFromInvoiceDetail(inv)` lifted from `import-zoho/route.ts:74-116` | P4 |
 | `src/lib/stock-location.ts` (extend) | `getStoreQtyMap(ids, storeId)` beside `getWarehouseQtyMap` (L59) | P6 |
 | `src/lib/inbound/complete-shipment.ts` | `finaliseDelivered(tx, …)`, `scheduleDeliveredSideEffects(snapshot, actor)` | P7 |
 | `src/components/ui/searchable-select.tsx` | combobox, 44 px rows, keyboard, click-outside | P7 |
-| `src/lib/reorder.ts` | `isLowStock(p)`, `suggestedOrderQty(p)` (client-safe) | P8 |
-| `src/components/reorder-sheet.tsx` | bottom sheet built from `filter-sheet.tsx` | P8 |
+| `src/lib/reorder.ts` | `isLowStock(p)`, `suggestedOrderQty(p)` (client-safe). **Built.** Its header lists the SIX copies deliberately left alone and why — read it before adding a seventh caller | P8 |
+| `src/lib/vendors/validate.ts` | `validateReorderVendor(id)` → `Promise<string | null>`, on the `validateSiteAssignment` pattern. **Built** — three routes write `reorderVendorId` and every prior vendor check in the repo tested existence but never `isActive` | P8 |
+| `src/components/reorder-sheet.tsx` | **Built**, but NOT from `filter-sheet.tsx` — that is a right-hand drawer used by 12 screens and has no focus trap to lift. Reuses `customer-edit-sheet.tsx`'s shape + `pb-safe` + focus return | P8 |
 | `src/lib/api-utils.ts` (edit) | `errorResponse(message, status, data?)` (two args today, L8) | P9 |
 | `src/lib/api-client.ts` (edit) | `timeoutMs` + `ApiError.isTimeout` (P4); `ApiError.data` (P9); `signal` already flows through `init` (`Omit<RequestInit,"body">`, L81) | P4, P9 |
 | `src/lib/purchase-orders/status.ts`, `duplicates.ts` | `PO_TRANSITIONS`, `canTransition`, `applyTransition`; `findOpenPoConflicts` | P9 |
@@ -1326,7 +2259,27 @@ rolls back group 1's real PO.
   item blocks with names; manual path search scoped to the vendor; empty scope shows "No products
   are linked to this vendor yet".
 
-### P11 — brand-stock sheet: colour-coded availability, no AI
+### ~~P11~~ — brand-stock sheet: colour-coded availability, no AI  ·  **DROPPED 6 Sep 2026**
+
+> **Owner, 6 Sep 2026: skip P11 — the implementation needs to change.** Kept below as the
+> record of what was specified and why, so that re-raising it starts from this rather than
+> from a blank page. Nothing depended on P11: it was the only leaf in the dependency graph
+> (`P8 + P9 → P10 → P11`), so dropping it blocks no other phase and needs no re-plan.
+>
+> **Two things moved into P10 because of this:**
+> 1. P10 does **not** build the "Excluded — not available at vendor / Include anyway"
+>    sub-list. P11 was the phase that would have filled it, so it would have shipped as UI
+>    nothing could ever populate.
+> 2. P10 **does** move `generate-po` onto `resolveVendors`. The plan deferred that to P11, but
+>    P10's create-time vendor check would refuse every brand-stock PO on day one while that
+>    route still picks its vendor by fuzzy name match — so the fix cannot wait for a phase
+>    that is not happening.
+>
+> **What is given up:** nothing reads a vendor sheet's fill colours, so availability plays no
+> part in what can be ordered. `BrandStockItem` keeps its existing columns and the upload
+> flow is unchanged. If it comes back, note that `docs/asset/` now holds a real vendor
+> workbook — the thing §10 Q5 was blocked on.
+
 - `package.json`: `exceljs` (server-only; `excel-parser.ts` is imported by route handlers only;
   `serverExternalPackages: ["exceljs"]` if the bundler complains; check the on-disk size against
   `npm view exceljs dist.unpackedSize` — truncated installs have happened here).

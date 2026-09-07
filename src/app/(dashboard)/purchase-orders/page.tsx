@@ -14,11 +14,13 @@ import { getAging, AGING_BADGE } from "@/lib/utils";
 import { type DateRangeKey } from "@/components/date-filter";
 import { FilterSheet } from "@/components/filter-sheet";
 import { SkeletonList } from "@/components/ui/skeleton";
+import { apiTry } from "@/lib/api-client";
+import { ErrorBanner } from "@/components/ui/error-banner";
 
 const PO_COLUMNS: ExportColumn[] = [
   { header: "PO Number", key: "poNumber" },
   { header: "Vendor", key: "vendor.name" },
-  { header: "Status", key: "status", format: (v) => String(v).replace(/_/g, " ") },
+  { header: "Status", key: "status", format: (v) => statusLabel(String(v)) },
   { header: "Order Date", key: "orderDate", format: (v) => new Date(String(v)).toLocaleDateString("en-IN") },
   { header: "Expected Date", key: "expectedDate", format: (v) => v ? new Date(String(v)).toLocaleDateString("en-IN") : "" },
   { header: "Items", key: "items", format: (v) => String((v as Array<{ quantity: number }>)?.reduce((s: number, i) => s + i.quantity, 0) || 0) },
@@ -38,7 +40,10 @@ interface POItem {
   createdBy: { name: string };
 }
 
-const STATUS_FILTERS = ["ALL", "DRAFT", "PENDING_APPROVAL", "APPROVED", "SENT_TO_VENDOR", "PARTIALLY_RECEIVED", "RECEIVED"];
+// CANCELLED was the one POStatus with no chip, so a cancelled PO was reachable only through
+// ALL. P9 makes cancelling a first-class action from every non-terminal state, which would
+// have made that gap much more visible.
+const STATUS_FILTERS = ["ALL", "DRAFT", "PENDING_APPROVAL", "APPROVED", "SENT_TO_VENDOR", "PARTIALLY_RECEIVED", "RECEIVED", "CANCELLED"];
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
@@ -49,14 +54,27 @@ function statusVariant(status: string) {
     case "DRAFT": return "default";
     case "APPROVED": case "RECEIVED": return "success";
     case "CANCELLED": return "danger";
+    // PENDING_APPROVAL, SENT_TO_VENDOR and PARTIALLY_RECEIVED all landed here before P9 and
+    // rendered identically, which mattered little while nothing could reach PENDING_APPROVAL.
+    // Now that it is a real state somebody is waiting on, "warning" is still the right family
+    // — they are all in flight — and the LABEL is what distinguishes them.
     default: return "warning";
   }
+}
+
+/** The label under the chip. Underscores are not words. */
+function statusLabel(status: string) {
+  return status.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase());
 }
 
 export default function PurchaseOrdersPage() {
   const [orders, setOrders] = useState<POItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // A counter, not a re-set of an existing filter: setting a state value to what it already is
+  // does not re-run the effect, so a Retry wired that way is a button that does nothing.
+  const [reloadKey, setReloadKey] = useState(0);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search);
   const [dateFilter, setDateFilter] = useState<DateRangeKey>("all");
@@ -71,12 +89,15 @@ export default function PurchaseOrdersPage() {
     if (dateFrom) params.set("dateFrom", dateFrom);
     if (dateTo) params.set("dateTo", dateTo);
 
-    fetch(`/api/purchase-orders?${params}`)
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setOrders(res.data); })
-      .catch(() => {})
+    // apiTry, not raw .json(): an expired session answers 307 -> /login -> HTML with status
+    // 200, so the old .catch(() => {}) rendered "No purchase orders found" for a dead session.
+    apiTry<POItem[]>(`/api/purchase-orders?${params}`)
+      .then(({ data, error }) => {
+        setOrders(data ?? []);
+        setLoadError(data ? null : error);
+      })
       .finally(() => setLoading(false));
-  }, [statusFilter, debouncedSearch, dateFrom, dateTo]);
+  }, [statusFilter, debouncedSearch, dateFrom, dateTo, reloadKey]);
 
   return (
     <div>
@@ -113,14 +134,20 @@ export default function PurchaseOrdersPage() {
           label: "Status",
           value: statusFilter,
           defaultValue: "ALL",
-          options: STATUS_FILTERS.map((s) => ({ key: s, label: s === "ALL" ? "All" : s.replace(/_/g, " ") })),
+          options: STATUS_FILTERS.map((s) => ({ key: s, label: s === "ALL" ? "All" : statusLabel(s) })),
           onChange: (key) => setStatusFilter(key),
         }]}
       />
 
+      {!loading && loadError && (
+        <div className="mb-3">
+          <ErrorBanner message={loadError} onRetry={() => setReloadKey((k) => k + 1)} />
+        </div>
+      )}
+
       {loading ? (
         <SkeletonList count={6} type="card" />
-      ) : (
+      ) : loadError ? null : (
         <>
         <DesktopTable
           className="hidden lg:block"
@@ -139,7 +166,7 @@ export default function PurchaseOrdersPage() {
               const aging = needsTracking ? getAging(po.orderDate) : null;
               return (
                 <div className="flex items-center gap-1.5">
-                  <Badge variant={statusVariant(po.status)} className="text-[10px]">{po.status.replace(/_/g, " ")}</Badge>
+                  <Badge variant={statusVariant(po.status)} className="text-[10px]">{statusLabel(po.status)}</Badge>
                   {aging && aging.level !== "ok" && (
                     <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full ${AGING_BADGE[aging.level]}`}>{aging.text}</span>
                   )}
@@ -180,7 +207,7 @@ export default function PurchaseOrdersPage() {
                   <div className="text-right shrink-0">
                     <p className="text-sm font-bold text-slate-900 tabular-nums">{formatCurrency(po.grandTotal)}</p>
                     <Badge variant={statusVariant(po.status)} className="mt-1">
-                      {po.status.replace(/_/g, " ")}
+                      {statusLabel(po.status)}
                     </Badge>
                     {aging && aging.level !== "ok" && (
                       <span className={`block text-[11px] font-semibold px-1.5 py-0.5 rounded-full tabular-nums mt-1 ${AGING_BADGE[aging.level]}`}>

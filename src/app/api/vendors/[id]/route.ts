@@ -17,6 +17,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         purchaseOrders: { orderBy: { createdAt: "desc" }, take: 10, include: { items: true } },
         bills: { orderBy: { dueDate: "asc" }, take: 10, include: { payments: true } },
         credits: { orderBy: { creditDate: "desc" }, take: 10 },
+        // The brands this vendor supplies. Read by the "Brands supplied" chips on
+        // /vendors/[id], and the reason vendor resolution tiers 2 and 3 have any data at all.
+        // Shaped like the ledger routes already shape it (api/ledger/vendors/route.ts) so the
+        // two screens agree on what a brand chip looks like.
+        brands: {
+          select: { isPrimary: true, brand: { select: { id: true, name: true } } },
+          orderBy: { brand: { name: "asc" } },
+        },
         _count: { select: { issues: true } },
       },
     });

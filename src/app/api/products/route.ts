@@ -102,6 +102,10 @@ export async function GET(req: NextRequest) {
           id: true, sku: true, name: true, status: true, size: true,
           costPrice: isAdmin, sellingPrice: true, mrp: true, gstRate: true, hsnCode: true,
           currentStock: true, minStock: true, reorderLevel: true,
+          // reorderQty and reorderVendorId are read by the /stock reorder sheet (P8), which
+          // opens pre-filled from the row it was tapped on. Without them the sheet would show
+          // 0 and no vendor for a product that has both, and saving would erase them.
+          reorderQty: true, reorderVendorId: true,
           category: { select: { id: true, name: true } },
           brand: { select: { id: true, name: true } },
           bin: { select: { id: true, code: true, location: true } },

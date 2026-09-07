@@ -211,6 +211,14 @@ export interface Vendor {
   isActive: boolean;
   notes?: string;
   contacts?: VendorContact[];
+  /**
+   * The brands this vendor supplies, flattened from BrandVendor. Present on
+   * GET /api/vendors/[id] and on the ledger routes; absent on the list route.
+   *
+   * `isPrimary` means "the usual billing route for this brand" and is an invariant ACROSS
+   * vendors, not within one — see PUT /api/vendors/[id]/brands.
+   */
+  brands?: Array<{ id: string; name: string; isPrimary: boolean }>;
   createdAt: string;
   updatedAt: string;
 }

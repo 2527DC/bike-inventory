@@ -46,7 +46,7 @@ function formatCurrency(amount: number) {
 
 export default function ReceivablesPage() {
   const { canFetch: canFetchCheck } = usePermissions();
-  const canFetch = canFetchCheck("customers");
+  const canFetch = canFetchCheck("zoho");
 
   const [invoices, setInvoices] = useState<InvoiceItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -125,20 +125,22 @@ export default function ReceivablesPage() {
         throw new Error("Neither Zakya POS nor Zoho Books is connected. Go to Settings > Zoho to connect.");
       }
 
-      // Step 2: Pull invoices with date range
-      let fromDate: string;
-      if (fetchDays === -1 && fetchCustomFrom) {
-        fromDate = fetchCustomFrom;
-      } else {
-        const fromDateObj = new Date();
-        fromDateObj.setDate(fromDateObj.getDate() - (fetchDays === -1 ? 30 : fetchDays));
-        fromDate = fromDateObj.toISOString().split("T")[0];
-      }
+      // Step 2: Pull invoices with date range.
+      //
+      // No local date arithmetic (root cause #5): `new Date()` + `toISOString()` on an IST
+      // browser rolls back a day before 05:30 IST, so the range chips asked Zoho for the
+      // wrong days. And `fetchCustomTo` — which this screen has ALWAYS collected, with a real
+      // input on the form — was never put in the body, so a custom To date did nothing at
+      // all. Both are fixed by letting the server resolve the window.
+      const windowBody =
+        fetchDays === -1
+          ? { fromDate: fetchCustomFrom || undefined, toDate: fetchCustomTo || undefined }
+          : { days: fetchDays };
       const label = fetchDays === -1 ? "custom range" : `last ${fetchDays} days`;
       setFetchProgress(`Pulling unpaid invoices (${label})...`);
       const invRes = await fetch("/api/zoho/trigger-pull", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ step: "invoices", pullId, fromDate }),
+        body: JSON.stringify({ step: "invoices", pullId, ...windowBody }),
       }).then(r => r.json());
       if (!invRes.success) throw new Error(invRes.error || "Invoice fetch failed");
 

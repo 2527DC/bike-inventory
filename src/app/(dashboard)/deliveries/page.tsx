@@ -21,8 +21,12 @@ import { ZohoImportFlow } from "./_components/zoho-import-flow";
 import { BottomSheetModal } from "./_components/bottom-sheet-modal";
 
 export default function DeliveriesPage() {
-  const { canFetch, canDelete } = usePermissions();
-  const canFetchInvoices = canFetch("deliveries");
+  const { canFetch, canApprove, canDelete } = usePermissions();
+  const canFetchInvoices = canFetch("zoho");
+  // The IMPORT gate. The component has never had one — only the Fetch button was gated —
+  // so anyone who could open the panel could also write Delivery rows. The route now
+  // requires zoho.approve; this is the matching client-side courtesy (the API re-checks).
+  const canImportInvoices = canApprove("zoho");
   // Gates the delete button and is handed to the child as a prop. Deleting a delivery is
   // exactly deliveries.delete.
   const isAdmin = canDelete("deliveries");
@@ -196,12 +200,15 @@ export default function DeliveriesPage() {
   // ─── Render ───
   return (
     <div>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-2">
+      {/* Header.
+          `flex-wrap` + `gap-y-2` is load-bearing, not styling. ZohoImportFlow renders a
+          trigger button AND — once opened — a `w-full` inline panel, banners and result
+          cards. Being full width, each of those wraps onto its own line beneath the title
+          row instead of being squeezed into it. That is what makes the fetch UI inline on
+          the page rather than a modal covering the delivery list (R1). */}
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 mb-2">
         <h1 className="text-lg font-bold text-slate-900">Deliveries</h1>
-        <div className="flex items-center gap-1.5">
-          <ZohoImportFlow canFetch={canFetchInvoices} onImported={fetchData} />
-        </div>
+        <ZohoImportFlow canFetch={canFetchInvoices} canImport={canImportInvoices} onImported={fetchData} />
       </div>
 
       {/* Stats */}

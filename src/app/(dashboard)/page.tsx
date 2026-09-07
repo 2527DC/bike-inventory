@@ -14,8 +14,14 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SkeletonDashboard } from "@/components/ui/skeleton";
 import { formatINR, formatTime } from "@/lib/utils";
+import { getStatusLabel } from "@/lib/status-colors";
 import { usePermissions } from "@/lib/use-permissions";
 import { SendScorecardButton } from "./_components/send-scorecard-button";
+import { MyStockAudits } from "./_components/my-stock-audits";
+// "Today" on this screen is the STORE's today, not the browser's UTC one. toISOString() names
+// yesterday for every one of these six calls between midnight and 05:30 IST, which is when the
+// morning shift is already working.
+import { getTodayIST } from "@/lib/services/timezone";
 
 
 interface CEOData {
@@ -49,7 +55,7 @@ function ShareDailyReport() {
   const handleShare = async () => {
     setSharing(true);
     try {
-      const today = new Date().toISOString().split("T")[0];
+      const today = getTodayIST();
       const res = await fetch(`/api/activity?date=${today}`);
       const json = await res.json();
       if (!json.success) throw new Error(json.error);
@@ -71,9 +77,15 @@ function ShareDailyReport() {
       for (const a of activities) {
         catCounts[a.category] = (catCounts[a.category] || 0) + 1;
       }
-      const catEmoji: Record<string, string> = { DELIVERY: "🚚", STOCK: "📦", INBOUND: "📥", TRANSFER: "🔄", EXPENSE: "💰", PAYMENT: "💳", PO: "📝" };
+      // The last four arrived with the ActivityLog source (P5). Without them the report still
+      // printed the line, but as a bullet and the raw key — "• MASTER_DATA: 3".
+      const catEmoji: Record<string, string> = {
+        DELIVERY: "🚚", STOCK: "📦", INBOUND: "📥", TRANSFER: "🔄", EXPENSE: "💰", PAYMENT: "💳", PO: "📝",
+        AUDIT: "📋", ISSUE: "⚠️", ZOHO: "🔄", MASTER_DATA: "🏷️",
+      };
+      const catLabel: Record<string, string> = { MASTER_DATA: "MASTER DATA" };
       for (const [cat, count] of Object.entries(catCounts)) {
-        msg += `${catEmoji[cat] || "•"} ${cat}: ${count}\n`;
+        msg += `${catEmoji[cat] || "•"} ${catLabel[cat] || cat}: ${count}\n`;
       }
 
       // Per-user summary
@@ -126,12 +138,19 @@ function InwardsEODReport() {
   const handleShare = async () => {
     setSharing(true);
     try {
-      const today = new Date().toISOString().split("T")[0];
+      const today = getTodayIST();
       const dateStr = new Date().toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 
       const [inwardsRes, transfersRes, inboundRes] = await Promise.all([
         fetch(`/api/inventory/inwards?dateFrom=${today}&limit=100&mine=true`).then(r => r.json()),
-        fetch(`/api/transfers?dateFrom=${today}&limit=100`).then(r => r.json()),
+        // /api/transfer-orders, not the legacy /api/transfers, which P13 deletes.
+        //
+        // This repoint fixes three bugs at once. The old route IGNORED dateFrom entirely — it
+        // only ever read `status` — so "Transfers: N today" was really the last 100 transfer
+        // ledger rows of all time. It also had no transferNo and no status column (status was
+        // a substring inside `notes`), so the detail lines below fell back to an id fragment
+        // and printed "PENDING" for every row regardless of the truth.
+        fetch(`/api/transfer-orders?dateFrom=${today}&limit=100`).then(r => r.json()),
         fetch(`/api/inventory/inwards?dateFrom=${today}&limit=100`).then(r => r.json()),
       ]);
 
@@ -166,8 +185,15 @@ function InwardsEODReport() {
       if (transfers.length > 0) {
         msg += `*Transfer Details:*\n`;
         for (const t of transfers.slice(0, 10)) {
-          const no = t.transferNo || t.id?.slice(0, 8);
-          const status = t.status || "PENDING";
+          // Real columns now: orderNo is TRF-YYYYMM-NNNN and status is the enum. The old
+          // `|| "PENDING"` fallback is gone deliberately — it was not a fallback, it was the
+          // only value that ever printed.
+          //
+          // getStatusLabel, not the raw enum. This string is pasted into WhatsApp and read by
+          // a person, and P14 introduced IN_TRANSIT — which would have arrived in the owner’s
+          // evening summary as "TRF-202609-0001: IN_TRANSIT", underscore and all.
+          const no = t.orderNo || t.id?.slice(0, 8);
+          const status = getStatusLabel(t.status);
           msg += `• ${no}: ${status}\n`;
         }
         if (transfers.length > 10) msg += `... +${transfers.length - 10} more\n`;
@@ -213,7 +239,7 @@ function AdminDashboard() {
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    const today = new Date().toISOString().split("T")[0];
+    const today = getTodayIST();
     const safeFetch = (url: string) => fetch(url).then((r) => r.ok ? r.json() : { success: false }).catch(() => ({ success: false }));
 
     Promise.all([
@@ -507,7 +533,7 @@ function SupervisorDashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const today = new Date().toISOString().split("T")[0];
+    const today = getTodayIST();
     const safeFetch = (url: string) => fetch(url).then((r) => r.ok ? r.json() : { success: false }).catch(() => ({ success: false }));
 
     Promise.all([
@@ -650,7 +676,7 @@ function ClerkDashboard({ type }: { type: "inward" | "outward" }) {
   const [shareOpen, setShareOpen] = useState(false);
 
   useEffect(() => {
-    const today = new Date().toISOString().split("T")[0];
+    const today = getTodayIST();
     const endpoint = type === "inward" ? "/api/inventory/inwards" : "/api/inventory/outwards";
     Promise.all([
       fetch(`${endpoint}?dateFrom=${today}&limit=50&mine=true`).then(r => r.json()),
@@ -880,7 +906,7 @@ function PurchaseManagerDashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const today = new Date().toISOString().split("T")[0];
+    const today = getTodayIST();
     const safeFetch = (url: string) => fetch(url).then((r) => r.ok ? r.json() : { success: false }).catch(() => ({ success: false }));
     Promise.all([
       safeFetch("/api/products?limit=1&status=ACTIVE"),
@@ -989,6 +1015,11 @@ export default function DashboardPage() {
         </p>
         <p className="text-xs font-medium text-slate-400 mt-0.5">{role?.name || "Team Member"}</p>
       </div>
+
+      {/* Above the role dashboard, deliberately: an audit assigned to you is work someone is
+          waiting on, and it used to be announced nowhere at all. Renders nothing when you
+          have none, so it costs no space on the days it has nothing to say. */}
+      {!loading && can("stock_audit", "view") && <MyStockAudits />}
 
       {!loading && pickDashboard()}
     </div>

@@ -4,6 +4,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { clearWarehouseCache } from "@/lib/warehouses";
 import { warehouseUpdateSchema } from "@/lib/validations";
 import { createLogger } from "@/lib/logger";
 
@@ -58,6 +59,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     });
 
     log.info("warehouse updated", { warehouseId: id, fields: Object.keys(data) });
+    // A rename or a deactivation changes what the cached set says.
+    // The cached array would otherwise outlive the change for the life of the process —
+    // which is how a warehouse the picker offers gets refused by the server that offered it.
+    clearWarehouseCache();
     return successResponse(warehouse);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
@@ -85,12 +90,28 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
       select: {
         id: true,
         name: true,
-        _count: { select: { stockLevels: true, users: true, transfersFrom: true, transfersTo: true } },
+        _count: {
+          select: {
+            stockLevels: true,
+            users: true,
+            transfersFrom: true,
+            transfersTo: true,
+            // Three Restrict foreign keys added by MIG-1a. `stockCounts` is an audit scoped
+            // to this warehouse; the two `orderTransfers*` are the transfer HEADER lane, as
+            // opposed to `transfersFrom`/`transfersTo`, which are the per-item lanes that
+            // already existed. Both sets are counted because both hold the row.
+            stockCounts: true,
+            orderTransfersFrom: true,
+            orderTransfersTo: true,
+          },
+        },
       },
     });
     if (!warehouse) return errorResponse("Warehouse not found", 404);
 
     const transfers = warehouse._count.transfersFrom + warehouse._count.transfersTo;
+    const transferOrders =
+      warehouse._count.orderTransfersFrom + warehouse._count.orderTransfersTo;
     const blockers: string[] = [];
 
     if (warehouse._count.stockLevels) {
@@ -105,6 +126,8 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
       );
     }
     if (transfers) blockers.push(`${transfers} transfer line(s)`);
+    if (transferOrders) blockers.push(`${transferOrders} transfer order(s)`);
+    if (warehouse._count.stockCounts) blockers.push(`${warehouse._count.stockCounts} stock audit(s)`);
 
     if (blockers.length) {
       log.info("warehouse delete refused", { warehouseId: id, blockers });
@@ -119,6 +142,10 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
 
     await prisma.warehouse.delete({ where: { id } });
     log.info("warehouse deleted", { warehouseId: id, unassignedUsers: warehouse._count.users });
+    // The deleted warehouse is still in the cached set.
+    // The cached array would otherwise outlive the change for the life of the process —
+    // which is how a warehouse the picker offers gets refused by the server that offered it.
+    clearWarehouseCache();
     return successResponse({
       deleted: true,
       name: warehouse.name,

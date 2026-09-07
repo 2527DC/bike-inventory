@@ -13,7 +13,10 @@ import { getBooks, getZakya } from "@/lib/integrations";
  */
 export async function POST(req: NextRequest) {
   try {
-    await requireFeature("deliveries", "fetch");
+    // zoho.fetch, not deliveries.fetch (Option B, R1). Four screens used to gate one server
+    // permission through four different module actions, so a role could hold the button and
+    // not the route, or the route and not the button. zoho.* is the single truth now.
+    await requireFeature("zoho", "fetch");
     const { query } = (await req.json()) as { query: string };
 
     if (!query || query.trim().length < 3) {
@@ -77,10 +80,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Filter out void invoices and BCC (Bharath Cycle Centre) invoices
-    invoices = invoices.filter((inv: { status: string; invoice_number: string }) =>
-      inv.status !== "void" && !inv.invoice_number.startsWith("BCC/")
-    );
+    // Void only. The `!inv.invoice_number.startsWith("BCC/")` that used to sit here is GONE
+    // (O8, owner 4 Sep) — the last of three routes hardcoding a store NAME to decide what to
+    // hide. Searching for a Bharath Cycle Centre invoice returned "not found", which is how a
+    // whole store with its own GSTIN stayed invisible. Its invoices are searchable and
+    // importable now, tagged with their store from Store.invoicePrefix.
+    invoices = invoices.filter((inv: { status: string }) => inv.status !== "void");
 
     // Check which are already imported
     const invoiceNumbers = invoices.map((inv: { invoice_number: string }) => inv.invoice_number);

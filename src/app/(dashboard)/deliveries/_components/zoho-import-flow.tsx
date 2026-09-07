@@ -1,10 +1,14 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { Cloud, Search, Download, Loader2, Phone } from "lucide-react";
+import { apiFetch, apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+import { Cloud, Download, Loader2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { BottomSheetModal } from "./bottom-sheet-modal";
+import { ZohoFetchPanel, type FetchMode } from "./zoho-fetch-panel";
 import { ZohoImportResults, type ImportableInvoice } from "./zoho-import-results";
+
+const log = createLogger("deliveries:zoho-import");
 
 // ─── Zoho types (from original page) ───
 
@@ -43,16 +47,25 @@ interface ZohoInvoicePreview {
   };
 }
 
-type ImportTab = "search" | "fetch";
-
 interface ZohoImportFlowProps {
   canFetch: boolean;
+  /**
+   * zoho.approve. Importing WRITES Delivery rows, so it is a separate grant from fetching —
+   * and this prop is new: the component had no import gate at all, only the fetch one, so
+   * anyone who could open the panel could also import. Cosmetic, as always: the route
+   * re-checks (CLAUDE.md).
+   */
+  canImport: boolean;
   onImported: () => void;
 }
 
-export function ZohoImportFlow({ canFetch, onImported }: ZohoImportFlowProps) {
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<ImportTab>("search");
+export function ZohoImportFlow({ canFetch, canImport, onImported }: ZohoImportFlowProps) {
+  // Was `sheetOpen` + a two-tab bar. The panel is inline now (R1) and the tabs became one
+  // segmented toggle, so a single set of banners and result cards serves both modes — the
+  // tabs each owned their own copy, which is how a message could sit on the tab you were
+  // not looking at.
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [mode, setMode] = useState<FetchMode>("fetch");
 
   // ─── Quick Search state ───
   const [invoiceSearch, setInvoiceSearch] = useState("");
@@ -72,8 +85,18 @@ export function ZohoImportFlow({ canFetch, onImported }: ZohoImportFlowProps) {
   const [fetchDays, setFetchDays] = useState<number>(7);
   const [fetchCustomFrom, setFetchCustomFrom] = useState("");
   const [fetchCustomTo, setFetchCustomTo] = useState("");
+  // Persistent summary of the last fetch — "12 found in Zoho (2 – 4 Sep) · 9 already
+  // imported · 1 void · 2 BCC". Survives the result card so the counts stay readable after
+  // an import, which is when people actually ask "where did the rest go?".
+  const [fetchSummary, setFetchSummary] = useState("");
+  const [fetchNotice, setFetchNotice] = useState("");
 
-  const isPhone = /^\d{10,}$/.test(invoiceSearch.trim());
+  // ONE progress string and ONE busy flag for both modes. The old render had four separate
+  // near-identical strips.
+  const progress = searchProgress || fetchProgress;
+  const isBusy =
+    searchStep === "searching" || searchStep === "importing" ||
+    fetchStep === "fetching" || fetchStep === "importing";
 
   // ─── Quick Search handlers ───
   const handleQuickSearch = useCallback(async () => {
@@ -87,25 +110,15 @@ export function ZohoImportFlow({ canFetch, onImported }: ZohoImportFlowProps) {
     setSearchError("");
     setSearchProgress(`Searching Zoho for "${q}"...`);
     try {
-      const res = await fetch("/api/deliveries/search-zoho", {
+      // apiFetch replaces a hand-rolled HTML guard (`text.startsWith("{")`) that could not
+      // tell an expired session from a server error — the exact failure api-client exists for.
+      const data = await apiFetch<{ results: ZohoSearchResult[] }>("/api/deliveries/search-zoho", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: q }),
+        json: { query: q },
+        timeoutMs: 30_000,
       });
 
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(
-          text.startsWith("{")
-            ? JSON.parse(text).error
-            : `Server error (${res.status}). Try again.`
-        );
-      }
-
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || "Search failed");
-
-      const results: ZohoSearchResult[] = data.data.results || [];
+      const results: ZohoSearchResult[] = data.results || [];
       setSearchResults(results);
 
       const newOnes = results.filter((r) => !r.alreadyImported);
@@ -134,25 +147,16 @@ export function ZohoImportFlow({ canFetch, onImported }: ZohoImportFlowProps) {
     setSearchError("");
     setSearchProgress(`Importing ${selectedResults.size} invoice(s)...`);
     try {
-      const res = await fetch("/api/deliveries/import-zoho", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invoiceIds: Array.from(selectedResults) }),
-      });
+      const data = await apiFetch<{ imported: number; errors: string[] }>(
+        "/api/deliveries/import-zoho",
+        {
+          method: "POST",
+          json: { invoiceIds: Array.from(selectedResults) },
+          timeoutMs: 60_000,
+        }
+      );
 
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(
-          text.startsWith("{")
-            ? JSON.parse(text).error
-            : `Server error (${res.status})`
-        );
-      }
-
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || "Import failed");
-
-      const { imported, errors } = data.data;
+      const { imported, errors } = data;
       setSearchStep("idle");
       setSearchResults([]);
       setSelectedResults(new Set());
@@ -161,7 +165,7 @@ export function ZohoImportFlow({ canFetch, onImported }: ZohoImportFlowProps) {
       if (errors && errors.length > 0) {
         setSearchError(`Imported ${imported}. Issues: ${errors.join(", ")}`);
       }
-      setSheetOpen(false);
+      setPanelOpen(false);
       onImported();
     } catch (e) {
       setSearchError(e instanceof Error ? e.message : "Import failed");
@@ -175,80 +179,109 @@ export function ZohoImportFlow({ canFetch, onImported }: ZohoImportFlowProps) {
   const handleFetchInvoices = useCallback(async () => {
     setFetchStep("fetching");
     setFetchError("");
-    setFetchProgress("Connecting to Zoho...");
+    setFetchSummary("");
+    setFetchNotice("");
+    setFetchProgress("Connecting to Zoho…");
     try {
-      const initRes = await fetch("/api/zoho/trigger-pull", {
+      // apiFetch, not raw fetch (CLAUDE.md). The old form threw
+      // `Connection failed (${status})` — a bare number — for every refusal, including the
+      // 409 whose body now carries a sentence the user can act on ("Zoho is not connected —
+      // connect it on Settings › Integrations"). apiFetch surfaces that message.
+      const initData = await apiFetch<{ pullId: string }>("/api/zoho/trigger-pull", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ step: "init" }),
+        json: { step: "init" },
+        timeoutMs: 20_000,
       });
-      if (!initRes.ok) throw new Error(`Connection failed (${initRes.status})`);
-      const initData = await initRes.json();
-      if (!initData.success)
-        throw new Error(initData.error || "Init failed");
-      const pullId = initData.data.pullId;
+      const pullId = initData.pullId;
       setFetchPullId(pullId);
 
-      let fromDate: string;
-      if (fetchDays === -1 && fetchCustomFrom) {
-        fromDate = fetchCustomFrom;
-      } else {
-        const fromDateObj = new Date();
-        fromDateObj.setDate(fromDateObj.getDate() - fetchDays);
-        fromDate = fromDateObj.toISOString().slice(0, 10);
-      }
-      const label =
-        fetchDays === -1 ? "custom range" : `last ${fetchDays} days`;
-      setFetchProgress(`Pulling invoices (${label})...`);
-      const invRes = await fetch("/api/zoho/trigger-pull", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ step: "invoices", pullId, fromDate }),
-      });
-      if (!invRes.ok)
-        throw new Error(`Fetch failed (${invRes.status}). Try again.`);
-      const invData = await invRes.json();
-      if (!invData.success)
-        throw new Error(invData.error || "Invoice fetch failed");
+      // THE DATE ARITHMETIC IS GONE (root cause #5).
+      //
+      // This used to build `fromDate` here: `new Date()`, subtract N days, then
+      // `.toISOString().slice(0,10)`. The browser is at IST (+5:30), so before 05:30
+      // `toISOString()` has already rolled back to yesterday — "3 days" on 3 Sep at 02:00
+      // asked Zoho for 30 Aug–2 Sep, an extra day at the front and TODAY'S invoices missing.
+      // It also never sent a To date, so `fetchCustomTo` was collected and thrown away.
+      //
+      // The server resolves the window now, once, in IST, and tells us what it used.
+      const windowBody =
+        fetchDays === -1
+          ? { fromDate: fetchCustomFrom || undefined, toDate: fetchCustomTo || undefined }
+          : { days: fetchDays };
 
-      const invFound = invData.data.invoicesNew || 0;
       setFetchProgress(
-        `Found ${invFound} invoice${invFound !== 1 ? "s" : ""}. Finalizing...`
+        fetchDays === -1 ? "Pulling invoices (custom range)…" : `Pulling invoices (last ${fetchDays} days)…`
       );
-      await fetch("/api/zoho/trigger-pull", {
+      const invData = await apiFetch<{
+        invoicesNew: number;
+        apiCalls: number;
+        errors: string[];
+        window: { from: string; to: string; clampedToFy: boolean } | null;
+        fetched: number;
+        skipped: { counts: { alreadyImported: number; void?: number; byStore?: Record<string, number> } };
+      }>("/api/zoho/trigger-pull", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        json: { step: "invoices", pullId, ...windowBody },
+        timeoutMs: 60_000,
+      });
+
+      const invFound = invData.invoicesNew || 0;
+      const w = invData.window;
+      // The label comes from the SERVER's window, not from what we asked for — so what the
+      // user reads is what Zoho was actually queried with.
+      const rangeLabel = w ? `${w.from} – ${w.to}` : "search";
+      const counts = invData.skipped?.counts ?? { alreadyImported: 0 };
+      const parts = [`${invData.fetched ?? 0} found in Zoho (${rangeLabel})`];
+      if (counts.alreadyImported) parts.push(`${counts.alreadyImported} already imported`);
+      if (counts.void) parts.push(`${counts.void} void`);
+      for (const [code, n] of Object.entries(counts.byStore ?? {})) {
+        if (code !== "unmatchedPrefix") parts.push(`${n} ${code}`);
+      }
+      if (counts.byStore?.unmatchedPrefix) {
+        parts.push(`${counts.byStore.unmatchedPrefix} with no store prefix`);
+      }
+      setFetchSummary(parts.join(" · "));
+      if (w?.clampedToFy) {
+        setFetchNotice(`Start date moved to ${w.from} — the financial year does not go back further.`);
+      }
+
+      setFetchProgress(`Found ${invFound} invoice${invFound !== 1 ? "s" : ""}. Finalizing…`);
+      // Deliberately not awaited into the failure path: finalize only closes the SyncLog row,
+      // and the invoices are already staged. A finalize failure is logged, not surfaced.
+      await apiTry("/api/zoho/trigger-pull", {
+        method: "POST",
+        json: {
           step: "finalize",
           pullId,
-          invoicesNew: invData.data.invoicesNew,
-          apiCalls: invData.data.apiCalls,
-          allErrors: invData.data.errors || [],
-        }),
-      }).catch(() => {});
+          invoicesNew: invData.invoicesNew,
+          apiCalls: invData.apiCalls,
+          allErrors: invData.errors || [],
+        },
+        timeoutMs: 20_000,
+      }).then((r) => {
+        if (r.error) log.warn("finalize failed", { pullId, error: r.error });
+      });
 
-      setFetchProgress("Loading preview...");
-      const previewRes = await fetch(
-        `/api/zoho/pull-review?pullId=${pullId}`
-      ).then((r) => r.json());
-      if (previewRes.success) {
-        const invoices = (previewRes.data.previews || []).filter(
-          (
-            p: ZohoInvoicePreview & { entityType: string; status: string }
-          ) => p.entityType === "invoice" && p.status === "PENDING"
+      setFetchProgress("Loading preview…");
+      // EVERY branch sets state now (root cause #3). This was
+      // `if (previewRes.success) { … }` with NO else — on a failure the component stayed in
+      // "fetching" forever: spinner gone, button disabled, nothing said.
+      const previewData = await apiFetch<{ previews: Array<ZohoInvoicePreview & { entityType: string; status: string }> }>(
+        `/api/zoho/pull-review?pullId=${pullId}`,
+        { timeoutMs: 20_000 }
+      );
+      const invoices = (previewData.previews || []).filter(
+        (p) => p.entityType === "invoice" && p.status === "PENDING"
+      );
+      setInvoicePreviews(invoices);
+      setSelectedInvoices(new Set(invoices.map((inv) => inv.id)));
+      setFetchStep(invoices.length > 0 ? "results" : "idle");
+      if (invoices.length === 0) {
+        setFetchError(
+          counts.alreadyImported > 0
+            ? `${invData.fetched} invoice${invData.fetched === 1 ? "" : "s"} dated ${rangeLabel}, all already imported.`
+            : `Zoho has no invoices dated ${rangeLabel}.`
         );
-        setInvoicePreviews(invoices);
-        setSelectedInvoices(
-          new Set(invoices.map((inv: ZohoInvoicePreview) => inv.id))
-        );
-        setFetchStep(invoices.length > 0 ? "results" : "idle");
-        if (invoices.length === 0) {
-          setFetchError(
-            invFound > 0
-              ? `${invFound} found but already imported`
-              : "No new invoices found (last 24h)"
-          );
-        }
       }
     } catch (e) {
       setFetchError(e instanceof Error ? e.message : "Fetch failed");
@@ -256,32 +289,64 @@ export function ZohoImportFlow({ canFetch, onImported }: ZohoImportFlowProps) {
     } finally {
       setFetchProgress("");
     }
-  }, [fetchDays, fetchCustomFrom]);
+  }, [fetchDays, fetchCustomFrom, fetchCustomTo]);
 
   const handleImportSelected = useCallback(async () => {
     if (selectedInvoices.size === 0) return;
     setFetchStep("importing");
+    setFetchError("");
+
+    // IMPORT IN CHUNKS OF 25.
+    //
+    // The approve route fetches a Zoho invoice DETAIL per record inside a 60-second function.
+    // A 120-invoice import therefore dies at maxDuration with a 504 and no body, and the user
+    // learns nothing about how many got in. Chunking keeps every request comfortably inside
+    // the budget and lets a mid-chunk failure report exactly where it stopped — with the
+    // remaining rows STILL SELECTED, so Import can simply be pressed again.
+    const CHUNK = 25;
+    const ids = Array.from(selectedInvoices);
+    const remaining = new Set(selectedInvoices);
+    let done = 0;
+
     try {
-      const res = await fetch("/api/zoho/pull-review/approve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pullId: fetchPullId,
-          action: "approve",
-          entityType: "invoice",
-          previewIds: Array.from(selectedInvoices),
-        }),
-      }).then((r) => r.json());
-      if (!res.success) throw new Error(res.error || "Import failed");
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const slice = ids.slice(i, i + CHUNK);
+        setFetchProgress(
+          ids.length > CHUNK
+            ? `Importing ${i + 1}–${Math.min(i + CHUNK, ids.length)} of ${ids.length}…`
+            : `Importing ${ids.length} invoice${ids.length === 1 ? "" : "s"}…`
+        );
+        await apiFetch("/api/zoho/pull-review/approve", {
+          method: "POST",
+          json: {
+            pullId: fetchPullId,
+            action: "approve",
+            entityType: "invoice",
+            previewIds: slice,
+          },
+          timeoutMs: 60_000,
+        });
+        for (const id of slice) remaining.delete(id);
+        done += slice.length;
+      }
+
       setFetchStep("idle");
       setInvoicePreviews([]);
       setSelectedInvoices(new Set());
-      setFetchError("");
-      setSheetOpen(false);
+      setPanelOpen(false);
       onImported();
     } catch (e) {
-      setFetchError(e instanceof Error ? e.message : "Import failed");
+      // Keep what has NOT been imported selected, so retrying does not re-import the rest.
+      setSelectedInvoices(remaining);
+      setFetchError(
+        done > 0
+          ? `Imported ${done} of ${ids.length}. ${e instanceof Error ? e.message : "Import failed"} — press Import again for the rest.`
+          : e instanceof Error ? e.message : "Import failed"
+      );
       setFetchStep("results");
+      if (done > 0) onImported();
+    } finally {
+      setFetchProgress("");
     }
   }, [selectedInvoices, fetchPullId, onImported]);
 
@@ -350,324 +415,165 @@ export function ZohoImportFlow({ canFetch, onImported }: ZohoImportFlowProps) {
       setSelectedInvoices(new Set(invoicePreviews.map((inv) => inv.id)));
     }
   };
-
-  const handleOpenSheet = () => {
-    setSheetOpen(true);
-    // Reset states when opening
+  // `panelOpen` replaces `sheetOpen`. Same idea, different consequence: this opens an inline
+  // panel that pushes the list down instead of a modal that covers it, so the deliveries you
+  // already have stay visible while you decide what to pull (R1).
+  const openPanel = () => {
+    setPanelOpen(true);
     setSearchError("");
     setFetchError("");
   };
 
-  const handleCloseSheet = () => {
-    // Don't close if an operation is in progress
-    if (
-      searchStep === "searching" ||
-      searchStep === "importing" ||
-      fetchStep === "fetching" ||
-      fetchStep === "importing"
-    ) {
-      return;
-    }
-    setSheetOpen(false);
+  const closePanel = () => {
+    // Never close mid-request: the panel is where progress and errors are reported, and
+    // closing it would strand a running fetch with nowhere to say what happened.
+    if (isBusy) return;
+    setPanelOpen(false);
   };
 
   if (!canFetch) return null;
 
-  const isBusy =
-    searchStep === "searching" ||
-    searchStep === "importing" ||
-    fetchStep === "fetching" ||
-    fetchStep === "importing";
-
   return (
     <>
-      {/* Trigger button */}
-      <button
-        onClick={handleOpenSheet}
-        disabled={isBusy}
-        className="flex items-center gap-1 bg-slate-700 text-white px-3 py-2 rounded-lg text-xs font-medium disabled:opacity-50"
-        title="Fetch deliveries from Zoho"
-      >
-        {isBusy ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        ) : (
-          <Cloud className="h-3.5 w-3.5" />
-        )}
-        Fetch
-      </button>
+      {/* Trigger. Stays in the page header row; the panel below is a `w-full` flex item, so
+          it wraps onto its own line under the header (hence the header's `flex-wrap`). */}
+      {!panelOpen && (
+        <button
+          onClick={openPanel}
+          disabled={isBusy}
+          className="flex items-center gap-1 bg-slate-700 text-white px-3 min-h-[44px] rounded-lg text-xs font-medium disabled:opacity-50"
+          title="Fetch deliveries from Zoho"
+        >
+          {isBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Cloud className="h-3.5 w-3.5" />}
+          Fetch
+        </button>
+      )}
 
-      {/* Progress banners (shown above the list even when sheet is closed) */}
-      {searchStep === "searching" && searchProgress && (
-        <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg p-2.5 mb-2 mt-2">
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600 shrink-0" />
-          <span className="text-xs text-blue-700 font-medium">
-            {searchProgress}
-          </span>
-        </div>
+      {panelOpen && (
+        <ZohoFetchPanel
+          mode={mode}
+          onModeChange={setMode}
+          searchText={invoiceSearch}
+          onSearchTextChange={setInvoiceSearch}
+          onSearch={handleQuickSearch}
+          searching={searchStep === "searching"}
+          days={fetchDays}
+          onDaysChange={setFetchDays}
+          customFrom={fetchCustomFrom}
+          onCustomFromChange={setFetchCustomFrom}
+          customTo={fetchCustomTo}
+          onCustomToChange={setFetchCustomTo}
+          onFetch={handleFetchInvoices}
+          fetching={fetchStep === "fetching"}
+          onCancel={closePanel}
+        />
       )}
-      {searchStep === "importing" && (
-        <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg p-2.5 mb-2 mt-2">
+
+      {/* ─── Progress ───
+          ONE strip for both modes. There used to be four near-identical copies, two of them
+          duplicated inside the modal's tabs, which is how a message could end up showing on
+          the tab you were not looking at. */}
+      {progress && (
+        <div className="w-full flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg p-2.5 mt-2">
           <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600 shrink-0" />
-          <span className="text-xs text-blue-700 font-medium">
-            {searchProgress || "Importing..."}
-          </span>
-        </div>
-      )}
-      {fetchStep === "fetching" && fetchProgress && (
-        <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg p-2.5 mb-2 mt-2">
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600 shrink-0" />
-          <span className="text-xs text-blue-700 font-medium">
-            {fetchProgress}
-          </span>
-        </div>
-      )}
-      {fetchStep === "importing" && (
-        <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 mt-2">
-          <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-          <span className="text-xs text-blue-700">
-            Importing {selectedInvoices.size} invoices...
-          </span>
+          <span className="text-xs text-blue-700 font-medium">{progress}</span>
         </div>
       )}
 
-      {/* Error banners */}
-      {searchError && !sheetOpen && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-2 mt-2 text-xs text-amber-700">
+      {/* ─── Errors ───
+          One banner per mode, rendered at page level rather than once per tab. Retry re-runs
+          the request that failed — the old banners only offered "dismiss". */}
+      {searchError && (
+        <div className="w-full bg-amber-50 border border-amber-200 rounded-lg p-2.5 mt-2 text-xs text-amber-700">
           {searchError}
-          <button
-            onClick={() => setSearchError("")}
-            className="ml-2 underline"
-          >
+          <button onClick={() => { setSearchError(""); handleQuickSearch(); }} className="ml-2 underline font-medium">
+            retry
+          </button>
+          <button onClick={() => setSearchError("")} className="ml-2 underline">
             dismiss
           </button>
         </div>
       )}
-      {fetchError && !sheetOpen && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-2 mt-2 text-xs text-amber-700">
+
+      {fetchError && (
+        <div className="w-full bg-amber-50 border border-amber-200 rounded-lg p-2.5 mt-2 text-xs text-amber-700">
           {fetchError}
-          <button
-            onClick={() => setFetchError("")}
-            className="ml-2 underline"
-          >
+          <button onClick={() => { setFetchError(""); handleFetchInvoices(); }} className="ml-2 underline font-medium">
+            retry
+          </button>
+          <button onClick={() => setFetchError("")} className="ml-2 underline">
             dismiss
           </button>
         </div>
       )}
 
-      {/* Bottom sheet with tabs */}
-      <BottomSheetModal
-        open={sheetOpen}
-        onClose={handleCloseSheet}
-        title="Import from Zoho"
-        actions={[]}
-      >
-        {/* Tab bar */}
-        <div className="flex gap-1 bg-slate-100 rounded-lg p-0.5 mb-3">
-          <button
-            onClick={() => setActiveTab("search")}
-            className={`flex-1 py-1.5 rounded-md text-xs font-medium transition-colors ${
-              activeTab === "search"
-                ? "bg-white text-slate-900 shadow-sm"
-                : "text-slate-500"
-            }`}
-          >
-            Search
-          </button>
-          <button
-            onClick={() => setActiveTab("fetch")}
-            className={`flex-1 py-1.5 rounded-md text-xs font-medium transition-colors ${
-              activeTab === "fetch"
-                ? "bg-white text-slate-900 shadow-sm"
-                : "text-slate-500"
-            }`}
-          >
-            Bulk Fetch
-          </button>
+      {/* Where the invoices that are NOT in the result card went. Without this, a fetch that
+          finds 12 and shows 3 looks broken; the other 9 were already imported. */}
+      {fetchSummary && (
+        <div className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 mt-2 text-[11px] text-slate-600">
+          {fetchSummary}
         </div>
+      )}
 
-        {/* ─── Search Tab ─── */}
-        {activeTab === "search" && (
-          <div>
-            <div className="flex gap-1.5 mb-2">
-              <div className="relative flex-1">
-                <input
-                  type="text"
-                  placeholder="Invoice / Phone..."
-                  value={invoiceSearch}
-                  onChange={(e) => setInvoiceSearch(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleQuickSearch()}
-                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-slate-400 pr-8"
-                />
-                {isPhone && (
-                  <Phone className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3 w-3 text-green-500" />
-                )}
-              </div>
-              <button
-                onClick={handleQuickSearch}
-                disabled={
-                  searchStep === "searching" || searchStep === "importing"
-                }
-                className="flex items-center gap-1 bg-slate-900 text-white px-3 py-2 rounded-lg text-xs font-medium disabled:opacity-50 shrink-0"
-              >
-                {searchStep === "searching" ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Search className="h-3.5 w-3.5" />
-                )}
-                Search
-              </button>
+      {fetchNotice && (
+        <div className="w-full bg-blue-50 border border-blue-200 rounded-lg p-2.5 mt-2 text-[11px] text-blue-700">
+          {fetchNotice}
+        </div>
+      )}
+
+      {/* ─── Results ─── */}
+      {searchStep === "results" && searchImportable.length > 0 && (
+        <Card className="w-full border-blue-200 bg-blue-50/50 mt-2">
+          <CardContent className="p-3">
+            <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+              <p className="text-xs font-semibold text-blue-800">
+                {searchImportable.length} invoice{searchImportable.length !== 1 ? "s" : ""} found in Zoho
+              </p>
+              {canImport && selectedResults.size > 0 && (
+                <button
+                  onClick={handleImportSearchResults}
+                  className="flex items-center gap-1 bg-blue-600 text-white px-3 min-h-[36px] rounded-md text-xs font-medium"
+                >
+                  <Download className="h-3 w-3" /> Import {selectedResults.size}
+                </button>
+              )}
             </div>
+            <ZohoImportResults
+              results={searchImportable}
+              selected={selectedResults}
+              onToggle={toggleSearchResult}
+              onSelectAll={toggleAllSearch}
+            />
+          </CardContent>
+        </Card>
+      )}
 
-            {searchError && (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-2 text-xs text-amber-700">
-                {searchError}
+      {fetchStep === "results" && fetchImportable.length > 0 && (
+        <Card className="w-full border-blue-200 bg-blue-50/50 mt-2">
+          <CardContent className="p-3">
+            <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+              <p className="text-xs font-semibold text-blue-800">
+                {fetchImportable.length} new invoice{fetchImportable.length !== 1 ? "s" : ""} from Zoho
+              </p>
+              {canImport && (
                 <button
-                  onClick={() => setSearchError("")}
-                  className="ml-2 underline"
+                  onClick={handleImportSelected}
+                  disabled={selectedInvoices.size === 0}
+                  className="flex items-center gap-1 bg-blue-600 text-white px-3 min-h-[36px] rounded-md text-xs font-medium disabled:opacity-50"
                 >
-                  dismiss
+                  <Download className="h-3 w-3" /> Import {selectedInvoices.size}
                 </button>
-              </div>
-            )}
-
-            {searchStep === "results" && searchImportable.length > 0 && (
-              <Card className="border-blue-200 bg-blue-50/50">
-                <CardContent className="p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-xs font-semibold text-blue-800">
-                      {searchImportable.length} invoice
-                      {searchImportable.length !== 1 ? "s" : ""} found in Zoho
-                    </p>
-                    {selectedResults.size > 0 && (
-                      <button
-                        onClick={handleImportSearchResults}
-                        className="flex items-center gap-1 bg-blue-600 text-white px-3 py-1.5 rounded-md text-xs font-medium"
-                      >
-                        <Download className="h-3 w-3" /> Import{" "}
-                        {selectedResults.size}
-                      </button>
-                    )}
-                  </div>
-                  <ZohoImportResults
-                    results={searchImportable}
-                    selected={selectedResults}
-                    onToggle={toggleSearchResult}
-                    onSelectAll={toggleAllSearch}
-                  />
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        )}
-
-        {/* ─── Fetch Tab ─── */}
-        {activeTab === "fetch" && (
-          <div>
-            {fetchStep === "idle" && (
-              <>
-                <p className="text-xs font-medium text-slate-700 mb-2">
-                  Fetch deliveries created in Zoho within:
-                </p>
-                <div className="flex flex-wrap gap-2 mb-3">
-                  {[
-                    { label: "3 days", value: 3 },
-                    { label: "7 days", value: 7 },
-                    { label: "14 days", value: 14 },
-                    { label: "30 days", value: 30 },
-                    { label: "Custom", value: -1 },
-                  ].map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => setFetchDays(opt.value)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                        fetchDays === opt.value
-                          ? "bg-slate-900 text-white border-slate-900"
-                          : "bg-white text-slate-600 border-slate-300 hover:border-slate-400"
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-                {fetchDays === -1 && (
-                  <div className="flex gap-2 mb-3">
-                    <div>
-                      <label className="text-xs text-slate-500 block mb-0.5">
-                        From
-                      </label>
-                      <input
-                        type="date"
-                        value={fetchCustomFrom}
-                        onChange={(e) => setFetchCustomFrom(e.target.value)}
-                        className="px-2 py-1.5 text-xs border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-slate-500 block mb-0.5">
-                        To (optional)
-                      </label>
-                      <input
-                        type="date"
-                        value={fetchCustomTo}
-                        onChange={(e) => setFetchCustomTo(e.target.value)}
-                        className="px-2 py-1.5 text-xs border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleFetchInvoices}
-                    disabled={fetchDays === -1 && !fetchCustomFrom}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-900 text-white disabled:opacity-50"
-                  >
-                    <Cloud className="h-3.5 w-3.5" /> Fetch
-                  </button>
-                </div>
-              </>
-            )}
-
-            {fetchError && (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-2 text-xs text-amber-700">
-                {fetchError}
-                <button
-                  onClick={() => setFetchError("")}
-                  className="ml-2 underline"
-                >
-                  dismiss
-                </button>
-              </div>
-            )}
-
-            {fetchStep === "results" && fetchImportable.length > 0 && (
-              <Card className="border-blue-200 bg-blue-50/50">
-                <CardContent className="p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-xs font-semibold text-blue-800">
-                      {fetchImportable.length} new invoice
-                      {fetchImportable.length !== 1 ? "s" : ""} from Zoho
-                    </p>
-                    <button
-                      onClick={handleImportSelected}
-                      disabled={selectedInvoices.size === 0}
-                      className="flex items-center gap-1 bg-blue-600 text-white px-3 py-1.5 rounded-md text-xs font-medium disabled:opacity-50"
-                    >
-                      <Download className="h-3 w-3" /> Import{" "}
-                      {selectedInvoices.size}
-                    </button>
-                  </div>
-                  <ZohoImportResults
-                    results={fetchImportable}
-                    selected={selectedInvoices}
-                    onToggle={toggleFetchInvoice}
-                    onSelectAll={toggleAllFetch}
-                  />
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        )}
-      </BottomSheetModal>
+              )}
+            </div>
+            <ZohoImportResults
+              results={fetchImportable}
+              selected={selectedInvoices}
+              onToggle={toggleFetchInvoice}
+              onSelectAll={toggleAllFetch}
+            />
+          </CardContent>
+        </Card>
+      )}
     </>
   );
 }
