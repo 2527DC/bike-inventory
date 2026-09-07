@@ -1,15 +1,29 @@
 // Two rules from AGENTS.md:
 //
-//   1. Every GIT command needs explicit approval  -> "ask"
+//   1. Git commands that WRITE need explicit approval  -> "ask"
 //   2. NOTHING is ever committed or pushed to main from local -> "deny"
 //
-// NPM IS NO LONGER GATED. Owner's instruction, 1 Sep 2026: npm runs without prompting.
-// npm/npx/pnpm/yarn were removed from the match below and from permissions.ask in
-// .claude/settings.json — BOTH were needed, because this hook returns "ask" on its own and
-// would have kept prompting even with the settings entries gone.
+// NPM IS NOT GATED. Owner's instruction, 1 Sep 2026: npm runs without prompting.
 //
-// Rule 2 is untouched and is the one that matters: a commit or push to main is still DENIED,
-// not merely prompted, because a prompt gets approved by reflex.
+//   ⚠ The previous version of this comment said npm/npx/pnpm/yarn had been "removed from the
+//   match below". They had NOT been — they were still in GATED, so every `npm run build`
+//   passed the gate, matched none of the deny patterns, and fell through to the blanket
+//   "ask" at the bottom. Only the permissions.allow entry in settings.json was keeping the
+//   prompt away. They are removed now, for real: this hook is about git and nothing else.
+//
+// RULE 1 NARROWED (owner, 7 Sep 2026): read-only git no longer prompts.
+//
+// It used to return "ask" for EVERY git command, `git status` and `git log` included, which
+// made the prompt something to dismiss rather than read — and a prompt answered by reflex is
+// not a safeguard. Now only commands that change something ask. The read-only ones are on
+// permissions.allow in settings.json and this hook stays silent for them.
+//
+// BOTH FILES MATTER, and that is the trap this hook has fallen into once already: narrowing
+// settings.json alone changes nothing, because a hook returning "ask" overrides an allow
+// rule. The list below is the one that decides.
+//
+// Rule 2 is untouched and is the one that matters most: a commit or push to main is still
+// DENIED, not merely prompted.
 //
 // Runs as a PreToolUse hook on Bash|PowerShell. Reads the hook payload on stdin.
 
@@ -52,9 +66,9 @@ process.stdin.on("end", () => {
 
   const bare = stripQuoted(cmd);
 
-  // Match git/npm at the start of the command or after a shell separator
-  // (; && || | & newline), so `cd foo && npm install` is caught too.
-  const GATED = /(?:^|[;&|\n]|\|\||&&)\s*(?:git|npm|npx|pnpm|yarn)\b/i;
+  // Match git at the start of the command or after a shell separator
+  // (; && || | & newline), so `cd foo && git commit` is caught too.
+  const GATED = /(?:^|[;&|\n]|\|\||&&)\s*git\b/i;
   if (!GATED.test(bare)) return;
 
   const deny = (reason) =>
@@ -123,14 +137,44 @@ process.stdin.on("end", () => {
     }
   }
 
-  // ── Rule 1: every other git command still needs approval ────────────────
+  // ── Rule 1: git commands that CHANGE something need approval ────────────
+  //
+  // Everything not listed here — status, diff, log, show, branch (listing), remote, fetch,
+  // rev-parse, ls-files, blame, describe, shortlog, reflog, stash list — returns silently
+  // below and is handled by permissions.allow in settings.json, so it runs without a prompt.
+  //
+  // The list is deliberately WIDER than "commit, merge, push". Those three are what the
+  // owner named, but `reset --hard`, `clean -fd`, `checkout -- .` and `restore` destroy
+  // uncommitted work just as permanently and with no undo, so they ask too. `stash pop` is
+  // here because it can conflict and lose the stash entry.
+  //
+  // Order matters within the alternation only where one command is a prefix of another; the
+  // sub-command forms (stash drop, branch -D, tag -d) are spelled out so that plain
+  // `git stash list`, `git branch` and `git tag` stay free.
+  const WRITE_OPS = new RegExp(
+    "\\bgit\\s+(?:" +
+      [
+        "commit", "merge", "push", "rebase", "cherry-pick", "revert", "am",
+        "reset", "clean", "restore", "apply", "update-ref", "filter-branch",
+        "checkout\\s+--",                       // discards changes; plain checkout <branch> is free
+        "stash\\s+(?:drop|clear|pop)",          // `stash list` / `stash push` stay free
+        "branch\\s+(?:-D|-d\\b|--delete)",      // `git branch` listing stays free
+        "tag\\s+(?:-d\\b|--delete)",            // `git tag` listing stays free
+      ].join("|") +
+      ")",
+    "i"
+  );
+
+  if (!WRITE_OPS.test(bare)) return; // read-only git: no prompt
+
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "ask",
         permissionDecisionReason:
-          "Project rule (AGENTS.md): git commands need your explicit approval. " +
+          "Project rule (AGENTS.md): this git command changes something, so it needs your " +
+          "explicit approval. Read-only git (status, diff, log, ...) runs without asking. " +
           "Choose No if you'd rather run it yourself — Claude will hand you the command and wait for the output.",
       },
     })
