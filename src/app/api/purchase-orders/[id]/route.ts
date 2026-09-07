@@ -18,10 +18,24 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const po = await prisma.purchaseOrder.findUnique({
       where: { id },
       include: {
-        vendor: true,
+        // `vendor: true` already returns `email`, which is what the send sheet prefills with.
+        // Contacts are a separate relation and were not included — without them the fallback
+        // "the vendor has no address of its own, use the primary contact's" cannot happen on
+        // the client. Sorted, not filtered: nothing guarantees a primary exists.
+        vendor: {
+          include: {
+            contacts: {
+              select: { name: true, email: true, isPrimary: true },
+              orderBy: { isPrimary: "desc" },
+            },
+          },
+        },
         items: { include: { product: { select: { name: true, sku: true, currentStock: true } } } },
         createdBy: { select: { name: true } },
         approvedBy: { select: { name: true } },
+        // Who sent it. The scalar sent* columns come back with the row, but the NAME needs the
+        // relation — without this the Order Info line can say when and how but never by whom.
+        sentBy: { select: { name: true } },
         bills: { include: { payments: true } },
       },
     });
