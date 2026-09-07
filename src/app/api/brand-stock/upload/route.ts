@@ -10,7 +10,7 @@ import { runMatchPipeline, populateBchContext } from "@/lib/brand-stock-matcher"
 
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireFeature("purchase_orders", "create");
+    const user = await requireFeature("brand_stock", "create");
 
     const formData = await req.formData();
     const file = formData.get("file") as File | null;

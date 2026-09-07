@@ -10,7 +10,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireFeature("purchase_orders", "view");
+    await requireFeature("brand_stock", "view");
     const { id } = await params;
 
     const upload = await prisma.brandStockUpload.findUnique({

@@ -51,6 +51,17 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // TWO gates, deliberately. The other four brand-stock routes moved onto `brand_stock`
+    // when it became a module of its own; this one did not follow them, because the row it
+    // writes is a PurchaseOrder. Gating it on `brand_stock.create` alone would make this a
+    // second and weaker way to mint a PO — raise one here without holding
+    // `purchase_orders.create`, bypassing the grant the manual screen requires.
+    //
+    // So: `brand_stock.view` to read the sheet, `purchase_orders.create` to write the order.
+    // `requireFeature` takes exactly two arguments and has no OR form, so this is two calls.
+    // The view check runs FIRST — someone who cannot open the sheet should be told that,
+    // not told they cannot create purchase orders.
+    await requireFeature("brand_stock", "view");
     const user = await requireFeature("purchase_orders", "create");
     const { id } = await params;
 

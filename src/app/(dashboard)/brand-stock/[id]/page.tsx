@@ -7,6 +7,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { apiTry } from "@/lib/api-client";
+import { usePermissions } from "@/lib/use-permissions";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("brand-stock:detail");
 
 interface BrandStockItemData {
   id: string;
@@ -60,6 +64,7 @@ export default function BrandStockReviewPage({ params }: { params: Promise<{ id:
   const { id } = use(params);
   const [data, setData] = useState<UploadData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"ALL" | "MATCHED" | "UNMATCHED" | "SELECTED">("ALL");
   const [, setSaving] = useState(false);
@@ -67,13 +72,27 @@ export default function BrandStockReviewPage({ params }: { params: Promise<{ id:
   const [actionError, setActionError] = useState("");
   const [skipped, setSkipped] = useState<Array<{ sku: string; name: string; reason: string }> | null>(null);
   const [generatedPo, setGeneratedPo] = useState<{ id: string; poNumber: string } | null>(null);
+  const { canCreate } = usePermissions();
+  const canCreatePo = canCreate("purchase_orders");
 
+  // `apiTry`, not `fetch().then(r => r.json()).catch(() => {})`. This file already imported
+  // apiTry for the PO call below, so the raw pair here was the odd one out — and it failed
+  // the worst way: an expired session left `data` null and the page rendered its "not found"
+  // state, telling the user the upload had been deleted.
   useEffect(() => {
-    fetch(`/api/brand-stock/uploads/${id}`)
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setData(res.data); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    (async () => {
+      const { data: res, error: err } = await apiTry<UploadData>(`/api/brand-stock/uploads/${id}`);
+      if (cancelled) return;
+      if (err) {
+        log.error("upload load failed", { uploadId: id, error: err });
+        setLoadError(err);
+      } else {
+        setData(res);
+      }
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
   }, [id]);
 
   const toggleSelect = (itemId: string) => {
@@ -92,29 +111,43 @@ export default function BrandStockReviewPage({ params }: { params: Promise<{ id:
     });
   };
 
-  const handleSave = async () => {
-    if (!data) return;
+  /**
+   * Returns whether the save succeeded, and that return value is load-bearing.
+   *
+   * `handleGeneratePO` awaits this first, and the old version could not fail visibly: the
+   * bare `catch { setActionError(...) }` set a message the very next line then cleared with
+   * `setActionError("")`, so a rejected save was erased and the PO was generated from
+   * whatever the server still held — quantities the user believed they had changed. Now the
+   * caller stops when this returns false.
+   */
+  const handleSave = async (): Promise<boolean> => {
+    if (!data) return false;
     setSaving(true);
-    try {
-      const changedItems = data.items.filter((i) => i.selected || i.orderQty).map((i) => ({
-        id: i.id,
-        orderQty: i.orderQty || 0,
-        selected: i.selected,
-      }));
-      const res = await fetch(`/api/brand-stock/uploads/${id}/items`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: changedItems }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) setActionError(json.error || "Save failed");
-    } catch { setActionError("Save failed"); }
-    finally { setSaving(false); }
+    const changedItems = data.items.filter((i) => i.selected || i.orderQty).map((i) => ({
+      id: i.id,
+      orderQty: i.orderQty || 0,
+      selected: i.selected,
+    }));
+    const { error: err } = await apiTry(`/api/brand-stock/uploads/${id}/items`, {
+      method: "PUT",
+      json: { items: changedItems },
+    });
+    setSaving(false);
+    if (err) {
+      log.error("item save failed", { uploadId: id, items: changedItems.length, error: err });
+      setActionError(err);
+      return false;
+    }
+    log.debug("items saved", { uploadId: id, items: changedItems.length });
+    return true;
   };
 
   const handleGeneratePO = async () => {
     if (!data) return;
-    await handleSave();
+    // Stop if the save failed. Continuing would raise the PO from the quantities the server
+    // still holds while the screen shows the user's edited ones — a PO that silently
+    // disagrees with what was on screen when the button was pressed.
+    if (!(await handleSave())) return;
     setGenerating(true);
     setActionError("");
     setSkipped(null);
@@ -197,6 +230,18 @@ export default function BrandStockReviewPage({ params }: { params: Promise<{ id:
     return (
       <div className="flex items-center justify-center py-12">
         <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  // A failed REQUEST and a missing ROW are different answers and now say so. Both used to
+  // land on "Upload not found", so an expired session or a 403 read as deleted data.
+  if (loadError) {
+    return (
+      <div className="text-center py-12">
+        <p className="text-sm font-medium text-red-700">Could not load this upload</p>
+        <p className="text-xs text-red-600 mt-1">{loadError}</p>
+        <Link href="/brand-stock" className="text-blue-600 text-sm mt-3 inline-block">Back</Link>
       </div>
     );
   }
@@ -444,7 +489,14 @@ export default function BrandStockReviewPage({ params }: { params: Promise<{ id:
               className="p-2.5 rounded-lg bg-green-600 text-white disabled:opacity-50">
               <Share2 className="h-4 w-4" />
             </button>
-            <button onClick={handleGeneratePO} disabled={selectedItems.length === 0 || generating}
+            {/* Mirrors the route's TWO gates: `brand_stock.view` opened this page, and
+                `purchase_orders.create` is what actually writes the order. Shown-but-DISABLED
+                rather than hidden, which is the pattern P9 settled on for /purchase-orders —
+                a missing button reads as a broken screen, a disabled one with a reason reads
+                as a permission. */}
+            <button onClick={handleGeneratePO}
+              disabled={selectedItems.length === 0 || generating || !canCreatePo}
+              title={canCreatePo ? undefined : "Needs Purchase Orders › Create"}
               className="flex items-center gap-1.5 bg-slate-900 text-white px-4 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50">
               {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
               Create PO

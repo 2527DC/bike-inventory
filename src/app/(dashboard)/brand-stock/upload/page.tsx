@@ -5,6 +5,17 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Upload, FileSpreadsheet, Loader2, CheckCircle2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("brand-stock:upload");
+
+interface UploadResult {
+  uploadId: string;
+  totalItems: number;
+  matchedItems: number;
+  unmatchedItems: number;
+}
 
 interface BrandOption {
   id: string;
@@ -19,13 +30,24 @@ export default function BrandStockUploadPage() {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
-  const [result, setResult] = useState<{ uploadId: string; totalItems: number; matchedItems: number; unmatchedItems: number } | null>(null);
+  const [result, setResult] = useState<UploadResult | null>(null);
 
+  // Was `fetch("/api/brands").then(r => r.json()).catch(() => {})`. The swallowed failure was
+  // worse here than on the list screen: the brand <select> simply stayed empty, so the upload
+  // could never be started and nothing said why.
   useEffect(() => {
-    fetch("/api/brands")
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setBrands(res.data); })
-      .catch(() => {});
+    let cancelled = false;
+    (async () => {
+      const { data, error: err } = await apiTry<BrandOption[]>("/api/brands");
+      if (cancelled) return;
+      if (err) {
+        log.error("brand list load failed", { error: err });
+        setError(err);
+      } else {
+        setBrands(data ?? []);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   const handleUpload = async () => {
@@ -34,25 +56,34 @@ export default function BrandStockUploadPage() {
     setError("");
     setResult(null);
 
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("brandId", brandId);
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("brandId", brandId);
 
-      const res = await fetch("/api/brand-stock/upload", { method: "POST", body: formData });
-      const json = await res.json();
+    // `apiTry` with a FormData body: ApiInit omits RequestInit's `body` and re-adds it, and
+    // apiFetch sets Content-Type ONLY for a `json` init — so the browser is left to write the
+    // multipart boundary itself, which it must. Parsing an Excel/PDF sheet is slow, hence the
+    // long timeout; without one a big file looks like a hang with no way to tell it apart
+    // from a dead request.
+    log.debug("-> POST /api/brand-stock/upload", { brandId, fileName: file.name, bytes: file.size });
+    const { data, error: err } = await apiTry<UploadResult>("/api/brand-stock/upload", {
+      method: "POST",
+      body: formData,
+      timeoutMs: 120_000,
+    });
 
-      if (!res.ok || !json.success) {
-        setError(json.error || "Upload failed");
-        return;
-      }
-
-      setResult(json.data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Upload failed");
-    } finally {
-      setUploading(false);
+    if (err) {
+      log.error("upload failed", { brandId, fileName: file.name, error: err });
+      setError(err);
+    } else if (data) {
+      log.info("upload parsed", {
+        uploadId: data.uploadId,
+        totalItems: data.totalItems,
+        matchedItems: data.matchedItems,
+      });
+      setResult(data);
     }
+    setUploading(false);
   };
 
   return (
