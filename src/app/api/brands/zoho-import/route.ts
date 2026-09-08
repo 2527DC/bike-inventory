@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
         // failed INSERT cannot be caught and stepped over here anyway: Postgres aborts the
         // whole transaction on a constraint violation, so the check has to come first.
         const local = await tx.brand.findMany({
-          select: { id: true, name: true, zohoBrandId: true },
+          select: { id: true, name: true, zohoBrandId: true, isActive: true },
         });
 
         const byZohoId = new Map(
@@ -65,6 +65,8 @@ export async function POST(req: NextRequest) {
         const claimedLocalIds = new Set<string>();
 
         const errors: string[] = [];
+        // Things the import DID that the person should hear about — not failures.
+        const notices: string[] = [];
         let adopted = 0;
         let created = 0;
         let skipped = 0;
@@ -114,6 +116,11 @@ export async function POST(req: NextRequest) {
             await tx.brand.update({ where: { id: sameName.id }, data: { zohoBrandId: zohoId } });
             claimedLocalIds.add(sameName.id);
             adopted++;
+            // Identity is identity: an inactive row still adopts its Zoho id. It stays
+            // inactive — a sync is not the thing that un-retires a brand.
+            if (!sameName.isActive) {
+              notices.push(`Brand "${sameName.name}" is inactive — re-activate it on /more/brands`);
+            }
             continue;
           }
 
@@ -141,7 +148,7 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        return { adopted, created, skipped, errors };
+        return { adopted, created, skipped, errors, notices };
       },
       // 151 brands can mean ~150 writes behind them. The 5 s default would abort a run that
       // is doing exactly what it was asked to do.
@@ -152,6 +159,7 @@ export async function POST(req: NextRequest) {
       adopted: result.adopted,
       created: result.created,
       skipped: result.skipped,
+      notices: result.notices.length,
     });
 
     return successResponse(result);

@@ -38,7 +38,7 @@ export type Db = PrismaClient | Prisma.TransactionClient;
 export interface ActivityEntry {
   /** RBAC module key: stock_audit | inbound | vendor_issues | zoho | categories | customers | purchase_orders | transfers */
   module: string;
-  /** created | updated | status_changed | approved | rejected | received | delivered | issue_reported | pulled | imported | sent | dispatched | cancelled */
+  /** created | updated | status_changed | approved | rejected | received | delivered | issue_reported | pulled | imported | sent | dispatched | cancelled | zeroed_uncounted */
   action: string;
   /** StockCount | InboundShipment | VendorIssue | Category | Customer | ZohoPull | PurchaseOrder | TransferOrder */
   entityType: string;

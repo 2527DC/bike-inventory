@@ -5,6 +5,7 @@ import { useSession } from "next-auth/react";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
 import { isLowStock } from "@/lib/reorder";
 import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
 import Link from "next/link";
 import { ArrowLeft, QrCode, MapPin, Tag, IndianRupee, Pencil, Save, X, Power } from "lucide-react";
 import { LabelPrintButton } from "@/components/label-print";
@@ -15,6 +16,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TransactionItem } from "@/components/transaction-item";
 import { usePermissions } from "@/lib/use-permissions";
+
+const log = createLogger("stock:detail");
 
 interface SerialItem {
   id: string;
@@ -101,14 +104,20 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
   const [bins, setBins] = useState<{ id: string; code: string; name: string; location: string }[]>([]);
 
   useEffect(() => {
-    Promise.all([
-      fetch("/api/brands").then((r) => r.json()),
-      BIN_TRACKING_ENABLED ? fetch("/api/bins").then((r) => r.json()) : Promise.resolve({ success: false }),
+    // GET /api/brands answers active brands only by default — a retired brand is not a
+    // destination. The product's own brand is appended below if it is no longer listed.
+    void Promise.all([
+      apiTry<{ id: string; name: string }[]>("/api/brands"),
+      BIN_TRACKING_ENABLED
+        ? apiTry<{ id: string; code: string; name: string; location: string }[]>("/api/bins")
+        : Promise.resolve({ data: null, error: null }),
     ]).then(([bRes, binRes]) => {
-      if (bRes.success) setBrands(bRes.data);
-      if (binRes.success) setBins(binRes.data);
-    }).catch(() => {});
-  }, []);
+      if (bRes.data) setBrands(bRes.data);
+      else if (bRes.error) log.error("could not load brands", { productId: id, message: bRes.error });
+      if (binRes.data) setBins(binRes.data);
+      else if (binRes.error) log.error("could not load bins", { productId: id, message: binRes.error });
+    });
+  }, [id]);
 
   // Loaded when the form opens rather than with the product: most visits to this page are
   // to read it, and the vendor list is only needed by the one select in the edit form.
@@ -145,6 +154,15 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
   }
 
   const inStockSerials = product.serialItems.filter((s) => s.status === "IN_STOCK");
+
+  // The brand list is active brands only. A product already filed under an inactive brand
+  // must still see its own brand in the select, or the control renders blank and the next
+  // save would silently move the product. Appended, marked, never hidden.
+  const currentBrand = product.brand;
+  const brandOptions =
+    currentBrand && !brands.some((b) => b.id === currentBrand.id)
+      ? [...brands, { id: currentBrand.id, name: `${currentBrand.name} (inactive)` }]
+      : brands;
 
   function startEdit() {
     setEditData({
@@ -263,7 +281,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
                   <select value={editData.brandId as string} onChange={(e) => setEditData({ ...editData, brandId: e.target.value })}
                     className="w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                     <option value="">No brand</option>
-                    {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    {brandOptions.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                   </select>
                 </div>
                 {BIN_TRACKING_ENABLED && (

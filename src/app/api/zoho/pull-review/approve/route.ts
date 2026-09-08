@@ -36,8 +36,8 @@ const FALLBACK_BRAND_NAME = "Unbranded";
 
 /** The brand fields this route needs: the id for the FKs, the name for messages, leadDays
  *  for the shipment's expected delivery date. */
-const BRAND_SELECT = { id: true, name: true, leadDays: true } as const;
-type ResolvedBrand = { id: string; name: string; leadDays: number };
+const BRAND_SELECT = { id: true, name: true, leadDays: true, isActive: true } as const;
+type ResolvedBrand = { id: string; name: string; leadDays: number; isActive: boolean };
 
 /**
  * Read the placeholder brand row, creating it ONCE if it is genuinely absent.
@@ -247,6 +247,15 @@ export async function POST(req: NextRequest) {
             log.info("brand resolved from vendor name", {
               billNo: String(d.billNumber), brandId: itemBrand.id,
             });
+            // An inactive match is still the brand (identity is identity); the product is
+            // filed under it and the person is told, rather than the import inventing a
+            // second row or silently un-retiring this one.
+            if (!itemBrand.isActive) {
+              log.warn("resolved brand is inactive", { billNo: String(d.billNumber), brandId: itemBrand.id });
+              results.notices.push(
+                `Brand "${itemBrand.name}" is inactive — product filed under it; re-activate on /more/brands`
+              );
+            }
           } else {
             itemBrand = await resolvePlaceholderBrand(String(d.billNumber));
             log.warn("vendor name matches no brand — filing under placeholder", {
@@ -348,13 +357,13 @@ export async function POST(req: NextRequest) {
                   (zohoCategoryId
                     ? await prisma.category.findFirst({
                         where: { zohoCategoryId },
-                        select: { id: true, name: true },
+                        select: { id: true, name: true, isActive: true },
                       })
                     : null) ??
                   (zohoCategoryName
                     ? await prisma.category.findFirst({
                         where: { name: { equals: zohoCategoryName, mode: "insensitive" } },
-                        select: { id: true, name: true },
+                        select: { id: true, name: true, isActive: true },
                       })
                     : null);
                 if (cat) {
@@ -362,6 +371,12 @@ export async function POST(req: NextRequest) {
                   log.info("category resolved", {
                     billNo: String(d.billNumber), zohoItemId, categoryId: cat.id,
                   });
+                  // Same rule as the brand above: an inactive match is used and reported.
+                  if (!cat.isActive) {
+                    results.notices.push(
+                      `Bill ${d.billNumber}: category "${cat.name}" is inactive — "${li.name}" filed under it; re-activate on /categories`
+                    );
+                  }
                 } else {
                   log.warn("zoho category matches no row — using placeholder", {
                     billNo: String(d.billNumber), zohoItemId, zohoCategoryId, zohoCategoryName,

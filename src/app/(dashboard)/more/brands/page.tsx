@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { ArrowLeft, Trash2, Tag, Plus, Pencil, Check, X, GitMerge, Clock } from "lucide-react";
+import { ArrowLeft, Power, Tag, Plus, Pencil, Check, X, GitMerge, Clock } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { ZohoTaxonomySheet } from "@/components/zoho-taxonomy-sheet";
 import { usePermissions } from "@/lib/use-permissions";
-import { apiFetch, apiTry } from "@/lib/api-client";
+import { apiFetch, apiTry, ApiError } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("brands");
@@ -32,24 +32,46 @@ interface BrandItem {
    */
   cdTermsDays: number | null;
   cdPercentage: number | null;
+  /**
+   * A brand is never deleted (owner, 8 Sep 2026). Inactive hides it from every picker and
+   * sets its products inactive; the row, its products and its history all stay.
+   */
+  isActive: boolean;
   _count: { products: number };
 }
 
-/** Both delete and merge answer with this. `deleted: false` is a refusal, not a failure. */
-interface DeleteOutcome {
-  deleted: boolean;
+/** What PATCH answers when `isActive` flips: the row plus what the cascade did. */
+interface ToggleResult extends BrandItem {
+  productsChanged: number;
+  unitsOnHand: number;
+}
+
+/** Rendered in the ActionConfirmation after a toggle — success, or a refusal with a reason. */
+interface ToggleOutcome {
+  type: "success" | "warning";
+  title: string;
   name: string;
   message: string;
 }
 
+type StatusFilter = "ACTIVE" | "INACTIVE" | "ALL";
+
+const STATUS_CHIPS: { key: StatusFilter; label: string }[] = [
+  { key: "ACTIVE", label: "Active" },
+  { key: "INACTIVE", label: "Inactive" },
+  { key: "ALL", label: "All" },
+];
+
 export default function BrandsPage() {
-  const { canView, canCreate, canEdit, canDelete, loading: permsLoading } = usePermissions();
+  const { canView, canCreate, canEdit, loading: permsLoading } = usePermissions();
 
   const [brands, setBrands] = useState<BrandItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [outcome, setOutcome] = useState<DeleteOutcome | null>(null);
+  const [outcome, setOutcome] = useState<ToggleOutcome | null>(null);
+  // Default Active: the inactive rows are the retired ones, shown on request.
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ACTIVE");
 
   // Inline edit — one row at a time. `draft` holds only what is being changed.
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -65,7 +87,9 @@ export default function BrandsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const { data, error: err } = await apiTry<BrandItem[]>("/api/brands");
+    // This screen is the master, so it asks for every row. Every other caller of
+    // GET /api/brands takes the default, which is active rows only.
+    const { data, error: err } = await apiTry<BrandItem[]>("/api/brands?includeInactive=1");
     if (err) {
       log.error("could not load brands", { message: err });
       setError(err);
@@ -139,20 +163,67 @@ export default function BrandsPage() {
     }
   }
 
-  async function remove(b: BrandItem) {
-    if (!confirm(`Delete ${b.name}? If anything still references it you will be told instead.`)) return;
+  /**
+   * Active ⇄ inactive. Replaces delete (owner, 8 Sep 2026): nothing is removed, the brand
+   * leaves every picker and its products go inactive with it. Activating brings the brand
+   * back and, only if the person says so, the products that went down with it — a product
+   * retired on its own before that should not come back by accident.
+   */
+  async function toggleActive(b: BrandItem) {
+    const products = `${b._count.products} product${b._count.products === 1 ? "" : "s"}`;
+    let reactivateProducts = false;
+
+    if (b.isActive) {
+      if (
+        !confirm(
+          `Deactivate ${b.name}? Its ${products} will be set inactive and it leaves every brand picker. Nothing is deleted.`
+        )
+      ) return;
+    } else {
+      if (!confirm(`Activate ${b.name}? It returns to every brand picker.`)) return;
+      if (b._count.products > 0) {
+        reactivateProducts = confirm(
+          `Also restore the products that went inactive with ${b.name}? OK restores them, Cancel leaves them inactive.`
+        );
+      }
+    }
+
     setBusy(b.id);
+    setError(null);
     try {
-      // A refusal arrives as 200 with deleted:false and a reason. Rendering it as a failure
-      // would be wrong — nothing broke, the request was declined for a stated cause.
-      const res = await apiFetch<DeleteOutcome>(`/api/brands/${b.id}`, { method: "DELETE" });
-      log.info("brand delete handled", { brandId: b.id, deleted: res.deleted });
-      setOutcome(res);
+      const res = await apiFetch<ToggleResult>(`/api/brands/${b.id}`, {
+        method: "PATCH",
+        json: { isActive: !b.isActive, ...(reactivateProducts ? { reactivateProducts: true } : {}) },
+      });
+      log.info("brand active toggled", {
+        brandId: b.id,
+        isActive: res.isActive,
+        productsChanged: res.productsChanged,
+        unitsOnHand: res.unitsOnHand,
+      });
+      const changed = `${res.productsChanged} product${res.productsChanged === 1 ? "" : "s"}`;
+      const units = `${res.unitsOnHand} unit${res.unitsOnHand === 1 ? "" : "s"}`;
+      setOutcome({
+        type: "success",
+        title: res.isActive ? "Activated" : "Deactivated",
+        name: b.name,
+        message: res.isActive
+          ? res.productsChanged > 0
+            ? `${changed} restored.`
+            : "Its products were left as they were."
+          : `${changed} set inactive · ${units} stay on the books.`,
+      });
       await load();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Could not delete";
-      log.error("brand delete failed", { brandId: b.id, message: msg });
-      setOutcome({ deleted: false, name: b.name, message: msg });
+      // A 400 is a refusal with a reason (a placeholder brand, for one) — rendered as a
+      // warning, not a failure, because nothing broke.
+      const msg = e instanceof Error ? e.message : "Could not update the brand";
+      if (e instanceof ApiError && e.status === 400) {
+        log.warn("brand toggle refused", { brandId: b.id, message: msg });
+      } else {
+        log.error("brand toggle failed", { brandId: b.id, message: msg });
+      }
+      setOutcome({ type: "warning", title: "Not changed", name: b.name, message: msg });
     } finally {
       setBusy(null);
     }
@@ -194,7 +265,15 @@ export default function BrandsPage() {
 
   const mayEdit = canEdit("brands");
   const mayMerge = canCreate("brands"); // merge is guarded on brands.create by the API
-  const mayDelete = canDelete("brands");
+
+  const activeCount = brands.filter((b) => b.isActive).length;
+  const inactiveCount = brands.length - activeCount;
+  const visible =
+    statusFilter === "ALL" ? brands
+    : statusFilter === "ACTIVE" ? brands.filter((b) => b.isActive)
+    : brands.filter((b) => !b.isActive);
+  // Merging INTO a retired brand would hide the moved products; only live brands are targets.
+  const mergeTargets = brands.filter((b) => b.isActive);
 
   return (
     <div>
@@ -205,7 +284,7 @@ export default function BrandsPage() {
         <div className="flex-1">
           <h1 className="text-lg font-bold text-slate-900">Brands</h1>
           <p className="text-xs text-slate-500 tabular-nums">
-            {brands.length} brand{brands.length === 1 ? "" : "s"} · lead time is days to deliver
+            {activeCount} active{inactiveCount > 0 ? ` · ${inactiveCount} inactive` : ""} · lead time is days to deliver
           </p>
         </div>
         {/* The sheet renders nothing at all without brands.fetch, so it is safe beside New. */}
@@ -240,6 +319,23 @@ export default function BrandsPage() {
         </Card>
       )}
 
+      {/* Active / Inactive / All — the same pill row /vendors uses for its sort. */}
+      <div className="flex gap-1.5 mb-3 pb-1" role="group" aria-label="Show brands">
+        {STATUS_CHIPS.map((s) => (
+          <button
+            key={s.key}
+            type="button"
+            onClick={() => setStatusFilter(s.key)}
+            aria-pressed={statusFilter === s.key}
+            className={`shrink-0 px-2.5 py-1 min-h-[32px] rounded-full text-[11px] font-medium transition-colors focus-ring ${
+              statusFilter === s.key ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+            }`}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+
       {loading ? (
         <SkeletonList count={5} type="card" />
       ) : brands.length === 0 ? (
@@ -247,14 +343,21 @@ export default function BrandsPage() {
           <Tag className="h-12 w-12 text-slate-300 mx-auto mb-3" />
           <p className="text-sm text-slate-500">No brands yet</p>
         </div>
+      ) : visible.length === 0 ? (
+        <div className="text-center py-12">
+          <Tag className="h-12 w-12 text-slate-300 mx-auto mb-3" />
+          <p className="text-sm text-slate-500">
+            No {statusFilter === "INACTIVE" ? "inactive" : "active"} brands
+          </p>
+        </div>
       ) : (
         <div className="space-y-1.5">
-          {brands.map((b) => {
+          {visible.map((b) => {
             const isEditing = editingId === b.id;
             const isMerging = mergeSource === b.id;
 
             return (
-              <Card key={b.id}>
+              <Card key={b.id} className={b.isActive ? "" : "opacity-60"}>
                 <CardContent className="p-3">
                   {isEditing ? (
                     <div className="flex flex-col sm:flex-row gap-2">
@@ -292,6 +395,9 @@ export default function BrandsPage() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <p className="text-sm font-semibold text-slate-900">{b.name}</p>
+                          {!b.isActive && (
+                            <Badge variant="danger" className="text-[10px]">Inactive</Badge>
+                          )}
                           <Badge variant="info" className="text-[10px] tabular-nums">
                             {b._count.products} product{b._count.products === 1 ? "" : "s"}
                           </Badge>
@@ -318,14 +424,19 @@ export default function BrandsPage() {
                             <Pencil className="h-3.5 w-3.5" />
                           </IconBtn>
                         )}
-                        {mayMerge && brands.length > 1 && (
+                        {mayMerge && mergeTargets.some((t) => t.id !== b.id) && (
                           <IconBtn label={`Merge ${b.name} into another brand`} onClick={() => setMergeSource(b.id)}>
                             <GitMerge className="h-3.5 w-3.5" />
                           </IconBtn>
                         )}
-                        {mayDelete && (
-                          <IconBtn label={`Delete ${b.name}`} danger disabled={busy === b.id} onClick={() => void remove(b)}>
-                            <Trash2 className="h-3.5 w-3.5" />
+                        {mayEdit && (
+                          <IconBtn
+                            label={b.isActive ? `Deactivate ${b.name}` : `Activate ${b.name}`}
+                            tone={b.isActive ? "amber" : "green"}
+                            disabled={busy === b.id}
+                            onClick={() => void toggleActive(b)}
+                          >
+                            <Power className="h-3.5 w-3.5" />
                           </IconBtn>
                         )}
                       </div>
@@ -345,7 +456,7 @@ export default function BrandsPage() {
                           className="flex-1 min-h-[40px] rounded-lg border border-slate-300 bg-white px-2 text-sm focus-ring"
                         >
                           <option value="">Merge into…</option>
-                          {brands.filter((t) => t.id !== b.id).map((t) => (
+                          {mergeTargets.filter((t) => t.id !== b.id).map((t) => (
                             <option key={t.id} value={t.id}>{t.name}</option>
                           ))}
                         </select>
@@ -369,8 +480,8 @@ export default function BrandsPage() {
         <ActionConfirmation
           open
           onClose={() => setOutcome(null)}
-          type={outcome.deleted ? "success" : "warning"}
-          title={outcome.deleted ? "Deleted" : "Not deleted"}
+          type={outcome.type}
+          title={outcome.title}
           referenceId={outcome.name}
           details={outcome.message}
         />
@@ -380,12 +491,13 @@ export default function BrandsPage() {
 }
 
 function IconBtn({
-  label, onClick, children, danger, disabled,
+  label, onClick, children, tone, disabled,
 }: {
   label: string;
   onClick: () => void;
   children: React.ReactNode;
-  danger?: boolean;
+  /** amber = about to take something away, green = about to bring it back. */
+  tone?: "amber" | "green";
   disabled?: boolean;
 }) {
   return (
@@ -395,7 +507,7 @@ function IconBtn({
       disabled={disabled}
       aria-label={label}
       className={`min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 focus-ring ${
-        danger ? "text-red-600" : "text-slate-600"
+        tone === "amber" ? "text-amber-600" : tone === "green" ? "text-green-600" : "text-slate-600"
       }`}
     >
       {children}

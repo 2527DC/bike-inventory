@@ -4,6 +4,12 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api:brands:merge");
+
+/** Thrown inside the transaction to refuse with a sentence; the catch turns it into a 400. */
+class MergeRefused extends Error {}
 
 export async function POST(
   req: NextRequest,
@@ -30,13 +36,56 @@ export async function POST(
 
     if (!sourceBrand) return errorResponse("Source brand not found", 404);
     if (!targetBrand) return errorResponse("Target brand not found", 404);
+    // Merging INTO a retired brand would hide every moved product behind an inactive row.
+    if (!targetBrand.isActive) {
+      log.warn("merge refused — target inactive", { sourceBrandId, targetBrandId });
+      return errorResponse(`${targetBrand.name} is inactive. Activate it first, or pick another brand.`, 400);
+    }
 
-    // Move all products and delete source brand in a transaction
+    // Move EVERYTHING the source holds, then delete it, in one transaction.
+    //
+    // This used to move products and vendor links only. Of the other seven relations on
+    // Brand, three are Restrict (the delete threw a raw P2003 and the merge rolled back) and
+    // four are SetNull (the merge SUCCEEDED and the ledger reconciliation's own rows quietly
+    // lost their brand). Delete is gone now, so merge is the only way to fold a brand away —
+    // it has to be at least as careful as the delete it replaces.
     const result = await prisma.$transaction(async (tx) => {
       const updated = await tx.product.updateMany({
         where: { brandId: sourceBrandId },
         data: { brandId: targetBrandId },
       });
+
+      // @@unique([brandId, brandName]): a mapping name the target already has cannot move.
+      // Check by name first so the refusal is a sentence, not a P2002.
+      const sourceMaps = await tx.brandSkuMapping.findMany({
+        where: { brandId: sourceBrandId },
+        select: { brandName: true },
+      });
+      if (sourceMaps.length > 0) {
+        const clashes = await tx.brandSkuMapping.findMany({
+          where: { brandId: targetBrandId, brandName: { in: sourceMaps.map((m) => m.brandName) } },
+          select: { brandName: true },
+        });
+        if (clashes.length > 0) {
+          throw new MergeRefused(
+            `${targetBrand.name} already has SKU mapping(s) named ${clashes
+              .map((c) => `"${c.brandName}"`)
+              .join(", ")}. Remove the duplicate on one side, then merge.`
+          );
+        }
+      }
+
+      const moveTo = { data: { brandId: targetBrandId } };
+      const where = { where: { brandId: sourceBrandId } };
+      const relations = {
+        inboundShipments: (await tx.inboundShipment.updateMany({ ...where, ...moveTo })).count,
+        stockUploads: (await tx.brandStockUpload.updateMany({ ...where, ...moveTo })).count,
+        skuMappings: (await tx.brandSkuMapping.updateMany({ ...where, ...moveTo })).count,
+        preBookings: (await tx.preBooking.updateMany({ ...where, ...moveTo })).count,
+        ledgerEntries: (await tx.brandLedgerEntry.updateMany({ ...where, ...moveTo })).count,
+        ledgerGaps: (await tx.ledgerGap.updateMany({ ...where, ...moveTo })).count,
+        discountTerms: (await tx.vendorDiscountTerm.updateMany({ ...where, ...moveTo })).count,
+      };
 
       // ─── carry the vendor links across ────────────────────────────────────────────────
       //
@@ -80,16 +129,28 @@ export async function POST(
         deleted: sourceBrand.name,
         vendorLinksMoved: toMove.length,
         vendorLinksDropped: sourceLinks.length - toMove.length,
+        relationsMoved: relations,
       };
+    });
+
+    log.info("brands merged", {
+      sourceBrandId,
+      targetBrandId,
+      moved: result.moved,
+      vendorLinksMoved: result.vendorLinksMoved,
+      relationsMoved: result.relationsMoved,
     });
 
     return successResponse(result);
   } catch (error) {
     if (error instanceof AuthError)
       return errorResponse(error.message, error.status);
-    return errorResponse(
-      error instanceof Error ? error.message : "Failed to merge brand",
-      500
-    );
+    if (error instanceof MergeRefused) {
+      log.warn("merge refused", { message: error.message });
+      return errorResponse(error.message, 400);
+    }
+    const message = error instanceof Error ? error.message : "Failed to merge brand";
+    log.error("brand merge failed", { message });
+    return errorResponse(message, 500);
   }
 }

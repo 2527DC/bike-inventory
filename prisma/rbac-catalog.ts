@@ -306,7 +306,12 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     // (which writes nothing), and `brands.create` is what actually inserts rows. Two grants,
     // because "may look at what Zoho has" and "may add 36 brands to the master" are
     // genuinely different decisions, and the person trusted with one need not hold the other.
-    actions: [...CRUD, "fetch"],
+    //
+    // No `delete` (plan 0809-brand-category-inactive): a brand is retired with the
+    // Active/Inactive toggle on `edit`, and nothing under it is ever destroyed.
+    // ⚠ RUN `npm run db:seed:rbac` AFTER DEPLOY — the seeder removes the stale
+    //   `brands.delete` permission and every grant of it, silently.
+    actions: ["view", "create", "edit", "fetch"],
   },
   {
     // The product taxonomy, which until now had no screen and no module of its own.
@@ -349,7 +354,12 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     // `categories.fetch` opens the preview (writes nothing); `categories.create` inserts.
     // The taxonomy is owned by the person who curates it, not by the person who happens to
     // run a bill pull.
-    actions: [...CRUD, "fetch"],
+    //
+    // No `delete` (plan 0809-brand-category-inactive): a category is retired with the
+    // Active/Inactive toggle on `edit`, subtree and all, and nothing is ever destroyed.
+    // ⚠ RUN `npm run db:seed:rbac` AFTER DEPLOY — the seeder removes the stale
+    //   `categories.delete` permission and every grant of it, silently.
+    actions: ["view", "create", "edit", "fetch"],
   },
   {
     key: "vendor_issues",

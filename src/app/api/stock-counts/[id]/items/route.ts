@@ -6,6 +6,9 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { getWarehouseQtyMap, getStoreQtyMap } from "@/lib/stock-location";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("stock-counts:items");
 
 /**
  * The system quantity for these products WITHIN this audit's scope (R2, §5.1).
@@ -102,10 +105,14 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       select: { storeId: true, warehouseId: true },
     });
     const liveQty = scope ? await scopedQtyMap(scope, items.map((i) => i.productId)) : null;
-    const staleCount = items.filter((i) => {
-      const live = liveQty ? (liveQty.get(i.productId) ?? 0) : i.product.currentStock;
-      return i.systemQty !== live;
-    }).length;
+    // `liveQty` rides on every line (plan §3 C2): the review table shows a "Now" column when
+    // stock moved between raising the audit and approving it, so a stale snapshot is visible
+    // before anything is applied. Same map that decides `staleCount` — computed once.
+    const withLive = items.map((i) => ({
+      ...i,
+      liveQty: liveQty ? (liveQty.get(i.productId) ?? 0) : i.product.currentStock,
+    }));
+    const staleCount = withLive.filter((i) => i.systemQty !== i.liveQty).length;
 
     // Count totals for tabs
     const allCounts = await prisma.stockCountItem.groupBy({
@@ -119,7 +126,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const totalCount = allCounts[0]?._count || 0;
 
     return successResponse({
-      items,
+      items: withLive,
       staleCount,
       totalCount,
       countedCount,
@@ -127,6 +134,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("items fetch failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Failed to fetch items", 500);
   }
 }
@@ -143,12 +151,22 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     // owner who assigned an audit to themselves found a screen where nothing worked. Holding
     // `approve` is not a disqualification; the only thing it must not let you do is sign off
     // your own count, and that is enforced on the status transition in [id]/route.ts.
-    const sc = await prisma.stockCount.findUnique({ where: { id }, select: { assignedToId: true } });
+    const sc = await prisma.stockCount.findUnique({ where: { id }, select: { assignedToId: true, status: true } });
     if (!sc) return errorResponse("Stock count not found", 404);
     if (sc.assignedToId !== user.id) {
       return errorResponse(
         "Only the person this audit is assigned to can start, count or complete it",
         403
+      );
+    }
+    // Counts are written while counting, and only then. This had no status check, so a
+    // line could be rewritten under a COMPLETED or APPROVED audit — after the approver had
+    // looked at it, or after stock had been corrected from it (plan §2.4 D6).
+    if (sc.status !== "IN_PROGRESS") {
+      log.warn("count write refused by status", { stockCountId: id, status: sc.status, userId: user.id });
+      return errorResponse(
+        `This audit is ${sc.status.toLowerCase().replace(/_/g, " ")}; counts can only be saved while it is in progress`,
+        409
       );
     }
     const body = await req.json();
@@ -185,6 +203,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     return successResponse({ updated: results.length });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("items update failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Failed to update items", 400);
   }
 }
@@ -238,6 +257,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return successResponse({ refreshed });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("systemQty refresh failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Failed to refresh", 400);
   }
 }

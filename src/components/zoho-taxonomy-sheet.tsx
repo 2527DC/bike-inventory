@@ -48,6 +48,8 @@ interface ImportResult {
   created: number;
   skipped: number;
   errors: string[];
+  /** Things the import did that deserve a sentence (an inactive row adopted); not failures. */
+  notices?: string[];
 }
 
 type Kind = "brand" | "category";
@@ -437,6 +439,15 @@ export function ZohoTaxonomySheet({ kind, onDone, className }: ZohoTaxonomySheet
                   …and {result.errors.length - 8} more
                 </li>
               )}
+            </ul>
+          )}
+          {(result.notices?.length ?? 0) > 0 && (
+            <ul className="max-h-40 space-y-1 overflow-y-auto">
+              {result.notices!.slice(0, 8).map((n, i) => (
+                <li key={`n-${i}`} className="text-xs text-slate-600">
+                  {n}
+                </li>
+              ))}
             </ul>
           )}
         </ActionConfirmation>

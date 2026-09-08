@@ -211,6 +211,7 @@ export async function GET(req: NextRequest) {
       vendor_issues: { category: "ISSUE", label: "Issue" },
       zoho: { category: "ZOHO", label: "Zoho" },
       categories: { category: "MASTER_DATA", label: "Category" },
+      brands: { category: "MASTER_DATA", label: "Brand" },
       customers: { category: "MASTER_DATA", label: "Customer" },
       purchase_orders: { category: "PO", label: "PO" },
       transfers: { category: "TRANSFER", label: "Transfer" },

@@ -36,13 +36,23 @@ export async function PUT(
 
     // Validate the target brand/category actually exist before updating,
     // so we return a clean message instead of leaking a raw Prisma FK error.
+    // An inactive brand or category is not a destination (plan 0809-brand-category-inactive):
+    // the pickers no longer offer one, and a stale screen must not file a product under it.
     if (data.brandId) {
-      const brand = await prisma.brand.findUnique({ where: { id: data.brandId }, select: { id: true } });
+      const brand = await prisma.brand.findUnique({
+        where: { id: data.brandId },
+        select: { id: true, name: true, isActive: true },
+      });
       if (!brand) return errorResponse("Selected brand no longer exists", 400);
+      if (!brand.isActive) return errorResponse(`${brand.name} is inactive. Activate it on /more/brands first.`, 400);
     }
     if (data.categoryId) {
-      const category = await prisma.category.findUnique({ where: { id: data.categoryId }, select: { id: true } });
+      const category = await prisma.category.findUnique({
+        where: { id: data.categoryId },
+        select: { id: true, name: true, isActive: true },
+      });
       if (!category) return errorResponse("Selected category no longer exists", 400);
+      if (!category.isActive) return errorResponse(`${category.name} is inactive. Activate it on /categories first.`, 400);
     }
 
     const existing = await prisma.product.findUnique({ where: { id }, select: { id: true } });

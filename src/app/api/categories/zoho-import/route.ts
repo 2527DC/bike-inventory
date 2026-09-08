@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
         // A failed INSERT cannot be caught and stepped over inside a transaction (Postgres
         // aborts the whole thing), so the check has to come first.
         const local = await tx.category.findMany({
-          select: { id: true, name: true, zohoCategoryId: true },
+          select: { id: true, name: true, zohoCategoryId: true, isActive: true },
         });
 
         const byZohoId = new Map(
@@ -73,6 +73,8 @@ export async function POST(req: NextRequest) {
         const claimedLocalIds = new Set<string>();
 
         const errors: string[] = [];
+        // Things the import DID that the person should hear about — not failures.
+        const notices: string[] = [];
         let adopted = 0;
         let created = 0;
         let skipped = 0;
@@ -129,6 +131,11 @@ export async function POST(req: NextRequest) {
             });
             claimedLocalIds.add(sameName.id);
             adopted++;
+            // Identity is identity: an inactive row still adopts its Zoho id. It stays
+            // inactive — a sync is not the thing that un-retires a category.
+            if (!sameName.isActive) {
+              notices.push(`Category "${sameName.name}" is inactive — re-activate it on /categories`);
+            }
             continue;
           }
 
@@ -157,7 +164,7 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        return { adopted, created, skipped, errors };
+        return { adopted, created, skipped, errors, notices };
       },
       // The 5 s default would abort a run that is doing exactly what it was asked to do.
       { maxWait: 10000, timeout: 60000 }
@@ -167,6 +174,7 @@ export async function POST(req: NextRequest) {
       adopted: result.adopted,
       created: result.created,
       skipped: result.skipped,
+      notices: result.notices.length,
     });
 
     return successResponse(result);

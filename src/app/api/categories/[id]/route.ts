@@ -7,13 +7,15 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { categoryUpdateSchema } from "@/lib/validations";
 import { createLogger } from "@/lib/logger";
 import { logActivity } from "@/lib/activity-log";
+import { isPlaceholderCategory } from "@/lib/import-placeholders";
 
 const log = createLogger("api:categories:id");
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  // Resolved outside the try so the catch can name the category in its log line.
+  const { id } = await params;
   try {
     const user = await requireFeature("categories", "edit");
-    const { id } = await params;
 
     const parsed = categoryUpdateSchema.safeParse(await req.json().catch(() => null));
     if (!parsed.success) {
@@ -25,7 +27,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       where: { id },
       // description and reorderLevel are selected for the activity log: it records WHICH fields
       // moved, and that cannot be decided without the values they moved from.
-      select: { id: true, name: true, parentId: true, description: true, reorderLevel: true },
+      select: {
+        id: true,
+        name: true,
+        parentId: true,
+        description: true,
+        reorderLevel: true,
+        isActive: true,
+        parent: { select: { name: true, isActive: true } },
+      },
     });
     if (!existing) return errorResponse("Category not found", 404);
 
@@ -62,6 +72,22 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
     }
 
+    // ─── active / inactive (plan 0809-brand-category-inactive) ────────────────────────────
+    //
+    // Deactivating takes the whole subtree: the row, every descendant category, and every
+    // ACTIVE product filed under any of them, in one transaction. Activating is the row only
+    // (a parent coming back does not silently resurrect children someone retired on
+    // purpose), plus its own INACTIVE products when `reactivateProducts` is sent. The
+    // placeholder is refused outright — every import falls back to it.
+    const flips = data.isActive !== undefined && data.isActive !== existing.isActive;
+    if (flips && isPlaceholderCategory(existing.name)) {
+      log.warn("deactivate refused — placeholder", { categoryId: id });
+      return errorResponse(`${existing.name} is the import fall-back and cannot be made inactive`, 400);
+    }
+    if (flips && data.isActive === true && existing.parent && !existing.parent.isActive) {
+      return errorResponse(`Activate ${existing.parent.name} first`, 400);
+    }
+
     const nextName = data.name !== undefined ? data.name.trim() : existing.name;
     const nextDescription =
       data.description !== undefined ? data.description?.trim() || null : existing.description;
@@ -78,7 +104,44 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (nextParentId !== existing.parentId) changed.push("parent");
     if (nextReorderLevel !== existing.reorderLevel) changed.push("reorder level");
 
+    const goingInactive = flips && data.isActive === false;
+
     const category = await prisma.$transaction(async (tx) => {
+      // The subtree, when deactivating: this id plus every descendant, level by level. The
+      // tree is two deep by convention, but the loop costs nothing and does not rely on it.
+      let subtree: string[] = [id];
+      if (goingInactive) {
+        let frontier = [id];
+        while (frontier.length > 0) {
+          const next = await tx.category.findMany({
+            where: { parentId: { in: frontier }, isActive: true },
+            select: { id: true },
+          });
+          frontier = next.map((c) => c.id).filter((cid) => !subtree.includes(cid));
+          subtree = subtree.concat(frontier);
+        }
+      }
+
+      // The walk follows ACTIVE children only. A child that was retired on its own earlier
+      // is left exactly as it is — including any of its products someone restored by hand
+      // since — because "activate is the row only" cuts both ways: this call owns the rows
+      // it changes and nothing that was decided separately.
+      //
+      // `status: ACTIVE` on the way down and `status: INACTIVE` on the way back up are not
+      // optional: ProductStatus also has DISCONTINUED, and a blind updateMany would rewrite
+      // it with nothing to restore it.
+      const touchProducts = goingInactive || (flips && data.reactivateProducts === true);
+      const affected = touchProducts
+        ? await tx.product.findMany({
+            where: {
+              categoryId: goingInactive ? { in: subtree } : id,
+              status: goingInactive ? "ACTIVE" : "INACTIVE",
+            },
+            select: { id: true, currentStock: true },
+          })
+        : [];
+      const unitsOnHand = affected.reduce((sum, p) => sum + (p.currentStock ?? 0), 0);
+
       const row = await tx.category.update({
         where: { id },
         data: {
@@ -86,9 +149,45 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           ...(data.description !== undefined ? { description: nextDescription } : {}),
           ...(data.parentId !== undefined ? { parentId: nextParentId } : {}),
           ...(data.reorderLevel !== undefined ? { reorderLevel: nextReorderLevel } : {}),
+          ...(flips ? { isActive: data.isActive } : {}),
         },
         include: { _count: { select: { products: true, children: true } } },
       });
+
+      let subcategoriesChanged = 0;
+      if (goingInactive && subtree.length > 1) {
+        const kids = await tx.category.updateMany({
+          where: { id: { in: subtree.filter((cid) => cid !== id) } },
+          data: { isActive: false },
+        });
+        subcategoriesChanged = kids.count;
+      }
+
+      let productsChanged = 0;
+      if (affected.length > 0) {
+        const changedProducts = await tx.product.updateMany({
+          where: { id: { in: affected.map((p) => p.id) } },
+          data: { status: goingInactive ? "INACTIVE" : "ACTIVE" },
+        });
+        productsChanged = changedProducts.count;
+      }
+
+      if (flips) {
+        await logActivity(tx, {
+          module: "categories",
+          action: goingInactive ? "deactivated" : "activated",
+          entityType: "Category",
+          entityId: id,
+          entityRef: nextName,
+          details: goingInactive
+            ? `${productsChanged} products and ${subcategoriesChanged} sub-categories set inactive · ${unitsOnHand} units stay on the books`
+            : data.reactivateProducts
+              ? `${productsChanged} products restored`
+              : "products untouched",
+          userId: user.id,
+          userName: user.name,
+        });
+      }
 
       // An unchanged save writes no row. The feed is meant to show what happened, and
       // "opened the sheet and pressed Save" did not happen to the category.
@@ -107,77 +206,28 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         });
       }
 
-      return row;
+      return { ...row, productsChanged, unitsOnHand, subcategoriesChanged };
     });
 
-    log.info("category updated", { categoryId: id, fields: changed });
+    if (flips) {
+      log.info(goingInactive ? "category deactivated" : "category activated", {
+        categoryId: id,
+        productsChanged: category.productsChanged,
+        subcategoriesChanged: category.subcategoriesChanged,
+        unitsOnHand: category.unitsOnHand,
+      });
+    } else {
+      log.info("category updated", { categoryId: id, fields: changed });
+    }
     return successResponse(category);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
     const message = error instanceof Error ? error.message : "Failed to update the category";
-    log.error("category update failed", { message });
+    log.error("category update failed", { categoryId: id, message });
     return errorResponse(message, 400);
   }
 }
 
-/**
- * Delete a category, but only when nothing points at it.
- *
- * Same rule as brands and as /team's user delete: count the references, remove the row only
- * when every count is zero, otherwise REFUSE and name what is holding it. `Product.categoryId`
- * is REQUIRED (schema.prisma:449), so a forced delete could not leave the products behind —
- * it would have to destroy them. Merge is the operation that actually cleans this data up,
- * and the refusal points there.
- */
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  try {
-    await requireFeature("categories", "delete");
-    const { id } = await params;
-
-    const category = await prisma.category.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        name: true,
-        _count: { select: { products: true, children: true, inboundShipments: true } },
-      },
-    });
-    if (!category) return errorResponse("Category not found", 404);
-
-    const blockers: string[] = [];
-    if (category._count.products) blockers.push(`${category._count.products} product(s)`);
-    // InboundShipment.categoryId is Restrict (MIG-1a), so the database refuses this anyway.
-    // Counting it here is what makes the refusal a sentence instead of a constraint string —
-    // the same reason every other blocker on this list exists.
-    if (category._count.inboundShipments)
-      blockers.push(`${category._count.inboundShipments} inbound shipment(s)`);
-    // A child left behind would point at a row that no longer exists. Prisma's referential
-    // action would null it silently and quietly promote the child to a root — a structural
-    // change nobody asked for, so refuse instead.
-    if (category._count.children) blockers.push(`${category._count.children} sub-categor(ies)`);
-
-    if (blockers.length) {
-      log.info("category delete refused", { categoryId: id, blockers });
-      return successResponse({
-        deleted: false,
-        name: category.name,
-        blockers,
-        message: `${category.name} still has ${blockers.join(" and ")}. Merge it into another category, or move those first.`,
-      });
-    }
-
-    await prisma.category.delete({ where: { id } });
-    log.info("category deleted", { categoryId: id, name: category.name });
-
-    return successResponse({
-      deleted: true,
-      name: category.name,
-      message: `${category.name} was deleted.`,
-    });
-  } catch (error) {
-    if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    const message = error instanceof Error ? error.message : "Failed to delete the category";
-    log.error("category delete failed", { message });
-    return errorResponse(message, 400);
-  }
-}
+// DELETE is gone on purpose (plan 0809-brand-category-inactive, R2). A category is retired
+// with PATCH { isActive: false } — subtree and all — and nothing under it is destroyed. Merge
+// is still the way to fold one category into another.

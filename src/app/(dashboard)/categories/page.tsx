@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { ArrowLeft, Trash2, Tag, Plus, Pencil, Check, X, GitMerge, Package } from "lucide-react";
+import { ArrowLeft, Power, Tag, Plus, Pencil, Check, X, GitMerge, Package } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { ZohoTaxonomySheet } from "@/components/zoho-taxonomy-sheet";
 import { usePermissions } from "@/lib/use-permissions";
-import { apiFetch, apiTry } from "@/lib/api-client";
+import { apiFetch, apiTry, ApiError } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 import { PLACEHOLDER_CATEGORY } from "@/lib/import-placeholders";
 
@@ -39,24 +39,47 @@ interface CategoryItem {
   description: string | null;
   reorderLevel: number;
   parent: { id: string; name: string } | null;
+  /**
+   * A category is never deleted (owner, 8 Sep 2026). Inactive hides it from every picker
+   * and sets its products — and its sub-categories, with theirs — inactive; every row stays.
+   */
+  isActive: boolean;
   _count: { products: number; children: number };
 }
 
-/** Delete answers with this. `deleted: false` is a refusal with a reason, not a failure. */
-interface DeleteOutcome {
-  deleted: boolean;
+/** What PATCH answers when `isActive` flips: the row plus what the cascade did. */
+interface ToggleResult extends CategoryItem {
+  productsChanged: number;
+  subcategoriesChanged: number;
+  unitsOnHand: number;
+}
+
+/** Rendered in the ActionConfirmation after a toggle — success, or a refusal with a reason. */
+interface ToggleOutcome {
+  type: "success" | "warning";
+  title: string;
   name: string;
   message: string;
 }
 
+type StatusFilter = "ACTIVE" | "INACTIVE" | "ALL";
+
+const STATUS_CHIPS: { key: StatusFilter; label: string }[] = [
+  { key: "ACTIVE", label: "Active" },
+  { key: "INACTIVE", label: "Inactive" },
+  { key: "ALL", label: "All" },
+];
+
 export default function CategoriesPage() {
-  const { canView, canCreate, canEdit, canDelete, loading: permsLoading } = usePermissions();
+  const { canView, canCreate, canEdit, loading: permsLoading } = usePermissions();
 
   const [categories, setCategories] = useState<CategoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [outcome, setOutcome] = useState<DeleteOutcome | null>(null);
+  const [outcome, setOutcome] = useState<ToggleOutcome | null>(null);
+  // Default Active: the inactive rows are the retired ones, shown on request.
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ACTIVE");
 
   // Inline edit — one row at a time. `draft` holds only what is being changed.
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -71,7 +94,9 @@ export default function CategoriesPage() {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const { data, error: err } = await apiTry<CategoryItem[]>("/api/categories");
+    // This screen is the master, so it asks for every row. Every other caller of
+    // GET /api/categories takes the default, which is active rows only.
+    const { data, error: err } = await apiTry<CategoryItem[]>("/api/categories?includeInactive=1");
     if (err) {
       log.error("could not load categories", { message: err });
       setError(err);
@@ -140,20 +165,75 @@ export default function CategoriesPage() {
     }
   }
 
-  async function remove(c: CategoryItem) {
-    if (!confirm(`Delete ${c.name}? If anything still references it you will be told instead.`)) return;
+  /**
+   * Active ⇄ inactive. Replaces delete (owner, 8 Sep 2026): nothing is removed, the category
+   * leaves every picker and its products — and its sub-categories with theirs — go inactive
+   * with it. Activating brings the category back and, only if the person says so, the
+   * products that went down with it; a sub-category is activated on its own row, and the
+   * API refuses to activate one whose parent is still inactive.
+   */
+  async function toggleActive(c: CategoryItem) {
+    const products = `${c._count.products} product${c._count.products === 1 ? "" : "s"}`;
+    const subs = c._count.children > 0
+      ? ` and its ${c._count.children} sub-categor${c._count.children === 1 ? "y" : "ies"}`
+      : "";
+    let reactivateProducts = false;
+
+    if (c.isActive) {
+      if (
+        !confirm(
+          `Deactivate ${c.name}? Its ${products}${subs} will be set inactive and it leaves every category picker. Nothing is deleted.`
+        )
+      ) return;
+    } else {
+      if (!confirm(`Activate ${c.name}? It returns to every category picker.`)) return;
+      if (c._count.products > 0) {
+        reactivateProducts = confirm(
+          `Also restore the products that went inactive with ${c.name}? OK restores them, Cancel leaves them inactive.`
+        );
+      }
+    }
+
     setBusy(c.id);
+    setError(null);
     try {
-      // A refusal arrives as 200 with deleted:false and a reason. Rendering it as a failure
-      // would be wrong — nothing broke, the request was declined for a stated cause.
-      const res = await apiFetch<DeleteOutcome>(`/api/categories/${c.id}`, { method: "DELETE" });
-      log.info("category delete handled", { categoryId: c.id, deleted: res.deleted });
-      setOutcome(res);
+      const res = await apiFetch<ToggleResult>(`/api/categories/${c.id}`, {
+        method: "PATCH",
+        json: { isActive: !c.isActive, ...(reactivateProducts ? { reactivateProducts: true } : {}) },
+      });
+      log.info("category active toggled", {
+        categoryId: c.id,
+        isActive: res.isActive,
+        productsChanged: res.productsChanged,
+        unitsOnHand: res.unitsOnHand,
+      });
+      const changed = `${res.productsChanged} product${res.productsChanged === 1 ? "" : "s"}`;
+      const units = `${res.unitsOnHand} unit${res.unitsOnHand === 1 ? "" : "s"}`;
+      setOutcome({
+        type: "success",
+        title: res.isActive ? "Activated" : "Deactivated",
+        name: c.name,
+        message: res.isActive
+          ? res.productsChanged > 0
+            ? `${changed} restored.`
+            : "Its products were left as they were."
+          : `${changed}${
+              res.subcategoriesChanged > 0
+                ? ` and ${res.subcategoriesChanged} sub-categor${res.subcategoriesChanged === 1 ? "y" : "ies"}`
+                : ""
+            } set inactive · ${units} stay on the books.`,
+      });
       await load();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Could not delete";
-      log.error("category delete failed", { categoryId: c.id, message: msg });
-      setOutcome({ deleted: false, name: c.name, message: msg });
+      // A 400 is a refusal with a reason (the placeholder, or a parent still inactive) —
+      // rendered as a warning, not a failure, because nothing broke.
+      const msg = e instanceof Error ? e.message : "Could not update the category";
+      if (e instanceof ApiError && e.status === 400) {
+        log.warn("category toggle refused", { categoryId: c.id, message: msg });
+      } else {
+        log.error("category toggle failed", { categoryId: c.id, message: msg });
+      }
+      setOutcome({ type: "warning", title: "Not changed", name: c.name, message: msg });
     } finally {
       setBusy(null);
     }
@@ -195,8 +275,16 @@ export default function CategoriesPage() {
 
   const mayEdit = canEdit("categories");
   const mayMerge = canCreate("categories"); // merge is guarded on categories.create by the API
-  const mayDelete = canDelete("categories");
   const totalProducts = categories.reduce((sum, c) => sum + c._count.products, 0);
+
+  const activeCount = categories.filter((c) => c.isActive).length;
+  const inactiveCount = categories.length - activeCount;
+  const visible =
+    statusFilter === "ALL" ? categories
+    : statusFilter === "ACTIVE" ? categories.filter((c) => c.isActive)
+    : categories.filter((c) => !c.isActive);
+  // Merging INTO a retired category would hide the moved products; only live ones are targets.
+  const mergeTargets = categories.filter((c) => c.isActive);
 
   return (
     <div>
@@ -208,7 +296,7 @@ export default function CategoriesPage() {
         <div className="flex-1">
           <h1 className="text-lg font-bold text-slate-900">Categories</h1>
           <p className="text-xs text-slate-500 tabular-nums">
-            {categories.length} categor{categories.length === 1 ? "y" : "ies"} · {totalProducts} product
+            {activeCount} active{inactiveCount > 0 ? ` · ${inactiveCount} inactive` : ""} · {totalProducts} product
             {totalProducts === 1 ? "" : "s"} filed
           </p>
         </div>
@@ -244,6 +332,23 @@ export default function CategoriesPage() {
         </Card>
       )}
 
+      {/* Active / Inactive / All — the same pill row /vendors uses for its sort. */}
+      <div className="flex gap-1.5 mb-3 pb-1" role="group" aria-label="Show categories">
+        {STATUS_CHIPS.map((s) => (
+          <button
+            key={s.key}
+            type="button"
+            onClick={() => setStatusFilter(s.key)}
+            aria-pressed={statusFilter === s.key}
+            className={`shrink-0 px-2.5 py-1 min-h-[32px] rounded-full text-[11px] font-medium transition-colors focus-ring ${
+              statusFilter === s.key ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+            }`}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+
       {loading ? (
         <SkeletonList count={5} type="card" />
       ) : categories.length === 0 ? (
@@ -251,14 +356,21 @@ export default function CategoriesPage() {
           <Tag className="h-12 w-12 text-slate-300 mx-auto mb-3" />
           <p className="text-sm text-slate-500">No categories yet</p>
         </div>
+      ) : visible.length === 0 ? (
+        <div className="text-center py-12">
+          <Tag className="h-12 w-12 text-slate-300 mx-auto mb-3" />
+          <p className="text-sm text-slate-500">
+            No {statusFilter === "INACTIVE" ? "inactive" : "active"} categories
+          </p>
+        </div>
       ) : (
         <div className="space-y-1.5">
-          {categories.map((c) => {
+          {visible.map((c) => {
             const isEditing = editingId === c.id;
             const isMerging = mergeSource === c.id;
 
             return (
-              <Card key={c.id}>
+              <Card key={c.id} className={c.isActive ? "" : "opacity-60"}>
                 <CardContent className="p-3">
                   {isEditing ? (
                     <div className="flex flex-col sm:flex-row gap-2">
@@ -284,6 +396,9 @@ export default function CategoriesPage() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <p className="text-sm font-semibold text-slate-900">{c.name}</p>
+                          {!c.isActive && (
+                            <Badge variant="danger" className="text-[10px]">Inactive</Badge>
+                          )}
                           <Badge variant="info" className="text-[10px] tabular-nums">
                             {c._count.products} product{c._count.products === 1 ? "" : "s"}
                           </Badge>
@@ -305,14 +420,19 @@ export default function CategoriesPage() {
                             <Pencil className="h-3.5 w-3.5" />
                           </IconBtn>
                         )}
-                        {mayMerge && categories.length > 1 && (
+                        {mayMerge && mergeTargets.some((t) => t.id !== c.id) && (
                           <IconBtn label={`Merge ${c.name} into another category`} onClick={() => setMergeSource(c.id)}>
                             <GitMerge className="h-3.5 w-3.5" />
                           </IconBtn>
                         )}
-                        {mayDelete && (
-                          <IconBtn label={`Delete ${c.name}`} danger disabled={busy === c.id} onClick={() => void remove(c)}>
-                            <Trash2 className="h-3.5 w-3.5" />
+                        {mayEdit && (
+                          <IconBtn
+                            label={c.isActive ? `Deactivate ${c.name}` : `Activate ${c.name}`}
+                            tone={c.isActive ? "amber" : "green"}
+                            disabled={busy === c.id}
+                            onClick={() => void toggleActive(c)}
+                          >
+                            <Power className="h-3.5 w-3.5" />
                           </IconBtn>
                         )}
                       </div>
@@ -334,7 +454,7 @@ export default function CategoriesPage() {
                           className="flex-1 min-h-[40px] rounded-lg border border-slate-300 bg-white px-2 text-sm focus-ring"
                         >
                           <option value="">Merge into…</option>
-                          {categories.filter((t) => t.id !== c.id).map((t) => (
+                          {mergeTargets.filter((t) => t.id !== c.id).map((t) => (
                             <option key={t.id} value={t.id}>{t.name}</option>
                           ))}
                         </select>
@@ -374,8 +494,8 @@ export default function CategoriesPage() {
         <ActionConfirmation
           open
           onClose={() => setOutcome(null)}
-          type={outcome.deleted ? "success" : "warning"}
-          title={outcome.deleted ? "Deleted" : "Not deleted"}
+          type={outcome.type}
+          title={outcome.title}
           referenceId={outcome.name}
           details={outcome.message}
         />
@@ -385,12 +505,13 @@ export default function CategoriesPage() {
 }
 
 function IconBtn({
-  label, onClick, children, danger, disabled,
+  label, onClick, children, tone, disabled,
 }: {
   label: string;
   onClick: () => void;
   children: React.ReactNode;
-  danger?: boolean;
+  /** amber = about to take something away, green = about to bring it back. */
+  tone?: "amber" | "green";
   disabled?: boolean;
 }) {
   return (
@@ -400,7 +521,7 @@ function IconBtn({
       disabled={disabled}
       aria-label={label}
       className={`min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 focus-ring ${
-        danger ? "text-red-600" : "text-slate-600"
+        tone === "amber" ? "text-amber-600" : tone === "green" ? "text-green-600" : "text-slate-600"
       }`}
     >
       {children}

@@ -64,16 +64,26 @@ export async function POST(req: NextRequest) {
       if (vendorError) return errorResponse(vendorError, 400);
     }
 
-    // Validate brand exists if provided
+    // Validate brand exists AND is active if provided. An inactive brand is not a destination
+    // (plan 0809-brand-category-inactive): the picker no longer offers one, and a stale screen
+    // must not re-file a batch of products under a retired row.
     if (brandId) {
-      const brand = await prisma.brand.findUnique({ where: { id: brandId } });
+      const brand = await prisma.brand.findUnique({
+        where: { id: brandId },
+        select: { id: true, name: true, isActive: true },
+      });
       if (!brand) return errorResponse("Brand not found", 404);
+      if (!brand.isActive) return errorResponse(`${brand.name} is inactive. Activate it on /more/brands first.`, 400);
     }
 
-    // Validate category exists if provided
+    // Same for the category.
     if (categoryId) {
-      const cat = await prisma.category.findUnique({ where: { id: categoryId } });
+      const cat = await prisma.category.findUnique({
+        where: { id: categoryId },
+        select: { id: true, name: true, isActive: true },
+      });
       if (!cat) return errorResponse("Category not found", 404);
+      if (!cat.isActive) return errorResponse(`${cat.name} is inactive. Activate it on /categories first.`, 400);
     }
 
     // Bins are the one detail no import can ever supply — a bin is a physical shelf in this

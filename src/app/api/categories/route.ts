@@ -13,12 +13,20 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 // for its category dropdown. Re-guarding it on the taxonomy module would empty those
 // dropdowns for anyone who is not a taxonomy admin — a silent empty list rather than an
 // honest 403, which is a worse failure than the one it would prevent.
-export async function GET() {
+//
+// Active rows by default (plan 0809-brand-category-inactive). Every picker reads this list,
+// so filtering HERE is what makes "inactive" mean anything. `/categories` passes
+// `includeInactive` (`1` or `true` — the vendor list spells it the second way) to show the
+// retired rows with a badge.
+export async function GET(req: NextRequest) {
   try {
     await requireFeature("stock", "view");
+    const flag = req.nextUrl.searchParams.get("includeInactive");
+    const includeInactive = flag === "1" || flag === "true";
     const categories = await prisma.category.findMany({
+      where: includeInactive ? {} : { isActive: true },
       include: {
-        children: { select: { id: true, name: true } },
+        children: { select: { id: true, name: true, isActive: true } },
         parent: { select: { id: true, name: true } },
         _count: { select: { products: true, children: true } },
       },

@@ -81,10 +81,18 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     if (brandIds.length > 0) {
       const found = await prisma.brand.findMany({
         where: { id: { in: brandIds } },
-        select: { id: true, name: true },
+        select: { id: true, name: true, isActive: true },
       });
       if (found.length !== brandIds.length) {
         return errorResponse("One or more of those brands no longer exists", 400);
+      }
+      // A retired brand cannot gain a supplier link (plan 0809-brand-category-inactive).
+      const inactive = found.filter((b) => !b.isActive).map((b) => b.name);
+      if (inactive.length > 0) {
+        return errorResponse(
+          `${inactive.join(", ")} ${inactive.length === 1 ? "is" : "are"} inactive. Activate on /more/brands before linking.`,
+          400
+        );
       }
     }
 
