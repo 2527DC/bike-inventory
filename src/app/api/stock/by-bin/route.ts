@@ -35,6 +35,19 @@ export async function GET() {
           id: w.id,
           label: w.name,
           storeId: w.storeId,
+          // `site` and `kind` are READ by /stock/by-bin and were never sent. The screen
+          // groups by `site`, so every row landed in one group keyed `undefined` — which is
+          // React's "each child needs a unique key" warning — the site heading rendered
+          // blank, and `kind` being undefined meant the Warehouse icon branch was never
+          // taken, so a warehouse drew the Store icon. Nothing type-checked it because the
+          // page casts the JSON straight into its own interface.
+          //
+          // Site is the store code's prefix: "BCH_STORE" -> "BCH", which is what SITE_NAMES
+          // on that page is keyed on. `kind` is always "Warehouse" here because this branch
+          // is driven by the Warehouse table; the screen's Store branch is for a store-floor
+          // location that does not exist yet.
+          site: (w.store?.code ?? "").split("_")[0],
+          kind: "Warehouse" as const,
           totalStock: r?.total_stock ?? 0,
           totalValue: r?.total_value ?? 0,
           productCount: r?.product_count ?? 0,

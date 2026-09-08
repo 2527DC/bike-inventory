@@ -58,8 +58,14 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  // `data-scroll-behavior="smooth"` tells Next that the `scroll-behavior: smooth` in
+  // globals.css is deliberate. Without it Next logs a warning, because it force-disables
+  // smooth scrolling during a route transition — otherwise the browser animates from the old
+  // page's scroll position to the new one, which reads as the page sliding on every
+  // navigation. The attribute keeps the smooth scroll for in-page anchors and silences the
+  // warning.
   return (
-    <html lang="en" className={`${inter.variable} h-full`}>
+    <html lang="en" data-scroll-behavior="smooth" className={`${inter.variable} h-full`}>
       <head>
         <link rel="apple-touch-icon" href="/icons/icon-192.png" />
       </head>
