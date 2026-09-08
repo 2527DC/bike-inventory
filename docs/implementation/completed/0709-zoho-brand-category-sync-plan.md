@@ -1,6 +1,6 @@
 # Zoho brand & category sync — fetch, review, import, keyed on the Zoho id
 
-**Status:** pending · **Raised:** 7 Sep 2026 · **Branch base:** to be confirmed by the owner
+Status: completed — 8 Sep 2026, the Zoho brand and category masters now reach the app by id: `zohoBrandId` / `zohoCategoryId` (migration `20260908090622`), `listAllBrands` / `listAllCategories` on the Inventory client, a preview + import route pair under both `/api/brands` and `/api/categories`, and one `ZohoTaxonomySheet` mounted on `/more/brands` and `/categories`. The bill import and the stock count stopped inventing brands. Raised 7 Sep 2026 on `chore/brand-stock-module-and-tooling`; the parts deliberately not built here are carried by `0809-brand-category-single-creation-path-plan.md`, including the §3.1 clash pre-check on `POST /api/brands`, which is still outstanding.
 
 Replace "the brand is whatever the bill's vendor was called" with "the brand is a row pulled
 from Zoho's own brand master, matched by `brand_id`". Same for categories, matched by
@@ -354,3 +354,105 @@ carrying brand and category are wanted, that step must be written; it is not the
 - The item payload carries no `brand_id` — verified on the single-item detail endpoint, and
   confirmed independently by the owner's own saved pull response, which contains
   `categoryId` 0 times and `brandId` 0 times.
+
+---
+
+## Clarifications — 8 Sep 2026
+
+Run of `/clarify-plan`. Every claim below was re-read from the code on 8 Sep, not carried
+over from the session that wrote the plan.
+
+### Verified against code
+
+- §6.1 `listBrands` / `listCategories` — MISSING. `src/lib/integrations/inventory.ts` holds
+  only `getBillDetails` (:15) and `createItem` (:45).
+- §6.2/6.3 `sync-zoho` routes — MISSING. No such path exists under `src/app/api`.
+- §3 `zohoBrandId` / `zohoCategoryId` — MISSING from `prisma/schema.prisma`; no migration
+  mentions either column.
+- §6.4 screens — MISSING. `more/brands/page.tsx` and `categories/page.tsx` carry no Zoho
+  reference.
+- §3.1 `POST /api/brands` has no clash pre-check — CONFIRMED, `api/brands/route.ts:29`.
+  `POST /api/categories` does have one, `api/categories/route.ts:44-48`.
+- `GET /api/categories` on `stock.view` — CONFIRMED, `api/categories/route.ts:16-18`
+  (the plan cited :14-18; the comment is :12-15). `GET /api/brands` on `brands.view`,
+  `api/brands/route.ts:11`.
+- §8 the bill import invents a brand from the vendor name — CONFIRMED, but at
+  `api/zoho/pull-review/approve/route.ts:174-175` and `:310-312`, not :173-175/:309-312.
+- §8 no code produces item previews — CONFIRMED, `api/zoho/trigger-pull/route.ts:541-544`.
+- `Product.zohoItemId String? @unique` exists, so the §7 backfill can key on it — CONFIRMED.
+- `brands.create` and `categories.create` grants exist — CONFIRMED,
+  `prisma/rbac-catalog.ts:279-287` and `:311-320`.
+- Merge actions exist on both sides — CONFIRMED, `api/brands/[id]/merge/route.ts:13`.
+- `apiCall` is `protected`; the pagination idiom is `page_context.has_more_page` —
+  CONFIRMED, `base.ts:263`, `:122`, `:372`.
+
+### Drifted — the plan is wrong here and the text above still says otherwise
+
+- **§7 "the rest stay blank" is impossible.** `Product.brandId` and `Product.categoryId` are
+  NON-NULL. An unmatched product stays on a *placeholder*, it cannot go blank.
+- **§7 names only `Unbranded`.** `src/lib/import-placeholders.ts:43` defines three
+  placeholder brand names — `Imported`, `Unbranded`, `General` — behind `isPlaceholderBrand()`.
+  The backfill must call that function, not compare one string.
+- **§10 Q1's branch tip was stale.** The tip is now `chore/brand-stock-module-and-tooling`
+  @ `a5e6c01`, which is the plan commit itself.
+- **`docs/integrations-endpoints.md` has no generator.** §6.1 says the doc is generated from
+  `endpoints.ts`; no script in `package.json` or `scripts/` produces it. The registry entry
+  is still required, but the doc is updated by hand.
+- **`scripts/gen-catalog-sql.js` landed with the plan and contradicts §3.** It sources from
+  `prisma/data/Item.xls`, NOT the Zoho API, and emits raw
+  `ALTER TABLE ... ADD COLUMN IF NOT EXISTS "zohoBrandId"` at :194-197 — adding the columns
+  outside Prisma Migrate and leaving `schema.prisma` unaware of them. Superseded by the
+  answers below; not the path taken.
+
+### Answers
+
+- **Q1 Which branch does this stack on?** — Branch off the current tip,
+  `chore/brand-stock-module-and-tooling` @ `a5e6c01`. That branch already carries the plan,
+  `scripts/zoho-probe.sh` and both Zoho JSON masters.
+- **Q2 Import all 151 brands, or only referenced ones?** — **Only brands that at least one
+  Zoho item actually references.** Costs one extra pass over `/items` during the fetch and
+  drops most of the misfiled vendor rows on its own.
+- **Q6 SQL bootstrap or the screens?** — **Build §6.** Proper Prisma migration, the two
+  client methods, the preview/apply route pair, the Fetch button and review sheet. The raw
+  `ALTER TABLE` path in `gen-catalog-sql.js` is NOT used.
+- **Target database** — **local `bch` (`localhost:5432`) for structuring.** Confirmed on
+  8 Sep: 100 public tables, 4 rows in `_prisma_migrations`, and 0 products / 0 brands /
+  0 categories / 0 vendors. So the "adopt an existing brand" and "link to existing" paths
+  can be built and type-checked but not exercised against real rows until a dump from
+  `backups/` is restored.
+- **Q3 The ~50 vendor rows** — **show them flagged and pre-unticked.** They appear in the
+  review sheet with a "looks like a vendor" marker and no tick; nothing is created unless a
+  person ticks it. Combined with Q2 (referenced-only), most never reach the sheet at all.
+- **Q4 `HERO` vs `HERO CYCLES`** — **build the link-to-existing picker.** Third action per
+  review row: choose an existing local brand and write `zohoBrandId` onto it. Without it the
+  import manufactures the duplicates it was built to prevent. Local rows are never renamed.
+- **Q5 Case-insensitive unique on `Brand.name`** — **later, in its own migration.** This
+  change ships the cheap half only: the clash pre-check on `POST /api/brands` (§3.1). The
+  `DROP INDEX` / `lower(name)` swap is a constraint change the whole app relies on and gets
+  its own review.
+- **Q7 (new) The §7 backfill overwrite rule** — **`isPlaceholderBrand()`, and unmatched
+  products stay on their placeholder.** Re-file any product sitting on `Imported`,
+  `Unbranded` or `General`; never touch one carrying a real brand; category re-filed only
+  from `Uncategorized` or NULL. §7's "stay blank" wording is wrong and is superseded by this.
+
+### Correction — later on 8 Sep 2026
+
+The other session's work landed while this plan sat halted. Three entries above are now stale:
+
+- **§3's columns are DONE.** `prisma/migrations/20260908090622_zoho_brand_category_ids/`
+  adds `Brand.zohoBrandId` and `Category.zohoCategoryId` as a proper Prisma migration, and
+  its own header explains it is the `catalog.sql` raw `ALTER TABLE` moved to where CLAUDE.md
+  requires — so those `IF NOT EXISTS` statements now find their work already done. The drift
+  finding above about `gen-catalog-sql.js:194-197` is therefore resolved, not outstanding.
+- **Local `bch` is no longer empty.** Measured: Product 5,738 · Brand 115 (114 carrying a
+  `zohoBrandId`) · Category 32 · Vendor 83 · `brand_vendors` **still 0**. A new
+  `npm run db:import` (`scripts/db/import-catalog-and-vendors.mjs`) did this.
+- **"5,738/5,739 products are Unbranded" is out of date.** Now 1,289 sit on `Unbranded`;
+  the top real brands are HERO 366, STRYDER 279, RALEIGH 267, LUCIFIRE 232, KEYSTO 190.
+  `src/lib/import-placeholders.ts` records the matching category change — 665 of 5,738 on the
+  placeholder, so `isPlaceholderCategory` is a meaningful signal again and the /stock card
+  tests it once more.
+
+The answers recorded above are unaffected. What changes is the starting position: Q2's
+"referenced brands only" and Q7's `isPlaceholderBrand()` rule now run against a populated
+catalog, so both can be verified rather than reasoned about.

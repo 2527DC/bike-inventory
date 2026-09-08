@@ -1,6 +1,6 @@
 # Bottom navigation — make the per-user pin actually drive the PWA tab bar
 
-Status: **PLANNED, not started** — written 7 Sep 2026.
+Status: completed — 8 Sep 2026, the pinned tabs reach the phone: one `MAX_NAV_TABS` cap, `navTabs` carried through `rbac` → `/api/my-permissions` → the client store, the bar hidden outright when nothing is pinned, and a header drawer as the safety net.
 Branch: **not cut yet.** Ask the owner which branch to base this on before creating one.
 
 ## The report
