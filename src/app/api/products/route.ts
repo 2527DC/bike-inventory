@@ -135,6 +135,26 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const data = productSchema.parse(body);
 
+    // An inactive brand or category is not a destination (plan 0809-brand-category-inactive):
+    // the create form's pickers no longer offer one, and a stale screen or a direct call must
+    // not file a NEW product under a retired row. The same two lookups reclassify does.
+    if (data.brandId) {
+      const brand = await prisma.brand.findUnique({
+        where: { id: data.brandId },
+        select: { name: true, isActive: true },
+      });
+      if (!brand) return errorResponse("Selected brand no longer exists", 400);
+      if (!brand.isActive) return errorResponse(`${brand.name} is inactive. Activate it on /more/brands first.`, 400);
+    }
+    if (data.categoryId) {
+      const category = await prisma.category.findUnique({
+        where: { id: data.categoryId },
+        select: { name: true, isActive: true },
+      });
+      if (!category) return errorResponse("Selected category no longer exists", 400);
+      if (!category.isActive) return errorResponse(`${category.name} is inactive. Activate it on /categories first.`, 400);
+    }
+
     const product = await prisma.product.create({
       data: {
         ...data,

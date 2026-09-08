@@ -39,18 +39,26 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         where: { id: sourceId },
         select: { id: true, name: true, _count: { select: { products: true, children: true } } },
       }),
-      prisma.category.findUnique({ where: { id: targetCategoryId }, select: { id: true, name: true } }),
+      prisma.category.findUnique({
+        where: { id: targetCategoryId },
+        select: { id: true, name: true, isActive: true },
+      }),
     ]);
 
     if (!source) return errorResponse("Source category not found", 404);
     if (!target) return errorResponse("Target category not found", 404);
+    // Merging INTO a retired category would hide every moved product behind an inactive row.
+    if (!target.isActive) {
+      log.warn("merge refused — target inactive", { sourceId, targetCategoryId });
+      return errorResponse(`${target.name} is inactive. Activate it first, or pick another category.`, 400);
+    }
 
     // Products move; children do not, because a sub-category is a structural decision rather
     // than a mis-filing. Re-parenting them silently would rearrange the tree as a side effect
     // of a cleanup, so refuse and let the person move them deliberately.
     if (source._count.children) {
       return errorResponse(
-        `${source.name} has ${source._count.children} sub-categor(ies). Move or delete them before merging.`,
+        `${source.name} has ${source._count.children} sub-categor(ies). Move them to another parent before merging.`,
         400
       );
     }

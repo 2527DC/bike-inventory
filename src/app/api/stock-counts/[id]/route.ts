@@ -7,7 +7,13 @@ import { stockCountUpdateSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { isPlaceholderBrand } from "@/lib/import-placeholders";
-import { setWarehouseQty } from "@/lib/stock-location";
+import {
+  setWarehouseQty,
+  adjustWarehouseQty,
+  deductFromStore,
+  getWarehouseQtyMap,
+  getStoreQtyMap,
+} from "@/lib/stock-location";
 import { logActivity } from "@/lib/activity-log";
 import { createLogger } from "@/lib/logger";
 
@@ -15,10 +21,38 @@ import { createLogger } from "@/lib/logger";
 // straight into the brand list — with no record of either beyond the response body.
 const log = createLogger("stock-counts");
 
+/**
+ * Where an approved count's numbers go when the approver chooses "set system stock".
+ *
+ * `warehouse` — the audit covered ONE warehouse, so each counted quantity becomes that
+ * warehouse's quantity outright (`setWarehouseQty`).
+ *
+ * `store` — the audit covered the WHOLE store, one number per product across every active
+ * warehouse. The approver names the warehouse that receives a surplus (`warehouseId`); a
+ * shortage is taken from the store's warehouses in picker order, the same rule a sale
+ * follows (`deductFromStore`). Until 8 Sep 2026 a whole-store audit could not be applied at
+ * all — the 4 Sep §5.1 rule — because nobody had said where the difference belongs. Now the
+ * approver says, per approval, and nothing is invented.
+ */
+type CorrectionTarget =
+  | { scope: "warehouse"; warehouseId: string; name: string }
+  | { scope: "store"; storeId: string; storeName: string; warehouseId: string; name: string };
+
+/** What "set system stock" actually did, returned to the screen so the receipt can say it. */
+interface AppliedSummary {
+  lines: number;
+  changed: number;
+  netUnits: number;
+  zeroLines: number;
+  writtenOff: number;
+  warehouse: string;
+  scope: "warehouse" | "store";
+}
+
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   try {
     const user = await requireFeature("stock_audit", "view");
-    const { id } = await params;
 
     // Clerks/Mechanic can only view their assigned stock counts
     if (!(await userCan(user.id, "stock_audit", "approve"))) {
@@ -52,15 +86,29 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const totalVariance = stockCount.items.reduce((sum, i) => sum + (i.variance || 0), 0);
     const itemsWithVariance = stockCount.items.filter((i) => i.variance !== null && i.variance !== 0).length;
 
+    // A whole-store audit can be applied only if the approver names a warehouse to receive
+    // any surplus. The store's active warehouses ride along in picker order so the review
+    // screen has the list without a second round trip. Empty for a warehouse-scoped audit
+    // (the target is the audit's own warehouse) and for a legacy audit (nothing to choose).
+    const correctionWarehouses =
+      stockCount.storeId && !stockCount.warehouseId
+        ? await prisma.warehouse.findMany({
+            where: { storeId: stockCount.storeId, isActive: true },
+            select: { id: true, name: true },
+            orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+          })
+        : [];
+
     return successResponse({
       ...stockCount,
       // The scope in one string, so every screen renders it the same way (§5.1 three states).
       scopeLabel:
         stockCount.warehouse?.name ??
         (stockCount.store ? `${stockCount.store.name} — whole store` : "Legacy audit — no location"),
-      // Only a warehouse-scoped audit may correct stock; the detail screen hides the
-      // checkbox on this, and the API refuses regardless.
-      canCorrectStock: Boolean(stockCount.warehouseId),
+      // A warehouse audit corrects its own warehouse; a whole-store audit corrects the store
+      // once a receiving warehouse is named (see CorrectionTarget). A legacy audit never can.
+      canCorrectStock: Boolean(stockCount.warehouseId) || correctionWarehouses.length > 0,
+      correctionWarehouses,
       countedItems,
       totalItems: stockCount.items.length,
       totalVariance,
@@ -68,14 +116,19 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("stock count fetch failed", {
+      stockCountId: id,
+      message: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse(error instanceof Error ? error.message : "Failed to fetch stock count", 500);
   }
 }
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  // Resolved outside the try so the catch can name the audit in its log line.
+  const { id } = await params;
   try {
     const user = await requireFeature("stock_audit", "edit");
-    const { id } = await params;
     const body = await req.json();
     const data = stockCountUpdateSchema.parse(body);
 
@@ -97,6 +150,17 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     if (!isAssignee && !canApprove) {
       return errorResponse("You can only update stock counts assigned to you", 403);
+    }
+
+    // Counts are written while the audit is IN PROGRESS and at no other time. The items
+    // route refuses this already; this body's own `items` loop is the second door, and a
+    // line rewritten after approval would contradict the stock that was corrected from it.
+    if (data.items && data.items.length > 0 && existing.status !== "IN_PROGRESS") {
+      log.warn("count write refused by status", { stockCountId: id, status: existing.status, userId: user.id });
+      return errorResponse(
+        `This audit is ${existing.status.toLowerCase().replace(/_/g, " ")}; counts can only be saved while it is in progress`,
+        409
+      );
     }
 
     const isReview = data.status === "APPROVED" || data.status === "REJECTED";
@@ -139,53 +203,79 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     }
 
     // Stock Count is VERIFY-ONLY by default: approving records the count + variance but does
-    // not change inventory (Inwards is the way stock is added). Only an ADMIN/CEO who explicitly
-    // sends applyToStock=true may push the counted quantities onto stock as a correction.
+    // not change inventory (Inwards is the way stock is added). Only an approver who
+    // explicitly sends applyToStock=true pushes the counted quantities onto stock. The
+    // approver decides — `stock_audit.approve` is the whole gate (owner, 8 Sep 2026, Q11).
     const applyToStock =
       data.status === "APPROVED" &&
       data.applyToStock === true &&
       canApprove;
 
-    // ─── RESOLVE THE CORRECTION TARGET BEFORE THE TRANSACTION (§5.1) ──────────────────────
+    // ─── RESOLVE THE CORRECTION TARGET BEFORE THE TRANSACTION ─────────────────────────────
     //
-    // This is a DATA-INTEGRITY FIX, not a refactor.
+    // This is a DATA-INTEGRITY guard, not a refactor.
     //
     // The old code resolved the target INSIDE the transaction, with
     // `warehouseByCode(existing.location)` — on the root `prisma` client, against a
     // module-level cache, using a free-text code. When that lookup returned null it set
-    // `isLocCount = false`, and the two `else` branches below then wrote
-    // `Product.currentStock` **globally** — while the comment directly above them claimed
-    // the count "is NOT applied to stock". A count of one warehouse silently overwrote the
-    // product's total across every store.
+    // `isLocCount = false`, and two `else` branches then wrote `Product.currentStock`
+    // **globally** — while the comment directly above them claimed the count "is NOT applied
+    // to stock". A count of one warehouse silently overwrote the product's total across
+    // every store.
     //
-    // Now: only a warehouse-scoped audit may correct stock. A whole-store audit cannot,
-    // because a whole-store count yields ONE number per product while StockLevel is per
-    // warehouse — any split of the variance would invent a location. Refusing is the
-    // correct answer, and it is a 400 with a sentence rather than a silent global write.
-    // ONE value, not a boolean plus a nullable warehouse. `applyToStock === true` and
-    // `countWarehouse === null` was a representable state that meant "correct stock, but
-    // nowhere" — precisely the state the old code fell into and resolved by writing globally.
-    // Non-null here means "apply the counts, at this warehouse", and nothing else can.
-    let correctionTarget: { id: string; name: string } | null = null;
+    // ONE value, not a boolean plus a nullable warehouse. `applyToStock === true` with no
+    // target was a representable state that meant "correct stock, but nowhere" — precisely
+    // the state the old code fell into and resolved by writing globally. Non-null here means
+    // "apply the counts, HERE", and nothing else can.
+    //
+    // A whole-store audit is applied only when the approver names the warehouse that
+    // receives a surplus (`correctionWarehouseId`). The split is theirs, not the system's.
+    let correctionTarget: CorrectionTarget | null = null;
     if (applyToStock) {
-      if (!existing.warehouseId) {
+      if (existing.warehouseId) {
+        const w = await prisma.warehouse.findUnique({
+          where: { id: existing.warehouseId },
+          select: { id: true, name: true, isActive: true },
+        });
+        if (!w) return errorResponse("The warehouse this audit covers no longer exists", 400);
+        if (!w.isActive) {
+          return errorResponse(`${w.name} is no longer active — stock cannot be corrected there`, 400);
+        }
+        correctionTarget = { scope: "warehouse", warehouseId: w.id, name: w.name };
+      } else if (existing.storeId) {
+        if (!data.correctionWarehouseId) {
+          return errorResponse(
+            "This audit covers the whole store. Choose the warehouse that receives any surplus before applying the counts, or approve as verify-only.",
+            400
+          );
+        }
+        const w = await prisma.warehouse.findUnique({
+          where: { id: data.correctionWarehouseId },
+          select: { id: true, name: true, isActive: true, storeId: true, store: { select: { name: true } } },
+        });
+        if (!w || w.storeId !== existing.storeId) {
+          return errorResponse("Choose a warehouse that belongs to the store this audit covers", 400);
+        }
+        if (!w.isActive) {
+          return errorResponse(`${w.name} is no longer active — a surplus cannot be booked there`, 400);
+        }
+        correctionTarget = {
+          scope: "store",
+          storeId: existing.storeId,
+          storeName: w.store.name,
+          warehouseId: w.id,
+          name: w.name,
+        };
+      } else {
         return errorResponse(
-          existing.storeId
-            ? "This audit covers the whole store. Approve as verify-only, or raise one audit per warehouse to correct stock."
-            : "This audit has no recorded location, so its counts cannot be applied to stock. Approve as verify-only.",
+          "This audit has no recorded location, so its counts cannot be applied to stock. Approve as verify-only.",
           400
         );
       }
-      const w = await prisma.warehouse.findUnique({
-        where: { id: existing.warehouseId },
-        select: { id: true, name: true, isActive: true },
-      });
-      if (!w) return errorResponse("The warehouse this audit covers no longer exists", 400);
-      if (!w.isActive) {
-        return errorResponse(`${w.name} is no longer active — stock cannot be corrected there`, 400);
-      }
-      correctionTarget = { id: w.id, name: w.name };
     }
+
+    // Filled inside the transaction when `correctionTarget` is set; null for verify-only.
+    let applied: AppliedSummary | null = null;
 
     // Suggested brands the count could NOT apply, one line per unmatched name (§6). A stock
     // count no longer creates brands, so the person who typed the suggestion has to hear
@@ -218,28 +308,15 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       if (data.status === "COMPLETED") {
         updateData.completedAt = new Date();
 
-        // After baseline: require all items to have countedQty
-        const BASELINE_END = new Date("2026-07-31T23:59:59+05:30");
-        if (new Date() > BASELINE_END) {
-          const uncountedItems = await tx.stockCountItem.count({
-            where: { stockCountId: id, countedQty: null },
-          });
-          if (uncountedItems > 0) {
-            throw new Error(`${uncountedItems} item${uncountedItems > 1 ? "s" : ""} not yet counted. Count all items before completing.`);
-          }
-        } else if (new Date() <= BASELINE_END) {
-          // Bulk update: set all uncounted items to 0 in one query
-          await tx.stockCountItem.updateMany({
-            where: { stockCountId: id, countedQty: null },
-            data: { countedQty: 0, countedAt: new Date() },
-          });
-          // Then fix variance: need individual updates since variance = 0 - systemQty per item
-          // Use raw SQL for bulk variance calculation
-          await tx.$executeRaw`
-            UPDATE "StockCountItem"
-            SET variance = 0 - "systemQty"
-            WHERE "stockCountId" = ${id} AND "countedQty" = 0 AND variance IS NULL
-          `;
+        // Every line must carry a number before the count can be signed off. "I looked and
+        // there were none" is a 0, recorded per line or by the Uncounted tab's bulk action
+        // (`POST /api/stock-counts/[id]/zero-uncounted`) — never silently assumed here. The
+        // pre-go-live branch that zeroed the rest at Complete ended 31 Jul 2026 and is gone.
+        const uncountedItems = await tx.stockCountItem.count({
+          where: { stockCountId: id, countedQty: null },
+        });
+        if (uncountedItems > 0) {
+          throw new Error(`${uncountedItems} item${uncountedItems > 1 ? "s" : ""} not yet counted. Count all items, or record 0 for the rest from the Uncounted tab, before completing.`);
         }
       }
       if (data.status === "APPROVED") {
@@ -250,31 +327,46 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         updateData.rejectionReason = data.rejectionReason || null;
       }
 
-      // Apply counted quantities to stock ONLY on an explicit admin correction (applyToStock).
+      // Apply counted quantities to stock ONLY on an explicit correction (applyToStock).
       // A plain approval is verify-only and leaves inventory untouched.
       if (correctionTarget) {
-        const BASELINE_END = new Date("2026-07-31T23:59:59+05:30");
-        const isBaselinePeriod = new Date() <= BASELINE_END;
-        // The count was scoped to ONE warehouse (guaranteed by the check before the
-        // transaction), so the counted quantity applies to THAT warehouse and currentStock
-        // recomputes as the sum across all of them. There is no longer an "unresolved
-        // location" path, because there is no longer a free-text location to fail to resolve.
+        const target = correctionTarget;
 
-        // Process all items that were counted (including 0 — means item not found at location)
+        // Every counted line, INCLUDING 0. A shelf counted as empty is the line that matters
+        // most here — it is the one that removes phantom stock. Until 8 Sep 2026 the loop
+        // below opened with `if (!item.countedQty) continue`, and `!0` is true, so every
+        // zero line was silently skipped and "correct stock" left the phantom units in place.
         const countedItems = await tx.stockCountItem.findMany({
           where: { stockCountId: id, countedQty: { not: null } },
-          include: { product: { select: { brandId: true, brand: { select: { name: true } } } } },
+          include: {
+            product: { select: { id: true, name: true, sku: true, brandId: true, brand: { select: { name: true } } } },
+          },
         });
 
+        // LIVE stock, read now, inside the transaction — not the snapshot the audit was
+        // raised with. Stock moves between raising and approving; the ledger row must say
+        // what the books held at the moment they were corrected, or it lies. The snapshot
+        // still decides `StockCountItem.variance` (what the counter saw), and a line whose
+        // two figures differ is warned about below so the drift is visible in the log.
+        const productIds = countedItems.map((i) => i.productId);
+        const liveMap =
+          target.scope === "warehouse"
+            ? await getWarehouseQtyMap(productIds, target.warehouseId, tx)
+            : await getStoreQtyMap(productIds, target.storeId, tx);
+
+        const summary: AppliedSummary = {
+          lines: 0, changed: 0, netUnits: 0, zeroLines: 0, writtenOff: 0,
+          warehouse: target.name, scope: target.scope,
+        };
+
         for (const item of countedItems) {
-          if (!item.countedQty) continue; // TS guard (query already filters > 0)
-
-          const product = await tx.product.findUnique({
-            where: { id: item.productId },
-            select: { id: true, currentStock: true, binId: true, brandId: true, brand: { select: { name: true } } },
-          });
-
-          if (!product) continue;
+          // Narrowing only — the query already excludes uncounted lines. `=== null`, never
+          // `!item.countedQty`: zero is a counted line and is applied like any other.
+          if (item.countedQty === null) continue;
+          const counted = item.countedQty;
+          const product = item.product;
+          const live = liveMap.get(item.productId) ?? 0;
+          const delta = counted - live;
 
           // Apply the counter's suggested brand only when the current one carries no
           // information. The three "no brand" names this catalog has collected used to be
@@ -305,54 +397,70 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
             }
           }
 
-          if (isBaselinePeriod) {
-            // --- BASELINE MODE: Stock count = INWARD + PUTAWAY ---
-            // Always through the ledger. The `else` that used to sit here wrote
-            // `currentStock` directly — the global total — for a count of one warehouse.
-            const newTotal = await setWarehouseQty(tx, product.id, correctionTarget.id, item.countedQty);
-            if (Object.keys(brandUpdate).length) {
-              await tx.product.update({ where: { id: product.id }, data: brandUpdate });
-            }
-
-            await tx.inventoryTransaction.create({
-              data: {
-                type: "INWARD",
-                productId: product.id,
-                quantity: item.countedQty,
-                previousStock: product.currentStock,
-                newStock: newTotal,
-                referenceNo: existing.title,
-                notes: `[STOCK_COUNT] [BASELINE] Counted ${item.countedQty} units at ${correctionTarget.name}${item.suggestedBrand ? ` — brand: ${item.suggestedBrand}` : ""} during "${existing.title}"`,
-                userId: user.id,
-              },
-            });
-          } else {
-            // --- VERIFICATION MODE: Stock count = AUDIT ---
-            // Variance against the SCOPED systemQty recorded when the audit was raised, not
-            // against the product's global total.
-            const variance = item.countedQty - (item.systemQty ?? 0);
-
-            await setWarehouseQty(tx, product.id, correctionTarget.id, item.countedQty);
-            if (Object.keys(brandUpdate).length) {
-              await tx.product.update({ where: { id: product.id }, data: brandUpdate });
-            }
-
-            if (variance !== 0) {
-              await tx.inventoryTransaction.create({
-                data: {
-                  type: "ADJUSTMENT",
-                  productId: product.id,
-                  quantity: Math.abs(variance),
-                  previousStock: item.systemQty ?? 0,
-                  newStock: item.countedQty,
-                  referenceNo: existing.title,
-                  notes: `[STOCK_COUNT] [VERIFICATION] ${variance > 0 ? "Surplus" : "Shortage"} of ${Math.abs(variance)} found during "${existing.title}"`,
-                  userId: user.id,
-                },
-              });
-            }
+          if (Object.keys(brandUpdate).length) {
+            await tx.product.update({ where: { id: product.id }, data: brandUpdate });
           }
+
+          summary.lines += 1;
+          if (counted === 0) {
+            summary.zeroLines += 1;
+            summary.writtenOff += live;
+          }
+          if (live !== item.systemQty) {
+            log.warn("stale line applied against live stock", {
+              stockCountId: id, productId: product.id, snapshot: item.systemQty, live, counted,
+            });
+          }
+          if (delta === 0) continue;
+          summary.changed += 1;
+          summary.netUnits += delta;
+
+          const label = `${product.name} (${product.sku})`;
+          if (target.scope === "warehouse") {
+            // One warehouse: the counted number IS that warehouse's quantity.
+            await setWarehouseQty(tx, product.id, target.warehouseId, counted);
+          } else if (delta > 0) {
+            // Whole store, surplus: booked to the warehouse the approver named.
+            await adjustWarehouseQty(tx, product.id, target.warehouseId, delta);
+          } else {
+            // Whole store, shortage: taken from the store's active warehouses in picker
+            // order — the rule a sale follows. `live` was summed over the same active
+            // warehouses inside this transaction, so the amount never exceeds what is held
+            // and `deductFromStore`'s insufficiency refusal cannot fire here.
+            await deductFromStore(tx, product.id, target.storeId, -delta, label);
+          }
+
+          // Keep the `[STOCK_COUNT]` prefix: DELETE of a completed count reverses by it.
+          const where =
+            target.scope === "warehouse"
+              ? `at ${target.name}`
+              : delta > 0
+                ? `booked to ${target.name}`
+                : `taken from ${target.storeName} in picker order`;
+          await tx.inventoryTransaction.create({
+            data: {
+              type: "ADJUSTMENT",
+              productId: product.id,
+              quantity: Math.abs(delta),
+              previousStock: live,
+              newStock: counted,
+              referenceNo: existing.title,
+              notes: `[STOCK_COUNT] [VERIFICATION] ${delta > 0 ? "Surplus" : "Shortage"} of ${Math.abs(delta)} (snapshot ${item.systemQty}, live ${live}, counted ${counted}) ${where} during "${existing.title}"`,
+              userId: user.id,
+            },
+          });
         }
+
+        applied = summary;
+        log.info("stock corrected", {
+          stockCountId: id,
+          scope: summary.scope,
+          lines: summary.lines,
+          changed: summary.changed,
+          netUnits: summary.netUnits,
+          zeroLines: summary.zeroLines,
+          writtenOff: summary.writtenOff,
+        });
       }
 
       // Logged INSIDE the transaction and BEFORE the update, so an approval that fails to
@@ -374,7 +482,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           details:
             data.status === "APPROVED"
               ? correctionTarget
-                ? `stock corrected at ${correctionTarget.name}`
+                ? correctionTarget.scope === "warehouse"
+                  ? `stock corrected at ${correctionTarget.name}`
+                  : `stock corrected across ${correctionTarget.storeName}, surplus to ${correctionTarget.name}`
                 : "verify only"
               : data.status === "REJECTED"
                 ? (data.rejectionReason || "no reason given")
@@ -398,19 +508,26 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       return updated;
     }, { timeout: 120000 }); // 2 min timeout for large stock counts
 
-    // `brandNotices` rides alongside the updated count rather than replacing the response
-    // shape — every existing reader of this endpoint keeps the object it already reads.
-    return successResponse({ ...result, brandNotices });
+    // `brandNotices` and `applied` ride alongside the updated count rather than replacing
+    // the response shape — every existing reader of this endpoint keeps the object it
+    // already reads. `applied` is null unless stock was actually corrected.
+    return successResponse({ ...result, brandNotices, applied });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    // This is the route that overwrites stock; a failed approval must leave a server-side
+    // trace and not only a response body somebody may never read.
+    log.error("stock count update failed", {
+      stockCountId: id,
+      message: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse(error instanceof Error ? error.message : "Failed to update stock count", 400);
   }
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   try {
     const user = await requireFeature("stock_audit", "delete");
-    const { id } = await params;
 
     const stockCount = await prisma.stockCount.findUnique({ where: { id } });
     if (!stockCount) return errorResponse("Stock count not found", 404);
@@ -477,6 +594,10 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     return successResponse({ deleted: true });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("stock count delete failed", {
+      stockCountId: id,
+      message: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse(error instanceof Error ? error.message : "Failed to delete stock count", 400);
   }
 }

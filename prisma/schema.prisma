@@ -441,6 +441,8 @@ model Category {
   // to two rows. It is what the catalog import resolves the parent tree through — Zoho's
   // `parent_category_id` names a Zoho id, not one of ours.
   zohoCategoryId String? @unique
+  // Inactive rows are hidden from every picker; nothing is deleted — plan 0809-brand-category-inactive
+  isActive     Boolean    @default(true)
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
@@ -466,6 +468,8 @@ model Brand {
   // rows. Zoho's item export carries the brand NAME only, so this is the sole stable handle
   // back to Zoho's /brands endpoint.
   zohoBrandId    String?  @unique
+  // Inactive rows are hidden from every picker; nothing is deleted — plan 0809-brand-category-inactive
+  isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

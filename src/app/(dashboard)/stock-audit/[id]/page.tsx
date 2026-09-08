@@ -73,20 +73,14 @@ const STATUS_STYLE: Record<string, string> = {
   REJECTED: "danger",
 };
 
-// Baseline mode: until July 31 2026, counted stock IS actual stock
-const BASELINE_END = new Date("2026-07-31T23:59:59+05:30");
-
 export default function StockAuditDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
   const { data: session } = useSession();
-  const { canApprove: canApproveCheck, canEdit, canDelete } = usePermissions();
+  const { canApprove: canApproveCheck, canDelete } = usePermissions();
+  // Approving — and choosing whether the counts become system stock — happens on the review
+  // table, gated on stock_audit.approve alone (plan Q11). This screen only points there.
   const canApprove = canApproveCheck("stock_audit");
-  // NOT stock_audit.approve. "Correct stock levels" does not approve anything — it
-  // OVERWRITES each product’s currentStock with the counted quantity. That is a write to
-  // stock, so it is stock.edit: someone who may approve a count is not automatically someone
-  // who may overwrite the books.
-  const isAdmin = canEdit("stock");
   const canDeleteAudit = canDelete("stock_audit");
   // WHOSE audit is this. Every start/count/complete gate keys off THIS, not off a
   // permission: the buttons used to be hidden by `!isAdmin`, so anyone holding stock.edit —
@@ -117,22 +111,28 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  // "Record 0 for all uncounted" (R4) — the sheet and its in-flight flag.
+  const [showZeroSheet, setShowZeroSheet] = useState(false);
+  const [zeroing, setZeroing] = useState(false);
   const itemRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dirtyRef = useRef<Set<string>>(new Set());
 
-  const isBaseline = new Date() < BASELINE_END;
-
-  // Fetch summary
+  // Fetch summary. Returns its promise so a caller that needs fresh data can await it.
   const fetchSummary = useCallback(() => {
-    fetch(`/api/stock-counts/${id}`)
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setSummary(res.data); })
-      .catch(() => {})
+    return apiTry<StockCountSummary>(`/api/stock-counts/${id}`)
+      .then(({ data, error }) => {
+        if (error || !data) {
+          log.error("summary load failed", { countId: id, message: error ?? "empty response" });
+          return;
+        }
+        setSummary(data);
+      })
       .finally(() => setLoadingSummary(false));
   }, [id]);
 
-  // Fetch items with tab filter
+  // Fetch items with tab filter. Returns its promise: the bulk-zero flow awaits it so the
+  // count it shows in the confirm sheet is the one the server will be asked to match.
   const fetchItems = useCallback(() => {
     setLoadingItems(true);
     const params = new URLSearchParams();
@@ -141,52 +141,56 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
     } else {
       params.set("filter", tab);
     }
+    type ItemsPayload = {
+      items: StockCountItemData[];
+      totalCount?: number;
+      countedCount?: number;
+      uncountedCount?: number;
+      staleCount?: number;
+    };
 
-    fetch(`/api/stock-counts/${id}/items?${params}`)
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success) {
-          const fetchedItems: StockCountItemData[] = res.data.items || res.data;
-          // Client-side fuzzy fallback if API returns 0 results and we have a search term
-          if (debouncedSearch && fetchedItems.length === 0) {
-            // Re-fetch all items and filter client-side
-            fetch(`/api/stock-counts/${id}/items?filter=all`)
-              .then((r2) => r2.json())
-              .then((res2) => {
-                if (res2.success) {
-                  const allItems: StockCountItemData[] = res2.data.items || res2.data;
-                  const fuzzyResults = allItems.filter((item) =>
-                    fuzzyMatch(debouncedSearch, item.product.name) ||
-                    fuzzyMatch(debouncedSearch, item.product.sku) ||
-                    fuzzyMatch(debouncedSearch, item.product.brand?.name) ||
-                    fuzzyMatch(debouncedSearch, item.product.category?.name) ||
-                    fuzzyMatch(debouncedSearch, item.product.size)
-                  );
-                  setItems(fuzzyResults);
-                  mergeServerCounts(fuzzyResults);
-                }
-              })
-              .catch(() => {})
-              .finally(() => setLoadingItems(false));
-            return;
-          }
-
-          setItems(fetchedItems);
-          mergeServerCounts(fetchedItems);
-          // Update tab counts
-          if (res.data.totalCount !== undefined) {
-            setTabCounts({
-              total: res.data.totalCount,
-              counted: res.data.countedCount,
-              uncounted: res.data.uncountedCount,
+    return apiTry<ItemsPayload>(`/api/stock-counts/${id}/items?${params}`)
+      .then(({ data, error }) => {
+        if (error || !data) {
+          log.error("items load failed", { countId: id, tab, message: error ?? "empty response" });
+          return;
+        }
+        const fetchedItems: StockCountItemData[] = data.items;
+        // Client-side fuzzy fallback if API returns 0 results and we have a search term
+        if (debouncedSearch && fetchedItems.length === 0) {
+          // Re-fetch all items and filter client-side
+          return apiTry<ItemsPayload>(`/api/stock-counts/${id}/items?filter=all`)
+            .then(({ data: all, error: allError }) => {
+              if (allError || !all) {
+                log.error("items fallback load failed", { countId: id, message: allError ?? "empty response" });
+                return;
+              }
+              const fuzzyResults = all.items.filter((item) =>
+                fuzzyMatch(debouncedSearch, item.product.name) ||
+                fuzzyMatch(debouncedSearch, item.product.sku) ||
+                fuzzyMatch(debouncedSearch, item.product.brand?.name) ||
+                fuzzyMatch(debouncedSearch, item.product.category?.name) ||
+                fuzzyMatch(debouncedSearch, item.product.size)
+              );
+              setItems(fuzzyResults);
+              mergeServerCounts(fuzzyResults);
             });
-          }
-          if (res.data.staleCount !== undefined) {
-            setStaleCount(res.data.staleCount);
-          }
+        }
+
+        setItems(fetchedItems);
+        mergeServerCounts(fetchedItems);
+        // Update tab counts
+        if (data.totalCount !== undefined) {
+          setTabCounts({
+            total: data.totalCount,
+            counted: data.countedCount ?? 0,
+            uncounted: data.uncountedCount ?? 0,
+          });
+        }
+        if (data.staleCount !== undefined) {
+          setStaleCount(data.staleCount);
         }
       })
-      .catch(() => {})
       .finally(() => setLoadingItems(false));
   }, [id, debouncedSearch, tab]);
 
@@ -205,10 +209,20 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
   useEffect(() => { fetchSummary(); }, [fetchSummary]);
   useEffect(() => { fetchItems(); }, [fetchItems]);
   useEffect(() => {
-    fetch("/api/brands").then((r) => r.json()).then((res) => {
-      if (res.success) setBrandList(res.data.map((b: { name: string }) => b.name));
-    }).catch(() => {});
-  }, []);
+    // The pick-existing list for the per-line brand suggestion. Once brands carry an active
+    // flag this returns the active ones only, with no change here.
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await apiTry<Array<{ name: string }>>("/api/brands");
+      if (cancelled) return;
+      if (error) {
+        log.error("brand list failed", { countId: id, message: error });
+        return;
+      }
+      setBrandList((data ?? []).map((b) => b.name));
+    })();
+    return () => { cancelled = true; };
+  }, [id]);
 
   // Auto-save: whenever counts change, debounce 2s then save
   useEffect(() => {
@@ -265,7 +279,12 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
         ...(brands[itemId] ? { suggestedBrand: brands[itemId] } : {}),
       }));
 
-    if (batch.length === 0) return;
+    if (batch.length === 0) {
+      // Nothing to send — a row can be dirty with only a brand suggestion and no count. That
+      // suggestion has nothing to attach to yet, so it is not a reason to hold up anything.
+      dirtyRef.current = new Set();
+      return;
+    }
     setSaving(true);
     setActionError("");
     const { error } = await apiTry(`/api/stock-counts/${id}/items`, {
@@ -280,8 +299,8 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
       dirtyRef.current = new Set();
       setAutoSaveStatus("saved");
       setTimeout(() => setAutoSaveStatus("idle"), 2000);
-      fetchSummary();
-      fetchItems();
+      // Awaited, so whoever called Save sees the reloaded counts before the button re-enables.
+      await Promise.all([fetchSummary(), fetchItems()]);
     }
     setSaving(false);
   };
@@ -337,19 +356,61 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
 
   const handleDelete = async () => {
     setDeleting(true);
-    try {
-      const res = await fetch(`/api/stock-counts/${id}`, { method: "DELETE" });
-      const data = await res.json();
-      if (data.success) router.push("/stock-audit");
-      else setActionError(data.error || "Failed to delete");
-    } catch { setActionError("Failed to delete"); }
-    finally { setDeleting(false); }
+    setActionError("");
+    const { error } = await apiTry(`/api/stock-counts/${id}`, { method: "DELETE" });
+    if (error) {
+      log.error("delete failed", { countId: id, message: error });
+      setActionError(error);
+      setDeleting(false);
+      return;
+    }
+    router.push("/stock-audit");
   };
 
   const handleReject = () => {
     handleStatusChange("REJECTED", { rejectionReason: rejectReason });
     setShowRejectModal(false);
     setRejectReason("");
+  };
+
+  // "Record 0 for all uncounted" (R4). Typed-but-unsaved counts are flushed FIRST: the
+  // server zeroes whatever is still null, and a number sitting in local state two seconds
+  // short of auto-save would otherwise be zeroed under the counter's fingers.
+  const openZeroSheet = async () => {
+    setActionError("");
+    if (dirtyRef.current.size > 0) {
+      await handleManualSave();
+      // A failed save leaves dirtyRef populated and the error line already says why.
+      if (dirtyRef.current.size > 0) return;
+    } else {
+      // Nothing to flush, but the number the sheet shows is the one the server must match —
+      // reload it rather than trust a count that may be minutes old.
+      await fetchItems();
+    }
+    setShowZeroSheet(true);
+  };
+
+  const handleZeroUncounted = async () => {
+    setZeroing(true);
+    setActionError("");
+    const expected = tabCounts.uncounted;
+    const { data, error, status } = await apiTry<{ zeroed: number }>(`/api/stock-counts/${id}/zero-uncounted`, {
+      method: "POST",
+      json: { expected },
+      timeoutMs: 60_000,
+    });
+    if (error) {
+      // The API's sentence, verbatim — a 409 says the list changed and names both counts.
+      log.error("zero uncounted failed", { countId: id, expected, status, message: error });
+      setActionError(error);
+    } else {
+      log.info("uncounted zeroed", { countId: id, zeroed: data?.zeroed ?? 0 });
+      setShowZeroSheet(false);
+    }
+    // Either way the counts on screen may be stale now — reload both.
+    fetchSummary();
+    fetchItems();
+    setZeroing(false);
   };
 
   const setCount = (itemId: string, value: number | null) => {
@@ -388,6 +449,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
 
   // Counting is the assignee's job; approving is somebody else's. Both facts, once.
   const isAssignee = summary.assignedToId === currentUserId;
+  const showApproveActions = summary.status === "COMPLETED" && canApprove && !isAssignee;
 
   return (
     <div>
@@ -425,15 +487,13 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
         )}
       </div>
 
-      {/* Baseline / Verification Banner */}
+      {/* What counting does — nothing, until the approver decides. */}
       {summary.status === "IN_PROGRESS" && (
-        <Card className={`mb-3 ${isBaseline ? "border-blue-200 bg-blue-50" : "border-slate-200 bg-slate-50"}`}>
+        <Card className="mb-3 border-slate-200 bg-slate-50">
           <CardContent className="p-2.5 flex items-center gap-2">
-            <Info className={`h-4 w-4 shrink-0 ${isBaseline ? "text-blue-600" : "text-slate-500"}`} />
-            <p className={`text-xs ${isBaseline ? "text-blue-800" : "text-slate-600"}`}>
-              {isBaseline
-                ? "Baseline Count — only count items you physically find. Uncounted items will be set to 0."
-                : "Audit Count — only variances will create stock adjustments"}
+            <Info className="h-4 w-4 shrink-0 text-slate-500" />
+            <p className="text-xs text-slate-600">
+              Audit count — stock does not change until the approver applies the counts.
             </p>
           </CardContent>
         </Card>
@@ -517,7 +577,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
       )}
 
       {/* Action Buttons */}
-      {(summary.status === "COMPLETED" || summary.status === "APPROVED") && (
+      {(summary.status === "COMPLETED" || summary.status === "APPROVED") && !showApproveActions && (
         <Link href={`/stock-audit/${id}/review`}>
           <button className="w-full flex items-center justify-center gap-2 bg-slate-900 text-white min-h-[48px] rounded-lg text-sm font-medium mb-3 focus-ring">
             <Table className="h-4 w-4" /> Review Table View
@@ -525,28 +585,22 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
         </Link>
       )}
 
-      {summary.status === "COMPLETED" && canApprove && !isAssignee && (
+      {/* APPROVAL LIVES ON THE REVIEW TABLE (plan Q12). The two approve buttons that sat here
+          — "verify only" and "correct stock levels" — fired on a tap with no preview of what
+          they would do. The review table lists every difference, offers the choice, and
+          confirms it. This screen points there and keeps Reject, which needs no preview. */}
+      {showApproveActions && (
         <div className="mb-3 space-y-2">
-          <div className="flex gap-2">
-            <button onClick={() => handleStatusChange("APPROVED")} disabled={actionLoading}
-              className="flex-1 flex items-center justify-center gap-2 bg-green-600 text-white min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50 focus-ring">
-              <ShieldCheck className="h-4 w-4" /> {actionLoading ? "..." : "Approve (verify only)"}
-            </button>
-            <button onClick={() => setShowRejectModal(true)}
-              className="flex-1 flex items-center justify-center gap-2 bg-red-600 text-white min-h-[48px] rounded-lg text-sm font-medium focus-ring">
-              <XCircle className="h-4 w-4" /> Reject
-            </button>
-          </div>
-          {isAdmin && summary.canCorrectStock && (
-            <button onClick={() => handleStatusChange("APPROVED", { applyToStock: true })} disabled={actionLoading}
-              className="w-full flex items-center justify-center gap-2 border border-amber-300 bg-amber-50 text-amber-800 min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50 focus-ring">
-              <ShieldCheck className="h-4 w-4" /> Approve &amp; correct stock levels
-            </button>
-          )}
+          <Link href={`/stock-audit/${id}/review`}
+            className="w-full flex items-center justify-center gap-2 bg-green-600 text-white min-h-[48px] rounded-lg text-sm font-medium focus-ring">
+            <ShieldCheck className="h-4 w-4" /> Review differences &amp; approve →
+          </Link>
+          <button onClick={() => setShowRejectModal(true)} disabled={actionLoading}
+            className="w-full flex items-center justify-center gap-2 bg-red-600 text-white min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50 focus-ring">
+            <XCircle className="h-4 w-4" /> Reject
+          </button>
           <p className="text-[11px] text-slate-500">
-            <span className="font-medium">Verify only</span> records the count without changing stock (Inwards adds stock).
-            {isAdmin && summary.canCorrectStock ? " Correct stock levels overwrites each item's stock at this warehouse with the counted quantity." : ""}
-            {isAdmin && !summary.canCorrectStock ? " This audit covers the whole store, so stock cannot be corrected from it — raise one audit per warehouse to do that." : ""}
+            The review table lists every difference between counted and system stock, and is where you choose whether the counts become system stock or are only recorded.
           </p>
         </div>
       )}
@@ -575,16 +629,13 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
           <button onClick={async () => {
             if (dirtyRef.current.size > 0) await handleManualSave();
             // INLINE, not `confirm()`. The browser dialog is unstyled, unreadable on a phone,
-            // and — because the baseline period has ended — it was asking the counter to
-            // accept a silent outcome ("their stock will remain unchanged") on rows they
-            // simply had not reached. Naming the count and pointing at the `0 ✓` pill turns
-            // it into something they can act on instead of a yes/no they will always answer
-            // yes to.
+            // and it was asking the counter to accept a silent outcome on rows they simply
+            // had not reached. Naming the count and pointing at the two ways to record a zero
+            // turns it into something they can act on instead of a yes/no they will always
+            // answer yes to.
             if (remaining > 0) {
               setActionError(
-                isBaseline
-                  ? `${remaining} item${remaining === 1 ? "" : "s"} not counted. During the baseline period those would be recorded as 0 — press "0 ✓" on each to confirm, or count them.`
-                  : `${remaining} item${remaining === 1 ? "" : "s"} still uncounted. Use the "0 ✓" button on any shelf that is genuinely empty, then Complete.`
+                `${remaining} item${remaining === 1 ? "" : "s"} still uncounted. Tap "0 ✓" on any shelf that is genuinely empty, or "Record 0 for all uncounted" on the Uncounted tab, then Complete.`
               );
               return;
             }
@@ -623,6 +674,17 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
           );
         })}
       </div>
+
+      {/* RECORD 0 FOR ALL UNCOUNTED (R4). One tap for the shelves the counter walked past
+          empty, instead of a `0 ✓` per row. Whole audit, server-side — the list here is capped
+          at 500 and a search hides rows, so an on-screen version would silently miss lines.
+          Hidden while a search is active so it never reads as "zero the rows I am looking at". */}
+      {tab === "uncounted" && !debouncedSearch && isAssignee && summary.status === "IN_PROGRESS" && tabCounts.uncounted > 0 && (
+        <button onClick={() => void openZeroSheet()} disabled={zeroing || saving || actionLoading}
+          className="w-full flex items-center justify-center gap-2 border border-slate-300 bg-white text-slate-700 min-h-[44px] rounded-lg text-sm font-medium mb-2 disabled:opacity-50 focus-ring tabular-nums">
+          <CheckCircle2 className="h-4 w-4" /> Record 0 for all {tabCounts.uncounted} uncounted
+        </button>
+      )}
 
       {/* Search + Quick Mode Toggle */}
       <div className="flex gap-2 mb-2">
@@ -804,38 +866,21 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                         <label className="text-[11px] text-slate-500 mb-0.5 block">
                           Brand {item.product.brand ? `(current: ${item.product.brand.name})` : ""}
                         </label>
+                        {/* PICK, NEVER CREATE (R5). This select used to end in "+ Add new
+                            brand…", which POSTed to /api/brands without reading the answer —
+                            a counter without brands.create got a name that existed only on
+                            their screen. A stock audit suggests an existing brand; creating
+                            one is brands.create on /more/brands, and stays there. */}
                         <select
                           value={brands[item.id] ?? item.suggestedBrand ?? ""}
-                          onChange={async (e) => {
-                            if (e.target.value === "__custom__") {
-                              const custom = prompt("Enter new brand name:");
-                              if (custom && custom.trim()) {
-                                const brandName = custom.trim();
-                                // Create brand in DB
-                                try {
-                                  await fetch("/api/brands", {
-                                    method: "POST",
-                                    headers: { "Content-Type": "application/json" },
-                                    body: JSON.stringify({ name: brandName }),
-                                  });
-                                } catch { /* ignore — will still work locally */ }
-                                // Add to dropdown if not already there
-                                setBrandList((prev) =>
-                                  prev.includes(brandName) ? prev : [...prev, brandName].sort()
-                                );
-                                setBrands((prev) => ({ ...prev, [item.id]: brandName }));
-                                dirtyRef.current.add(item.id);
-                              }
-                            } else {
-                              setBrands((prev) => ({ ...prev, [item.id]: e.target.value }));
-                              if (e.target.value) dirtyRef.current.add(item.id);
-                            }
+                          onChange={(e) => {
+                            setBrands((prev) => ({ ...prev, [item.id]: e.target.value }));
+                            if (e.target.value) dirtyRef.current.add(item.id);
                           }}
                           className="w-full rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400"
                         >
                           <option value="">— Keep current —</option>
                           {brandList.map((b) => <option key={b} value={b}>{b}</option>)}
-                          <option value="__custom__">+ Add new brand...</option>
                         </select>
                       </div>
                     </div>
@@ -872,6 +917,32 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
       )}
 
 
+
+      {/* Record-zero Bottom Sheet (R4) */}
+      {showZeroSheet && (
+        <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/40" onClick={() => { if (!zeroing) setShowZeroSheet(false); }}>
+          <div className="w-full max-w-lg bg-white rounded-t-2xl p-4 pb-8 safe-bottom" onClick={(e) => e.stopPropagation()}>
+            <div className="w-10 h-1 bg-slate-300 rounded-full mx-auto mb-4" />
+            <h3 className="text-base font-bold text-slate-900 mb-2">Record 0 for all uncounted?</h3>
+            <p className="text-sm text-slate-700 mb-2 tabular-nums">
+              <span className="font-semibold">{tabCounts.uncounted}</span> item{tabCounts.uncounted === 1 ? "" : "s"} you have not counted will be recorded as <span className="font-semibold">0 — none found</span>.
+            </p>
+            <p className="text-xs text-slate-500 mb-4">
+              You can still change any line afterwards. Complete will then be allowed. This is recorded in the activity log under your name.
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => setShowZeroSheet(false)} disabled={zeroing}
+                className="flex-1 min-h-[44px] rounded-lg text-sm font-medium bg-slate-100 text-slate-700 disabled:opacity-50">
+                Cancel
+              </button>
+              <button onClick={() => void handleZeroUncounted()} disabled={zeroing}
+                className="flex-1 min-h-[44px] rounded-lg text-sm font-medium bg-slate-900 text-white disabled:opacity-50 tabular-nums">
+                {zeroing ? "Recording..." : `Record 0 for ${tabCounts.uncounted}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Rejection Bottom Sheet Modal */}
       {showRejectModal && (

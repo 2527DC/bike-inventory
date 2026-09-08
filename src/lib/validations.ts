@@ -134,11 +134,20 @@ export const categorySchema = z.object({
  */
 export const categoryUpdateSchema = categorySchema
   .partial()
-  .extend({ parentId: z.string().nullable().optional() })
+  .extend({
+    parentId: z.string().nullable().optional(),
+    // Active / inactive replaces delete (plan 0809-brand-category-inactive). Deactivating
+    // takes the whole subtree and its ACTIVE products with it; activating is the row only,
+    // plus its INACTIVE products when `reactivateProducts` is sent.
+    isActive: z.boolean().optional(),
+    reactivateProducts: z.boolean().optional(),
+  })
   .refine((d) => Object.keys(d).length > 0, { message: "Nothing to update" });
 
 export const brandSchema = z.object({
-  name: z.string().min(1, "Name is required").max(100),
+  // Trimmed BEFORE min(1): "   " is refused as empty, and " Hero" can never become a row
+  // distinct from "Hero". The database enforces the same key (lower(btrim(name))).
+  name: z.string().trim().min(1, "Name is required").max(100),
   contactName: z.string().optional(),
   contactPhone: z.string().optional(),
   whatsappNumber: z.string().optional(),
@@ -188,9 +197,13 @@ export const stockCountUpdateSchema = z.object({
   status: z.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "APPROVED", "REJECTED"]).optional(),
   notes: z.string().optional(),
   rejectionReason: z.string().optional(),
-  // Admin-only: when approving, also overwrite stock with the counted quantities.
+  // Approver's choice: when approving, also set system stock to the counted quantities.
   // Default (absent/false) = verify-only — records the count/variance without changing stock.
+  // A warehouse-scoped audit writes its own warehouse. A whole-store audit needs
+  // `correctionWarehouseId` as well — the warehouse that receives any surplus; a shortage is
+  // taken from the store's warehouses in picker order, the way a sale is.
   applyToStock: z.boolean().optional(),
+  correctionWarehouseId: z.string().min(1).optional(),
   items: z
     .array(
       z.object({
