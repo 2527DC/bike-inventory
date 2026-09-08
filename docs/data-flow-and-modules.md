@@ -170,7 +170,7 @@ app's own inventory routes. Every route that writes `InventoryTransaction`:
 
 | Module | Screen | Sub-screens | Zoho? | Writes |
 |---|---|---|---|---|
-| Stock & Inventory | `/stock` | `/[id]`, `/[id]/barcode`, `/[id]/serials`, `/by-bin`, `/by-brand`, `/by-location/[location]` | items via approve | `Product`, `SerialItem` |
+| Stock & Inventory | `/stock` | `/[id]`, `/[id]/barcode`, `/[id]/serials`, `/by-bin`, `/by-location/[location]` | items via approve | `Product`, `SerialItem` |
 | Inbound Tracking | `/inbound` | `/[id]` | **yes** — bills → shipments | `InboundShipment`, `InboundLineItem`, `PreBooking`, and stock on receipt |
 | Deliveries & Dispatch | `/deliveries` | `/[id]`, `/dispatch`, `/prebook`, `/blr`, `/outstation`, `/walkout` | **yes** — invoices | `Delivery`, `InventoryTransaction`, `Product` |
 | Stock Transfers | `/transfers` | `/new` | no | `TransferOrder`, `InventoryTransaction`, `SerialItem` |

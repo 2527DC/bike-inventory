@@ -4,7 +4,7 @@ import { useDebounce } from "@/hooks/use-debounce";
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, Square, X, Package, ChevronRight, EyeOff, RotateCcw, Trash2
+import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, Square, X, Package, EyeOff, RotateCcw
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +20,7 @@ import { apiFetch, apiTry } from "@/lib/api-client";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
-import { isPlaceholderBrand } from "@/lib/import-placeholders";
+import { isPlaceholderBrand, isPlaceholderCategory } from "@/lib/import-placeholders";
 import { isLowStock } from "@/lib/reorder";
 import { ReorderSheet, type ReorderTarget, type ReorderSaved } from "@/components/reorder-sheet";
 import { BICYCLE_SIZES } from "@/lib/product-size";
@@ -61,30 +61,6 @@ interface BrandItem { id: string; name: string; _count: { products: number }; }
 interface BinItem { id: string; code: string; name: string; location: string; _count: { products: number }; }
 interface CategoryItem { id: string; name: string; _count: { products: number }; }
 
-interface PerItemBin {
-  binId: string | null;
-  binCode: string | null;
-  binName: string | null;
-  binLocation: string | null;
-  stock: number;
-  sku: string;
-  productId: string;
-  costPrice: number;
-  sellingPrice: number;
-  lastInward: string | null;
-  lastOutward: string | null;
-}
-
-interface PerItemGroup {
-  name: string;
-  brandName: string | null;
-  brandId: string | null;
-  categoryName: string | null;
-  totalStock: number;
-  bins: PerItemBin[];
-}
-
-type StockView = "list" | "per-item";
 type QuickFilter = "ALL" | "IN_STOCK" | "NO_STOCK" | "LOW_STOCK" | "INACTIVE" | "NEEDS_DETAILS";
 
 const QUICK_CHIPS: { key: QuickFilter; label: string }[] = [
@@ -132,7 +108,7 @@ function getStockAccent(p: ProductItem) {
 
 export default function StockPage() {
   const { data: session } = useSession();
-  const { canEdit, canDelete, canView } = usePermissions();
+  const { canEdit, canView } = usePermissions();
   // Bulk edit writes product fields, so it is stock.edit.
   const canBulkEdit = canEdit("stock");
 
@@ -140,10 +116,13 @@ export default function StockPage() {
   // the API already withholds the field itself, which is the gate that matters.
   const showCost = canView("cost_price");
 
-  // Deactivate / restore are edits — the row survives with all its history.
-  // Delete permanently removes it, and only when nothing references it.
+  // Deactivate / restore are edits — the row survives with all its history, and that is now
+  // the ONLY way a product leaves this screen. There is no permanent delete: the button, the
+  // one-dialog confirm flow and `DELETE /api/products/[id]` were all removed on 8 Sep 2026
+  // (owner's instruction). Nothing in the schema cascades onto Product, so deleting one meant
+  // hand-rolling a nine-table cascade that rewrote what a shipment, order, transfer and stock
+  // count each said had happened — with no undo. INACTIVE hides the row and keeps all of it.
   const mayDeactivate = canEdit("stock");
-  const mayDelete = canDelete("stock");
 
   // reorder.edit, NOT stock.edit. PUT /api/products/[id]/reorder is guarded on reorder.edit
   // because api/reorder/update-levels already writes these same three columns behind it
@@ -175,33 +154,6 @@ export default function StockPage() {
   const [hasMore, setHasMore] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [refreshing, setRefreshing] = useState(false);
-
-  // View toggle: list vs per-item
-  const [stockView, setStockView] = useState<StockView>("list");
-  const [perItemData, setPerItemData] = useState<PerItemGroup[]>([]);
-  const [perItemLoading, setPerItemLoading] = useState(false);
-  const [perItemSearch, setPerItemSearch] = useState("");
-  const debouncedPerItemSearch = useDebounce(perItemSearch);
-  const [perItemBrandFilter, setPerItemBrandFilter] = useState("");
-  const [expandedItem, setExpandedItem] = useState<string | null>(null);
-
-  const fetchPerItemData = useCallback(() => {
-    setPerItemLoading(true);
-    const params = new URLSearchParams();
-    if (debouncedPerItemSearch) params.set("search", debouncedPerItemSearch);
-    if (perItemBrandFilter) params.set("brandId", perItemBrandFilter);
-    fetch(`/api/stock/per-item?${params}`)
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success) setPerItemData(res.data);
-      })
-      .catch(() => {})
-      .finally(() => setPerItemLoading(false));
-  }, [debouncedPerItemSearch, perItemBrandFilter]);
-
-  useEffect(() => {
-    if (stockView === "per-item") fetchPerItemData();
-  }, [stockView, fetchPerItemData]);
 
   // Bulk select mode
   const [selectMode, setSelectMode] = useState(false);
@@ -393,61 +345,6 @@ export default function StockPage() {
     }
   }
 
-  /**
-   * Permanent delete, in one dialog: ask the API what is attached, show that, then delete.
-   *
-   * The confirmation names the actual records before anything is destroyed, so the
-   * destructive answer is never a surprise — and because only one dialog is ever raised, a
-   * browser cannot suppress the one that matters. The server still refuses a delete that
-   * did not ask for force, so this screen is not the only gate.
-   */
-  async function deleteProduct(p: ProductItem) {
-    setRowBusy(p.id);
-    try {
-      // Ask what is attached FIRST. ?check=true counts and returns; it deletes nothing.
-      //
-      // This exists so there is exactly ONE dialog. There used to be two chained confirm()
-      // calls — one before the request, a second after the API refused and named the
-      // blockers. Chrome puts a "Prevent this page from creating additional dialogs"
-      // checkbox on the SECOND dialog of a chain, and once that is ticked every later
-      // confirm() returns false with nothing shown. The force path was therefore
-      // unreachable: you saw the refusal message and never got the prompt. A single dialog
-      // cannot be suppressed that way.
-      const check = await apiFetch<{ name: string; blockers?: string[] }>(
-        `/api/products/${p.id}?check=true`,
-        { method: "DELETE" }
-      );
-      const blockers = check.blockers ?? [];
-      const what = blockers.join(", ");
-      log.debug("product delete check", { productId: p.id, blockers });
-
-      const ok = confirm(
-        what
-          ? `${check.name} has ${what}.\n\nDelete the product AND all of that data permanently?\n\nThis removes its stock history and cannot be undone.`
-          : `Permanently delete ${check.name}? This cannot be undone.`
-      );
-      if (!ok) return;
-
-      // force only when something is actually attached, so a clean product still takes the
-      // safe path and the server keeps its own guard either way.
-      const res = await apiFetch<{ deleted: boolean; name: string; message: string }>(
-        `/api/products/${p.id}${what ? "?force=true" : ""}`,
-        { method: "DELETE" }
-      );
-      if (what) log.warn("product force deleted", { productId: p.id, blockers });
-      else log.info("product deleted", { productId: p.id });
-
-      setRowOutcome({ ok: res.deleted, name: res.name, message: res.message });
-      fetchProducts(1);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Could not delete the product";
-      log.error("product delete failed", { productId: p.id, message: msg });
-      setRowOutcome({ ok: false, name: p.name, message: msg });
-    } finally {
-      setRowBusy(null);
-    }
-  }
-
   function loadMore() {
     const nextPage = page + 1;
     setPage(nextPage);
@@ -507,6 +404,17 @@ export default function StockPage() {
           {selectMode ? `${selectedIds.size} selected` : "Stock"}
         </h1>
         <div className="flex items-center gap-1.5">
+          {/* The only cross-link left on this page now that the view-tab bar is gone. It sits
+              in the header action row so it reads as a destination, not an orphaned tab, and
+              hides in select mode like the other actions beside it. */}
+          {!selectMode && (
+            <Link
+              href="/stock/by-bin"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100"
+            >
+              <MapPin className="h-3.5 w-3.5" /> {BIN_TRACKING_ENABLED ? "By Bin" : "By Location"}
+            </Link>
+          )}
           {canBulkEdit && !selectMode && (
             <button
               onClick={() => setSelectMode(true)}
@@ -549,55 +457,6 @@ export default function StockPage() {
         />
       )}
 
-      {/* View Tabs */}
-      <div className="flex gap-2 mb-3">
-        <button
-          onClick={() => setStockView("list")}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium border transition-colors ${
-            stockView === "list"
-              ? "bg-slate-900 text-white border-slate-900"
-              : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
-          }`}
-        >
-          List View
-        </button>
-        <button
-          onClick={() => setStockView("per-item")}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium border transition-colors ${
-            stockView === "per-item"
-              ? "bg-slate-900 text-white border-slate-900"
-              : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
-          }`}
-        >
-          <Package className="h-3 w-3" /> Per Item
-        </button>
-        <Link href="/stock/by-brand"
-          className="flex-1 flex items-center justify-center gap-1.5 bg-blue-50 border border-blue-200 text-blue-700 py-2 rounded-lg text-xs font-medium">
-          By Brand
-        </Link>
-        <Link href="/stock/by-bin"
-          className="flex-1 flex items-center justify-center gap-1.5 bg-purple-50 border border-purple-200 text-purple-700 py-2 rounded-lg text-xs font-medium">
-          <MapPin className="h-3 w-3" /> {BIN_TRACKING_ENABLED ? "By Bin" : "By Location"}
-        </Link>
-      </div>
-
-      {/* ═══════════ PER-ITEM VIEW ═══════════ */}
-      {stockView === "per-item" && (
-        <PerItemView
-          data={perItemData}
-          loading={perItemLoading}
-          search={perItemSearch}
-          onSearchChange={setPerItemSearch}
-          brandFilter={perItemBrandFilter}
-          onBrandFilterChange={setPerItemBrandFilter}
-          brands={brands}
-          expandedItem={expandedItem}
-          onToggleExpand={(name) => setExpandedItem(expandedItem === name ? null : name)}
-        />
-      )}
-
-      {/* ═══════════ LIST VIEW ═══════════ */}
-      {stockView === "list" && <>
       {/* Search */}
       <div className="relative mb-3">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
@@ -788,25 +647,46 @@ export default function StockPage() {
                       </p>
                       <div className="flex items-center gap-1 mt-0.5 flex-wrap">
                         <span className="text-xs text-slate-400 tabular-nums">{p.sku}</span>
+                        {/* Brand and category are two different KINDS of fact, so they carry
+                            two different colours rather than two greys. Category used to be
+                            `text-slate-400` — the same grey as the SKU sitting beside it AND
+                            the same grey as a placeholder brand. Three meanings in one colour
+                            is what made this row hard to read at a glance.
+
+                            Blue for brand, violet for category. Both are tints (`-50`
+                            background, `-700` text) rather than solid badges, so they read as
+                            labels and do not compete with the stock Badge on the right, which
+                            owns green/amber/red. */}
+
                         {/* A placeholder is the ABSENCE of a brand, so it must not look like
-                            one. `Imported` rendered in the same blue as `Atlas` reads as a
-                            brand name to anyone who has not been told otherwise — which is
-                            how 151 undescribed products stayed invisible. Muted and italic,
-                            the style this app already uses for missing data. */}
-                        {p.brand && (
-                          <span className={isPlaceholderBrand(p.brand.name)
-                            ? "text-xs italic text-slate-400"
-                            : "text-xs font-medium text-blue-600"}>
-                            {p.brand.name}
-                          </span>
-                        )}
-                        {/* Category is NOT styled as a placeholder any more. Every imported
-                            product starts `Uncategorized`, so grey italic would be every card
-                            on the screen — a signal that fires always is not a signal. Brand
-                            above still is, because a real one is the exception worth seeing. */}
-                        {p.category && (
-                          <span className="text-xs text-slate-400">{p.category.name}</span>
-                        )}
+                            one — and specifically must not get a pill, because the pill is
+                            what now says "a person filled this in". `Imported` rendered in the
+                            same blue as `Atlas` reads as a brand name to anyone who has not
+                            been told otherwise, which is how 151 undescribed products stayed
+                            invisible. Muted and italic, the style this app uses for missing
+                            data. */}
+                        {p.brand &&
+                          (isPlaceholderBrand(p.brand.name) ? (
+                            <span className="text-xs italic text-slate-400">{p.brand.name}</span>
+                          ) : (
+                            <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[11px] font-medium text-blue-700">
+                              {p.brand.name}
+                            </span>
+                          ))}
+
+                        {/* `Uncategorized` is muted AGAIN. It was un-muted back when every
+                            imported product carried it — a signal that fires always is not a
+                            signal. The catalog import changed that: it writes the real Zoho
+                            category, and only 665 of 5,738 products still land on the
+                            placeholder. It is the exception once more, so it is worth seeing. */}
+                        {p.category &&
+                          (isPlaceholderCategory(p.category.name) ? (
+                            <span className="text-xs italic text-slate-400">{p.category.name}</span>
+                          ) : (
+                            <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-[11px] font-medium text-violet-700">
+                              {p.category.name}
+                            </span>
+                          ))}
                         {p.size && (
                           <Badge variant="default" className="text-[10px] py-0 tabular-nums">{p.size}</Badge>
                         )}
@@ -815,7 +695,7 @@ export default function StockPage() {
                           quoted. Cost price is NOT: it is gated by the `cost_price` module,
                           and `api/products/route.ts:100` already omits the field entirely for
                           anyone without that grant, so this renders nothing rather than
-                          "₹0" for them. Same pattern as stock/by-brand and stock/[id]. */}
+                          "₹0" for them. Same pattern as stock/[id]. */}
                       <div className="flex items-baseline gap-2 mt-1">
                         <span className="text-sm font-semibold text-slate-900 tabular-nums">
                           {formatCurrency(p.sellingPrice)}
@@ -852,7 +732,7 @@ export default function StockPage() {
 
                       {/* Hidden in select mode: the whole row is a checkbox target there, and
                           a button inside it would fight the row's click handler. */}
-                      {!selectMode && (mayDeactivate || mayDelete || mayReorder) && (
+                      {!selectMode && (mayDeactivate || mayReorder) && (
                         <div className="flex gap-1 justify-end mt-1.5">
                           {mayReorder && (
                             <RowBtn
@@ -881,19 +761,6 @@ export default function StockPage() {
                               onClick={(e) => { e.preventDefault(); e.stopPropagation(); void setProductStatus(p, "ACTIVE"); }}
                             >
                               <RotateCcw className="h-3.5 w-3.5" />
-                            </RowBtn>
-                          )}
-                          {/* Permanent delete is offered only on an already-deactivated
-                              product. Deactivate first is the safe default, and it means the
-                              destructive button is never a mis-tap away on the main list. */}
-                          {mayDelete && p.status === "INACTIVE" && (
-                            <RowBtn
-                              label={`Permanently delete ${p.name}`}
-                              tone="text-red-600"
-                              disabled={rowBusy === p.id}
-                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); void deleteProduct(p); }}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
                             </RowBtn>
                           )}
                         </div>
@@ -1129,190 +996,6 @@ export default function StockPage() {
               </div>
             )}
           </div>
-        </div>
-      )}
-      </>}
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   Per-Item View Component
-   ═══════════════════════════════════════════════════════════════ */
-
-function formatRelativeDate(dateStr: string | null): string {
-  if (!dateStr) return "—";
-  const d = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - d.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  if (diffDays < 30) return `${diffDays}d ago`;
-  if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
-  return `${Math.floor(diffDays / 365)}y ago`;
-}
-
-function PerItemView({
-  data,
-  loading,
-  search,
-  onSearchChange,
-  brandFilter,
-  onBrandFilterChange,
-  brands,
-  expandedItem,
-  onToggleExpand,
-}: {
-  data: PerItemGroup[];
-  loading: boolean;
-  search: string;
-  onSearchChange: (v: string) => void;
-  brandFilter: string;
-  onBrandFilterChange: (v: string) => void;
-  brands: BrandItem[];
-  expandedItem: string | null;
-  onToggleExpand: (name: string) => void;
-}) {
-  return (
-    <div>
-      {/* Search */}
-      <div className="relative mb-3">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-        <Input
-          placeholder="Search product name, SKU, or brand..."
-          value={search}
-          onChange={(e) => onSearchChange(e.target.value)}
-          className="pl-9"
-        />
-      </div>
-
-      {/* Brand filter */}
-      <div className="mb-3">
-        <select
-          value={brandFilter}
-          onChange={(e) => onBrandFilterChange(e.target.value)}
-          className="flex h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
-        >
-          <option value="">All Brands</option>
-          {brands.map((b) => (
-            <option key={b.id} value={b.id}>{b.name} ({b._count.products})</option>
-          ))}
-        </select>
-      </div>
-
-      {/* Count */}
-      <p className="text-xs text-slate-500 mb-2">
-        {data.length} item{data.length !== 1 ? "s" : ""} grouped by name
-      </p>
-
-      {/* Loading skeleton */}
-      {loading ? (
-        <SkeletonList count={6} type="card" />
-      ) : data.length === 0 ? (
-        <div className="text-center py-12">
-          <p className="text-sm text-slate-400">No products found</p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {data.map((group) => {
-            const isExpanded = expandedItem === group.name;
-            // Build per-location summary: e.g. "Hub: 1 | Godown: 2"
-            const locationSummary: Record<string, number> = {};
-            for (const bin of group.bins) {
-              const loc = bin.binName || bin.binLocation || "Unassigned";
-              locationSummary[loc] = (locationSummary[loc] || 0) + bin.stock;
-            }
-            const locationLine = Object.entries(locationSummary)
-              .map(([loc, qty]) => `${loc}: ${qty}`)
-              .join(" | ");
-
-            return (
-              <div key={group.name}>
-                <Card
-                  className={`cursor-pointer border-l-4 ${group.totalStock <= 0 ? "border-l-red-500" : "border-l-green-500"} transition-colors active:bg-slate-50 ${isExpanded ? "border-slate-400" : "hover:border-slate-300"}`}
-                  onClick={() => onToggleExpand(group.name)}
-                >
-                  <CardContent className="p-3">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1 min-w-0 mr-3">
-                        <p className="text-sm font-semibold text-slate-900">{group.name}</p>
-                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                          {group.brandName && (
-                            <span className="text-xs font-medium text-blue-600">{group.brandName}</span>
-                          )}
-                          {group.categoryName && (
-                            <span className="text-xs text-slate-400">{group.categoryName}</span>
-                          )}
-                        </div>
-                        {BIN_TRACKING_ENABLED && <p className="text-[11px] text-slate-500 mt-1 tabular-nums">{locationLine}</p>}
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <div className="text-right">
-                          <p className={`text-xl font-bold tabular-nums ${group.totalStock <= 0 ? "text-red-600" : "text-green-600"}`}>
-                            {group.totalStock}
-                          </p>
-                          <span className="text-[11px] text-slate-400">total</span>
-                        </div>
-                        <ChevronRight className={`h-4 w-4 text-slate-400 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Expanded detail: per-bin breakdown */}
-                {isExpanded && (
-                  <div className="ml-3 mt-1 mb-2 space-y-1.5 border-l-2 border-slate-200 pl-3">
-                    {group.bins.map((bin) => (
-                      <div
-                        key={bin.productId}
-                        className="bg-slate-50 rounded-lg p-2.5 border border-slate-100"
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1 min-w-0">
-                            {BIN_TRACKING_ENABLED ? (
-                              <div className="flex items-center gap-1.5">
-                                <MapPin className="h-3 w-3 text-slate-400 shrink-0" />
-                                <span className="text-xs font-medium text-slate-700">
-                                  {bin.binName || bin.binCode || "No Bin"}
-                                </span>
-                                {bin.binLocation && (
-                                  <span className="text-[10px] text-slate-400">({bin.binLocation})</span>
-                                )}
-                              </div>
-                            ) : (
-                              <span className="text-xs font-medium text-slate-700 tabular-nums">{bin.sku}</span>
-                            )}
-                            {BIN_TRACKING_ENABLED && (
-                              <p className="text-[11px] text-slate-400 mt-0.5 ml-[18px] tabular-nums">
-                                SKU: {bin.sku}
-                              </p>
-                            )}
-                            <div className="flex items-center gap-3 mt-1 ml-[18px]">
-                              <span className="text-[11px] text-slate-500">
-                                In: <span className="font-medium text-green-700 tabular-nums">{formatRelativeDate(bin.lastInward)}</span>
-                              </span>
-                              <span className="text-[11px] text-slate-500">
-                                Out: <span className="font-medium text-orange-700 tabular-nums">{formatRelativeDate(bin.lastOutward)}</span>
-                              </span>
-                            </div>
-                          </div>
-                          <div className="text-right shrink-0">
-                            <p className={`text-lg font-bold tabular-nums ${bin.stock <= 0 ? "text-red-600" : "text-slate-900"}`}>
-                              {bin.stock}
-                            </p>
-                            <Badge variant={bin.stock <= 0 ? "danger" : "success"} className="text-[10px]">
-                              {bin.stock <= 0 ? "Out" : "In Stock"}
-                            </Badge>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
         </div>
       )}
     </div>
