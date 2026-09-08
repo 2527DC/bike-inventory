@@ -436,6 +436,11 @@ model Category {
   parent       Category?  @relation("CategoryTree", fields: [parentId], references: [id])
   children     Category[] @relation("CategoryTree")
   reorderLevel Int        @default(0)
+  // The `category_id` this category has in Zoho Inventory. Nullable: a category created here
+  // has no Zoho counterpart until someone syncs it. Unique so a Zoho category can never map
+  // to two rows. It is what the catalog import resolves the parent tree through — Zoho's
+  // `parent_category_id` names a Zoho id, not one of ours.
+  zohoCategoryId String? @unique
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
@@ -456,6 +461,11 @@ model Brand {
   // missing row to `?? 7` — so "no row" and "7" were already synonyms, and @default(7) says
   // that in the schema instead of encoding it as row-absence at three call sites.
   leadDays       Int      @default(7)
+  // The `brand_id` this brand has in Zoho Inventory. Nullable: a brand created here has no
+  // Zoho counterpart until someone syncs it. Unique so a Zoho brand can never map to two
+  // rows. Zoho's item export carries the brand NAME only, so this is the sole stable handle
+  // back to Zoho's /brands endpoint.
+  zohoBrandId    String?  @unique
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
