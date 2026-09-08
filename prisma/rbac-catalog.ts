@@ -281,9 +281,32 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     description: "Brand master, lead times and stock files",
     icon: "Tag",
     route: "/more/brands",
-    group: "Purchase",
-    sortOrder: 220,
-    actions: CRUD,
+    // Moved under Stock Management on 8 Sep 2026 (owner). The brand master is stock master
+    // data — it sits beside Categories, which was already a child here — not a purchasing
+    // screen. It was in "Purchase" at sortOrder 220, next to purchase orders.
+    //
+    // `group` MUST equal the parent's ("Operations"); the seeder asserts it. `route` is
+    // deliberately UNCHANGED: `User.navTabs` pins a module's route string, so renaming it to
+    // /brands would silently drop the tab for anyone who pinned it (use-bottom-nav.ts skips a
+    // route matching no granted module). `key` is likewise untouched — every existing grant
+    // is keyed on it.
+    parentKey: "stock_management",
+    group: "Operations",
+    sortOrder: 108, // after transfers (107); 100-107 are the existing stock_management children
+    // CRUD plus `fetch`, and `fetch` is deliberately NOT `zoho.fetch`.
+    //
+    // `zoho.fetch` is the grant for pulling BILLS and INVOICES — a routine, high-frequency
+    // job an accounts clerk does. Until now that same import was also the thing that MINTED
+    // brands, one per bill vendor name, which is the defect the 0809 plan closes. If the
+    // "Fetch from Zoho" button on /more/brands were guarded by `zoho.fetch`, everyone who
+    // pulls bills would silently regain the power to rewrite the brand master — the same
+    // hole, moved from an import side effect to a button.
+    //
+    // So the brand master is owned by its own screen: `brands.fetch` opens the preview
+    // (which writes nothing), and `brands.create` is what actually inserts rows. Two grants,
+    // because "may look at what Zoho has" and "may add 36 brands to the master" are
+    // genuinely different decisions, and the person trusted with one need not hold the other.
+    actions: [...CRUD, "fetch"],
   },
   {
     // The product taxonomy, which until now had no screen and no module of its own.
@@ -316,7 +339,17 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     parentKey: "stock_management",
     group: "Operations", // MUST equal the parent's — the seeder asserts it
     sortOrder: 103, // 102 is now vacant (product_types removed); nothing renumbered
-    actions: CRUD,
+    // `fetch` here is the same argument as on `brands` above, and it matters more, not less.
+    //
+    // The Zoho bill import creates a Category from `item.category_name` verbatim and
+    // UNBOUNDED — that is how wheel sizes ended up as categories. Guarding the new "Fetch
+    // from Zoho" screen with `zoho.fetch` would hand the taxonomy back to whoever imports
+    // bills, which is precisely the arrangement that produced the mess documented above.
+    //
+    // `categories.fetch` opens the preview (writes nothing); `categories.create` inserts.
+    // The taxonomy is owned by the person who curates it, not by the person who happens to
+    // run a bill pull.
+    actions: [...CRUD, "fetch"],
   },
   {
     key: "vendor_issues",

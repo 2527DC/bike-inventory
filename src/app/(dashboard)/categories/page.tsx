@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
+import { ZohoTaxonomySheet } from "@/components/zoho-taxonomy-sheet";
 import { usePermissions } from "@/lib/use-permissions";
 import { apiFetch, apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
@@ -211,6 +212,8 @@ export default function CategoriesPage() {
             {totalProducts === 1 ? "" : "s"} filed
           </p>
         </div>
+        {/* Renders nothing at all without categories.fetch, so it is safe beside New. */}
+        <ZohoTaxonomySheet kind="category" onDone={() => void load()} />
         {canCreate("categories") && !creating && (
           <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => setCreating(true)}>
             <Plus className="h-3.5 w-3.5 mr-1" />New
