@@ -59,11 +59,21 @@ export function isPlaceholderBrand(name: string | null | undefined): boolean {
 /**
  * True when the category on a product is the import's placeholder.
  *
- * NOTE: this is no longer a "needs attention" signal and must not be used as one. Every
- * product the catalog import creates is `Uncategorized`, so it is the normal state of the
- * whole catalog rather than the exception — which is why the "Needs details" filter and the
- * /stock card both stopped testing it. Kept because the bill import still writes the name
- * (`api/zoho/pull-review/approve`), and something may yet want to ask.
+ * HISTORY, because this flipped twice and the reason matters more than the answer:
+ *
+ *   Once, every product the catalog import created was `Uncategorized`, so this fired on the
+ *   whole catalog. A signal that fires always is not a signal, and both the "Needs details"
+ *   filter and the /stock card stopped testing it.
+ *
+ *   The catalog import now writes the product's REAL Zoho category, and only 665 of 5,738
+ *   products land on the placeholder. It is the exception again, so the /stock card tests it
+ *   once more and renders it muted — the same treatment a placeholder brand gets.
+ *
+ * Still NOT part of the "Needs details" filter (`api/products/route.ts`), which matches on
+ * brand only. Display and filter therefore disagree about category on purpose: a muted
+ * category tells a person to look, it does not put the row in the fix-up queue. If that queue
+ * is ever widened to include category, change both together — a card that flags a row the
+ * filter passes by is the same failure, in the other direction.
  */
 export function isPlaceholderCategory(name: string | null | undefined): boolean {
   return (name ?? "").trim().toLowerCase() === PLACEHOLDER_CATEGORY.toLowerCase();
