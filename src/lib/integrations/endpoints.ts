@@ -181,6 +181,24 @@ export const ENDPOINTS = {
     purpose:
       "Same path as Books, DIFFERENT payload — Inventory posts the object directly where Books wraps it in JSONString. A real difference between the two Zoho products, not an inconsistency to fix",
   },
+  "brands.list.inventory": {
+    key: "brands.list.inventory",
+    method: "GET",
+    path: "/brands?page&per_page",
+    providers: INVENTORY_ONLY,
+    owner: "InventoryClient.listBrands / listAllBrands",
+    purpose:
+      "The brand master, for the Fetch from Zoho sheet on /more/brands. Only Inventory exposes it — an item payload carries a brand NAME and no id, so this is the sole source of brand_id",
+  },
+  "categories.list.inventory": {
+    key: "categories.list.inventory",
+    method: "GET",
+    path: "/categories?page&per_page",
+    providers: INVENTORY_ONLY,
+    owner: "InventoryClient.listCategories / listAllCategories",
+    purpose:
+      "The category master, for the Fetch from Zoho sheet on /categories. Zoho returns a tree; the import is deliberately flat",
+  },
 } as const satisfies Record<string, EndpointSpec>;
 
 export type EndpointKey = keyof typeof ENDPOINTS;

@@ -9,6 +9,11 @@ import { userCan } from "@/lib/rbac";
 import { isPlaceholderBrand } from "@/lib/import-placeholders";
 import { setWarehouseQty } from "@/lib/stock-location";
 import { logActivity } from "@/lib/activity-log";
+import { createLogger } from "@/lib/logger";
+
+// This route applies a counter's numbers — and used to apply their spelling of a brand name
+// straight into the brand list — with no record of either beyond the response body.
+const log = createLogger("stock-counts");
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -182,6 +187,12 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       correctionTarget = { id: w.id, name: w.name };
     }
 
+    // Suggested brands the count could NOT apply, one line per unmatched name (§6). A stock
+    // count no longer creates brands, so the person who typed the suggestion has to hear
+    // that it was not applied — silence would read as "applied", and the product would keep
+    // its placeholder brand with nobody the wiser.
+    const brandNotices: string[] = [];
+
     const result = await prisma.$transaction(async (tx) => {
       if (data.items && data.items.length > 0) {
         for (const item of data.items) {
@@ -277,10 +288,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
             });
             if (targetBrand) {
               brandUpdate = { brandId: targetBrand.id };
+              log.info("suggested brand matched", {
+                stockCountId: id, productId: product.id, brandId: targetBrand.id,
+              });
             } else {
-              // Create new brand
-              const newBrand = await tx.brand.create({ data: { name: item.suggestedBrand } });
-              brandUpdate = { brandId: newBrand.id };
+              // MATCH ONLY (§6). This used to `brand.create` whatever the counter typed, so
+              // a typo on a shelf became a permanent row in the brand list. The product keeps
+              // the brandId it already has — non-null, so nothing is left dangling — and the
+              // unmatched name is reported back instead. Creating a brand is `brands.create`
+              // on /more/brands, and it stays there.
+              const notice = `brand "${item.suggestedBrand}" is not in the list; create it on /more/brands`;
+              if (!brandNotices.includes(notice)) brandNotices.push(notice);
+              log.warn("suggested brand not in the list — left unchanged", {
+                stockCountId: id, productId: product.id, suggestedBrand: item.suggestedBrand,
+              });
             }
           }
 
@@ -377,7 +398,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       return updated;
     }, { timeout: 120000 }); // 2 min timeout for large stock counts
 
-    return successResponse(result);
+    // `brandNotices` rides alongside the updated count rather than replacing the response
+    // shape — every existing reader of this endpoint keeps the object it already reads.
+    return successResponse({ ...result, brandNotices });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
     return errorResponse(error instanceof Error ? error.message : "Failed to update stock count", 400);

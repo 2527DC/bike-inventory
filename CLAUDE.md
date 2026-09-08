@@ -153,9 +153,16 @@ are in `docs/implementation/pending/prisma-migrations-adoption-plan.md`. **Until
 3. **Read the SQL before committing.** `DROP`, `ALTER COLUMN … TYPE`, or `SET NOT NULL` on a
    populated table means hand-editing the file: rename instead of drop-and-create; add
    nullable, backfill, then set not null.
-4. **Production is written by `prisma migrate deploy` from the Vercel build and by nothing
-   else.** Not `db push`, not `migrate dev`, not the Supabase SQL editor. The build runs
-   migrate → generate → build, so a failed migration is a failed build and no deploy.
+4. ~~Production is written by `prisma migrate deploy` from the Vercel build.~~ **REMOVED
+   7 Sep 2026** on the owner's instruction — `scripts/vercel-build.mjs` no longer runs
+   `prisma migrate deploy`; it is `prisma generate → next build`. **Nothing applies
+   migrations automatically now.** A committed-but-unapplied migration therefore reaches a
+   deployed app as new code against an old schema, failing at the first query rather than at
+   build time — the old wiring made a bad migration a failed build, and that safety net went
+   with it. Apply migrations by hand against the target before the code goes live:
+   `npx prisma migrate status`, then `npx prisma migrate deploy`.
+   (The number is kept so rules 6, 7, 9 and 10 — cited by number in two migration files and
+   in `src/app/api/transfer-orders/route.ts` — do not shift.)
 5. **Never, against any URL that is not localhost:** `db push`, `migrate dev`,
    `migrate reset`, `--force-reset`, `--accept-data-loss`.
 6. **Never edit a merged migration.** Add a new one.

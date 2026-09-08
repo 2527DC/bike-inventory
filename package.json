@@ -15,6 +15,7 @@
     "db:wipe:products": "ts-node --project prisma/tsconfig.json prisma/wipe-products.ts",
     "import:products": "ts-node --project scripts/tsconfig.json scripts/import-products.ts",
     "db:studio": "prisma studio",
+    "db:import": "node scripts/db/import-catalog-and-vendors.mjs",
     "db:restore:integrations": "node scripts/db/restore-integrations.mjs",
     "db:snapshot": "node scripts/db/snapshot.mjs",
     "db:migrate:status": "prisma migrate status"

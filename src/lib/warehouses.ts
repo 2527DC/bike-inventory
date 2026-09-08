@@ -8,8 +8,11 @@ export interface WarehouseRef {
   code: string;
   name: string;
   storeId: string;
-  /** The owning store's tax identity, for P14's document derivation. */
-  store: { gstin: string | null; stateCode: string | null };
+  /**
+   * The owning store's tax identity, for P14's document derivation, plus its `code`
+   * ("BCH_STORE") — whose prefix is the site key `/stock/by-bin` groups warehouses under.
+   */
+  store: { code: string; gstin: string | null; stateCode: string | null };
 }
 
 /**
@@ -52,7 +55,10 @@ export async function listWarehouses(): Promise<WarehouseRef[]> {
       code: true,
       name: true,
       storeId: true,
-      store: { select: { gstin: true, stateCode: true } },
+      // `code` ("BCH_STORE") rides along so /api/stock/by-bin can say which SITE a warehouse
+      // belongs to without a second query. Its prefix is the site key the by-location screen
+      // groups on.
+      store: { select: { code: true, gstin: true, stateCode: true } },
     },
     orderBy: [{ store: { sortOrder: "asc" } }, { sortOrder: "asc" }, { name: "asc" }],
   });

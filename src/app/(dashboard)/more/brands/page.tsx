@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
+import { ZohoTaxonomySheet } from "@/components/zoho-taxonomy-sheet";
 import { usePermissions } from "@/lib/use-permissions";
 import { apiFetch, apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
@@ -207,6 +208,8 @@ export default function BrandsPage() {
             {brands.length} brand{brands.length === 1 ? "" : "s"} · lead time is days to deliver
           </p>
         </div>
+        {/* The sheet renders nothing at all without brands.fetch, so it is safe beside New. */}
+        <ZohoTaxonomySheet kind="brand" onDone={() => void load()} />
         {canCreate("brands") && !creating && (
           <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => setCreating(true)}>
             <Plus className="h-3.5 w-3.5 mr-1" />New

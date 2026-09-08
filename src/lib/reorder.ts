@@ -28,9 +28,9 @@
  *    a SIGNAL meaning "not selected". `suggestedOrderQty` floors at 1, so swapping it in would
  *    auto-select every matched row.
  * 5. `brand-stock/[id]/page.tsx` compares a nullable snapshot column with no `> 0` guard.
- * 6. Three raw-SQL copies (`api/stock/summary`, `api/stock/by-brand`, `api/stock/by-bin`)
- *    express the same rule in Postgres and cannot call a TypeScript helper. If the rule here
- *    changes, those three change by hand or they drift.
+ * 6. Two raw-SQL copies (`api/stock/summary`, `api/stock/by-bin`) express the same rule in
+ *    Postgres and cannot call a TypeScript helper. If the rule here changes, those two change
+ *    by hand or they drift.
  */
 
 /** The fields the reorder rules read. Structural, so any row carrying them qualifies. */

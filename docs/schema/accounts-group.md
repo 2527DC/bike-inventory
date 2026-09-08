@@ -32,7 +32,7 @@ gate APIs and columns. Deleting them would revoke grants.
 | Checked in | Guards |
 |---|---|
 | `src/app/api/products/route.ts`, `…/products/[id]/route.ts` | `Product.costPrice` (stripped from the response without the grant) |
-| `src/app/(dashboard)/stock/[id]/page.tsx`, `stock/by-brand/page.tsx` | cost columns in the stock UI |
+| `src/app/(dashboard)/stock/[id]/page.tsx` | cost columns in the stock UI |
 | `src/app/(dashboard)/inbound/[id]/page.tsx` | `InboundLineItem.rate` / `.amount` / shipment total |
 | `src/app/api/second-hand/route.ts`, `second-hand/page.tsx`, `second-hand/[id]/page.tsx` | `SecondHandCycle.costPrice` / `sellingPrice` |
 
