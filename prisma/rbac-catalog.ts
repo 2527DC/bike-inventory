@@ -894,103 +894,27 @@ export interface RoleSeed {
   grants: Record<string, ActionKey[]>;
 }
 
-const ALL_JOB_ACTIONS: ActionKey[] = ["view", "create", "edit", "delete", "approve"];
-const ALL_LMS_ACTIONS: ActionKey[] = ["view", "create", "edit", "delete", "approve"];
-
 export const ROLE_CATALOG: RoleSeed[] = [
-  {
-    key: "SERVICE_MECHANIC",
-    name: "Service Mechanic",
-    description: "Works assigned job cards and logs assembly work.",
-    grants: {
-      service_jobs: ["view", "edit"], // works jobs; cannot create or delete them
-      service_assembly: ["view", "create", "edit"],
-    },
-  },
-  {
-    key: "SERVICE_SUPERVISOR",
-    name: "Service Supervisor",
-    description: "Assigns work, approves job completion, oversees the floor.",
-    grants: {
-      service_jobs: ALL_JOB_ACTIONS,
-      service_assembly: CRUD,
-      service_prices: ["view"],
-      service_reports: ["view"],
-      service_incentives: ["view"],
-    },
-  },
-  {
-    key: "SERVICE_STAFF",
-    name: "Service Counter Staff",
-    description: "Receives bikes at the counter, creates job cards, handles customers.",
-    grants: {
-      service_jobs: ["view", "create", "edit"],
-      service_prices: ["view"],
-      customers: ["view", "create", "edit"],
-    },
-  },
-  {
-    key: "SERVICE_BILLING",
-    name: "Service Billing",
-    description: "Bills completed jobs and records payment.",
-    grants: {
-      service_billing: ["view", "create", "edit", "approve"],
-      service_jobs: ["view"],
-      service_prices: ["view"],
-      customers: ["view"],
-    },
-  },
-  {
-    key: "SERVICE_MANAGER",
-    name: "Service Manager",
-    description: "Full workshop control including pricing, reviews and incentives.",
-    grants: {
-      service_jobs: ALL_JOB_ACTIONS,
-      service_assembly: CRUD,
-      service_billing: ["view", "create", "edit", "approve"],
-      service_prices: CRUD,
-      service_reviews: ["view", "delete"],
-      service_incentives: ["view", "edit"],
-      service_reports: ["view"],
-      customers: ["view", "create", "edit"],
-    },
-  },
-  {
-    key: "SERVICE_VIEWER",
-    name: "Service Viewer",
-    description: "Read-only view of the workshop board. Cannot change anything.",
-    grants: {
-      service_jobs: ["view"],
-      service_reports: ["view"],
-    },
-  },
-
-  // ── Staff LMS ─────────────────────────────────────────────────────────────
-  // The ONLY role this merge seeds. Deliberate: modules and permissions are created by the
-  // seed, but who holds them is decided by hand at /team/permissions, with no redeploy.
-  // There is no seeded learner, editor or lead role and no backfill script — so right after
-  // `db:seed:rbac` an ordinary staff member gets no sidebar entry and 403 on every
-  // /api/staff-lms call. That is the module shipping UNASSIGNED, not broken.
+  // EMPTY BY DECISION — owner, 8 Sep 2026: "I don't want any default roles in the RBAC,
+  // remove the default roles except for admin."
   //
-  // Everything inside Staff LMS, nothing outside it. A person holding this role authors
-  // content and reads the whole team's progress, but has no stock, purchase, accounts or
-  // service access at all — scoped the same way the SERVICE_* roles above are. It is a
-  // module owner, not a system administrator.
+  // Seven roles used to live here (SERVICE_MECHANIC, SERVICE_SUPERVISOR, SERVICE_STAFF,
+  // SERVICE_BILLING, SERVICE_MANAGER, SERVICE_VIEWER, STAFF_LMS_ADMIN). They are in git
+  // history if the grant sets are ever wanted as a reference.
   //
-  // Note the seeder is create-only for roles that already exist: this is created once with
-  // its 20 grants, and any later widening or narrowing you do in the UI survives re-seeding.
-  {
-    key: "STAFF_LMS_ADMIN",
-    name: "Staff LMS Admin",
-    description: "Full control of Staff LMS — content, learners and team progress.",
-    grants: {
-      staff_lms: ALL_LMS_ACTIONS,
-      staff_lms_learning: ALL_LMS_ACTIONS,
-      staff_lms_products: ALL_LMS_ACTIONS,
-      staff_lms_practice: ALL_LMS_ACTIONS,
-      staff_lms_rank: ALL_LMS_ACTIONS,
-    },
-  },
+  // ADMIN is NOT here and never was: seed-rbac.ts creates it directly (ADMIN_ROLE_KEY) with
+  // isSystem: true and every permission, because the first login needs a role that already
+  // holds everything. It is unaffected by this list being empty.
+  //
+  // WHAT THIS DOES AND DOES NOT DO. The seeder only CREATES a role that does not exist —
+  // it never updates and never deletes one (unlike modules and permissions, which it prunes
+  // with deleteMany/notIn). So emptying this list means a FRESH database gets ADMIN alone.
+  // It does NOT remove roles from a database that already has them; those are deleted by
+  // hand, and only once no User references them — User.roleId is required with the default
+  // Restrict, so the delete is refused rather than orphaning anyone.
+  //
+  // Roles are created at runtime from /team/permissions. That is the point: a role is data
+  // an admin defines, not a constant a developer ships.
 ];
 
 /** Flattened (role, permission-key) pairs for seeding. */
