@@ -437,6 +437,7 @@ model User {
   // The delivery log (NotificationOutbox) deliberately has NO relation here, so it survives.
   pushDevices             PushDevice[]
   notificationPreferences NotificationPreference[]
+  poExtractions           PoExtraction[]           @relation("PoExtractionCreatedBy")
 
   @@index([roleId])
 }
@@ -558,6 +559,7 @@ model Product {
   // every seeded row — an LmsProduct is a sales STORY (one bicycle model, mostly narrative
   // JSON), not a stock-keeping unit, and it maps to N SKUs or to none. See LmsProduct.
   lmsProducts LmsProduct[] @relation("LmsProductSku")
+  poExtractionItems PoExtractionItem[] @relation("PoExtractionItemProduct")
 
   @@index([status])
   @@index([categoryId])
@@ -793,6 +795,7 @@ model Vendor {
   ledgerGaps    LedgerGap[]
   discountTerms VendorDiscountTerm[]
   brands        BrandVendor[]        @relation("VendorBrands")
+  poExtractions PoExtraction[]       @relation("PoExtractionVendor")
 
   @@index([name])
 }
@@ -3400,4 +3403,66 @@ model LmsWeeklyTestAttempt {
   @@index([testId])
   @@index([userId, completedAt])
   @@map("lms_weekly_test_attempts")
+}
+
+// ─── Purchase-order import: a quotation, extracted and reviewed ─────────────────────────
+//
+// Plan 0909-po-ai-upload-and-brand-stock-removal, §5.2 (owner's answers, 9 Sep 2026).
+//
+// A PoExtraction is what one uploaded vendor file (PDF / image through AI, XLSX / CSV through
+// the column-sniffing parser) turned into, held ONLY while the review on /purchase-orders/new
+// is open — so a refresh or a 30–60 s AI call is not lost. The moment a purchase order is
+// created from it, or the person discards it, the extraction, its items and the stored file
+// are DELETED. Nothing from the upload outlives the PO; the PO's own lines are the record.
+// That is why there is no purchaseOrderId here and no mapping-memory table beside it.
+//
+// Money is Decimal(12,2) — database-architect.md:56-59 — not the Float the brand-stock tables
+// this replaces carried.
+
+model PoExtraction {
+  id           String   @id @default(cuid())
+  vendorId     String
+  vendor       Vendor   @relation("PoExtractionVendor", fields: [vendorId], references: [id])
+  fileName     String
+  fileType     String // "pdf" | "xlsx" | "csv" | "png" | "jpg" | "jpeg" | "webp"
+  /// The stored original, kept for the review and deleted with the row. Null when storage is
+  /// not configured — the extraction still works without it.
+  fileUrl      String?
+  source       String // "ai" | "excel" — which parser produced the rows
+  aiModel      String? // provider + model, for "why did it read it that way"
+  totalItems   Int      @default(0)
+  matchedItems Int      @default(0)
+  createdById  String
+  createdBy    User     @relation("PoExtractionCreatedBy", fields: [createdById], references: [id])
+  createdAt    DateTime @default(now())
+
+  items PoExtractionItem[]
+
+  @@index([createdById])
+  @@index([vendorId])
+}
+
+model PoExtractionItem {
+  id              String       @id @default(cuid())
+  extractionId    String
+  extraction      PoExtraction @relation(fields: [extractionId], references: [id], onDelete: Cascade)
+  rawName         String
+  rawSku          String?
+  rawCategory     String?
+  rawSize         String?
+  qty             Int?
+  price           Decimal?     @db.Decimal(12, 2)
+  mrp             Decimal?     @db.Decimal(12, 2)
+  /// The match, when there is one. SetNull on product delete (Prisma default for an optional
+  /// relation): a review row is short-lived, so losing a match is the right outcome, not a block.
+  productId       String?
+  product         Product?     @relation("PoExtractionItemProduct", fields: [productId], references: [id])
+  matchStatus     String       @default("UNMATCHED") // AUTO | FUZZY | MANUAL | UNMATCHED
+  matchConfidence Float?
+  selected        Boolean      @default(false)
+  orderQty        Int?
+  sortOrder       Int          @default(0)
+
+  @@index([extractionId])
+  @@index([productId])
 }

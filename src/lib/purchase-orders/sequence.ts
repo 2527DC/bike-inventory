@@ -10,8 +10,10 @@ export const PO_SEQUENCE_PAD = 5;
  * The seed query for the `PO-00042` series.
  *
  * Lives here rather than at the call site because `PO-` had TWO allocators that disagreed —
- * `api/purchase-orders/route.ts` padded to 5 and ordered by `createdAt`, while
- * `brand-stock/uploads/[id]/generate-po` padded to 4 and ordered by `poNumber` as a STRING.
+ * `api/purchase-orders/route.ts` padded to 5 and ordered by `createdAt`, while the
+ * brand-stock `generate-po` route (deleted 9 Sep 2026; the quotation import on
+ * /purchase-orders/new now creates through `createPurchaseOrder`) padded to 4 and ordered by
+ * `poNumber` as a STRING.
  * That second one is not merely racy: once `PO-00010` exists it sorts below `PO-0002`, so the
  * route reads the wrong "last" PO and emits a number already taken. `poNumber` is `@unique`,
  * so the loser got a raw P2002. Both are replaced by `nextSequence` and this one definition.

@@ -5,6 +5,18 @@ import type { ParsedItem } from "@/lib/excel-parser";
 const log = createLogger("catalogue:pdf-parser");
 
 export async function parsePdfWithAI(buffer: ArrayBuffer, fileName: string): Promise<ParsedItem[]> {
+  return (await parsePdfWithAIDetailed(buffer, fileName)).items;
+}
+
+/**
+ * As parsePdfWithAI, but also names the model that read the document. The PO import stores
+ * that beside the extraction (plan 0909-po-ai-upload, §5.2 `aiModel`) so "why did it read it
+ * that way" has an answer.
+ */
+export async function parsePdfWithAIDetailed(
+  buffer: ArrayBuffer,
+  fileName: string
+): Promise<{ items: ParsedItem[]; model: string }> {
   const base64 = Buffer.from(buffer).toString("base64");
   const isPdf = fileName.toLowerCase().endsWith(".pdf");
   const mediaType = isPdf ? "application/pdf" : (
@@ -73,7 +85,7 @@ Return format: [{"name":"...","sku":"...","category":"...","qty":0,"price":null,
 
   log.info("catalogue parsed", { fileName, items: rawItems.length, model: result.model });
 
-  return rawItems
+  const items = rawItems
     .filter((item) => item.name && String(item.name).trim().length > 0)
     .map((item) => ({
       rawSku: item.sku ? String(item.sku).trim() : null,
@@ -84,4 +96,6 @@ Return format: [{"name":"...","sku":"...","category":"...","qty":0,"price":null,
       brandMrp: typeof item.mrp === "number" ? item.mrp : (item.mrp ? parseFloat(String(item.mrp)) : null),
       rawSize: item.size ? String(item.size).trim() : null,
     }));
+
+  return { items, model: String(result.model ?? "") };
 }

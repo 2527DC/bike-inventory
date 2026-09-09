@@ -46,21 +46,28 @@ export interface CreatePoOptions {
    *
    * "reject" — refuse the whole request with a 400. Right for /purchase-orders/new, where a
    *            blank rate is a typo somebody can fix on the spot.
-   * "skip"   — leave those lines off the PO and name them back to the caller. Right for the
-   *            brand-stock sheet, where a blank price cell is missing DATA, not a mistake:
-   *            failing forty rows because three had no price makes the screen unusable
-   *            (owner, 6 Sep).
+   * "skip"   — leave those lines off the PO and name them back to the caller. Written for the
+   *            brand-stock sheet (deleted 9 Sep 2026), where a blank price cell was missing
+   *            DATA, not a mistake: failing forty rows because three had no price made the
+   *            screen unusable (owner, 6 Sep). NO caller passes it today: the quotation import
+   *            that replaced brand-stock submits through the same POST as manual entry and
+   *            passes "reject", because its review step lets a person fix or drop a priceless
+   *            row before the PDF becomes an offer (owner, 9 Sep 2026, Q7). Kept, not removed,
+   *            so the next bulk caller does not have to rediscover the distinction.
    */
   onPricelessLine?: "reject" | "skip";
 
   /**
    * Refuse the order when a product is not supplied by the chosen vendor.
    *
-   * OFF by default, and that default is load-bearing. `generate-po` picks its vendor by a
-   * fuzzy `name contains brand.name` match, which frequently is NOT any product's resolved
-   * vendor — turning this on unconditionally would make every brand-stock purchase order a
-   * 400 on the day it shipped. The manual screen turns it on, because there the vendor was
-   * chosen deliberately and a mismatch means somebody picked the wrong one.
+   * OFF by default, and that default is load-bearing for library callers: a matched
+   * product's resolved vendor (`reorderVendorId`, else the brand-linked vendor) is often NOT
+   * the vendor an order is raised against while the catalogue's vendor links are incomplete,
+   * so a caller that did not choose the vendor deliberately must not be refused for it.
+   * POST /api/purchase-orders turns it ON for both of its screens — manual entry and the
+   * quotation import — because on both the vendor was chosen before any product was
+   * (owner, 9 Sep 2026, Q2) and a mismatch means the wrong product was mapped. The review
+   * screen shows a vendor-mismatch notice for exactly that reason.
    */
   verifyVendorSupplies?: boolean;
 }
@@ -110,9 +117,11 @@ function createPurchaseOrderRow(tx: Tx, args: Prisma.PurchaseOrderCreateArgs) {
  *
  * There were two independent creators, and they disagreed about nearly everything:
  * `api/purchase-orders/route.ts` padded the number to five digits and ordered by `createdAt`;
- * `brand-stock/uploads/[id]/generate-po` padded to four and ordered by `poNumber` as a STRING,
- * which is not merely racy — once `PO-00010` exists it sorts below `PO-0002`, so that route
- * read the wrong "last" PO and emitted a number already taken.
+ * the brand-stock `generate-po` route (deleted 9 Sep 2026 — its job is now the quotation
+ * import on /purchase-orders/new, which creates through this function) padded to four and
+ * ordered by `poNumber` as a STRING, which is not merely racy — once `PO-00010` exists it
+ * sorts below `PO-0002`, so that route read the wrong "last" PO and emitted a number already
+ * taken.
  *
  * That second route never worked at all. It passed `hsnCode` into a `PurchaseOrderItem` create
  * and that column does not exist, so every valid request threw

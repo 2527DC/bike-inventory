@@ -23,11 +23,12 @@ export interface PoConflict {
  * order was called off, and re-ordering after either is legitimate.
  *
  * WHAT THIS DOES NOT CATCH, stated so nobody assumes otherwise: it answers "is this product
- * on an open PO", not "has this brand-stock upload already been ordered". Re-running the same
- * sheet after its first PO is received or cancelled produces a second PO and this rule will
- * not object. A real answer to that question needs a link between the upload and the PO, and
- * there is none in the schema — not a foreign key in either direction, and no
- * BrandStockUploadStatus value meaning "ordered".
+ * on an open PO", not "has this quotation already been ordered". Re-importing the same file
+ * through the quotation import on /purchase-orders/new after its first PO is received or
+ * cancelled produces a second PO and this rule will not object. A real answer to that question
+ * needs a link between the import and the PO, and there is none by design — the review rows
+ * and the uploaded file are deleted the moment the PO is created (0909 plan, Q3/Q4), so
+ * nothing survives to point back at.
  *
  * @param db must be the SAME transaction client that holds the advisory lock. Called on the
  *           root client it would read outside the lock's protection and two concurrent
