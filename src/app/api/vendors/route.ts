@@ -30,6 +30,9 @@ export async function GET(req: NextRequest) {
         select: {
           id: true, name: true, code: true, city: true, phone: true,
           whatsappNumber: true, isActive: true, paymentTermDays: true,
+          // Carried-forward balance as of 1 Apr 2026. The detail route returns it because it
+          // uses `include`; this `select` silently dropped it, so /vendors showed blank.
+          openingBalance: true,
           _count: { select: { purchaseOrders: true, bills: true } },
           bills: {
             where: { status: { not: "PAID" } },
