@@ -2,38 +2,26 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
+import { ArrowLeft, AlertTriangle, CheckCircle2, Download, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
-import type { ExtractionView } from "@/lib/po-extraction/types";
+import type { ExtractionView, SheetLine } from "@/lib/po-extraction/types";
 import {
   VendorSection,
-  formatCurrency,
   type Section,
   type POLineItem,
   type PoConflict,
   type VendorOption,
 } from "./_components/vendor-section";
-import { QuotationImport } from "./_components/quotation-import";
+import { SheetImport } from "./_components/sheet-import";
 
 const log = createLogger("purchase-orders:new");
 
-/** sessionStorage key for the open quotation review, so a refresh reloads it (plan 0909, Q3). */
+/** sessionStorage key for the open sheet extraction, so a refresh reloads it (plan 0909, Q6 a). */
 const EXTRACTION_KEY = "po-extraction-id";
-
-type ImportMode = "search" | "upload";
-
-interface ProductOption {
-  id: string;
-  name: string;
-  sku: string;
-  /** Absent for a caller without cost_price.view — declaring it `number` is what produced ₹NaN. */
-  costPrice?: number;
-  gstRate?: number;
-}
 
 interface PreparedItem {
   productId: string;
@@ -61,16 +49,19 @@ interface PrepareResponse {
 
 const MANUAL_KEY = "manual";
 
+/**
+ * A /reorder handoff item → a line. This is the ONE path that still carries a productId: the
+ * things ticked on /reorder are catalogue products by definition, and the order should stay
+ * linked to them. The sheet flow never sets it (R3, D2).
+ */
 const toLine = (it: PreparedItem): POLineItem => ({
+  key: it.productId,
   productId: it.productId,
-  productName: it.name,
-  sku: it.sku,
+  name: it.name,
   quantity: it.quantity,
   // ?? 0 leaves the rate box empty and required rather than inventing a price for somebody
   // who is not permitted to see cost.
   unitPrice: it.costPrice ?? 0,
-  // The product's real GST. The v1 handoff hardcoded 0, which is why every purchase order
-  // raised from /reorder before P10 carried 0% GST.
   gstRate: it.gstRate,
 });
 
@@ -84,6 +75,9 @@ const emptyManualSection = (): Section => ({
   error: null,
   conflicts: null,
 });
+
+/** The duplicate rule keys on the normalised name; match the same way when removing lines. */
+const normName = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
 
 /**
  * Raise purchase orders.
@@ -99,6 +93,13 @@ const emptyManualSection = (): Section => ({
  * — a real purchase order exists at that point. So "Create all" runs them in order, records an
  * outcome per vendor, and the screen STAYS PUT afterwards. Navigating away on success is what
  * would destroy the only report of what actually happened.
+ *
+ * ─── WHERE THE LINES COME FROM (plan 0909-po-sheet-ai-extraction, R3) ────────────────────
+ *
+ * The manual section takes its lines from the vendor's uploaded sheet and nowhere else. There
+ * is no product search on this screen: a line is the item name the sheet said, with Qty, Unit
+ * Price and GST % typed here. The only lines that carry a catalogue product are the ones
+ * handed over from /reorder, which are products by definition.
  */
 export default function NewPurchaseOrderPage() {
   const router = useRouter();
@@ -111,13 +112,9 @@ export default function NewPurchaseOrderPage() {
   const [runningAll, setRunningAll] = useState(false);
   const [pageError, setPageError] = useState("");
 
-  const [productSearch, setProductSearch] = useState("");
-  const [productResults, setProductResults] = useState<ProductOption[]>([]);
-
-  // ─── the quotation import (plan 0909-po-ai-upload, P3) ────────────────────────────────
-  // The review rows live on the server; the page holds the loaded view and its id goes into
+  // ─── the sheet import ─────────────────────────────────────────────────────────────────
+  // The rows live on the server; the page holds the loaded view and its id goes into
   // sessionStorage so a refresh reloads it instead of paying for the AI read again.
-  const [importMode, setImportMode] = useState<ImportMode>("search");
   const [extraction, setExtraction] = useState<ExtractionView | null>(null);
 
   useEffect(() => {
@@ -131,10 +128,9 @@ export default function NewPurchaseOrderPage() {
     if (!id) return;
     apiTry<ExtractionView>(`/api/purchase-orders/extract/${encodeURIComponent(id)}`).then(({ data, error, status }) => {
       if (data) {
-        log.debug("extraction reloaded", { extractionId: data.id, items: data.items.length });
+        log.debug("extraction reloaded", { extractionId: data.id, stage: data.stage, items: data.items.length });
         setExtraction(data);
-        setImportMode("upload");
-        // The review belongs to one vendor (Q2); put the manual section back on it.
+        // The upload belongs to one vendor (Q11); put the manual section back on it.
         setSections((prev) => prev.map((s) => (s.key === MANUAL_KEY && !s.vendorId ? { ...s, vendorId: data.vendorId } : s)));
         return;
       }
@@ -148,7 +144,7 @@ export default function NewPurchaseOrderPage() {
         return;
       }
       log.error("extraction reload failed", { extractionId: id, message: error });
-      setPageError(error ?? "Could not reload the uploaded quotation. Upload it again.");
+      setPageError(error ?? "Could not reload the uploaded sheet. Upload it again.");
     });
   }, []);
 
@@ -234,59 +230,29 @@ export default function NewPurchaseOrderPage() {
       .finally(() => setPreparing(false));
   }, []);
 
-  useEffect(() => {
-    if (productSearch.length < 2) return;
-    apiTry<ProductOption[]>(`/api/products/search?q=${encodeURIComponent(productSearch)}`).then(({ data }) =>
-      setProductResults(data ?? [])
-    );
-  }, [productSearch]);
-
-  // Derived rather than cleared in the effect. The previous version called setProductResults([])
-  // synchronously inside the effect body to drop stale matches; deriving the visible list from
-  // the query length does the same job with no cascading render and no stale window.
-  const visibleResults = productSearch.length >= 2 ? productResults : [];
-
   const patch = useCallback((key: string, next: Partial<Section>) => {
     setSections((prev) => prev.map((s) => (s.key === key ? { ...s, ...next } : s)));
   }, []);
 
-  /** Products go into the manual section — the derived ones are what the resolver decided. */
-  function addItem(product: ProductOption) {
-    const manual = sections.find((s) => s.key === MANUAL_KEY);
-    if (!manual) return;
-    if (manual.items.some((i) => i.productId === product.id)) return;
-    patch(MANUAL_KEY, {
-      items: [
-        ...manual.items,
-        {
-          productId: product.id,
-          productName: product.name,
-          sku: product.sku,
-          quantity: 1,
-          unitPrice: product.costPrice ?? 0,
-          gstRate: product.gstRate ?? 0,
-        },
-      ],
-    });
-    setProductSearch("");
-    setProductResults([]);
-  }
-
   /**
-   * The ticked review rows become the manual section's lines. Merged, not replaced: a line
-   * already on the section keeps the qty and rate somebody typed, so a second "Use selected"
-   * adds the newly ticked rows without undoing edits to the first batch.
+   * The ticked review rows become the manual section's lines (R8). Merged, not replaced: a
+   * line already on the section keeps the qty and rate somebody typed, so a second "Use
+   * selected" adds the newly ticked rows without undoing edits to the first batch. Deduped
+   * on `key` — the extraction item id — so a row used twice is one line.
    */
-  function useSelectedLines(lines: POLineItem[]) {
+  function useSelectedLines(lines: SheetLine[]) {
     const manual = sections.find((s) => s.key === MANUAL_KEY);
     if (!manual) return;
-    const have = new Set(manual.items.map((i) => i.productId));
-    const fresh = lines.filter((l) => !have.has(l.productId));
-    // Two review rows mapped to the same product collapse to one line — the first wins.
+    const have = new Set(manual.items.map((i) => i.key));
     const seen = new Set<string>();
-    const unique = fresh.filter((l) => (seen.has(l.productId) ? false : (seen.add(l.productId), true)));
-    log.debug("selected rows used", { offered: lines.length, added: unique.length, alreadyPresent: lines.length - fresh.length });
-    patch(MANUAL_KEY, { items: [...manual.items, ...unique] });
+    const fresh: POLineItem[] = [];
+    for (const l of lines) {
+      if (have.has(l.key) || seen.has(l.key)) continue;
+      seen.add(l.key);
+      fresh.push({ key: l.key, name: l.name, quantity: l.quantity, unitPrice: l.unitPrice, gstRate: l.gstRate });
+    }
+    log.debug("selected rows used", { offered: lines.length, added: fresh.length, alreadyPresent: lines.length - fresh.length });
+    patch(MANUAL_KEY, { items: [...manual.items, ...fresh] });
   }
 
   /** Create ONE vendor's order. Returns true when a purchase order now exists. */
@@ -298,7 +264,7 @@ export default function NewPurchaseOrderPage() {
 
       patch(key, { status: "running", error: null, conflicts: null });
 
-      const { data, error, errorData, status } = await apiTry<{ id: string; poNumber: string }>(
+      const { data, error, errorData, status } = await apiTry<{ id: string; poNumber: string; status: string }>(
         "/api/purchase-orders",
         {
           method: "POST",
@@ -307,17 +273,24 @@ export default function NewPurchaseOrderPage() {
             expectedDate,
             notes,
             submit: submitForApproval,
-            // The open review, if this order came out of one: the server deletes it (and the
-            // uploaded file) once the PO exists — nothing from the upload outlives the PO.
+            // The open extraction, if this order came out of one: the server deletes it (and
+            // the uploaded file) once the PO exists — nothing from the upload outlives it (R9).
             ...(key === MANUAL_KEY && extraction && extraction.vendorId === s.vendorId ? { extractionId: extraction.id } : {}),
-            items: s.items.map(({ productId, quantity, unitPrice, gstRate }) => ({ productId, quantity, unitPrice, gstRate })),
+            // A line is a name plus what was typed. productId travels only on /reorder lines.
+            items: s.items.map(({ name, quantity, unitPrice, gstRate, productId }) => ({
+              name,
+              quantity,
+              unitPrice,
+              gstRate,
+              ...(productId ? { productId } : {}),
+            })),
           },
         }
       );
 
       if (data) {
         patch(key, { status: "created", poId: data.id, poNumber: data.poNumber, error: null, conflicts: null });
-        log.info("purchase order created", { vendorId: s.vendorId, poNumber: data.poNumber });
+        log.info("purchase order created", { vendorId: s.vendorId, poNumber: data.poNumber, lines: s.items.length });
         if (key === MANUAL_KEY && extraction) {
           log.debug("extraction consumed by purchase order", { extractionId: extraction.id, poNumber: data.poNumber });
           setExtraction(null);
@@ -355,11 +328,17 @@ export default function NewPurchaseOrderPage() {
     setRunningAll(false);
   }
 
+  /** Drop the lines the 409 named — by name for sheet lines, by product id for /reorder ones. */
   function removeConflictingLines(key: string) {
     const s = sections.find((x) => x.key === key);
     if (!s?.conflicts) return;
-    const clashing = new Set(s.conflicts.flatMap((c) => c.productIds));
-    patch(key, { items: s.items.filter((i) => !clashing.has(i.productId)), conflicts: null, status: "idle" });
+    const clashingNames = new Set(s.conflicts.flatMap((c) => c.names ?? c.productNames ?? []).map(normName));
+    const clashingIds = new Set(s.conflicts.flatMap((c) => c.productIds ?? []));
+    patch(key, {
+      items: s.items.filter((i) => !clashingNames.has(normName(i.name)) && !(i.productId && clashingIds.has(i.productId))),
+      conflicts: null,
+      status: "idle",
+    });
   }
 
   const creatable = sections.filter((s) => s.status !== "created" && s.vendorId && s.items.length > 0);
@@ -456,45 +435,16 @@ export default function NewPurchaseOrderPage() {
             onRemoveConflictingLines={() => removeConflictingLines(s.key)}
             busy={runningAll}
           >
-            {/* The product search belongs to the manual section only: a derived section's lines
-                are what the resolver decided, and adding to it by hand would put a product on
-                a vendor that does not supply it — which the server would then refuse. */}
+            {/* The sheet upload belongs to the manual section only: a derived section's lines
+                are what the /reorder resolver decided. It needs a vendor first (Q11): the file
+                is that vendor's sheet, and the order is raised against them. */}
             {s.key === MANUAL_KEY && (
               <div className="space-y-2">
                 <label className="block text-sm font-medium text-slate-700">
-                  Add Products <span className="text-red-500">*</span>
+                  Items <span className="text-red-500">*</span>
                 </label>
-                {/* Two ways in, one editor out (Q1). The upload needs a vendor first (Q2):
-                    the file is that vendor's quotation and the matcher is scoped to what
-                    they supply, so the tab is disabled — not hidden — until one is chosen. */}
-                <div className="flex gap-1 rounded-lg bg-slate-100 p-1" role="tablist" aria-label="How to add products">
-                  {(
-                    [
-                      { mode: "search", label: "Search products" },
-                      { mode: "upload", label: "Upload a quotation" },
-                    ] as Array<{ mode: ImportMode; label: string }>
-                  ).map((t) => (
-                    <button
-                      key={t.mode}
-                      type="button"
-                      role="tab"
-                      aria-selected={importMode === t.mode}
-                      onClick={() => setImportMode(t.mode)}
-                      disabled={t.mode === "upload" && !s.vendorId}
-                      className={`flex-1 min-h-[44px] rounded-md text-sm font-medium transition-colors disabled:opacity-40 ${
-                        importMode === t.mode ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
-                      }`}
-                    >
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-                {!s.vendorId && (
-                  <p className="text-[11px] text-slate-500">Choose the vendor first to upload their quotation.</p>
-                )}
-
-                {importMode === "upload" && s.vendorId && (
-                  <QuotationImport
+                {s.vendorId ? (
+                  <SheetImport
                     vendorId={s.vendorId}
                     vendorName={vendors.find((v) => v.id === s.vendorId)?.name ?? null}
                     extraction={extraction}
@@ -502,35 +452,8 @@ export default function NewPurchaseOrderPage() {
                     onUseSelected={useSelectedLines}
                     disabled={runningAll || s.status === "running"}
                   />
-                )}
-
-                {importMode === "search" && (
-                <div className="relative">
-                  <Input
-                    placeholder="Search product by name or SKU..."
-                    value={productSearch}
-                    onChange={(e) => setProductSearch(e.target.value)}
-                    className="min-h-[44px]"
-                  />
-                  {visibleResults.length > 0 && (
-                    <div className="absolute top-full left-0 right-0 z-10 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                      {visibleResults.map((p) => (
-                        <button
-                          key={p.id}
-                          type="button"
-                          onClick={() => addItem(p)}
-                          className="w-full text-left px-3 py-2.5 hover:bg-slate-50 border-b border-slate-100 last:border-0"
-                        >
-                          <p className="text-sm font-medium text-slate-900">{p.name}</p>
-                          <p className="text-xs text-slate-500">
-                            {p.sku}
-                            {p.costPrice !== undefined ? ` | Cost: ${formatCurrency(p.costPrice)}` : ""}
-                          </p>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                ) : (
+                  <p className="text-[11px] text-slate-500">Choose the vendor first, then upload their sheet.</p>
                 )}
               </div>
             )}
@@ -582,13 +505,25 @@ export default function NewPurchaseOrderPage() {
               <CheckCircle2 className="h-4 w-4" />
               {created.length} purchase order{created.length === 1 ? "" : "s"} created
             </p>
-            <ul className="mt-2 space-y-1">
+            <ul className="mt-2 space-y-1.5">
               {created.map((s) => (
-                <li key={s.key} className="text-xs text-green-800">
-                  <Link href={`/purchase-orders/${s.poId}`} className="font-semibold underline tabular-nums">
-                    {s.poNumber}
+                <li key={s.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-green-800">
+                  <span>
+                    <span className="font-semibold tabular-nums">{s.poNumber}</span>
+                    {" · "}{s.vendorName ?? vendors.find((v) => v.id === s.vendorId)?.name ?? "Vendor"}
+                  </span>
+                  {/* The PDF is one click away from the moment the order exists (R10, Q8 a);
+                      the API serves any status under purchase_orders.view. */}
+                  <a
+                    href={`/api/purchase-orders/${s.poId}/pdf`}
+                    download
+                    className="inline-flex items-center gap-1 min-h-[44px] font-semibold underline"
+                  >
+                    <Download className="h-3.5 w-3.5" /> Download PDF
+                  </a>
+                  <Link href={`/purchase-orders/${s.poId}`} className="inline-flex items-center min-h-[44px] font-semibold underline">
+                    Open
                   </Link>
-                  {" · "}{s.vendorName ?? vendors.find((v) => v.id === s.vendorId)?.name ?? "Vendor"}
                 </li>
               ))}
             </ul>

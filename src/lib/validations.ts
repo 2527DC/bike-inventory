@@ -384,7 +384,14 @@ export const purchaseOrderSchema = z.object({
    */
   extractionId: z.string().min(1).optional(),
   items: z.array(z.object({
-    productId: z.string().min(1, "Product is required"),
+    /**
+     * The item name as ordered — what the PDF's Description column prints. A line raised
+     * from the vendor's sheet is this name and nothing from the products table (plan
+     * 0909-po-sheet-ai-extraction, D2); `productId` is optional and never sent by that flow.
+     * It stays accepted so an older caller that links a catalogue product still works.
+     */
+    name: z.string().trim().min(1, "Item name is required").max(300, "Item name is too long"),
+    productId: z.string().min(1).optional(),
     quantity: z.number().int().min(1, "Quantity must be at least 1"),
     // Still min(0) here, NOT min(0.01). The zero rule is enforced in createPurchaseOrder
     // through its `onPricelessLine` option, not here: a schema cannot express "depends who is
@@ -399,25 +406,74 @@ export const purchaseOrderSchema = z.object({
   })).min(1, "At least one item is required"),
 });
 
-/** The non-file fields of the multipart body POST /api/purchase-orders/extract receives. */
+/**
+ * The non-file fields of the multipart body POST /api/purchase-orders/extract receives.
+ *
+ * `hint` is the one optional free-text box of the column step ("items are in column C").
+ * Length-capped here; the real sanitising — newlines and brackets stripped, instruction
+ * words refused — is `sanitizeHint` in po-extraction/sheet.ts (plan 0909, §3.6). It is data
+ * for the model, never an instruction, which is why it is bounded twice.
+ */
 export const poExtractRequestSchema = z.object({
   vendorId: z.string().min(1, "Vendor is required"),
+  hint: z.string().max(500, "The hint is too long").optional(),
 });
 
 /**
- * One review row's edits. `productId: null` clears a wrong match (the row becomes UNMATCHED and
- * unselected); a string maps it by hand (MANUAL). At least one field must be present — an
- * empty PATCH is a client bug, not a no-op.
+ * One review row's edit: tick or untick. Nothing else — a row is what the sheet said, and
+ * the product match and order quantity the old PATCH accepted are gone (plan 0909, D2/Q10).
  */
-export const poExtractionItemPatchSchema = z
-  .object({
-    productId: z.string().min(1).nullable().optional(),
-    selected: z.boolean().optional(),
-    orderQty: z.number().int().min(1, "Quantity must be at least 1").nullable().optional(),
-  })
-  .refine((v) => v.productId !== undefined || v.selected !== undefined || v.orderQty !== undefined, {
-    message: "Nothing to change",
+export const poExtractionItemPatchSchema = z.object({
+  selected: z.boolean(),
+});
+
+const columnRoleSchema = z.enum([
+  "itemName", "quantity", "itemCode", "price", "mrp", "size", "uom", "hsn", "category", "brand", "other", "ignore",
+]);
+
+/**
+ * The person's confirmation of the column step: for every sheet, the header row and a role
+ * per column. `rescue` skips the deterministic read and sends the whole sheet to the model
+ * (plan 0909, §3.2 step 5) — the path for a sheet whose header the model cannot find.
+ *
+ * A sheet with no `itemName` column is refused here rather than in the extractor: without it
+ * there is nothing to put on a PO line, and the screen already blocks the button.
+ */
+export const poExtractionColumnsSchema = z.object({
+  sheets: z
+    .array(
+      z.object({
+        sheet: z.string().min(1).max(200),
+        headerRow: z.number().int().min(0).max(100_000),
+        columns: z
+          .array(z.object({ index: z.number().int().min(0).max(1000), role: columnRoleSchema }))
+          .max(1000),
+      })
+    )
+    .max(50),
+  rescue: z.boolean().optional(),
+}).superRefine((v, ctx) => {
+  if (v.rescue) return;
+  if (v.sheets.length === 0) {
+    ctx.addIssue({ code: "custom", message: "Confirm the columns of at least one sheet", path: ["sheets"] });
+    return;
+  }
+  v.sheets.forEach((s, i) => {
+    if (!s.columns.some((c) => c.role === "itemName")) {
+      ctx.addIssue({
+        code: "custom",
+        message: `Choose which column of "${s.sheet}" holds the item name`,
+        path: ["sheets", i, "columns"],
+      });
+    }
   });
+});
+
+/** Select-all-shown for a 400-row review: one request, not four hundred. */
+export const poExtractionSelectSchema = z.object({
+  itemIds: z.array(z.string().min(1)).min(1, "Choose at least one row").max(2000, "Too many rows in one request"),
+  selected: z.boolean(),
+});
 
 /**
  * The header fields a PO's PUT may change.

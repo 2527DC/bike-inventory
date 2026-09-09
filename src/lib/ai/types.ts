@@ -36,6 +36,20 @@ export interface AiRequest {
    * a document.
    */
   json?: boolean;
+  /**
+   * A JSON Schema the reply must match. Implies `json`. Anthropic passes it as
+   * `output_config.format` (the reply is then guaranteed to parse); Google as
+   * `responseJsonSchema`; OpenAI keeps the prompt path, so the prompt must still describe
+   * the shape. Every object in it needs `additionalProperties: false`, and numeric / string
+   * constraints (`minimum`, `maxLength`, …) are rejected — keep it to types, enums and
+   * `required`.
+   */
+  jsonSchema?: Record<string, unknown>;
+  /**
+   * Thinking depth for the call. Anthropic passes it as `output_config.effort`; the other
+   * providers have no equivalent and ignore it. Omit for the provider's default.
+   */
+  effort?: "low" | "medium" | "high";
 }
 
 export interface AiUsage {

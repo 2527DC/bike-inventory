@@ -16,8 +16,11 @@ import type { CompanyIdentity } from "./company";
 const log = createLogger("purchase-orders:pdf");
 
 export interface PoPdfLine {
-  sku: string;
+  /** The linked product's SKU, or null for a line raised from the vendor's sheet (plan 0909, D2). */
+  sku: string | null;
+  /** `PurchaseOrderItem.name` — the description as ordered, never read from the product. */
   name: string;
+  /** The linked product's HSN, or null when the line has no product. Prints as "—". */
   hsnCode: string | null;
   quantity: number;
   unitPrice: number;
@@ -192,7 +195,7 @@ export async function renderPurchaseOrderPdf(
     head: [["#", "SKU", "Description", "HSN", "Qty", "Rate", "GST %", "Amount"]],
     body: po.items.map((it, i) => [
       String(i + 1),
-      it.sku,
+      it.sku ?? "—",
       it.name,
       it.hsnCode ?? "—",
       String(it.quantity),

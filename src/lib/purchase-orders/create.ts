@@ -24,7 +24,14 @@ const log = createLogger("purchase-orders:create");
 const PO_LOCK_NAMESPACE = 0x504f;
 
 export interface PoLineInput {
-  productId: string;
+  /**
+   * Optional since 9 Sep 2026 (plan 0909-po-sheet-ai-extraction, D2). A line raised from the
+   * vendor's sheet is its NAME and nothing from the products table; the sheet flow never sets
+   * this. When present the product must exist, and the vendor check below applies to it.
+   */
+  productId?: string;
+  /** The item name as ordered — the PDF's Description column. Stored on the line. */
+  name: string;
   quantity: number;
   unitPrice: number;
   gstRate?: number;
@@ -73,8 +80,9 @@ export interface CreatePoOptions {
 }
 
 export interface SkippedLine {
-  productId: string;
-  sku: string;
+  /** Null for a line that has no product. */
+  productId: string | null;
+  sku: string | null;
   name: string;
   reason: string;
 }
@@ -178,9 +186,10 @@ export async function createPurchaseOrder(
     throw new PoCreateError("At least one item is required", 400);
   }
 
-  // Products are read BEFORE the transaction: this is what turns "no rate" into a sentence
-  // naming an SKU rather than an id, and the lookup does not need to be inside the lock.
-  const productIds = [...new Set(input.items.map((i) => i.productId))];
+  // Only the lines that carry a product are looked up (D2): a sheet-built line is its name
+  // and there is nothing in the catalogue to check it against. Read BEFORE the transaction —
+  // the lookup does not need to be inside the lock.
+  const productIds = [...new Set(input.items.map((i) => i.productId).filter((id): id is string => !!id))];
   const products = await prisma.product.findMany({
     where: { id: { in: productIds } },
     // brandId and reorderVendorId feed the vendor check below. Selected here rather than in a
@@ -196,8 +205,9 @@ export async function createPurchaseOrder(
 
   // ─── does this vendor actually supply these products? ─────────────────────────────────
   // Outside the transaction and outside the lock, for the same reason as the lookup above: it
-  // is a read, and serialising it would buy nothing.
-  if (options.verifyVendorSupplies) {
+  // is a read, and serialising it would buy nothing. `products` holds only the LINKED lines'
+  // products, so a sheet-built line is never refused here — it has no product to resolve.
+  if (options.verifyVendorSupplies && products.length > 0) {
     const resolutions = await resolveVendors(products);
     const mismatched = products.filter((p) => {
       const r = resolutions.get(p.id);
@@ -245,34 +255,39 @@ export async function createPurchaseOrder(
       priced.push(item);
       continue;
     }
-    const p = byId.get(item.productId)!;
+    // The line's own name, not the product's: a sheet-built line has no product, and the
+    // name is what the person is looking at on the screen.
+    const p = item.productId ? byId.get(item.productId) : undefined;
     if (onPricelessLine === "reject") {
-      throw new PoCreateError(`Line ${p.sku} has no rate — enter a unit price`, 400);
+      throw new PoCreateError(`Line "${item.name.trim()}" has no rate — enter a unit price`, 400);
     }
     skipped.push({
-      productId: p.id,
-      sku: p.sku,
-      name: p.name,
-      reason: "No price on the sheet and no cost price on the product",
+      productId: p?.id ?? null,
+      sku: p?.sku ?? null,
+      name: item.name.trim(),
+      reason: "No unit price on the line",
     });
   }
 
   if (priced.length === 0) {
     throw new PoCreateError(
       skipped.length > 0
-        ? `None of the ${skipped.length} selected item(s) has a price. Set a cost price on the products, or add prices to the sheet.`
+        ? `None of the ${skipped.length} selected item(s) has a price. Enter a unit price on each line.`
         : "At least one item is required",
       400
     );
   }
 
   const lines = priced.map((item) => ({
-    productId: item.productId,
+    // Written only when the line is linked; null is the sheet-built line (D2).
+    productId: item.productId ?? null,
+    name: item.name.trim(),
     quantity: item.quantity,
     unitPrice: item.unitPrice,
     gstRate: item.gstRate ?? 18,
     amount: item.quantity * item.unitPrice,
   }));
+  const linkedLines = lines.filter((l) => l.productId !== null).length;
 
   const subtotal = lines.reduce((sum, l) => sum + l.amount, 0);
   const gstTotal = lines.reduce((sum, l) => sum + l.amount * (l.gstRate / 100), 0);
@@ -289,7 +304,12 @@ export async function createPurchaseOrder(
             // only the first argument needs it.
             await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PO_LOCK_NAMESPACE}::int4, hashtext(${input.vendorId}))`;
 
-      const conflicts = await findOpenPoConflicts(tx, input.vendorId, lines.map((l) => l.productId));
+      // Two keys (D2): the linked lines' product ids, and every line's normalised name — the
+      // only thing two orders of a sheet-built line can share.
+      const conflicts = await findOpenPoConflicts(tx, input.vendorId, {
+        productIds: lines.map((l) => l.productId).filter((id): id is string => id !== null),
+        names: lines.map((l) => l.name),
+      });
       if (conflicts.length > 0) {
         throw new PoCreateError(conflictMessage(conflicts), 409, { conflicts });
       }
@@ -344,6 +364,8 @@ export async function createPurchaseOrder(
     vendorId: input.vendorId,
     status: result.status,
     lines: lines.length,
+    linkedLines,
+    snapshotLines: lines.length - linkedLines,
     skipped: skipped.length,
   });
 
