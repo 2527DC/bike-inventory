@@ -1,6 +1,6 @@
 # AI provider settings and one shared AI client
 
-Status: in-progress — 9 Sep 2026, all five phases verified present on disk, but nothing is committed on any branch and the migration is applied to the local database only.
+Status: completed — 9 Sep 2026, all five phases are on `main` (`c8f1b61`): the provider table and migration `20260908143858_ai_provider`, the model catalogue in code, `src/lib/ai/` with the three adapters behind one client, the four existing call sites migrated to it, and `/api/settings/ai` with its activate and test routes. Which provider is live is data now, not an env var. Still owed: `npx prisma migrate deploy` on any database other than the local one — the migration has only been applied locally.
 Branch: the working tree is on **`feat/taxonomy-inactive-and-audit-approval`**, not
 `chore/brand-stock-module-and-tooling` as this line used to say — the work travelled with the
 tree rather than with a branch. `git log --all -- src/lib/ai src/app/api/settings/ai` returns

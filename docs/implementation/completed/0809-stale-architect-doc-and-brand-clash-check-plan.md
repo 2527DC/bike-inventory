@@ -1,6 +1,6 @@
 # Two small holes: a stale architect doc, and a brand that can be created twice
 
-Status: in-progress — 9 Sep 2026, both findings are fixed in the working tree and Finding 2's route code is committed, but Part B step 6 is undone: the migration is still untracked.
+Status: completed — 9 Sep 2026, both findings are closed on `main` (`b158aa3`). Finding 2’s route code shipped inside `ddf0092`, and the blocker this status carried — `prisma/migrations/20260908151058_brand_name_ci_unique/` untracked while the later `20260908161249` was committed — is gone: the folder is in git, so a fresh clone gets the case-insensitive unique index in order. The architect doc no longer describes a constraint the database does not have.
 Branch: the work did **not** land on `fix/architect-doc-and-brand-clash`. That branch exists and
 holds none of it; Finding 2's route changes travelled inside the unrelated taxonomy commit
 `ddf0092` on `feat/taxonomy-inactive-and-audit-approval`, and the doc edit is still uncommitted.

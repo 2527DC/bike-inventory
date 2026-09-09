@@ -1,6 +1,6 @@
 # Transfer mode is chosen, the document is attached, and GST leaves the store form
 
-Status: **PLAN ONLY — nothing built.** Written 9 Sep 2026. Awaiting the answers in §2.
+Status: pending — plan complete; Q1 answered by the scoping plan; Q2–Q11 and the §7 questions await the owner. Nothing built.
 Branch: **not cut yet** — tell me which branch to base it on before I create one.
 
 ---
@@ -69,6 +69,15 @@ the two modes would pick the same pair of places. Which of these is the real sho
   exists per store, the modes differ only in which document they demand.
 - **(c)** Add `Warehouse.kind { FLOOR, GODOWN }` and drive the left panel from `FLOOR` rows and
   the right panel from every row. More schema, same result as (a).
+
+> **Decision on record — 9 Sep 2026.** Answered by
+> `0909-stock-store-and-warehouse-scoping-plan.md` (its D1 + D2), which ships **first**: the
+> shop floor is a second `Warehouse` row per store (`BCH_FLOOR`, `BCC_FLOOR`) and
+> `Warehouse.kind { FLOOR, GODOWN }` is a real column — option **(c)**. A store picked on the
+> left resolves to its first `FLOOR` warehouse by `sortOrder`, then name; the right panel in
+> Store → Warehouse lists every active warehouse of any kind except the resolved source (Q7).
+> `resolveStoreWarehouse` in §4.2 becomes a one-line lookup on `kind`. This plan is unblocked
+> once that plan's Part A has landed; nothing else in it changes.
 
 ### Q2 — Does the **mode alone** decide the document?
 
@@ -413,3 +422,44 @@ creator or `transfers.edit` (`document/route.ts:68-71`). No role name is introdu
      grouped by store, the note says delivery challan, attach a **photo**, submit.
    - Approve, then **dispatch with no document** → refused; with the right document → allowed.
    - Confirm no transfer is refused anywhere for a missing GSTIN.
+
+---
+
+## 7. Clarifications — 9 Sep 2026
+
+Run of `/clarify-plan` against the code on disk. Nothing in this section is carried over from
+an earlier session; every row was re-read the same day.
+
+### Verified against code
+
+| Claim | Verdict | Evidence |
+|---|---|---|
+| Create form: two flat warehouse selects, GSTIN preview, draft key v2, POST body without mode or document | CONFIRMED | `transfers/new/page.tsx:39,77-104,112,239-244,305-321,452` |
+| `deriveTransferPolicy` refuses store-to-store on a blank GSTIN | CONFIRMED | `src/lib/transfers/policy.ts:44-77`; both stores `gstin: null` (live) |
+| Approve route re-derives the policy | **DRIFTED** | `approve/route.ts:151` runs it only when `requiredDocType` is null — a backfill. §4.3 deletes a backfill branch, not a re-derive. |
+| Document route requires the URL to *start* with `transfers/<orderNo>/` | **DRIFTED** | `document/route.ts:91` is `includes`, not `startsWith` |
+| Upload key `tax-invoice-<ts>.pdf` | **DRIFTED** | `document-card.tsx:101` already switches tax-invoice / delivery-challan by doc type; extension from the compressor. §4.4 reuses it verbatim. |
+| Document route: docNumber 1–40 required, docDate optional, PENDING/APPROVED only, creator or `transfers.edit` | CONFIRMED | `document/route.ts:17-18,68-70,73-79` |
+| Dispatch gate and e-way warning | CONFIRMED | `dispatch/route.ts:100-111,210-213` |
+| `/stores` inputs exist; `save()` never sends `gstin`/`stateCode` | CONFIRMED | `stores/page.tsx:98-104,217-229,313-319` |
+| Schema: `TransferOrder` columns; no `Warehouse.kind`; no `TransferMode`; newest migration `20260908161249` | CONFIRMED | `prisma/schema.prisma:285-317,1768-1787` |
+| Two stores, one warehouse each; 0 `TransferOrder`; 0 `StorageConfig` rows | CONFIRMED | live query, `.env` → localhost `bch` |
+| Storage: S3 provider via aws4fetch; `transfers/` accepts PDF; `uploadMedia` fallback; Settings → Storage and the CORS route exist | CONFIRMED | `storage/s3.ts:10,20`, `upload-policy.ts:21,55-56`, `media-upload.ts:31,55`, `settings/storage/page.tsx`, `api/settings/storage/cors/route.ts` |
+| `.env` has `R2_*` only; bootstrap reads `S3_*` | CONFIRMED | `storage/index.ts:63-71` |
+| A `LOCAL` provider exists (not mentioned in Q8) | NOTED | `storage/local.ts`; `StorageConfig.provider` default `LOCAL` (`schema.prisma:1132-1140`) |
+| Any partial implementation on disk | **NONE** | `git status` clean under transfers, transfer-orders API, `src/lib/transfers`, stores page, schema; repo-wide grep for `TransferMode`/`STORE_TO_*`/`fromStoreId` empty |
+| Q1 dependency | CONFIRMED | `0909-stock-store-and-warehouse-scoping-plan.md` D1/D2/§6: `enum WarehouseKind { FLOOR, GODOWN }`, `Warehouse.kind @default(GODOWN)`, migration `warehouse_kind`, seed `BCH_FLOOR`/`BCC_FLOOR` at `sortOrder` 5. None of it exists on disk yet. The scoping plan's own requirement (R1–R5) does **not** contain any of this plan's requirement; it only supplies the column §4.2 reads. |
+
+### Answers — owner, 9 Sep 2026
+
+- Q1 floor model — settled by the scoping plan (option c). The two earlier stock plans that disagreed on the enum were replaced by the scoping + screens split the same day.
+- Q8 storage — **S3, configured at Settings → Storage** (bucket, region, keys, public URL; test; activate). No `.env` change, no code.
+- Sequencing — the scoping plan's **Part A ships first**; this plan follows. Branch naming is deliberately **not** decided here (owner: "don't include the branch in this ask").
+- Q2–Q11 — recommendations stand; **not yet accepted or changed by the owner**. Open.
+
+### Open — need the owner's answer before code
+
+- **Q12 — Godown → floor has no mode.** Under Q1(c) the left panel's store resolves to its FLOOR. Store → Warehouse can therefore move floor → godown (the right panel lists every warehouse), but nothing can move **godown → floor**, which is the most frequent movement in a shop. Scoping-plan D3 uses two audits for the one-time opening split only. Options: (a) accept, restock the floor by audit; (b) a third button **Warehouse → Store** (source = any warehouse, destination = a store's floor, delivery challan); (c) keep today's plain **Warehouse → Warehouse** as a third button. Recommended: **(b)**.
+- **Q13 — `/stores` scope.** Owner's words were "on edit"; the page is one form for create and edit, so §4.5 removes the inputs from both. Default: both.
+- **Q14 — `document/route.ts:91` `includes`.** Tighten to `startsWith` while touching the create flow, or leave and file it in §5 with the storage gaps. Default: leave.
+- **Q3 timing note.** After scoping Part A the floor holds 0 until the D3 audits run, so the §6 browser walk needs the opening split done first or every Store → Store transfer is refused for stock.

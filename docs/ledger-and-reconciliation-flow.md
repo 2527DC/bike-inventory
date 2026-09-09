@@ -5,6 +5,30 @@
 it, how is it implemented end to end, and is the statement-upload screen missing?
 **Branch audited:** `refactor/zoho-endpoint-registry`
 
+> **Re-verified 9 Sep 2026 against `6cbdf4b` (branch `docs/plan-requirements-rule`).** The
+> analysis holds; **three passages no longer match the code** and are kept as the record of
+> what was true on 31 Aug:
+>
+> - **§2's module table** still lists a **`fetch`** action on `brand_ledger`. That action was
+>   removed — finding L7 is closed (`rbac-catalog.ts:505`).
+> - **§3 Acts 3 and 5** describe this route calling Claude directly, scraping JSON with a
+>   regex, salvaging a truncated array, and swallowing a bad `txnId` at `:333`. All of that was
+>   replaced on 9 Sep by `c8f1b61`, which moved both calls onto `runAi` from `src/lib/ai`.
+>   A truncated reply is now **refused**, not salvaged, and the skipped row is **logged**.
+> - **§1 counts four ledgers**; the companion doc narrows it to three plus Daily Settlement,
+>   which consumes the bank flow's rows rather than being a ledger of its own.
+>
+> Findings are re-checked in §8.1 below. Two companion documents carry the step-by-step
+> detail this one summarises:
+>
+> - [`bank-statement-upload-flow.md`](./bank-statement-upload-flow.md) — the bank flow act by
+>   act, both AI prompts quoted, direct/indirect table impact, nine failure modes.
+> - [`brand-ledger-flow.md`](./brand-ledger-flow.md) — the brand ledger act by act, the
+>   reconciliation engine, the claim register, and what is still missing.
+>
+> The AI-specific findings in §8 are also tracked as **F1–F11** in
+> [`ai-usage-audit.md`](./ai-usage-audit.md), which is the authority on those.
+
 ---
 
 ## 0. The short answer
@@ -334,6 +358,39 @@ nothing to match against.
 ## 8. Findings
 
 **H** = blocks real work or loses data · **M** = correctness · **L** = hygiene
+
+### 8.1 Status as at 9 Sep 2026
+
+Every finding below re-checked against `6cbdf4b` (branch `docs/plan-requirements-rule`). Line references in the original
+finding text are from 31 Aug and have drifted; the corrected ones are here.
+
+| # | Status | Verified today |
+|---|---|---|
+| L1 | **OPEN** | `BrandStatement` still has zero writers in `src/`; the only reference is a `findFirst` at `api/ledger/vendors/[id]/route.ts:80` |
+| L2 | **OPEN** | `ledger/page.tsx:101` unchanged |
+| L3 | **OPEN** | now `review/route.ts:99` (was `:93`) — bulk still writes `billId: null` |
+| L4 | **OPEN** | `reconcile.ts` still unused by the bank flow |
+| L5 | **OPEN** | unchanged — see §0 of `brand-ledger-flow.md`, which narrows it to three |
+| L6 | **OPEN** | `BCH_BOOKS` still declared, still unused |
+| L7 | **FIXED** | the `fetch` action is gone from `rbac-catalog.ts:505`; `brand_ledger` is now `view, create, edit, delete` |
+| L8 | **OPEN** | now `ledger/page.tsx:50`, `ledger/[id]/page.tsx:94`+`:107`, `ledger/[id]/gaps/new/page.tsx:56`, `vendors/[id]/page.tsx:104` |
+| L9 | **OPEN** | `BankStatement` still has no `fileUrl` |
+
+**Fixed since, and not in the original list:** the *single* `confirm_payment` path now runs
+inside `prisma.$transaction` with a remaining-balance guard and a ₹0.01 epsilon
+(`review/route.ts:137-188`). Previously three bare statements that could drive `paidAmount`
+past `amount`. The bulk path (L3) did not get the same treatment.
+
+**Found since, and not in the original list:**
+
+| Ref | Severity | Finding |
+|---|---|---|
+| L10 | **H** | `LedgerGapEvidence` has **zero references in `src/`** — no upload, no read. `tier: FIRM` means "provable in writing", and there is no way to attach the writing. |
+| L11 | **M** | `LedgerGapNote` is read via `include` (`vendors/[id]/gaps/route.ts:20`) but **no route creates one** — the claim progress log cannot be written to. |
+| L12 | **M** | `VendorDiscountTerm` is read at `vendors/[id]/route.ts:115` but has no writer, so `expectedDiscount()` always computes against an empty term list. |
+| L13 | **M** | `api/pos/settlement/[id]/match/route.ts:55-59` sets a `BankTransaction` to `MATCHED` + `processedAt` **without creating a `VendorPayment`** — the row leaves the reconcile queue with nothing behind it. Two modules write the same status column. |
+| L14 | **M** | `api/vendors/[id]/ledger/route.ts` computes its running balance over a 50-bill + 50-payment cap (`:22-40`) but returns only the first 20 rows (`:105`), so a vendor with longer history gets a wrong starting balance for the visible window. |
+| L15 | **L** | No `createLogger` anywhere in `api/ledger/*` or `lib/brand-ledger/*`; every `catch` there returns without logging. |
 
 ### H — L1: The brand statement import does not exist
 

@@ -1,6 +1,6 @@
 # Vendor opening balance reaches the listing
 
-Status: in-progress — 8 Sep 2026, the list route select, the /vendors listing, and its fetch
+Status: completed — 9 Sep 2026, on `main` (`5dcbdb3`): `openingBalance` is in the list route’s `select` (`api/vendors/route.ts:35`) and renders on `/vendors` in both the table and the card, blank when zero. `outstandingBalance` is a different number and was left untouched, sorts included.
 Branch: **`chore/brand-stock-module-and-tooling`** — the owner decided on 8 Sep 2026 that this ships on the current branch, not on a branch of its own (see Clarifications).
 
 Opening balance shows on `/vendors/[id]` and is blank on `/vendors`. One field, missing from

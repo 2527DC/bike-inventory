@@ -30,8 +30,19 @@ where i need to implment the email thing where it has to send the email with the
 8. Assembly audit which is build line 
 
 
+
 # Implemnation needed 
 1. ask once syed like in the product edit u have a ststic text type where u  write teh  size do u need the size or do u want it as category  is size and category different
+
+PI.  Implment the po and the complete cycle of the aplication  
+PI.  Get to know the legdger flow
+PI.  Build line implemnetation :
+reuiremnt  -> the build line is ntg but the assamle audit 
+    Q1 -> is this module a dependent on any other module 
+      eg -> the dependent module operation   must be done before  getting into this module 
+    # operation steps 
+     1. when a assable audit  cration is done what thing is created i need screen what it must have and what is the flow 
+
 
 2. tell the scope of stock holding as of now the stocks are holded at the warehouse level not the store level
  if u need it in both the level then tell me this  how does the stock and from where do u want to reduce 
@@ -39,4 +50,24 @@ where i need to implment the email thing where it has to send the email with the
  - outbound
  -> stock transfer  
 
+ Aanswer -> in this we need the stock count for both the warehouse and shope level where  at the time of the inbound  it must effect respect to the selected warehouse  
+
+->  remove the warehosue from the siedbar which is the submodule for the stores  
+
  3. stock-audit/brand-count  where i need to list the store tooo 
+ 4. need to show the time stamp  the time to  insde the inbound details 
+ 5.  what are  vendor bills  hat action are done on the  vendor bills module 
+ 6. Expense : need to add the photo option in the expenses module 
+     Q - do the user must be able to add one or  more than one  photo per expences creation
+       -it should be like a calculator because those guys don't know that much. It should be like this:
+      1. They say 450 and press +.
+      2. It should ask which category.
+      3. They click X.
+      4. How did they pay?
+      5. Next, upload a photo.
+      6. Once they upload the photo, it is done.
+      UAX should be like this, like a calculator.
+
+--> we can make this like the user clicks on the expense module and  the date is autoseleted with current date and  it will be like first it will ask  for the amount and  category and after that  discription  , 
+should  the paid by be search and selectable  and final payment mode selction and attachments  and  submit
+where one expences  creation can have more than one expece creatiin at a time before submitting it like confermation we can have the  review 

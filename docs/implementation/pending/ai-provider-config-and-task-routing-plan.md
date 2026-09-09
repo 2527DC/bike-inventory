@@ -8,6 +8,27 @@ findings (F1–F11) and its own question log. This plan **depends on** that audi
 repeat it. Where the two overlap, the audit is the record of *what is wrong today*; this
 plan is the record of *how the configuration layer should be built*.
 
+> **Status note, 9 Sep 2026 — Phases 0–3 of this plan have been superseded.**
+> `implementation/completed/0809-ai-provider-settings-and-shared-client-plan.md` shipped
+> (`c8f1b61`): the `AiProvider` table and its migration, the model catalogue, `src/lib/ai/`
+> with three adapters behind one client, **all four call sites migrated**, and
+> `/api/settings/ai`. Which provider is live is data now, not an env var.
+>
+> **§4, §6 and §11 of this plan still describe the pre-`c8f1b61` world and need amending.**
+> In particular §11's table of call sites: `bank-statements/route.ts` no longer calls Anthropic
+> at `:117` and `:296` — it calls `runAi({ purpose: "bank.statement_parse" })` at `:126` and
+> `runAi({ purpose: "bank.vendor_resolve" })` at `:280`. The purposes this plan named are the
+> ones the shipped code uses, so the routing table's *keys* survived; the wiring beneath them
+> changed.
+>
+> **What remains in scope here:** per-task model routing from the database, the usage log, and
+> the spend comparison that motivated the plan (F9). That is the part `c8f1b61` did not build.
+
+**Second companion, added 9 Sep 2026:** `docs/bank-statement-upload-flow.md` — the two
+`bank-statements` call sites read end to end against the **post-`c8f1b61`** code, with both
+prompts quoted verbatim and the database writes they cause. Useful before amending §11,
+because §11 calls that file *"a checkpoint, not a routine edit"* and this is what it writes.
+
 ---
 
 ## 1. What this changes, in one paragraph

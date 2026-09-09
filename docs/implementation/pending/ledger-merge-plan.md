@@ -1,6 +1,6 @@
 # Merging `ledgers` into BCH Management
 
-Status: in-progress — schema, RBAC, backend and frontend shipped; PDF statement import and the 219-gap migration remain
+Status: in-progress — schema, RBAC, backend and frontend shipped; statement import (CSV/XLSX and PDF), evidence upload, claim notes, discount-term entry and the 219-gap migration all remain. Re-verified 9 Sep 2026; see "Re-verified" at the end of §11
 **Scope:** `F:\bharath  Cycle\ledgers` → this app. `bch-service` is out of scope (already merged).
 
 ---
@@ -603,3 +603,45 @@ the person decides.
 - **Vendor matching on upload** (D8 — GSTIN first, then name, always confirm).
 - **Monthly / Table / Share tabs** from the original app.
 - **Not click-tested.** Verified by build and typecheck only.
+
+### Re-verified 9 Sep 2026 (`main` @ `58bcfab`)
+
+Narrative walkthrough of everything below, with line references:
+[`docs/brand-ledger-flow.md`](../../brand-ledger-flow.md).
+
+**Confirmed still shipped and working:** schema (5 models, 8 enums), both RBAC modules, the
+pure engine in `src/lib/brand-ledger/reconcile.ts`, the read API, `/ledger` and `/ledger/[id]`,
+manual entry, human review of unmatched rows, and claim CRUD with the `approve`-to-close guard.
+
+**Three more read-only tables than "Not yet done" states.** Each is read by the detail route
+and has **no writer anywhere in `src/`** — so the feature that depends on it is inert, not
+merely unfinished:
+
+| Model | Read at | Consequence today |
+|---|---|---|
+| `BrandStatement` | `vendors/[id]/route.ts:80` | `claimedClosing` is always null, so the **tie-out check never runs** — `checkBalance` compares against `null` and reports `tiesOut: false` forever. The single most valuable check in the design is dormant. |
+| `LedgerGapEvidence` | *nowhere* — zero references in `src/` | `tier: FIRM` ("provable in writing") cannot be substantiated in the app |
+| `LedgerGapNote` | `vendors/[id]/gaps/route.ts:20` | the claim progress log renders but cannot be appended to |
+| `VendorDiscountTerm` | `vendors/[id]/route.ts:115` | `expectedDiscount()` always computes against an empty term list, so the discount audit this plan's §8 describes produces zero |
+
+**Also open, and not previously listed here:**
+
+- **The empty state promises the missing import.** `ledger/page.tsx:101` reads *"Import a
+  supplier statement from a vendor's page to start reconciling."* There is no such control.
+  Worth fixing regardless of when the import is built — it is a one-line change that stops the
+  module looking broken.
+- **`LedgerEntrySource.BCH_BOOKS` is declared and never used** (D7 chose live assembly instead
+  of mirroring). Either use it or delete it.
+- **CLAUDE.md violations in the shipped code:** no `createLogger` anywhere in `api/ledger/*` or
+  `lib/brand-ledger/*`; every `catch` returns without logging; and all four `/ledger` screens
+  use raw `fetch().then(r => r.json())` instead of `apiFetch` / `apiTry`
+  (`ledger/page.tsx:50`, `ledger/[id]/page.tsx:94` and `:107`,
+  `ledger/[id]/gaps/new/page.tsx:56`).
+
+**Ordering note for D6.** The bank flow already does AI extraction of a statement in production
+(`api/bank-statements/route.ts`), and its failure modes are catalogued as F1–F3 in
+[`docs/ai-usage-audit.md`](../../ai-usage-audit.md) — silent truncation at 50,000 characters,
+partial JSON salvaged and stored as complete. **Do not copy that shape.** The import this plan
+describes has an advantage the bank flow lacks: `claimedClosing` gives it a tie-out check, so a
+truncated extraction can be *detected* rather than silently accepted. Wire the check first, and
+let it block the import.

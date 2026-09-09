@@ -5,6 +5,35 @@
 it is worth it, and what to change.
 **Branch audited:** `refactor/zoho-endpoint-registry`
 
+> ## ⚠ Re-verified 9 Sep 2026 — four findings are CLOSED and §3's line numbers are stale
+>
+> `c8f1b61` (*"which AI provider is live becomes data, and one client answers for all of it"*,
+> plan `implementation/completed/0809-ai-provider-settings-and-shared-client-plan.md`)
+> **rewrote every call site in §3 onto `runAi` from `src/lib/ai`.** The inventory below still
+> describes the pre-`c8f1b61` code. Findings status as at `6cbdf4b`:
+>
+> | | Status | Where it stands |
+> |---|---|---|
+> | **F1** truncation at 50,000 chars | **OPEN** | `bank-statements/route.ts:109` — unchanged, and now the *only* silent data-loss path left |
+> | **F2** partial JSON stored as complete | **CLOSED** | `runAi` throws on `stopReason === "max_tokens"` (`lib/ai/index.ts:219`); the hand-rolled salvage is deleted |
+> | **F3** `pdf-parser.ts` 4096-token cap | **CHECK** — not re-verified in this pass |
+> | **F4** `res.json()` on a third-party response | **CLOSED** for `bank-statements`; the route no longer sees the HTTP response |
+> | **F5** browser `fetch` + `res.json()` | **OPEN** — `bank-upload/page.tsx:61`,`:87`; `reconcile/[id]/page.tsx:143`,`:154`,`:165`,`:182` |
+> | **F6** bare `catch {}` | **CLOSED** in `bank-statements` — every catch logs |
+> | **F7** no logger | **CLOSED** in `bank-statements` — debug/info/error/warn at every branch |
+> | **F8** no `maxDuration` | **CHECK** — not re-verified |
+> | **F9** no usage logging / spend visibility | **OPEN** — the remaining scope of `ai-provider-config-and-task-routing-plan.md` |
+> | **F10** JSON scraped from prose by regex | **CLOSED** for both bank calls — `runAi({ json: true })` parses |
+> | **F11** dead `@google/generative-ai` dependency | **CHECK** — `src/lib/ai/google.ts` now exists, so this may have become a real adapter |
+>
+> **Model IDs in §5 are no longer read from application code** for the migrated call sites —
+> provider and model come from the `AiProvider` table, and the model actually used is returned
+> on the result and logged.
+>
+> Narrative walkthrough of the bank path as it stands now, with current line numbers:
+> [`bank-statement-upload-flow.md`](./bank-statement-upload-flow.md).
+> **§3 and §6 below still need rewriting against `src/lib/ai`.**
+
 ---
 
 ## 1. Summary

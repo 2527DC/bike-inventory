@@ -1,6 +1,6 @@
 # Brand & Category: one creation path, and a Fetch from Zoho on their own screens
 
-Status: pending — written 8 Sep 2026.
+Status: completed — 9 Sep 2026, a brand or category is created by one path and nothing else: `brands.fetch` / `categories.fetch` in the catalog, the four `zoho-preview` / `zoho-import` routes, one shared `ZohoTaxonomySheet` mounted on `/more/brands` and `/categories`, and §6 closed every side-effect writer — the bill approve route resolves the vendor name against the brand list and files a miss under `Unbranded` in a new `notices` list instead of inventing a row, the second brand lookup is gone, categories resolve by `zohoCategoryId` then name, and a stock count matches a suggested brand or reports it. `api/brands/route.ts` keeps its plain CRUD create by §1 decision. Still owed: `npm run db:seed:rbac` wherever this deploys, and the §9 walk (steps 3–9).
 
 Supersedes the unbuilt parts of `0709-zoho-brand-category-sync-plan.md`. That plan's §3
 (`Brand.zohoBrandId`, `Category.zohoCategoryId`) is **already shipped** — migration
