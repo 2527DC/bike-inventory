@@ -1,6 +1,6 @@
 # Raise a purchase order from an uploaded document — AI extraction, a review step, and the end of /brand-stock
 
-**Status:** in-progress — 9 Sep 2026, P1–P4 building on branch feat/0909-stock-po-expense (four plans share it); P5 drop migration is a later release
+**Status:** completed — 9 Sep 2026, P1–P4 shipped in ee72cd5 and superseded the same day by 0909-po-sheet-ai-extraction (name-only lines, no product matching); P5 drop migration deliberately left for a later release
 **Branch:** **`feat/po-ai-upload`** — create it with exactly this name. **The base branch is
 not assumed:** the owner names it before anything is checked out (the current tip of this line
 of work is `feat/taxonomy-inactive-and-audit-approval`).

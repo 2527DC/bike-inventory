@@ -1,6 +1,6 @@
 # One expense module, entered a step at a time, several expenses to a single submit
 
-Status: in-progress — 9 Sep 2026, Parts B–E building on branch feat/0909-stock-po-expense (four plans share it; not off main)
+Status: completed — 9 Sep 2026, stepped entry with one atomic batch submit, payer stamped server-side, one receipt photo, delete removes the photo, Expenses back in the sidebar (commit 89d9025)
 Branch: **`feat/expense-multi-entry`** — create it with exactly this name, off `main`.
 
 Written 9 Sep 2026. Nothing built. Every claim in §2 was read off the code on disk that day

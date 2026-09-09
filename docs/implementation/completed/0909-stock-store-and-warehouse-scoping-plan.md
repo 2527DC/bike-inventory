@@ -1,6 +1,6 @@
 # Stock is held at two scopes — the shop floor becomes a location, the store becomes a total — and the two screens that show scope learn to say which
 
-Status: in-progress — 9 Sep 2026, Parts A, B, C building on branch feat/0909-stock-po-expense (four plans share it)
+Status: completed — 9 Sep 2026, Warehouse.kind with floor rows, floor-first outbound, By Store screen, store-scoped /stock filter (commit c2c6913; built and type-checked, browser walk and cloud migrate deploy owed by the owner)
 Branch: **`feat/stock-store-and-warehouse-scoping`** — create it with exactly this name. **The base branch is NOT decided in this file. Owner, 9 Sep 2026: *"i will let u know when i am creating it"* — so at implementation time, before any `git checkout -b`, Claude ASKS the owner which branch to base on and waits.** Do not default to `main` (it is behind), and do not assume `feat/taxonomy-inactive-and-audit-approval` either: on 9 Sep its tip and `docs/plan-requirements-rule`'s tip carried the same commit message with different hashes, so the two lines have diverged and only the owner knows which one this work continues.
 
 ---
