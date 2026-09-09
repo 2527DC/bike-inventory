@@ -47,7 +47,6 @@ export async function GET(req: NextRequest) {
               { name: { contains: q, mode: "insensitive" as const } },
               { sku: { contains: q, mode: "insensitive" as const } },
               { brand: { name: { contains: q, mode: "insensitive" as const } } },
-              { size: { contains: q, mode: "insensitive" as const } },
               { category: { name: { contains: q, mode: "insensitive" as const } } },
               { bin: { code: { contains: q, mode: "insensitive" as const } } },
             ],

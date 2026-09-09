@@ -6,6 +6,10 @@ import { ArrowLeft, Search, Package, Loader2, ChevronDown, Warehouse, Store } fr
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { DesktopTable } from "@/components/desktop-table";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("stock:by-location");
 
 
 interface LocProduct {
@@ -48,16 +52,22 @@ export default function StockByLocationDetailPage({ params }: { params: Promise<
   const kind = data?.level;
 
   useEffect(() => {
-    fetch(`/api/stock/by-location/${location}`)
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setData(res.data); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    (async () => {
+      const res = await apiTry<LocData>(`/api/stock/by-location/${location}`);
+      if (cancelled) return;
+      if (res.data) setData(res.data);
+      else log.error("location stock failed to load", { location, reason: res.error, status: res.status });
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
   }, [location]);
 
+  // The back arrow returns to the list the person came from: By Store for a store view,
+  // By Location for a warehouse view (plan 0909-stock-store-and-warehouse-scoping, B5).
   const goBack = () => {
     if (typeof window !== "undefined" && window.history.length > 1) router.back();
-    else router.push("/stock/by-bin");
+    else router.push(kind === "store" ? "/stock/by-store" : "/stock/by-bin");
   };
 
   // Brands present in this location, with per-brand unit totals (for the dropdown).

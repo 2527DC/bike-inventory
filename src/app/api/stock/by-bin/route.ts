@@ -35,7 +35,7 @@ export async function GET() {
           id: w.id,
           label: w.name,
           storeId: w.storeId,
-          // `site` and `kind` are READ by /stock/by-bin and were never sent. The screen
+          // `site` and `kind` are READ by /stock/by-bin and were once never sent. The screen
           // groups by `site`, so every row landed in one group keyed `undefined` — which is
           // React's "each child needs a unique key" warning — the site heading rendered
           // blank, and `kind` being undefined meant the Warehouse icon branch was never
@@ -43,11 +43,13 @@ export async function GET() {
           // page casts the JSON straight into its own interface.
           //
           // Site is the store code's prefix: "BCH_STORE" -> "BCH", which is what SITE_NAMES
-          // on that page is keyed on. `kind` is always "Warehouse" here because this branch
-          // is driven by the Warehouse table; the screen's Store branch is for a store-floor
-          // location that does not exist yet.
+          // on that page is keyed on. `kind` follows `Warehouse.kind` (plan
+          // 0909-stock-store-and-warehouse-scoping, D2): a FLOOR row is the shop, and the
+          // screen draws it with the Store icon; a GODOWN is storage and draws the Warehouse
+          // icon. The page's vocabulary ("Store" / "Warehouse") predates the column and is
+          // kept so the card needs no change.
           site: (w.store?.code ?? "").split("_")[0],
-          kind: "Warehouse" as const,
+          kind: w.kind === "FLOOR" ? ("Store" as const) : ("Warehouse" as const),
           totalStock: r?.total_stock ?? 0,
           totalValue: r?.total_value ?? 0,
           productCount: r?.product_count ?? 0,

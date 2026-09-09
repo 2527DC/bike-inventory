@@ -14,10 +14,46 @@ import { SkeletonList } from "@/components/ui/skeleton";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SearchableSelect, type SearchableSelectOption } from "@/components/ui/searchable-select";
 import { TransactionItem } from "@/components/transaction-item";
 import { usePermissions } from "@/lib/use-permissions";
 
 const log = createLogger("stock:detail");
+
+/**
+ * What GET /api/categories returns: a FLAT list of every row — roots AND children — each with
+ * its `children` nested and its `parent` named. It is not a tree; a child appears twice.
+ */
+interface RawCategory {
+  id: string;
+  name: string;
+  parent: { id: string; name: string } | null;
+  children?: Array<{ id: string; name: string; isActive?: boolean }>;
+}
+
+/**
+ * Flattened for the picker, parent as the hint so "Tyres" under two parents can be told apart.
+ * Only ROOT rows are walked — iterating every row would push each child twice, once as its own
+ * row and once under its parent (plan 0909-stock-screens-size-category-and-sidebar, Q10). A
+ * child whose parent is not in the list (the parent is inactive, the child is not) is kept, or
+ * it would vanish from the picker even though it is a valid destination.
+ */
+function flattenCategories(rows: RawCategory[]): SearchableSelectOption[] {
+  const rootIds = new Set(rows.filter((c) => c.parent === null).map((c) => c.id));
+  const flat: SearchableSelectOption[] = [];
+  for (const c of rows) {
+    if (c.parent === null) {
+      flat.push({ id: c.id, label: c.name });
+      for (const ch of c.children ?? []) {
+        if (ch.isActive === false) continue;
+        flat.push({ id: ch.id, label: ch.name, hint: c.name });
+      }
+    } else if (!rootIds.has(c.parent.id)) {
+      flat.push({ id: c.id, label: c.name, hint: c.parent.name });
+    }
+  }
+  return flat;
+}
 
 interface SerialItem {
   id: string;
@@ -54,7 +90,6 @@ interface ProductDetail {
   mrp: number;
   gstRate: number;
   hsnCode: string | null;
-  size: string | null;
   tags: string[];
   categoryId: string | null;
   category: { id: string; name: string } | null;
@@ -98,22 +133,27 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [editData, setEditData] = useState<Record<string, unknown>>({ name: "", color: "", size: "", sellingPrice: 0, mrp: 0, reorderLevel: 0, reorderQty: 0, reorderVendorId: "", brandId: "", binId: "" });
+  const [editData, setEditData] = useState<Record<string, unknown>>({ name: "", color: "", categoryId: "", sellingPrice: 0, mrp: 0, reorderLevel: 0, reorderQty: 0, reorderVendorId: "", brandId: "", binId: "" });
   const [vendors, setVendors] = useState<Array<{ id: string; name: string; code: string }>>([]);
   const [brands, setBrands] = useState<{ id: string; name: string }[]>([]);
+  const [categories, setCategories] = useState<SearchableSelectOption[]>([]);
   const [bins, setBins] = useState<{ id: string; code: string; name: string; location: string }[]>([]);
 
   useEffect(() => {
-    // GET /api/brands answers active brands only by default — a retired brand is not a
-    // destination. The product's own brand is appended below if it is no longer listed.
+    // GET /api/brands and GET /api/categories both answer active rows only by default — a
+    // retired row is not a destination. The product's own brand / category is appended below
+    // if it is no longer listed.
     void Promise.all([
       apiTry<{ id: string; name: string }[]>("/api/brands"),
+      apiTry<RawCategory[]>("/api/categories"),
       BIN_TRACKING_ENABLED
         ? apiTry<{ id: string; code: string; name: string; location: string }[]>("/api/bins")
         : Promise.resolve({ data: null, error: null }),
-    ]).then(([bRes, binRes]) => {
+    ]).then(([bRes, cRes, binRes]) => {
       if (bRes.data) setBrands(bRes.data);
       else if (bRes.error) log.error("could not load brands", { productId: id, message: bRes.error });
+      if (cRes.data) setCategories(flattenCategories(cRes.data));
+      else if (cRes.error) log.error("could not load categories", { productId: id, message: cRes.error });
       if (binRes.data) setBins(binRes.data);
       else if (binRes.error) log.error("could not load bins", { productId: id, message: binRes.error });
     });
@@ -164,11 +204,20 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
       ? [...brands, { id: currentBrand.id, name: `${currentBrand.name} (inactive)` }]
       : brands;
 
+  // Same rule for the category: the picker lists active rows, and a product already filed
+  // under an inactive one must still see it, or the control renders blank. Saving with the
+  // inactive id still in place succeeds — PUT refuses a category only on CHANGE (D2 / Q9).
+  const currentCategory = product.category;
+  const categoryOptions =
+    currentCategory && !categories.some((c) => c.id === currentCategory.id)
+      ? [...categories, { id: currentCategory.id, label: `${currentCategory.name} (inactive)` }]
+      : categories;
+
   function startEdit() {
     setEditData({
       name: product!.name,
       color: (product as unknown as Record<string, string>).color || "",
-      size: product!.size || "",
+      categoryId: product!.categoryId || "",
       sellingPrice: product!.sellingPrice,
       mrp: product!.mrp,
       reorderLevel: product!.reorderLevel,
@@ -296,8 +345,17 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
                 )}
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-[11px] text-slate-500">Size</label>
-                    <Input value={editData.size as string} onChange={(e) => setEditData({ ...editData, size: e.target.value })} placeholder='e.g. 26"' />
+                    <label className="text-[11px] text-slate-500">Category</label>
+                    {/* Category took over what Size used to say — 20 of the 32 categories ARE
+                        wheel sizes, and `Product.size` was never written. The dropdown is
+                        unportalled; `Card` sets no overflow, so nothing clips it. */}
+                    <SearchableSelect
+                      options={categoryOptions}
+                      value={(editData.categoryId as string) || null}
+                      onChange={(cid) => setEditData({ ...editData, categoryId: cid ?? "" })}
+                      placeholder="Search categories"
+                      emptyText="No category matches"
+                    />
                   </div>
                   <div>
                     <label className="text-[11px] text-slate-500">Color</label>
@@ -356,14 +414,17 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
       )}
 
       {/* Identity badges */}
-      {/* Size shows whenever there IS one. It used to be gated on `type === "BICYCLE"`, a
-          name comparison that broke the moment someone renamed the type or added "E-Bike" —
-          the same class of bug CLAUDE.md bans for roles. A product either has a size or it
-          does not, and nullability already says which. */}
-      {(product.brand || product.size || product.condition !== "NEW") && (
-        <div className="flex flex-wrap gap-2 mb-3">
+      {/* Brand, then category in the same violet chip /stock uses for it, so the list and the
+          detail agree on what a category looks like. The size badge that used to sit here is
+          gone with `Product.size` (plan 0909-stock-screens-size-category-and-sidebar, D1). */}
+      {(product.brand || product.category || product.condition !== "NEW") && (
+        <div className="flex flex-wrap items-center gap-2 mb-3">
           {product.brand && <Badge variant="default" className="font-semibold">{product.brand.name}</Badge>}
-          {product.size && <Badge variant="default">{product.size}</Badge>}
+          {product.category && (
+            <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-[11px] font-medium text-violet-700">
+              {product.category.name}
+            </span>
+          )}
           {product.condition !== "NEW" && <Badge variant="warning">{product.condition.replace("_", " ")}</Badge>}
         </div>
       )}

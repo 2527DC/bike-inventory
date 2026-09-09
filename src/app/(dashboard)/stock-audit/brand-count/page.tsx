@@ -10,13 +10,25 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
-import { useWarehouses } from "@/hooks/use-sites";
+import { useStores } from "@/hooks/use-sites";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("stock-audit:brand-count");
 
 interface Brand { id: string; name: string; _count: { products: number } }
+// One row per warehouse, flattened out of `useStores()` so the lookups below can resolve a
+// warehouse id back to its store. `kind` is optional on purpose: `Warehouse.kind` arrives with
+// plan 0909-stock-store-and-warehouse-scoping; until it is on the wire the Floor/Godown tag
+// simply does not render (plan 0909-stock-screens-size-category-and-sidebar, Part E).
+interface WarehouseRow {
+  id: string; code: string; name: string; sortOrder: number;
+  kind?: "FLOOR" | "GODOWN";
+  storeId: string; storeName: string;
+}
 interface BinOption { id: string; code: string; name: string; location: string }
 interface CategoryOption { id: string; name: string }
 interface ProductItem {
-  id: string; sku: string; name: string; size: string | null;
+  id: string; sku: string; name: string;
   currentStock: number; reorderLevel: number; reorderQty: number;
   category: { name: string } | null; brand: { name: string } | null;
 }
@@ -38,10 +50,23 @@ function clearBrandCountDraft() {
 }
 
 export default function BrandCountPage() {
-  const { warehouses } = useWarehouses();
+  const { stores, loading: storesLoading } = useStores();
+  // Store first, then that store's warehouses (Part E). The flat list is only for lookups —
+  // the picker itself is grouped, so nobody has to know which building belongs to which shop.
+  const warehouses: WarehouseRow[] = stores.flatMap((s) =>
+    (s.warehouses as Array<Omit<WarehouseRow, "storeId" | "storeName">>).map((w) => ({
+      ...w, storeId: s.id, storeName: s.name,
+    }))
+  );
   const selectedWarehouseFor = (id: string | null | undefined) => warehouses.find((w) => w.id === id) ?? null;
   const locationName = (id: string | null | undefined) =>
     warehouses.find((w) => w.id === id)?.name ?? "—";
+  // "<warehouse> · <store>" — what the header, sticky bar and success copy print, because a
+  // warehouse name alone ("Godown") does not say which shop's godown was counted.
+  const locationLabel = (id: string | null | undefined) => {
+    const w = warehouses.find((x) => x.id === id);
+    return w ? `${w.name} · ${w.storeName}` : "—";
+  };
   const { data: session } = useSession();
   const userName = (session?.user as { name?: string })?.name || "You";
 
@@ -51,6 +76,7 @@ export default function BrandCountPage() {
   const [categories, setCategories] = useState<CategoryOption[]>([]);
   const [selectedBrand, setSelectedBrand] = useState<Brand | null>(null);
   const [selectedBin, setSelectedBin] = useState<BinOption | null>(null);
+  const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
   const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
   const [products, setProducts] = useState<ProductItem[]>([]);
   const [counts, setCounts] = useState<Record<string, { qty: number | null; reorder: number | null }>>({});
@@ -81,6 +107,7 @@ export default function BrandCountPage() {
         step?: Step;
         selectedBrand?: Brand | null;
         selectedBin?: BinOption | null;
+        selectedStoreId?: string | null;
         selectedLocation?: string | null;
         products?: ProductItem[];
         counts?: Record<string, { qty: number | null; reorder: number | null }>;
@@ -88,6 +115,7 @@ export default function BrandCountPage() {
       if (d.step && d.step !== "submitted" && d.selectedBrand) {
         setSelectedBrand(d.selectedBrand);
         if (d.selectedBin) setSelectedBin(d.selectedBin);
+        if (d.selectedStoreId) setSelectedStoreId(d.selectedStoreId);
         if (d.selectedLocation) setSelectedLocation(d.selectedLocation);
         if (Array.isArray(d.products) && d.products.length) setProducts(d.products);
         if (d.counts) setCounts(d.counts);
@@ -102,9 +130,9 @@ export default function BrandCountPage() {
     if (step === "submitted") return;
     if (step === "brand" && !selectedBrand) return;
     try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify({ step, selectedBrand, selectedBin, selectedLocation, products, counts }));
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ step, selectedBrand, selectedBin, selectedStoreId, selectedLocation, products, counts }));
     } catch { /* ignore */ }
-  }, [step, selectedBrand, selectedBin, selectedLocation, products, counts]);
+  }, [step, selectedBrand, selectedBin, selectedStoreId, selectedLocation, products, counts]);
 
   useEffect(() => {
     Promise.all([
@@ -168,6 +196,15 @@ export default function BrandCountPage() {
     setStep("count");
   };
 
+  const handleSelectStore = (storeId: string) => {
+    setSelectedStoreId(storeId);
+    // A warehouse picked under another store must not survive the switch — the server would
+    // refuse the pair (api/stock-counts/route.ts) and the person would not know why.
+    if (selectedLocation && selectedWarehouseFor(selectedLocation)?.storeId !== storeId) {
+      setSelectedLocation(null);
+    }
+  };
+
   const handleSelectLocation = (loc: string) => {
     setSelectedLocation(loc);
     setStep("count");
@@ -218,7 +255,7 @@ export default function BrandCountPage() {
     if (!alreadyInList) {
       const newProduct: ProductItem = {
         id: result.id, sku: result.sku, name: result.name,
-        size: null, currentStock: result.currentStock, reorderLevel: result.reorderLevel,
+        currentStock: result.currentStock, reorderLevel: result.reorderLevel,
         reorderQty: 0, category: result.category, brand: result.brand,
       };
       setProducts((prev) => [...prev, newProduct]);
@@ -242,9 +279,12 @@ export default function BrandCountPage() {
   const handleSubmit = async () => {
     if (!selectedBrand) return;
     if (BIN_TRACKING_ENABLED && !selectedBin) return;
-    if (!BIN_TRACKING_ENABLED && !selectedLocation) { setError("Select a location first"); return; }
+    if (!BIN_TRACKING_ENABLED && (!selectedStoreId || !selectedLocation)) { setError("Select a store and location first"); return; }
     const selectedWarehouse = selectedWarehouseFor(selectedLocation);
     if (!BIN_TRACKING_ENABLED && !selectedWarehouse) { setError("That warehouse is no longer available — pick another"); return; }
+    if (!BIN_TRACKING_ENABLED && selectedWarehouse && selectedWarehouse.storeId !== selectedStoreId) {
+      setError("That warehouse belongs to a different store — pick the location again"); return;
+    }
     const counted = Object.entries(counts).filter(([, c]) => c.qty !== null);
     if (counted.length === 0) { setError("Count at least one item"); return; }
 
@@ -263,13 +303,14 @@ export default function BrandCountPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title,
-          // Scope as store + warehouse (R2). `selectedLocation` is already a warehouse ID
-          // and `useWarehouses()` returns `storeId` on each row, so the store comes from the
-          // warehouse rather than being asked for a second time. A brand count is always
-          // warehouse-scoped, which is also what makes it correctable.
+          // Scope as store + warehouse. The store is chosen first and the warehouse comes
+          // from that store's own list, so both ids are the person's explicit picks. A brand
+          // count is always warehouse-scoped — there is no whole-store option (D12) — which
+          // is what makes it correctable. The server refuses a warehouse that is not the
+          // store's (api/stock-counts/route.ts).
           ...(BIN_TRACKING_ENABLED && selectedBin
             ? { binId: selectedBin.id, storeId: selectedWarehouse?.storeId }
-            : { storeId: selectedWarehouse?.storeId, warehouseId: selectedLocation }),
+            : { storeId: selectedStoreId, warehouseId: selectedLocation }),
           productIds: products.map((p) => p.id),
           assignedToId: userId,
           selfCount: true,
@@ -277,7 +318,18 @@ export default function BrandCountPage() {
         }),
       });
       const createJson = await res.json();
-      if (!res.ok || !createJson.success) { setError(createJson.error || "Failed to create count"); return; }
+      if (!res.ok || !createJson.success) {
+        log.error("create failed", {
+          status: res.status,
+          brandId: selectedBrand.id,
+          storeId: selectedStoreId,
+          warehouseId: selectedLocation,
+          binId: selectedBin?.id ?? null,
+          error: createJson.error,
+        });
+        setError(createJson.error || "Failed to create count");
+        return;
+      }
 
       const countId = createJson.data.id;
 
@@ -339,6 +391,12 @@ export default function BrandCountPage() {
       setResultId(countId);
       setStep("submitted");
     } catch (e) {
+      log.error("submit failed", {
+        message: e instanceof Error ? e.message : String(e),
+        brandId: selectedBrand.id,
+        storeId: selectedStoreId,
+        warehouseId: selectedLocation,
+      });
       setError(e instanceof Error ? e.message : "Submit failed");
     } finally {
       setSubmitting(false);
@@ -385,7 +443,7 @@ export default function BrandCountPage() {
               : `Step 2: ${selectedBrand?.name} — Select location`)}
             {step === "count" && (BIN_TRACKING_ENABLED
               ? `Step 3: Count ${selectedBrand?.name} items in ${selectedBin?.name}`
-              : `Step 3: Count ${selectedBrand?.name} at ${locationName(selectedLocation)}`)}
+              : `Step 3: Count ${selectedBrand?.name} at ${locationLabel(selectedLocation)}`)}
             {step === "submitted" && "Done! Waiting for approval"}
           </p>
         </div>
@@ -404,7 +462,7 @@ export default function BrandCountPage() {
           <button
             onClick={() => {
               clearBrandCountDraft();
-              setStep("brand"); setSelectedBrand(null); setSelectedBin(null); setSelectedLocation(null);
+              setStep("brand"); setSelectedBrand(null); setSelectedBin(null); setSelectedStoreId(null); setSelectedLocation(null);
               setProducts([]); setCounts({}); setSearch(""); setDraftRestored(false);
             }}
             className="underline shrink-0"
@@ -459,27 +517,76 @@ export default function BrandCountPage() {
         </div>
       )}
 
-      {/* ── STEP 2: Select Location (bins dormant) ── */}
-      {step === "bin" && !BIN_TRACKING_ENABLED && (
-        <div className="space-y-2">
-          <p className="text-xs text-slate-600 mb-2">Which location are you counting {selectedBrand?.name} at?</p>
-          {warehouses.map((loc) => (
-            <button key={loc.id} onClick={() => handleSelectLocation(loc.id)}
-              className="w-full flex items-center justify-between p-3 bg-white border border-slate-200 rounded-lg hover:border-blue-400 transition-colors text-left">
-              <div className="flex items-center gap-2">
-                <MapPin className={`h-4 w-4 ${"text-amber-500"}`} />
-                <div>
-                  <p className="text-sm font-medium text-slate-900">{loc.name}</p>
-                  <p className="text-[10px] text-slate-500">{loc.store.name}</p>
-                </div>
+      {/* ── STEP 2: Select Location (bins dormant) — store first, then that store's warehouses.
+          Replaces a flat list of every warehouse in the business. No "Whole store" button: a
+          brand count corrects stock, and correction is per warehouse (D12). ── */}
+      {step === "bin" && !BIN_TRACKING_ENABLED && (() => {
+        const selectedStore = stores.find((s) => s.id === selectedStoreId) ?? null;
+        const storeWarehouses = warehouses.filter((w) => w.storeId === selectedStoreId);
+        return (
+          <div className="space-y-3">
+            <div>
+              <p className="text-xs text-slate-600 mb-2">Which store are you counting {selectedBrand?.name} at?</p>
+              <div className="grid grid-cols-2 gap-2">
+                {stores.map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => handleSelectStore(s.id)}
+                    className={`min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
+                      selectedStoreId === s.id ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    {s.name}
+                  </button>
+                ))}
               </div>
-              <ChevronRight className="h-4 w-4 text-slate-400" />
-            </button>
-          ))}
-          <button onClick={() => { setStep("brand"); setSelectedBrand(null); }}
-            className="text-xs text-blue-600 mt-2 underline">← Change brand</button>
-        </div>
-      )}
+              {storesLoading && stores.length === 0 && (
+                <div className="flex items-center justify-center py-4">
+                  <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
+                </div>
+              )}
+              {!storesLoading && stores.length === 0 && (
+                <p className="text-xs text-slate-400 text-center py-4">No stores available</p>
+              )}
+            </div>
+
+            {selectedStore && (
+              <div className="space-y-2">
+                <p className="text-xs text-slate-600">Which location in {selectedStore.name}?</p>
+                {storeWarehouses.map((loc) => (
+                  <button key={loc.id} onClick={() => handleSelectLocation(loc.id)}
+                    className="w-full flex items-center justify-between p-3 bg-white border border-slate-200 rounded-lg hover:border-blue-400 transition-colors text-left">
+                    <div className="flex items-center gap-2">
+                      <MapPin className="h-4 w-4 text-amber-500" />
+                      <div>
+                        <p className="text-sm font-medium text-slate-900 flex items-center gap-1.5">
+                          <span>{loc.name}</span>
+                          {/* Floor / Godown tag — only once `Warehouse.kind` is on the wire. */}
+                          {loc.kind && (
+                            <Badge className="text-[9px] px-1 py-0 bg-slate-100 text-slate-600 font-normal">
+                              {loc.kind === "FLOOR" ? "Floor" : "Godown"}
+                            </Badge>
+                          )}
+                        </p>
+                        <p className="text-[10px] text-slate-500 font-mono">{loc.code}</p>
+                      </div>
+                    </div>
+                    <ChevronRight className="h-4 w-4 text-slate-400" />
+                  </button>
+                ))}
+                {storeWarehouses.length === 0 && (
+                  <p className="text-[11px] text-slate-500">
+                    {selectedStore.name} has no active warehouses — a brand count needs one, so pick another store.
+                  </p>
+                )}
+              </div>
+            )}
+
+            <button onClick={() => { setStep("brand"); setSelectedBrand(null); }}
+              className="text-xs text-blue-600 mt-2 underline">← Change brand</button>
+          </div>
+        );
+      })()}
 
       {/* ── STEP 2: Select Bin ── */}
       {step === "bin" && BIN_TRACKING_ENABLED && (
@@ -585,9 +692,6 @@ export default function BrandCountPage() {
                                     <p className="text-xs font-medium text-slate-900 leading-tight">{p.name}</p>
                                     <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                                       <span className="text-[10px] text-slate-400 font-mono">{p.sku}</span>
-                                      {p.size && (
-                                        <Badge className="text-[9px] px-1 py-0 bg-slate-100 text-slate-600">{p.size}</Badge>
-                                      )}
                                     </div>
 
                                     {/* Brand & Category change chips */}
@@ -783,7 +887,7 @@ export default function BrandCountPage() {
           <div>
             <p className="text-lg font-bold text-green-900">Count Submitted!</p>
             <p className="text-sm text-slate-600 mt-1">
-              {countedCount} items counted for {selectedBrand?.name}{BIN_TRACKING_ENABLED && selectedBin ? ` in ${selectedBin.name}` : selectedLocation ? ` at ${locationName(selectedLocation)}` : ""}
+              {countedCount} items counted for {selectedBrand?.name}{BIN_TRACKING_ENABLED && selectedBin ? ` in ${selectedBin.name}` : selectedLocation ? ` at ${locationLabel(selectedLocation)}` : ""}
             </p>
             <p className="text-xs text-slate-500 mt-2">
               This is a verification count — it records the numbers and any variance, but does not change stock. Stock is added through Inwards.
@@ -797,7 +901,7 @@ export default function BrandCountPage() {
             <button
               onClick={() => {
                 clearBrandCountDraft();
-                setStep("brand"); setSelectedBrand(null); setSelectedBin(null); setSelectedLocation(null);
+                setStep("brand"); setSelectedBrand(null); setSelectedBin(null); setSelectedStoreId(null); setSelectedLocation(null);
                 setProducts([]); setCounts({}); setSearch(""); setResultId("");
                 setNotInListSearch(""); setNotInListResults([]); setDraftRestored(false);
               }}
@@ -815,7 +919,7 @@ export default function BrandCountPage() {
             <div>
               <p className="text-xs text-slate-600"><strong>{countedCount}</strong> of {totalProducts} counted</p>
               <p className="text-[10px] text-slate-400">
-                by {userName} · {selectedBrand?.name}{BIN_TRACKING_ENABLED && selectedBin ? ` · ${selectedBin.code}` : selectedLocation ? ` · ${locationName(selectedLocation)}` : ""}
+                by {userName} · {selectedBrand?.name}{BIN_TRACKING_ENABLED && selectedBin ? ` · ${selectedBin.code}` : selectedLocation ? ` · ${locationLabel(selectedLocation)}` : ""}
               </p>
             </div>
             <button onClick={handleSubmit} disabled={submitting}

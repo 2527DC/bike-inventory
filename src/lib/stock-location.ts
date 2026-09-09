@@ -11,6 +11,9 @@
 // correct, so every caller changed with them.
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("stock:location");
 
 type Tx = Prisma.TransactionClient;
 type DbClient = Tx | typeof prisma;
@@ -64,8 +67,10 @@ export async function adjustWarehouseQty(tx: Tx, productId: string, warehouseId:
  * A delivery names a store and nothing else — no screen and no request body mentions a
  * warehouse (owner, 4 Sep: deduction is store-scoped). But stock only exists in StockLevel
  * rows, which are per warehouse. So the store is the interface and its warehouses are the
- * implementation: this walks them in `sortOrder` and cascades to the next when one cannot
- * cover the line.
+ * implementation: this walks them FLOOR first, then GODOWN, each group in `sortOrder`, and
+ * cascades to the next when one cannot cover the line. A sale leaves the shop before it
+ * reaches into storage; when it does reach storage that is logged at warn so a silent
+ * reach-through becomes a visible one (plan 0909-stock-store-and-warehouse-scoping, D4).
  *
  * ─── THE SHORTFALL CHECK IS NOT OPTIONAL ──────────────────────────────────────────────────
  *
@@ -73,9 +78,9 @@ export async function adjustWarehouseQty(tx: Tx, productId: string, warehouseId:
  * writes 0 and reports success — which would lose the sale exactly as the original bug did,
  * in a new costume. Summing the store first and refusing up front is what prevents that.
  *
- * Today every store has one warehouse, so this resolves to a single write. The cascade
- * exists because /stores already allows a second one, and a silent partial deduction must
- * not be the way we find that out.
+ * Every store has a floor and a godown now, so the cascade is the normal case rather than a
+ * safeguard. The shortfall check still runs on the STORE total, as before: a floor that is
+ * short does not refuse a sale at the counter while the godown holds the unit.
  *
  * Throws a readable Error naming the product and the shortfall. Call it inside the caller's
  * transaction so a refusal rolls the whole delivery back rather than leaving half a sale.
@@ -91,11 +96,11 @@ export async function deductFromStore(
 ): Promise<number> {
   if (qty <= 0) return recomputeCurrentStock(tx, productId);
 
-  // Active only, in picker order. An inactive warehouse is one nobody is putting stock into
-  // or taking it out of, so draining it as a side effect of a sale would be a surprise.
+  // Active only. An inactive warehouse is one nobody is putting stock into or taking it out
+  // of, so draining it as a side effect of a sale would be a surprise.
   const warehouses = await tx.warehouse.findMany({
     where: { storeId, isActive: true },
-    select: { id: true },
+    select: { id: true, kind: true, name: true, sortOrder: true },
     orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
   });
 
@@ -105,14 +110,37 @@ export async function deductFromStore(
     );
   }
 
-  return deductAcrossWarehouses(
+  // Drain order: every FLOOR first, then every GODOWN, each group in picker order (D4).
+  // Ordered IN CODE rather than with `orderBy: { kind }`, because Postgres sorts an enum by
+  // its declaration order — a fact a reader should not have to know to trust this function.
+  // The query above already sorts by sortOrder then name, and a stable sort keeps that
+  // within each group.
+  const rank = (kind: string) => (kind === "FLOOR" ? 0 : 1);
+  const ordered = [...warehouses].sort((a, b) => rank(a.kind) - rank(b.kind));
+  const kindOf = new Map(ordered.map((w) => [w.id, w.kind]));
+
+  const { total, taken } = await deductAcrossWarehouses(
     tx,
     productId,
-    warehouses.map((w) => w.id),
+    ordered.map((w) => w.id),
     qty,
     productLabel,
     "at this store"
   );
+
+  // A sale that reached into storage is a sale the floor could not cover. Not an error —
+  // the store had the units — but the person restocking the shop needs to hear about it.
+  let fromFloor = 0;
+  let fromGodown = 0;
+  for (const t of taken) {
+    if (kindOf.get(t.warehouseId) === "FLOOR") fromFloor += t.qty;
+    else fromGodown += t.qty;
+  }
+  if (fromGodown > 0) {
+    log.warn("outbound reached the godown", { productId, storeId, fromFloor, fromGodown });
+  }
+
+  return total;
 }
 
 /**
@@ -145,7 +173,7 @@ export async function deductAnywhere(
     orderBy: { quantity: "desc" },
   });
 
-  return deductAcrossWarehouses(
+  const { total } = await deductAcrossWarehouses(
     tx,
     productId,
     levels.map((l) => l.warehouseId),
@@ -153,6 +181,7 @@ export async function deductAnywhere(
     productLabel,
     "in any warehouse"
   );
+  return total;
 }
 
 /**
@@ -202,6 +231,10 @@ export async function addAnywhere(
  * deducting 3 from a warehouse holding 0 writes 0 and reports success — a silent short
  * deduction, which is the original bug wearing a different hat. Summing first and refusing
  * before any write is what makes that impossible.
+ *
+ * @returns the product's new cached total, plus what was taken from where — so
+ *   `deductFromStore` can tell a floor-only drain from one that reached the godown. Private:
+ *   the two exported wrappers still return the bare total their callers expect.
  */
 async function deductAcrossWarehouses(
   tx: Tx,
@@ -210,7 +243,7 @@ async function deductAcrossWarehouses(
   qty: number,
   productLabel: string | undefined,
   scopeLabel: string
-): Promise<number> {
+): Promise<{ total: number; taken: Array<{ warehouseId: string; qty: number }> }> {
   const label = productLabel ?? productId;
 
   const levels = await tx.stockLevel.findMany({
@@ -227,12 +260,14 @@ async function deductAcrossWarehouses(
   }
 
   let remaining = qty;
+  const taken: Array<{ warehouseId: string; qty: number }> = [];
   for (const warehouseId of warehouseIds) {
     if (remaining <= 0) break;
     const inThis = held.get(warehouseId) ?? 0;
     if (inThis <= 0) continue;
     const take = Math.min(inThis, remaining);
     await adjustWarehouseQty(tx, productId, warehouseId, -take);
+    taken.push({ warehouseId, qty: take });
     remaining -= take;
   }
 
@@ -240,12 +275,14 @@ async function deductAcrossWarehouses(
   // caller's transaction so nothing else can drain it in between. Kept as a loud failure
   // rather than a silent short deduction if that reasoning is ever wrong.
   if (remaining > 0) {
+    log.error("deduction left units unallocated", { productId, scopeLabel, qty, remaining });
     throw new Error(
       `Could not fully deduct ${label}: ${remaining} of ${qty} left unallocated ${scopeLabel}.`
     );
   }
 
-  return recomputeCurrentStock(tx, productId);
+  const total = await recomputeCurrentStock(tx, productId);
+  return { total, taken };
 }
 
 // Set a warehouse's quantity to an absolute value (clamped >= 0), then recompute

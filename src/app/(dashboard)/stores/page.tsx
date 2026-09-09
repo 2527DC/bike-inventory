@@ -14,13 +14,18 @@ import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { usePermissions } from "@/lib/use-permissions";
 import { apiFetch, apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
+import type { WarehouseKind } from "@/hooks/use-sites";
 
 const log = createLogger("stores");
+
+/** What each kind is called on screen. FLOOR is the shop, GODOWN is storage (D2). */
+const KIND_LABEL: Record<WarehouseKind, string> = { FLOOR: "Floor", GODOWN: "Godown" };
 
 interface WarehouseRow {
   id: string;
   code: string;
   name: string;
+  kind: WarehouseKind;
   sortOrder: number;
 }
 
@@ -44,9 +49,12 @@ interface DeleteOutcome {
   message: string;
 }
 
+// `kind` here is the union tag of the draft ("store" | "warehouse") and predates the column
+// of the same name on Warehouse. The column is carried as `warehouseKind` in this state so
+// the two never collide; the API field is still `kind`.
 type Draft =
   | { kind: "store"; id: string | null; code: string; name: string; address: string; phone: string; invoicePrefix: string; gstin: string; stateCode: string }
-  | { kind: "warehouse"; id: string | null; storeId: string; code: string; name: string };
+  | { kind: "warehouse"; id: string | null; storeId: string; code: string; name: string; warehouseKind: WarehouseKind };
 
 export default function StoresPage() {
   const { canCreate, canEdit, canDelete } = usePermissions();
@@ -105,7 +113,7 @@ export default function StoresPage() {
         if (draft.id) await apiFetch(`/api/stores/${draft.id}`, { method: "PUT", json: body });
         else await apiFetch("/api/stores", { method: "POST", json: body });
       } else {
-        const body = { storeId: draft.storeId, code: draft.code, name: draft.name };
+        const body = { storeId: draft.storeId, code: draft.code, name: draft.name, kind: draft.warehouseKind };
         if (draft.id) await apiFetch(`/api/warehouses/${draft.id}`, { method: "PUT", json: body });
         else await apiFetch("/api/warehouses", { method: "POST", json: body });
       }
@@ -191,6 +199,29 @@ export default function StoresPage() {
                 onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                 className={inputCls}
               />
+              {draft.kind === "warehouse" && (
+                // Floor = the shop, where a customer sees the bike; Godown = storage. Outbound
+                // drains floors first and inbound lands in a godown by default, so the choice
+                // is behavioural, not a label (plan 0909-stock-store-and-warehouse-scoping).
+                <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Kind of location">
+                  {(["FLOOR", "GODOWN"] as WarehouseKind[]).map((k) => (
+                    <button
+                      key={k}
+                      type="button"
+                      role="radio"
+                      aria-checked={draft.warehouseKind === k}
+                      onClick={() => setDraft({ ...draft, warehouseKind: k })}
+                      className={`${inputCls} rounded-lg text-sm font-semibold border transition-colors focus-ring ${
+                        draft.warehouseKind === k
+                          ? "bg-blue-600 text-white border-blue-600"
+                          : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                      }`}
+                    >
+                      {KIND_LABEL[k]}
+                    </button>
+                  ))}
+                </div>
+              )}
               {draft.kind === "store" && (
                 <>
                   <Input
@@ -354,12 +385,15 @@ export default function StoresPage() {
                         <div key={w.id} className="flex items-center gap-2">
                           <Warehouse className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                           <span className="text-sm text-slate-800">{w.name}</span>
+                          <Badge variant={w.kind === "FLOOR" ? "info" : "default"} className="text-[10px]">
+                            {KIND_LABEL[w.kind]}
+                          </Badge>
                           <Badge variant="default" className="font-mono text-[10px]">{w.code}</Badge>
                           <div className="flex gap-1 ml-auto">
                             {canEdit("warehouses") && (
                               <IconBtn
                                 label={`Edit ${w.name}`}
-                                onClick={() => setDraft({ kind: "warehouse", id: w.id, storeId: s.id, code: w.code, name: w.name })}
+                                onClick={() => setDraft({ kind: "warehouse", id: w.id, storeId: s.id, code: w.code, name: w.name, warehouseKind: w.kind })}
                               >
                                 <Pencil className="h-3 w-3" />
                               </IconBtn>
@@ -375,7 +409,7 @@ export default function StoresPage() {
                       {canCreate("warehouses") && (
                         <button
                           type="button"
-                          onClick={() => setDraft({ kind: "warehouse", id: null, storeId: s.id, code: "", name: "" })}
+                          onClick={() => setDraft({ kind: "warehouse", id: null, storeId: s.id, code: "", name: "", warehouseKind: "GODOWN" })}
                           className="inline-flex items-center gap-1 text-[11px] text-blue-600 hover:text-blue-700 focus-ring rounded px-1 py-1"
                         >
                           <Plus className="h-3 w-3" />Add warehouse

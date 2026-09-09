@@ -12,17 +12,21 @@
 // enum strings ("BCH_WAREHOUSE", "BCH_STORE", ...) — the Phase 4 backfill becomes a plain
 // lookup by the value already sitting in the column, rather than a mapping table.
 //
-// The shape below is the STARTING shape, not the permanent one. Two sites, one warehouse
-// each. Adding a second warehouse under a store is an INSERT through /stores with no
-// migration and no redeploy — that is the whole reason these are rows instead of an enum.
+// The shape below is the STARTING shape, not the permanent one. Two sites, two locations
+// each: the shop FLOOR and the GODOWN (plan 0909-stock-store-and-warehouse-scoping, D1).
+// Adding another location under a store is an INSERT through /stores with no migration and
+// no redeploy — that is the whole reason these are rows instead of an enum.
 // See docs/implementation/pending/store-hierarchy-and-team-plan.md §2.1.
-import { PrismaClient } from "@prisma/client";
+//
+// The floor's sortOrder (5) is BELOW the godown's (10) on purpose: every picker lists the
+// floor first, and that is also the order outbound drains a store (D4).
+import { PrismaClient, WarehouseKind } from "@prisma/client";
 
 interface StoreSeed {
   code: string;
   name: string;
   sortOrder: number;
-  warehouses: Array<{ code: string; name: string; sortOrder: number }>;
+  warehouses: Array<{ code: string; name: string; kind: WarehouseKind; sortOrder: number }>;
 }
 
 const STORES: StoreSeed[] = [
@@ -30,13 +34,19 @@ const STORES: StoreSeed[] = [
     code: "BCH_STORE",
     name: "BCH Store",
     sortOrder: 10,
-    warehouses: [{ code: "BCH_WAREHOUSE", name: "BCH Warehouse", sortOrder: 10 }],
+    warehouses: [
+      { code: "BCH_FLOOR", name: "BCH Floor", kind: "FLOOR", sortOrder: 5 },
+      { code: "BCH_WAREHOUSE", name: "BCH Warehouse", kind: "GODOWN", sortOrder: 10 },
+    ],
   },
   {
     code: "BCC_STORE",
     name: "BCC Store",
     sortOrder: 20,
-    warehouses: [{ code: "BCC_WAREHOUSE", name: "BCC Warehouse", sortOrder: 10 }],
+    warehouses: [
+      { code: "BCC_FLOOR", name: "BCC Floor", kind: "FLOOR", sortOrder: 5 },
+      { code: "BCC_WAREHOUSE", name: "BCC Warehouse", kind: "GODOWN", sortOrder: 10 },
+    ],
   },
 ];
 
@@ -58,10 +68,12 @@ export async function seedStores(prisma: PrismaClient) {
 
     for (const w of s.warehouses) {
       const had = await prisma.warehouse.findUnique({ where: { code: w.code } });
+      // `kind` is in `create` ONLY, for the same reason `isActive` is left out of `update`
+      // above: a kind an admin changed on /stores must survive a re-seed.
       await prisma.warehouse.upsert({
         where: { code: w.code },
         update: { name: w.name, sortOrder: w.sortOrder, storeId: store.id },
-        create: { code: w.code, name: w.name, sortOrder: w.sortOrder, storeId: store.id },
+        create: { code: w.code, name: w.name, kind: w.kind, sortOrder: w.sortOrder, storeId: store.id },
       });
       if (!had) warehousesCreated++;
     }

@@ -49,11 +49,12 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         ...(data.storeId !== undefined ? { storeId: data.storeId } : {}),
         ...(data.code !== undefined ? { code: data.code.trim().toUpperCase() } : {}),
         ...(data.name !== undefined ? { name: data.name.trim() } : {}),
+        ...(data.kind !== undefined ? { kind: data.kind } : {}),
         ...(data.sortOrder !== undefined ? { sortOrder: data.sortOrder } : {}),
         ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
       },
       select: {
-        id: true, code: true, name: true, sortOrder: true, isActive: true,
+        id: true, code: true, name: true, kind: true, sortOrder: true, isActive: true,
         store: { select: { id: true, code: true, name: true } },
       },
     });

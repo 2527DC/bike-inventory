@@ -17,14 +17,19 @@ import { useWarehouses } from "@/hooks/use-sites";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
+import { formatDateTime } from "@/lib/utils";
 
 const log = createLogger("inbound:detail");
 
-/** What GET /api/categories returns: roots with their children nested one level. */
+/**
+ * What GET /api/categories returns: a FLAT list of every row — roots AND children — each with
+ * its `children` nested and its `parent` named. It is not a tree; a child appears twice.
+ */
 interface RawCategory {
   id: string;
   name: string;
-  children?: Array<{ id: string; name: string }>;
+  parent: { id: string; name: string } | null;
+  children?: Array<{ id: string; name: string; isActive?: boolean }>;
 }
 
 /** Flattened for the picker — `hint` carries the parent so two leaves can be told apart. */
@@ -80,6 +85,7 @@ interface Shipment {
   createdBy: { name: string };
   deliveredBy: { name: string } | null;
   putawayBy: { name: string } | null;
+  putawayAt: string | null;
   createdAt: string;
   lineItems: LineItem[];
   preBookings: { id: string; customerName: string; customerPhone: string | null; status: string; productName: string }[];
@@ -93,6 +99,8 @@ function formatINR(n: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n);
 }
 
+// Date only — for Bill Date and Expected Delivery, which are dates, not moments. The moments
+// (created, approved, delivered, putaway) go through `formatDateTime` from @/lib/utils.
 function formatDate(d: string) {
   return new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
@@ -148,10 +156,15 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
   // receive still carries one without the user having to think about it.
   const [receiveLocation, setReceiveLocation] = useState<string>("");
 
-  // Pick the first warehouse once the list arrives, so a normal receive carries one without
-  // the user choosing. Only when nothing is selected — never clobber a deliberate choice.
+  // Pre-select the first GODOWN once the list arrives, so a normal receive carries one
+  // without the user choosing: goods arrive at the back, not on the shop floor (plan
+  // 0909-stock-store-and-warehouse-scoping, D5). The list is already in picker order, so the
+  // first godown is the primary store's. Falls back to the first warehouse of any kind when
+  // no godown exists. Only when nothing is selected — never clobber a deliberate choice.
   useEffect(() => {
-    if (!receiveLocation && warehouses.length > 0) setReceiveLocation(warehouses[0].id);
+    if (receiveLocation || warehouses.length === 0) return;
+    const godown = warehouses.find((w) => w.kind === "GODOWN") ?? warehouses[0];
+    setReceiveLocation(godown.id);
   }, [warehouses, receiveLocation]);
   // The Cycles/Spares/Accessories choice is a COLUMN on the shipment now, not a value in this
   // browser's localStorage (R3). It used to be keyed `inbound-shiptype-<id>` on one phone, so
@@ -185,12 +198,21 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
         log.error("could not load categories", { message: catRes.error });
       } else if (catRes.data) {
         // Flattened parent + children, with the parent as the hint so "Tyres" is
-        // distinguishable from another "Tyres" under a different parent.
+        // distinguishable from another "Tyres" under a different parent. Only ROOT rows are
+        // walked: the API lists every row, children included, so walking all of them pushed
+        // each child twice (plan 0909-stock-screens-size-category-and-sidebar, Q10). A child
+        // whose parent is not in the list (parent inactive, child not) is kept on its own.
+        const rootIds = new Set(catRes.data.filter((c) => c.parent === null).map((c) => c.id));
         const flat: CategoryOption[] = [];
         for (const c of catRes.data) {
-          flat.push({ id: c.id, label: c.name });
-          for (const ch of c.children ?? []) {
-            flat.push({ id: ch.id, label: ch.name, hint: c.name });
+          if (c.parent === null) {
+            flat.push({ id: c.id, label: c.name });
+            for (const ch of c.children ?? []) {
+              if (ch.isActive === false) continue;
+              flat.push({ id: ch.id, label: ch.name, hint: c.name });
+            }
+          } else if (!rootIds.has(c.parent.id)) {
+            flat.push({ id: c.id, label: c.name, hint: c.parent.name });
           }
         }
         setCategories(flat);
@@ -615,7 +637,7 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
           {shipment.deliveredAt && (
             <div className="flex justify-between items-center">
               <span className="text-xs text-slate-500">Delivered</span>
-              <span className="text-sm font-semibold text-green-600 tabular-nums">{formatDate(shipment.deliveredAt)}</span>
+              <span className="text-sm font-semibold text-green-600 tabular-nums">{formatDateTime(shipment.deliveredAt)}</span>
             </div>
           )}
           {isAdmin && (
@@ -636,24 +658,31 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
           )}
           <div className="flex justify-between items-center">
             <span className="text-xs text-slate-500">Created by</span>
-            <span className="text-xs text-slate-700 tabular-nums">{shipment.createdBy.name} on {formatDate(shipment.createdAt)}</span>
+            <span className="text-xs text-slate-700 tabular-nums">{shipment.createdBy.name} on {formatDateTime(shipment.createdAt)}</span>
           </div>
           {shipment.approvedBy && (
             <div className="flex justify-between items-center">
               <span className="text-xs text-slate-500">Approved by</span>
-              <span className="text-xs text-green-700 font-medium tabular-nums">{shipment.approvedBy.name} on {formatDate(shipment.approvedAt!)}</span>
+              <span className="text-xs text-green-700 font-medium tabular-nums">{shipment.approvedBy.name} on {formatDateTime(shipment.approvedAt)}</span>
             </div>
           )}
+          {/* Delivered and putaway are moments the row already carries (`deliveredAt`,
+              `putawayAt` — plan 0909-stock-screens-size-category-and-sidebar, Part F). A
+              name with no time answered "who" and threw "when" away. */}
           {shipment.deliveredBy && (
             <div className="flex justify-between items-center">
               <span className="text-xs text-slate-500">Delivered by</span>
-              <span className="text-xs text-slate-700">{shipment.deliveredBy.name}</span>
+              <span className="text-xs text-slate-700 tabular-nums">
+                {shipment.deliveredBy.name}{shipment.deliveredAt ? ` on ${formatDateTime(shipment.deliveredAt)}` : ""}
+              </span>
             </div>
           )}
           {shipment.putawayBy && (
             <div className="flex justify-between items-center">
               <span className="text-xs text-slate-500">Putaway by</span>
-              <span className="text-xs text-slate-700">{shipment.putawayBy.name}</span>
+              <span className="text-xs text-slate-700 tabular-nums">
+                {shipment.putawayBy.name}{shipment.putawayAt ? ` on ${formatDateTime(shipment.putawayAt)}` : ""}
+              </span>
             </div>
           )}
         </CardContent>
