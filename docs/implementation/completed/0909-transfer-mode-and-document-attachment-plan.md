@@ -1,6 +1,6 @@
 # Transfer mode is chosen, the document is attached, and GST leaves the store form
 
-Status: in-progress — 9 Sep 2026 evening, building on branch feat/0909-stock-po-expense after the owner answered Q2–Q14 (see §7, second round)
+Status: completed — 9 Sep 2026, Store → Store / Store → Warehouse modes, document required at creation, GSTIN never consulted and off the store form, TransferMode + store lanes in migration 20260909134910 (commit e846872); Q12 godown→floor mode left for the owner
 Branch: **not cut yet** — tell me which branch to base it on before I create one.
 
 ---

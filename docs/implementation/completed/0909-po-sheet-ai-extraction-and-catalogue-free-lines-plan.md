@@ -1,6 +1,6 @@
 # A purchase order is raised from the vendor's sheet alone — AI finds the item columns, the review keeps the sheet's colours, the lines never touch the products table, and the PDF is one click away
 
-Status: in-progress — 9 Sep 2026, P1–P4 building on feat/0909-stock-po-expense (owner: same branch); migration po_sheet_extraction_and_line_name applied to local bch
+Status: completed — 9 Sep 2026, AI column step + deterministic sheet read with colours, name-only PO lines, colour-tinted review, Download PDF (commit 76c12ef); the AI row's Test, storage, the §7 walk and the Reorder→PO decision are the owner's
 Branch: **not cut** — the owner names the base before anything is checked out. The work it
 supersedes lives on `feat/0909-stock-po-expense` (commit `ee72cd5`, the quotation import).
 
