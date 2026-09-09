@@ -290,3 +290,15 @@ export async function usersWithPermission(
   });
   return users.map((u) => u.id);
 }
+
+/**
+ * How many of `permissionIds` belong to a module that is not assignable (admin-only).
+ * Used by the role-write routes to refuse such a grant on any non-system role. Reads the
+ * database each time — it runs only when an admin saves a role, never on a request path.
+ */
+export async function reservedPermissionCount(permissionIds: string[]): Promise<number> {
+  if (permissionIds.length === 0) return 0;
+  return prisma.permission.count({
+    where: { id: { in: permissionIds }, module: { assignable: false } },
+  });
+}

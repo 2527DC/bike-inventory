@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/db";
-import { successResponse, errorResponse } from "@/lib/api-utils";
+import { successResponse, errorResponse, failure } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // The full module × permission catalog, used to build the grid in the Roles & Permissions
@@ -28,6 +28,8 @@ export async function GET() {
         // hint that ticking `staff_lms_learning.view` without `staff_lms.view` leaves the
         // parent as a non-clickable heading.
         parentId: true,
+        // false = admin-only; the editor greys the card out and the role routes refuse it.
+        assignable: true,
         permissions: {
           orderBy: { action: "asc" },
           select: { id: true, key: true, action: true, label: true },
@@ -38,6 +40,6 @@ export async function GET() {
     return successResponse({ modules });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed", 500);
+    return failure(error, { scope: "modules" });
   }
 }

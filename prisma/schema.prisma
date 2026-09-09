@@ -30,6 +30,11 @@ model Module {
   group       String? // sidebar grouping: "Accounts", "Purchase", "Operations", "Admin"
   sortOrder   Int      @default(0)
   isActive    Boolean  @default(true)
+  // false = only the system role may hold this module's permissions. Enforced in the two
+  // role-write routes by `Role.isSystem` (a column, never a role name — CLAUDE.md rule 1),
+  // and shown greyed out on /team/permissions. Seeded from `ModuleSeed.assignable`.
+  // First used by brand_ledger / brand_ledger_gaps (plan 0909-vendor-ledger-screens, R7).
+  assignable  Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -300,20 +305,20 @@ enum WarehouseKind {
 /// on day one, but the whole point of the model is that a second location is an INSERT rather
 /// than a migration — see the plan's §2.1. The floor is exactly that second row (D1).
 model Warehouse {
-  id        String   @id @default(cuid())
+  id        String        @id @default(cuid())
   storeId   String
   // RESTRICT, explicitly. Deleting a store that still has warehouses must FAIL at the
   // database. The API's delete rule (Phase 6) catches it first and returns a readable
   // message; this is the backstop for when that check is missed. Never Cascade — it would
   // silently take the warehouses, and with them every StockLevel row pointing at one.
-  store     Store    @relation(fields: [storeId], references: [id], onDelete: Restrict)
-  code      String   @unique // "BCH_WAREHOUSE", "BCC_WAREHOUSE"
+  store     Store         @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  code      String        @unique // "BCH_WAREHOUSE", "BCC_WAREHOUSE"
   name      String // "BCH Warehouse"
   kind      WarehouseKind @default(GODOWN)
-  isActive  Boolean  @default(true)
-  sortOrder Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  isActive  Boolean       @default(true)
+  sortOrder Int           @default(0)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
 
   users         User[]
   stockLevels   StockLevel[]
@@ -381,6 +386,8 @@ model User {
   approvedStockCounts      StockCount[]      @relation("StockCountApprovedBy")
   verifiedDeliveries       Delivery[]        @relation("DeliveryVerifiedBy")
   uploadedStatements       BankStatement[]   @relation("StatementUploader")
+  ledgerUploads            LedgerUpload[]    @relation("LedgerUploadedBy")
+  ledgerAiRuns             LedgerAiRun[]     @relation("LedgerAiRunCreatedBy")
 
   // Service / workshop (merged from bch-service)
   assignedJobs       ServiceJob[]  @relation("ServiceJobMechanic")
@@ -448,22 +455,22 @@ model User {
 }
 
 model Category {
-  id           String     @id @default(cuid())
-  name         String     @unique
-  description  String?
-  parentId     String?
-  parent       Category?  @relation("CategoryTree", fields: [parentId], references: [id])
-  children     Category[] @relation("CategoryTree")
-  reorderLevel Int        @default(0)
+  id             String     @id @default(cuid())
+  name           String     @unique
+  description    String?
+  parentId       String?
+  parent         Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children       Category[] @relation("CategoryTree")
+  reorderLevel   Int        @default(0)
   // The `category_id` this category has in Zoho Inventory. Nullable: a category created here
   // has no Zoho counterpart until someone syncs it. Unique so a Zoho category can never map
   // to two rows. It is what the catalog import resolves the parent tree through — Zoho's
   // `parent_category_id` names a Zoho id, not one of ours.
-  zohoCategoryId String? @unique
+  zohoCategoryId String?    @unique
   // Inactive rows are hidden from every picker; nothing is deleted — plan 0809-brand-category-inactive
-  isActive     Boolean    @default(true)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  isActive       Boolean    @default(true)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
 
   products         Product[]
   inboundShipments InboundShipment[]
@@ -563,7 +570,7 @@ model Product {
   // Staff LMS learning cards that have been soft-linked to this SKU. Optional and NULL on
   // every seeded row — an LmsProduct is a sales STORY (one bicycle model, mostly narrative
   // JSON), not a stock-keeping unit, and it maps to N SKUs or to none. See LmsProduct.
-  lmsProducts LmsProduct[] @relation("LmsProductSku")
+  lmsProducts       LmsProduct[]       @relation("LmsProductSku")
   poExtractionItems PoExtractionItem[] @relation("PoExtractionItemProduct")
 
   @@index([status])
@@ -801,6 +808,9 @@ model Vendor {
   discountTerms VendorDiscountTerm[]
   brands        BrandVendor[]        @relation("VendorBrands")
   poExtractions PoExtraction[]       @relation("PoExtractionVendor")
+  ledgerProfile VendorLedgerProfile?
+  ledgerUploads LedgerUpload[]
+  ledgerAiRuns  LedgerAiRun[]
 
   @@index([name])
 }
@@ -1819,9 +1829,9 @@ model TransferOrder {
   // history. `toStoreId` is null in STORE_TO_WAREHOUSE. Restrict, like every other lane FK.
   mode        TransferMode?
   fromStoreId String?
-  fromStore   Store?  @relation("TransferOrderFromStore", fields: [fromStoreId], references: [id], onDelete: Restrict)
+  fromStore   Store?        @relation("TransferOrderFromStore", fields: [fromStoreId], references: [id], onDelete: Restrict)
   toStoreId   String?
-  toStore     Store?  @relation("TransferOrderToStore", fields: [toStoreId], references: [id], onDelete: Restrict)
+  toStore     Store?        @relation("TransferOrderToStore", fields: [toStoreId], references: [id], onDelete: Restrict)
 
   // The document itself (P15).
   docType          TransferDocType?
@@ -2541,6 +2551,7 @@ enum LedgerEntryType {
   DEBIT_NOTE
   DISCOUNT
   ADJUSTMENT
+  NOTE // informational, direction 0, amount optional — the ledger app's "note" entry
 }
 
 // Which party the entry originates from â€” separates "their invoice" from "our payment".
@@ -2756,17 +2767,18 @@ model LedgerGap {
 }
 
 model LedgerGapEvidence {
-  id           String       @id @default(cuid())
-  gapId        String
-  gap          LedgerGap    @relation(fields: [gapId], references: [id], onDelete: Cascade)
-  url          String // R2
-  kind         EvidenceKind
-  capturedOn   DateTime? // when the evidence event happened, not when it was uploaded
-  source       String? // "Mani WhatsApp chat (L1600)"
-  note         String? // what it proves
-  uploadedById String?
-  uploadedBy   User?        @relation("GapEvidenceUploadedBy", fields: [uploadedById], references: [id])
-  createdAt    DateTime     @default(now())
+  id            String       @id @default(cuid())
+  gapId         String
+  gap           LedgerGap    @relation(fields: [gapId], references: [id], onDelete: Cascade)
+  url           String // R2
+  kind          EvidenceKind
+  capturedOn    DateTime? // when the evidence event happened, not when it was uploaded
+  capturedLabel String? // the ledger app's free-text date ("2024-08 orders") when it is not a date
+  source        String? // "Mani WhatsApp chat (L1600)"
+  note          String? // what it proves
+  uploadedById  String?
+  uploadedBy    User?        @relation("GapEvidenceUploadedBy", fields: [uploadedById], references: [id])
+  createdAt     DateTime     @default(now())
 
   @@index([gapId])
   @@map("ledger_gap_evidence")
@@ -2848,6 +2860,129 @@ model BrandVendor {
   @@unique([brandId, vendorId])
   @@index([vendorId])
   @@map("brand_vendors")
+}
+
+// ─── Vendor ledger screen (plan 0909-vendor-ledger-screens-and-ai-import) ────────────────
+// The per-vendor header of the ledger app's document: position paragraph, both balances with
+// their labels, the recoverable line, the deadline, the review date, and the ledger's own
+// opening. Typed columns, not Json — the header card, the "review due" chip and the Table
+// tab's gap anchor each read one field. One row per vendor, created by the JSON import or
+// the first edit.
+model VendorLedgerProfile {
+  vendorId String @id
+  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  code String // "CULT" — the prefix of CULT-3; set from the ledger app's map on import
+  sub  String? // "Aoki Mobility Pvt Ltd · POC Prashant"
+
+  position String? @db.Text
+  notes    String? @db.Text
+
+  theirBalAmount Float?
+  theirBalLabel  String?
+  ourBalAmount   Float?
+  ourBalLabel    String?
+  recovAmount    Float?
+  recovText      String?   @db.Text
+  deadlineLabel  String?
+  deadlineDate   DateTime?
+
+  // The BRAND's ledger opening — NOT Vendor.openingBalance, which is BCH's own book figure as
+  // of 1 Apr 2026. EMotorad's statement opens at 64,78,990 on 1 Apr 2025; the two differ.
+  ledgerOpeningAmount Float?
+  ledgerOpeningDate   DateTime?
+  ledgerCoverage      String?
+  ledgerMatchable     Boolean   @default(false)
+  ledgerNote          String?   @db.Text
+
+  updatedOn    DateTime? // the ledger app's `updated`
+  lastReviewed DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("vendor_ledger_profiles")
+}
+
+enum LedgerUploadKind {
+  STATEMENT
+  CHAT
+  SCREENSHOT
+  DOCUMENT
+}
+
+// A file uploaded on the ledger screen. The row outlives the object: deleting the file (R12)
+// nulls fileUrl and stamps deletedAt, so an AI run that read it keeps its provenance.
+model LedgerUpload {
+  id       String @id @default(cuid())
+  vendorId String
+  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  kind        LedgerUploadKind
+  fileName    String
+  contentType String
+  sizeBytes   Int
+  fileUrl     String?
+  deletedAt   DateTime?
+
+  uploadedById String
+  uploadedBy   User     @relation("LedgerUploadedBy", fields: [uploadedById], references: [id])
+  createdAt    DateTime @default(now())
+
+  runs LedgerAiRun[]
+
+  @@index([vendorId, createdAt])
+  @@map("ledger_uploads")
+}
+
+enum LedgerAiTask {
+  STATEMENT_ROWS
+  CLAIMS_FROM_CHAT
+  CLAIMS_FROM_IMAGE
+}
+
+enum LedgerAiRunStatus {
+  RUNNING
+  DONE
+  FAILED
+  ACCEPTED
+  DISCARDED
+}
+
+// One AI pass over one upload. `reply` is the raw model output and `proposals` the validated
+// candidate rows — Json on purpose: provenance nobody queries by field. Rows reach the real
+// tables only when a person accepts them (acceptedAt), never on the model's say-so.
+model LedgerAiRun {
+  id       String       @id @default(cuid())
+  uploadId String
+  upload   LedgerUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  vendorId String
+  vendor   Vendor       @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  task       LedgerAiTask
+  userPrompt String?      @db.Text // sanitised, capped — inserted into the prompt as data
+  provider   String?
+  model      String?
+  usageIn    Int?
+  usageOut   Int?
+  latencyMs  Int?
+  chunks     Int          @default(1) // chat runs: how many pieces the export was sent in
+
+  reply     Json?
+  proposals Json?
+  status    LedgerAiRunStatus @default(RUNNING)
+  error     String?           @db.Text
+
+  acceptedAt  DateTime?
+  statementId String? // the BrandStatement an accepted STATEMENT_ROWS run produced
+
+  createdById String
+  createdBy   User     @relation("LedgerAiRunCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([vendorId, createdAt])
+  @@index([uploadId])
+  @@map("ledger_ai_runs")
 }
 
 // ─── Store Analytics (merged from bch-store-analytics) ───────────────────────
@@ -3498,7 +3633,7 @@ model PoExtractionItem {
   productId       String?
   product         Product?     @relation("PoExtractionItemProduct", fields: [productId], references: [id])
   matchStatus     String       @default("UNMATCHED") // AUTO | FUZZY | MANUAL | UNMATCHED — no longer written (D2); dropped next release
-  matchConfidence Float?                              // no longer written (D2); dropped next release
+  matchConfidence Float? // no longer written (D2); dropped next release
   selected        Boolean      @default(false)
   orderQty        Int?
   sortOrder       Int          @default(0)
@@ -3506,8 +3641,8 @@ model PoExtractionItem {
   /// the PO line (D2); `columns` is what the review SHOWS, in the sheet's own column order.
   sheetName       String?
   rowIndex        Int?
-  rowColor        String?      // "FF0000" — the item-name cell's fill; null when the cell has none
-  columns         Json?        // [{ header, value }]
+  rowColor        String? // "FF0000" — the item-name cell's fill; null when the cell has none
+  columns         Json? // [{ header, value }]
 
   @@index([extractionId])
   @@index([productId])

@@ -1,6 +1,13 @@
 # The Brand Ledger — a story of one supplier statement
 
 **Date:** 9 Sep 2026
+**Superseded in part, 9 Sep 2026 (later the same day):** the screens in §2 Act 7, §3 and §5 —
+`/ledger`, the three-tab `/ledger/[id]` and `gaps/new` — are replaced by a 100 % port of the
+ledger app's own five-tab per-vendor screen, reached only from a Ledger button on
+`/vendors/[id]`; the statement import, evidence upload, claim notes and the data migration this
+document lists as missing are built there. See
+[`implementation/pending/0909-vendor-ledger-screens-and-ai-import-plan.md`](./implementation/pending/0909-vendor-ledger-screens-and-ai-import-plan.md).
+The tables, the engine (`reconcile.ts`) and the write rules described below are unchanged.
 **Question this answers:** what is the ledger in this application, how does a supplier's
 statement become a claim we can press, and which tables move when it does?
 **Verified against:** `6cbdf4b` (branch `docs/plan-requirements-rule`) — every claim below carries a `file:line`.

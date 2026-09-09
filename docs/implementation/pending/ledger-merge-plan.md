@@ -1,6 +1,7 @@
 # Merging `ledgers` into BCH Management
 
 Status: in-progress — schema, RBAC, backend and frontend shipped; statement import (CSV/XLSX and PDF), evidence upload, claim notes, discount-term entry and the 219-gap migration all remain. Re-verified 9 Sep 2026; see "Re-verified" at the end of §11
+§7 and §12 Frontend superseded 9 Sep 2026 by `0909-vendor-ledger-screens-and-ai-import-plan.md`; the schema, engine and API decisions stand.
 **Scope:** `F:\bharath  Cycle\ledgers` → this app. `bch-service` is out of scope (already merged).
 
 ---
