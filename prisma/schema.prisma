@@ -278,6 +278,11 @@ model Store {
 
   stockCounts StockCount[] @relation("StockCountStore")
   deliveries  Delivery[]   @relation("DeliveryStore")
+
+  // The store lane of a transfer — what was PICKED on /transfers/new, beside the warehouse it
+  // resolved to on TransferOrder. Restrict: a store with transfer history is not deletable.
+  transfersFrom TransferOrder[] @relation("TransferOrderFromStore")
+  transfersTo   TransferOrder[] @relation("TransferOrderToStore")
 }
 
 /// What kind of place a warehouse is. FLOOR is the shop — where a customer sees the bike;
@@ -1758,6 +1763,14 @@ enum TransferDocType {
   TAX_INVOICE
 }
 
+/// Chosen on the form, not derived. Store to store carries a tax invoice; store to warehouse
+/// carries a delivery challan. The GSTIN is deliberately NOT consulted — a store's tax
+/// registration is master data, and the document that travels with a van is not.
+enum TransferMode {
+  STORE_TO_STORE
+  STORE_TO_WAREHOUSE
+}
+
 model TransferOrder {
   id      String              @id @default(cuid())
   orderNo String              @unique // Auto: TRF-YYYYMM-NNNN
@@ -1789,8 +1802,20 @@ model TransferOrder {
   // Derived from the two lanes, stored so history stays readable after a warehouse moves
   // store. `requiredDocType` NULL means "pre-policy" -- an order raised before P15 existed --
   // and is never rendered as "no document needed".
+  // `transferType` is NO LONGER WRITTEN (9 Sep 2026): the mode below replaced the GSTIN
+  // derivation. Dropped a release later, per CLAUDE.md rule 7.
   transferType    TransferType?
   requiredDocType TransferDocType?
+
+  // The mode the person chose on /transfers/new. Null = raised before the mode existed.
+  // `fromStoreId`/`toStoreId` are a SNAPSHOT of what was picked — the store resolved to a
+  // warehouse (its floor) at create time, and re-pointing that floor later must not rewrite
+  // history. `toStoreId` is null in STORE_TO_WAREHOUSE. Restrict, like every other lane FK.
+  mode        TransferMode?
+  fromStoreId String?
+  fromStore   Store?  @relation("TransferOrderFromStore", fields: [fromStoreId], references: [id], onDelete: Restrict)
+  toStoreId   String?
+  toStore     Store?  @relation("TransferOrderToStore", fields: [toStoreId], references: [id], onDelete: Restrict)
 
   // The document itself (P15).
   docType          TransferDocType?

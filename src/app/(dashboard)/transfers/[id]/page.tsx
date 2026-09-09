@@ -22,12 +22,13 @@ const log = createLogger("transfers:detail");
 
 type DocType = "DELIVERY_CHALLAN" | "TAX_INVOICE";
 type Action = "approve" | "reject" | "dispatch" | "receive" | "cancel" | "attach_document";
+type TransferMode = "STORE_TO_STORE" | "STORE_TO_WAREHOUSE";
 
 interface WarehouseRef {
   id: string;
   code: string;
   name: string;
-  store: { id: string; name: string; gstin: string | null; stateCode: string | null };
+  store: { id: string; name: string };
 }
 
 interface Item {
@@ -45,6 +46,8 @@ interface TransferDetail {
   notes: string | null;
   rejectionNote: string | null;
   transferType: "INTRA_STORE" | "INTER_STORE" | null;
+  /** Which of the two create-form buttons raised this order. Null before the column existed. */
+  mode?: TransferMode | null;
   requiredDocType: DocType | null;
   docType: DocType | null;
   docNumber: string | null;
@@ -78,6 +81,17 @@ function when(value: string | null): string {
   return new Date(value).toLocaleString("en-IN", {
     day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit",
   });
+}
+
+/**
+ * Wording for the transfer-type chip. `mode` is what the two create-form buttons write and
+ * wins when present; older orders only carry `transferType`, which was derived from comparing
+ * the two stores' GSTINs, and keep the wording that matched that derivation.
+ */
+function modeLabel(mode: TransferMode | null | undefined, transferType: TransferDetail["transferType"]): string {
+  if (mode === "STORE_TO_STORE") return "Store → Store";
+  if (mode === "STORE_TO_WAREHOUSE") return "Store → Warehouse";
+  return transferType === "INTER_STORE" ? "Inter-store" : "Within one store";
 }
 
 export default function TransferDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -224,11 +238,15 @@ export default function TransferDetailPage({ params }: { params: Promise<{ id: s
             </div>
           </div>
 
-          {order.transferType && (
+          {/* The chip reads `mode` first — the column the create form writes from the two
+              buttons (plan 0909-transfer-mode-and-document-attachment, Q10). Orders raised
+              before the column existed have `mode: null` and keep the older wording, which
+              was derived from the GSTIN comparison in `transferType`. */}
+          {(order.mode || order.transferType) && (
             <div className="mt-3 flex flex-wrap items-center gap-1.5">
               <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
                 <Building2 className="h-3 w-3" />
-                {order.transferType === "INTER_STORE" ? "Inter-store" : "Within one store"}
+                {modeLabel(order.mode, order.transferType)}
               </span>
               {order.requiredDocType && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
