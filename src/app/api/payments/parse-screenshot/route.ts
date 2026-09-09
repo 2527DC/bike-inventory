@@ -1,12 +1,17 @@
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+// runAi's retry policy is three attempts with 3 s + 6 s sleeps between them; two 529s already exceed 30 s.
+export const maxDuration = 60;
 
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { createLogger } from "@/lib/logger";
+import { runAi, toAiErrorResponse, aiErrorKind } from "@/lib/ai";
 
-// POST — Parse payment screenshot using Claude Vision
+const log = createLogger("payments:parse-screenshot");
+
+// POST — Parse payment screenshot with the shared AI client (vision)
 export async function POST(req: NextRequest) {
   try {
     await requireFeature("bills", "create");
@@ -25,9 +30,6 @@ export async function POST(req: NextRequest) {
     const bytes = await file.arrayBuffer();
     const base64 = Buffer.from(bytes).toString("base64");
     const mediaType = file.type as "image/png" | "image/jpeg" | "image/webp";
-
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return errorResponse("AI API key not configured", 400);
 
     // Fetch vendor names for matching
     const vendors = await prisma.vendor.findMany({
@@ -69,56 +71,33 @@ Return ONLY valid JSON, no markdown, no explanation:
 
 If a field cannot be determined, use null. Always try to extract at least amount and referenceNo.`;
 
-    // Call Claude Vision API with retry
-    let claudeData: { content?: Array<{ text?: string }> } | null = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 1024,
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "image",
-                  source: { type: "base64", media_type: mediaType, data: base64 },
-                },
-                { type: "text", text: prompt },
-              ],
-            },
-          ],
-        }),
+    log.debug("-> runAi payments.screenshot_scan", {
+      mediaType,
+      bytes: bytes.byteLength,
+      vendors: vendors.length,
+    });
+
+    const result = await runAi({
+      purpose: "payments.screenshot_scan",
+      prompt,
+      attachments: [{ kind: "image", mediaType, base64 }],
+      // maxTokens is a ceiling, not spend: a thinking model draws its reasoning from the same budget,
+      // and runAi refuses a max_tokens stop outright rather than hand back half a screenshot.
+      maxTokens: 4096,
+      json: true,
+    });
+
+    // runAi has already stripped fences and parsed; all that is left to check is the shape.
+    const raw: unknown = result.json;
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      log.error("screenshot scan returned JSON that is not an object", {
+        model: result.model,
+        type: Array.isArray(raw) ? "array" : raw === null ? "null" : typeof raw,
       });
-
-      if (res.ok) {
-        claudeData = await res.json();
-        break;
-      }
-
-      const errText = await res.text();
-      if (errText.includes("overloaded") || res.status === 529) {
-        if (attempt < 2) {
-          await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
-          continue;
-        }
-        return errorResponse("AI service is temporarily busy. Please try again in a minute.", 503);
-      }
-      return errorResponse(`AI processing failed (${res.status})`, 500);
+      return errorResponse("Failed to parse AI response", 500);
     }
 
-    if (!claudeData) return errorResponse("AI processing failed", 500);
-
-    const responseText = claudeData.content?.[0]?.text || "";
-
-    // Parse JSON from response
-    let parsed: {
+    const parsed = raw as {
       amount: number | null;
       paymentMode: string | null;
       referenceNo: string | null;
@@ -130,13 +109,12 @@ If a field cannot be determined, use null. Always try to extract at least amount
       notes: string | null;
     };
 
-    try {
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("No JSON found");
-      parsed = JSON.parse(jsonMatch[0]);
-    } catch {
-      return errorResponse("Failed to parse AI response", 500);
-    }
+    log.info("screenshot parsed", {
+      model: result.model,
+      hasAmount: parsed.amount != null,
+      hasReference: !!parsed.referenceNo,
+      hasMatchedVendor: !!parsed.matchedVendor,
+    });
 
     // Try to find the matched vendor ID
     let vendorId: string | null = null;
@@ -173,7 +151,16 @@ If a field cannot be determined, use null. Always try to extract at least amount
       notes: parsed.notes || null,
     });
   } catch (error) {
+    const aiRes = toAiErrorResponse(error);
+    if (aiRes) {
+      log.warn("screenshot scan failed at the AI step", { status: aiRes.status, kind: aiErrorKind(error) });
+      return aiRes;
+    }
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("parse-screenshot failed", {
+      kind: aiErrorKind(error),
+      message: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse(
       error instanceof Error ? error.message : "Failed to parse screenshot",
       500

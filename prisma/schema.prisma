@@ -1149,6 +1149,45 @@ model StorageConfig {
   updatedAt DateTime @updatedAt
 }
 
+// ─── AI ────────────────────────────────────────────────────────────────────────
+//
+// One row per AI provider we hold a key for. Exactly one row has isActive = true; that is
+// the provider every runAi() call in src/lib/ai uses. Configured from Settings → AI with no
+// redeploy, for the same reason StorageConfig exists: which provider is live is DATA.
+//
+// `key` is a plain String, not an enum, matching StorageConfig.provider — adding a provider
+// should be a row, not a migration. The valid values and the model list per provider are
+// validated with src/lib/ai/models.ts in the route.
+//
+// apiKey is plaintext, matching StorageConfig.secretAccessKey and IntegrationConfig
+// .clientSecret above. Same deliberate trade-off (owner, 8 Sep 2026): anyone with database
+// read access already holds the AWS keys and the Zoho refresh token. The API NEVER returns
+// this field to the browser — not even masked; it sends `hasApiKey: boolean`.
+//
+// "At most one active" is not a database constraint (Prisma cannot express a partial unique
+// index). The activate route is the only writer of isActive and flips every other row false
+// inside one transaction; the resolver takes the most recently updated row if it ever finds
+// two, and warns.
+model AiProvider {
+  key           String    @id // "anthropic" | "google" | "openai"
+  apiKey        String?   @db.Text
+  model         String? // validated against src/lib/ai/models.ts
+  isActive      Boolean   @default(false)
+  // Set ONLY by a successful test call, never by saving the form — a provider that has not
+  // proven it can answer must not become the live one. Cleared by every save.
+  isConnected   Boolean   @default(false)
+  lastTestedAt  DateTime?
+  lastTestError String?   @db.Text
+  updatedById   String? // bare string, no relation — the row outlives a deleted user
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // No index on isActive ON PURPOSE. The table has one row per provider — three today, a
+  // handful ever — and the planner sequential-scans a table that small whatever indexes it
+  // carries. An index here is maintenance cost with nothing to buy.
+  @@map("ai_provider")
+}
+
 // ─── Notifications ─────────────────────────────────────────────────────────────
 //
 // Push (FCM, to the browser PWA and to the separate Expo app) and email (SMTP), raised by

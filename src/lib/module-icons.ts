@@ -45,6 +45,7 @@ import {
   Swords,
   HardDrive,
   Bell,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 
@@ -86,6 +87,7 @@ const ICONS: Record<string, LucideIcon> = {
   HardDrive,
   Bell,
   Boxes,
+  Sparkles,
 };
 
 export function moduleIcon(name: string | null | undefined): LucideIcon {
