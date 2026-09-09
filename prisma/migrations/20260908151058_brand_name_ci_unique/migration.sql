@@ -1,0 +1,38 @@
+-- Make a brand name unique regardless of case and surrounding whitespace.
+--
+-- WHY
+-- ---
+-- `Brand.name` is `@unique`, which on a Postgres text column is a CASE-SENSITIVE btree
+-- (`Brand_name_key`). Every brand lookup in the codebase is `mode: "insensitive"`, so the
+-- application treats `hero` and `Hero` as the same brand while the database happily stores
+-- both. Once two rows mean one brand, `findFirst` returns whichever Postgres yields first,
+-- which is neither deterministic nor stable across queries. `POST /api/brands` had no
+-- pre-check at all, so this was reachable from the New Brand button on /more/brands.
+--
+-- This index makes the LOWERCASED, TRIMMED name unique at the database. The route-level
+-- pre-check added alongside it (case-insensitive findFirst, then 409) turns the ordinary
+-- clash into a sentence; only this index closes the race that a read-then-write in the
+-- route cannot — two concurrent creates that both read "no such brand" and both insert.
+-- `btrim` is in the key so `" Hero"` collides with `Hero` here too, which makes a forgotten
+-- `.trim()` in some future writer a 409, not a duplicate.
+--
+-- ADDITIVE ONLY (CLAUDE.md rule 7): `Brand_name_key` STAYS, and prisma/schema.prisma is
+-- untouched, because Prisma cannot express an expression index. Keeping `@unique` on `name`
+-- means `findUnique({ where: { name } })` / `upsert({ where: { name } })` keep compiling —
+-- scripts/import-products.ts and prisma/seed.ts rely on that. Nothing running before this
+-- migration becomes invalid; only a NEW insert that clashes case-insensitively is refused.
+-- Prisma's Postgres describer does not model expression indexes, so `migrate diff` sees
+-- neither side and no later migration tries to drop this one (verified on local bch when
+-- this file was written).
+--
+-- THIS MIGRATION FAILS ON PURPOSE if the target already holds a case-insensitive duplicate
+-- (`Hero` and `hero`, or `Hero` and ` Hero`). The fix is the Merge action on /more/brands
+-- against the target's data — NEVER editing this file. Run the pre-flight query on any
+-- target before `migrate deploy`; both counts must be 0:
+--
+--   select
+--     (select count(*) from (select lower(btrim(name)) from "Brand" group by 1 having count(*) > 1) s) as ci_dupe_groups,
+--     (select count(*) from "Brand" where name <> btrim(name)) as padded;
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Brand_name_ci_key" ON "Brand" (lower(btrim("name")));
