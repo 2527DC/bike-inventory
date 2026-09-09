@@ -11,6 +11,10 @@ import { ExportButtons } from "@/components/export-buttons";
 import { FilterSheet } from "@/components/filter-sheet";
 import { DesktopTable } from "@/components/desktop-table";
 import { exportToExcel, exportToPDF, type ExportColumn } from "@/lib/export";
+import { apiFetchEnvelope } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("vendors");
 
 const VENDOR_COLUMNS: ExportColumn[] = [
   { header: "Code", key: "code" },
@@ -19,6 +23,7 @@ const VENDOR_COLUMNS: ExportColumn[] = [
   { header: "Phone", key: "phone" },
   { header: "WhatsApp", key: "whatsappNumber" },
   { header: "Payment Terms (Days)", key: "paymentTermDays" },
+  { header: "Opening Balance (Apr 1)", key: "openingBalance" },
   { header: "Status", key: "isActive", format: (v) => (v ? "Active" : "Inactive") },
   { header: "POs", key: "_count.purchaseOrders" },
   { header: "Bills", key: "_count.bills" },
@@ -33,6 +38,8 @@ interface VendorItem {
   whatsappNumber?: string;
   isActive: boolean;
   paymentTermDays: number;
+  /** Carried-forward balance as of 1 Apr 2026. Not the same number as outstandingBalance. */
+  openingBalance: number;
   outstandingBalance: number;
   _count: { purchaseOrders: number; bills: number };
 }
@@ -61,22 +68,29 @@ export default function VendorsPage() {
   const [total, setTotal] = useState(0);
   const [activeFilter, setActiveFilter] = useState<VendorFilter>("ACTIVE");
   const [sortBy, setSortBy] = useState<VendorSort>("name");
+  const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(() => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     const params = new URLSearchParams({ limit: "100", includeInactive: "true" });
     if (debouncedSearch.length >= 2) params.set("search", debouncedSearch);
 
-    fetch(`/api/vendors?${params}`)
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success) {
-          setVendors(res.data);
-          setTotal(res.pagination?.total || res.data.length);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    try {
+      // apiFetchEnvelope, not apiFetch: the row count lives in `pagination`, which sits
+      // OUTSIDE `data` and apiFetch discards. Never a raw fetch().then(r => r.json()) —
+      // an expired session answers 307 -> /login -> HTML with status 200, which `res.ok`
+      // does not catch (CLAUDE.md).
+      const { data, pagination } = await apiFetchEnvelope<VendorItem[]>(`/api/vendors?${params}`);
+      setVendors(data);
+      setTotal(pagination?.total ?? data.length);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not load vendors";
+      setError(msg);
+      log.error("failed to load vendors", { message: msg });
+    } finally {
+      setLoading(false);
+    }
   }, [debouncedSearch]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
@@ -146,7 +160,18 @@ export default function VendorsPage() {
 
       <p className="text-xs text-slate-500 mb-2">Showing {filtered.length} of {total} vendors</p>
 
-      {loading ? (
+      {error ? (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-center">
+          <p className="text-sm font-medium text-red-700">Could not load vendors</p>
+          <p className="text-xs text-red-600 mt-1">{error}</p>
+          <button
+            onClick={() => { fetchData(); }}
+            className="mt-3 text-xs font-medium text-red-700 underline"
+          >
+            Retry
+          </button>
+        </div>
+      ) : loading ? (
         <SkeletonList count={6} type="card" />
       ) : (
         <>
@@ -176,6 +201,9 @@ export default function VendorsPage() {
             { header: "City", cell: (v) => v.city || "—" },
             { header: "Bills", cell: (v) => v._count.bills || "—", className: "text-right w-20 tabular-nums" },
             { header: "Status", cell: (v) => <Badge variant={v.isActive ? "success" : "default"}>{v.isActive ? "Active" : "Inactive"}</Badge> },
+            { header: "Opening Bal.", cell: (v) => v.openingBalance !== 0
+              ? <span className="text-slate-700 tabular-nums">₹{v.openingBalance.toLocaleString("en-IN")}</span>
+              : <span className="text-slate-400">—</span>, className: "text-right" },
             { header: "Outstanding", cell: (v) => v.outstandingBalance > 0
               ? <span className="font-medium text-red-600 tabular-nums">₹{v.outstandingBalance.toLocaleString("en-IN")}</span>
               : <span className="text-slate-400">—</span>, className: "text-right" },
@@ -193,11 +221,20 @@ export default function VendorsPage() {
               ? "border-l-green-500"
               : "border-l-slate-200";
             return (
-            <Link
+            // The card is a DIV, not a Link. The call button inside it is an <a href="tel:">,
+            // and an <a> inside an <a> is invalid HTML — React's validateDOMNesting warned on
+            // every render of this list and it would break hydration. So the row link is an
+            // absolutely-positioned overlay that covers the card, and the call button sits
+            // above it on z-10. Both stay real links; neither contains the other.
+            <div
               key={v.id}
-              href={`/vendors/${v.id}`}
-              className={`block rounded-xl border border-slate-200 border-l-4 ${accent} bg-white shadow-sm transition-colors active:bg-slate-50 focus-ring`}
+              className={`relative rounded-xl border border-slate-200 border-l-4 ${accent} bg-white shadow-sm transition-colors active:bg-slate-50 focus-within:ring-2 focus-within:ring-slate-900`}
             >
+              <Link
+                href={`/vendors/${v.id}`}
+                aria-label={v.name}
+                className="absolute inset-0 z-0 rounded-xl focus:outline-none"
+              />
               <div className="p-3">
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0 mr-3">
@@ -224,20 +261,24 @@ export default function VendorsPage() {
                           ₹{v.outstandingBalance.toLocaleString("en-IN")} due
                         </span>
                       )}
+                      {v.openingBalance !== 0 && (
+                        <span className="text-xs text-slate-600 tabular-nums">
+                          ₹{v.openingBalance.toLocaleString("en-IN")} opening
+                        </span>
+                      )}
                     </div>
                   </div>
                   {v.phone && (
                     <a
                       href={`tel:${v.phone}`}
-                      onClick={(e) => e.stopPropagation()}
-                      className="p-2 rounded-full hover:bg-slate-100"
+                      className="relative z-10 p-2 rounded-full hover:bg-slate-100"
                     >
                       <Phone className="h-4 w-4 text-slate-500" />
                     </a>
                   )}
                 </div>
               </div>
-            </Link>
+            </div>
             );
           })}
 
