@@ -1,7 +1,19 @@
 # Brands and categories go inactive, never deleted; the stock audit gets "all uncounted → 0" and a real approval choice
 
-Status: in-progress — written 8 Sep 2026; build started the same day on the §1.1 defaults, order B and C first, A (the migration) last, one commit at the end.
-Branch: **`feat/taxonomy-inactive-and-audit-approval`** — base to be confirmed by the owner (Q0). The working tree on `chore/brand-stock-module-and-tooling` carries unrelated uncommitted work (AI provider), so this must not be built there.
+Status: completed — 9 Sep 2026, every §3 artefact shipped 8 Sep in `ddf0092`; the owner still owes `db:seed:rbac`, `migrate deploy` and the browser pass.
+Branch: **`feat/taxonomy-inactive-and-audit-approval`** — built and committed there as `ddf0092`
+(30 files, +2224/−565), the single commit at the end that §1.1 ordered. Not yet merged to `main`.
+
+Verified against the code on disk 9 Sep 2026, item by item: the migration adds exactly two
+`isActive` columns, both `DELETE` handlers are gone with tombstone comments, `zero-uncounted`
+exists, a counted 0 now applies, and the approver's whole-store correction runs through
+`correctionWarehouseId`. Two gaps this plan did not enumerate remain open and are NOT part of it:
+
+- `src/app/(dashboard)/stock-audit/new/page.tsx:246-253` still tells the person creating a
+  whole-store audit "Verify only — to correct stock, audit one warehouse." That is now false.
+  The plan never names this file, so it was never in scope — raise it separately.
+- The §5.1 supersession was never written down. C4 said "the plan says so in its PR"; the
+  0409 plan's own text has since been corrected instead, on 9 Sep 2026.
 
 Every `file:line` below was read from disk on 8 Sep 2026 by two Explore agents and re-checked by hand at the places that decide the design. Check rather than trust.
 

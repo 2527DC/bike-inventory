@@ -2,10 +2,20 @@
 
 > **To continue this work:** read **[▶ RESUME HERE](#-resume-here--the-only-place-that-holds-current-state)** below. It is the only section that holds current state — branch, database, what is done, what is next. Everything else is design or history.
 
-Status: **BUILD COMPLETE** — 7 Sep 2026. **Every phase is built** (P11 dropped 6 Sep by the owner). R1–R6, R8, R10, R11, R12, R13 all closed. Nothing is merged: the owner opens every PR, and asked for the conflicts to be resolved here when they merge to `main`.
+Status: completed — 9 Sep 2026, every phase including P12 is built and merged to `main`; P11 cleanly dropped 6 Sep; R1–R13 closed (R9 by P12).
 Branch: **`feat/purchasing-transfers-p5-p15`** — cut from `feat/inbound-receiving` @ `df12868`,
-one commit per phase from here. Nothing is merged; the owner opens every PR. Update this line as
-work moves, and keep the detail in ▶ RESUME HERE, not here.
+one commit per phase. **Merged.** `git rev-list --count main..feat/purchasing-transfers-p5-p15`
+is 0 and all ten phase commits are ancestors of `main`, verified 9 Sep 2026; the earlier
+"nothing is merged" on this line was stale.
+
+Two things this plan wrote have since been superseded, and are recorded here so a reader does
+not act on the version below:
+- **R13/O11** — the Vercel build no longer runs `prisma migrate deploy` (removed 7 Sep 2026 on
+  the owner's instruction, `scripts/vercel-build.mjs`). MIG-2's reasoning about a failed build
+  no longer holds; migrations are applied by hand before the code goes live.
+- **§5.1** — a whole-store stock audit no longer refuses with a 400. From 8 Sep 2026 the
+  approver names the warehouse that receives a surplus
+  (`src/app/api/stock-counts/[id]/route.ts:246-253`), per the 0809 taxonomy/audit plan.
 
 Written 4 Sep 2026. Merges and **replaces** two plans written the same day:
 `0409-purchasing-deliveries-transfers-plan.md` (PLAN-1: §A–§G) and
