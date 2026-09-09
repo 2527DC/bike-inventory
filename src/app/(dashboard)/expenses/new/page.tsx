@@ -1,72 +1,205 @@
 "use client";
 
-import { useState } from "react";
+// /expenses/new — the stepped expense entry flow (0909-expense-multi-entry-flow-plan, Part C).
+//
+// One field per screen, in the owner's order: amount → category → description → payment mode
+// → photo. Several expenses are built up in client state and committed by ONE Submit from the
+// review screen, as a single call to POST /api/expenses/batch. Nothing is written per step.
+//
+// The date is shared by the batch and defaults to today (R2). The payer is the signed-in user,
+// shown but never typed (D2) — the server stamps it, so the payload does not carry it at all.
+import { useCallback, useState } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { usePermissions } from "@/lib/use-permissions";
+import { usePermissionStore } from "@/stores/permissions";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+import { BatchBar } from "./_components/batch-bar";
+import { StepShell } from "./_components/step-shell";
+import { AmountStep } from "./_components/amount-step";
+import { CategoryStep } from "./_components/category-step";
+import { DescriptionStep } from "./_components/description-step";
+import { PaymentModeStep } from "./_components/payment-mode-step";
+import { PhotoStep } from "./_components/photo-step";
+import { NextStep } from "./_components/next-step";
+import { ReviewStep } from "./_components/review-step";
+import {
+  EMPTY_DRAFT, ENTRY_STEPS, draftFromRow, newRowKey, parseAmount, rowFromDraft, todayLocal,
+  type Draft, type ExpenseRow, type Step,
+} from "./_components/types";
 
-const CATEGORIES = [
-  "DELIVERY", "TRANSPORT", "SHOP_MAINTENANCE", "UTILITIES",
-  "SALARY_ADVANCE", "FOOD_TEA", "STATIONERY", "MISCELLANEOUS",
-];
+const log = createLogger("expenses:entry");
 
-const PAYMENT_MODES = ["CASH", "CHEQUE", "NEFT", "RTGS", "UPI"];
+const STEP_TITLES: Record<Step, string> = {
+  amount: "Amount",
+  category: "Category",
+  description: "Description",
+  paymentMode: "Payment mode",
+  photo: "Receipt photo",
+  next: "Added",
+  review: "Review",
+};
 
 export default function NewExpensePage() {
-  const { status: sessionStatus } = useSession();
-  const { canCreate: canCreateCheck } = usePermissions();
-  const canAccess = canCreateCheck("expenses");
-
+  const { data: session, status: sessionStatus } = useSession();
+  const { canCreate, loading: permissionsLoading } = usePermissions();
+  const storeUser = usePermissionStore((s) => s.user);
+  const canAccess = canCreate("expenses");
   const router = useRouter();
+
+  // The session carries the name on the web; the permission store carries it for both web and
+  // the bearer-token path. Either is the same person.
+  const payer = session?.user?.name || storeUser?.name || "";
+
+  const [date, setDate] = useState(todayLocal);
+  const [rows, setRows] = useState<ExpenseRow[]>([]);
+  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const [step, setStepState] = useState<Step>("amount");
+  /** The row picked from review that the stepper is currently reloading (Q5). */
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  /** True when "Add another" was pressed on the review screen, so completion returns there. */
+  const [returnToReview, setReturnToReview] = useState(false);
+  const [lastAdded, setLastAdded] = useState<ExpenseRow | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
-  const [form, setForm] = useState({
-    date: new Date().toISOString().split("T")[0],
-    amount: "",
-    category: "MISCELLANEOUS",
-    description: "",
-    paidBy: "",
-    paymentMode: "CASH",
-    referenceNo: "",
-    notes: "",
-  });
+  const go = useCallback((next: Step, rowCount: number) => {
+    log.debug("step", { step: next, rowCount });
+    setStepState(next);
+  }, []);
 
-  function update(field: string, value: string) {
-    setForm((prev) => ({ ...prev, [field]: value }));
+  const editing = editingKey !== null;
+  const entryIndex = ENTRY_STEPS.indexOf(step);
+
+  function leave() {
+    if (rows.length > 0 && !window.confirm(`Discard ${rows.length === 1 ? "1 unsaved expense" : `${rows.length} unsaved expenses`}?`)) return;
+    router.push("/expenses");
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!form.amount || !form.description || !form.paidBy) return;
+  function startFresh(nextRows: ExpenseRow[], toReview: boolean) {
+    setDraft(EMPTY_DRAFT);
+    setEditingKey(null);
+    setReturnToReview(toReview);
+    go("amount", nextRows.length);
+  }
 
-    setSubmitting(true);
-    setError("");
+  /** The current draft is complete: file it into the batch and decide where to go next. */
+  function commitDraft() {
+    const key = editingKey ?? newRowKey();
+    const row = rowFromDraft(draft, key);
+    if (!row) {
+      // Forward buttons are disabled until each step is valid, so this is a defensive branch:
+      // it names the first step that is not, rather than silently doing nothing.
+      const firstInvalid: Step =
+        parseAmount(draft.amount) === null ? "amount" : !draft.category ? "category" : "description";
+      log.warn("draft incomplete at commit", { step: firstInvalid, rowCount: rows.length });
+      go(firstInvalid, rows.length);
+      return;
+    }
 
-    try {
-      const res = await fetch("/api/expenses", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...form,
-          amount: parseFloat(form.amount),
-        }),
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || "Failed to record expense");
-      router.push("/expenses");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
-    } finally {
-      setSubmitting(false);
+    if (editingKey) {
+      const nextRows = rows.map((r) => (r.key === editingKey ? row : r));
+      setRows(nextRows);
+      setEditingKey(null);
+      setDraft(EMPTY_DRAFT);
+      go("review", nextRows.length);
+      return;
+    }
+
+    const nextRows = [...rows, row];
+    setRows(nextRows);
+    setLastAdded(row);
+    setDraft(EMPTY_DRAFT);
+    if (returnToReview) {
+      setReturnToReview(false);
+      go("review", nextRows.length);
+    } else {
+      go("next", nextRows.length);
     }
   }
 
-  if (sessionStatus === "loading") {
+  function nextEntryStep() {
+    if (entryIndex < 0) return;
+    if (entryIndex < ENTRY_STEPS.length - 1) go(ENTRY_STEPS[entryIndex + 1], rows.length);
+    else commitDraft();
+  }
+
+  function back() {
+    if (step === "review") {
+      leave();
+      return;
+    }
+    if (step === "next") {
+      go("review", rows.length);
+      return;
+    }
+    if (entryIndex > 0) {
+      go(ENTRY_STEPS[entryIndex - 1], rows.length);
+      return;
+    }
+    // On the amount step. Abandon the draft (or the edit) and go back to wherever the person
+    // came from: the review screen if the batch has rows, otherwise out of the flow.
+    if (editing || returnToReview || rows.length > 0) {
+      setDraft(EMPTY_DRAFT);
+      setEditingKey(null);
+      setReturnToReview(false);
+      go("review", rows.length);
+      return;
+    }
+    leave();
+  }
+
+  function editRow(key: string) {
+    const row = rows.find((r) => r.key === key);
+    if (!row) return;
+    setDraft(draftFromRow(row));
+    setEditingKey(key);
+    setReturnToReview(false);
+    go("amount", rows.length);
+  }
+
+  function removeRow(key: string) {
+    const nextRows = rows.filter((r) => r.key !== key);
+    setRows(nextRows);
+    if (nextRows.length === 0) startFresh(nextRows, false);
+  }
+
+  async function submit() {
+    if (rows.length === 0 || submitting) return;
+    setSubmitting(true);
+    setError("");
+    const { error: submitError, isAuth, status } = await apiTry<{ count: number; total: number; ids: string[] }>(
+      "/api/expenses/batch",
+      {
+        method: "POST",
+        json: {
+          date,
+          expenses: rows.map((r) => ({
+            amount: r.amount,
+            category: r.category,
+            description: r.description,
+            paymentMode: r.paymentMode,
+            receiptUrl: r.receiptUrl ?? undefined,
+          })),
+        },
+      }
+    );
+    if (submitError) {
+      log.error("submit failed", { rowCount: rows.length, status, isAuth });
+      setSubmitting(false);
+      if (isAuth) {
+        router.push("/login");
+        return;
+      }
+      setError(submitError);
+      return;
+    }
+    log.info("batch submitted", { rowCount: rows.length });
+    router.push("/expenses");
+  }
+
+  if (sessionStatus === "loading" || permissionsLoading) {
     return (
       <div className="flex items-center justify-center py-12">
         <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
@@ -74,6 +207,7 @@ export default function NewExpensePage() {
     );
   }
 
+  // Cosmetic gate only — POST /api/expenses/batch re-checks the same grant (access rule 5).
   if (!canAccess) {
     return (
       <div className="text-center py-12">
@@ -83,117 +217,58 @@ export default function NewExpensePage() {
     );
   }
 
+  const subtitle =
+    entryIndex >= 0
+      ? `Step ${entryIndex + 1} of ${ENTRY_STEPS.length}${editing ? " · editing" : ""}`
+      : step === "next"
+        ? "Add another, or review the batch"
+        : "Check every line before submitting";
+
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/expenses" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
-          <ArrowLeft className="h-5 w-5 text-slate-600" />
-        </Link>
-        <h1 className="text-lg font-bold text-slate-900 truncate">Record Expense</h1>
-      </div>
+      {step !== "next" && step !== "review" && (
+        <BatchBar date={date} onDateChange={setDate} payer={payer} />
+      )}
 
-      {error && <div className="bg-red-50 text-red-700 text-sm p-3 rounded-lg mb-4">{error}</div>}
-
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Date *</label>
-          <Input type="date" value={form.date} onChange={(e) => update("date", e.target.value)} className="min-h-[44px] tabular-nums" />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Amount *</label>
-          <Input
-            type="number"
-            inputMode="decimal"
-            placeholder="0.00"
-            value={form.amount}
-            onChange={(e) => update("amount", e.target.value)}
-            min="0.01"
-            step="0.01"
-            className="text-lg tabular-nums min-h-[44px]"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Category *</label>
-          <select
-            value={form.category}
-            onChange={(e) => update("category", e.target.value)}
-            className="flex h-10 min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
-          >
-            {CATEGORIES.map((c) => (
-              <option key={c} value={c}>{c.replace(/_/g, " ")}</option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Description *</label>
-          <Input
-            placeholder="What was this expense for?"
-            value={form.description}
-            onChange={(e) => update("description", e.target.value)}
-            className="min-h-[44px]"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Paid By *</label>
-          <Input
-            placeholder="Person who paid"
-            value={form.paidBy}
-            onChange={(e) => update("paidBy", e.target.value)}
-            className="min-h-[44px]"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Payment Mode</label>
-          <div className="flex flex-wrap gap-2">
-            {PAYMENT_MODES.map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => update("paymentMode", mode)}
-                className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                  form.paymentMode === mode ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                }`}
-              >
-                {mode}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Reference No</label>
-          <Input placeholder="Optional reference" value={form.referenceNo} onChange={(e) => update("referenceNo", e.target.value)} className="min-h-[44px]" />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
-          <textarea
-            placeholder="Any additional notes..."
-            value={form.notes}
-            onChange={(e) => update("notes", e.target.value)}
-            rows={2}
-            className="flex w-full min-h-[44px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
-          />
-        </div>
-
-        {!submitting && (!form.amount || !form.description || !form.paidBy) && (
-          <p className="text-xs text-slate-500">Enter amount, description and paid by to save.</p>
+      <StepShell title={STEP_TITLES[step]} subtitle={subtitle} onBack={back} rowCount={rows.length} editing={editing}>
+        {step === "amount" && (
+          <AmountStep value={draft.amount} onChange={(amount) => setDraft((d) => ({ ...d, amount }))} onNext={nextEntryStep} />
         )}
-
-        <Button
-          type="submit"
-          size="lg"
-          disabled={!form.amount || !form.description || !form.paidBy || submitting}
-          className="w-full min-h-[48px] bg-green-600 hover:bg-green-700"
-        >
-          {submitting ? "Recording..." : "Record Expense"}
-        </Button>
-      </form>
+        {step === "category" && (
+          <CategoryStep value={draft.category} onChange={(category) => setDraft((d) => ({ ...d, category }))} onNext={nextEntryStep} />
+        )}
+        {step === "description" && (
+          <DescriptionStep value={draft.description} onChange={(description) => setDraft((d) => ({ ...d, description }))} onNext={nextEntryStep} />
+        )}
+        {step === "paymentMode" && (
+          <PaymentModeStep value={draft.paymentMode} onChange={(paymentMode) => setDraft((d) => ({ ...d, paymentMode }))} onNext={nextEntryStep} />
+        )}
+        {step === "photo" && (
+          <PhotoStep value={draft.receiptUrl} onChange={(receiptUrl) => setDraft((d) => ({ ...d, receiptUrl }))} onNext={nextEntryStep} editing={editing} />
+        )}
+        {step === "next" && lastAdded && (
+          <NextStep
+            added={lastAdded}
+            rows={rows}
+            onAddAnother={() => startFresh(rows, false)}
+            onReview={() => go("review", rows.length)}
+          />
+        )}
+        {step === "review" && (
+          <ReviewStep
+            rows={rows}
+            date={date}
+            payer={payer}
+            submitting={submitting}
+            error={error}
+            onEdit={editRow}
+            onRemove={removeRow}
+            onAddAnother={() => startFresh(rows, true)}
+            onSubmit={submit}
+            onDismissError={() => setError("")}
+          />
+        )}
+      </StepShell>
     </div>
   );
 }

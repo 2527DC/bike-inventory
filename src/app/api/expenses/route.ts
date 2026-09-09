@@ -49,7 +49,8 @@ export async function POST(req: NextRequest) {
         amount: data.amount,
         category: data.category,
         description: data.description,
-        paidBy: data.paidBy,
+        // D2: the payer is the signed-in user, derived here, never taken from the body.
+        paidBy: user.name,
         paymentMode: data.paymentMode,
         referenceNo: data.referenceNo,
         notes: data.notes,
