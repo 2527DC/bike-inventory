@@ -4,8 +4,7 @@ import { useDebounce } from "@/hooks/use-debounce";
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, Square, X, Package, EyeOff, RotateCcw
-} from "lucide-react";
+import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, Square, X, Package, EyeOff, RotateCcw, Store } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -23,14 +22,14 @@ import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
 import { isPlaceholderBrand, isPlaceholderCategory } from "@/lib/import-placeholders";
 import { isLowStock } from "@/lib/reorder";
 import { ReorderSheet, type ReorderTarget, type ReorderSaved } from "@/components/reorder-sheet";
-import { BICYCLE_SIZES } from "@/lib/product-size";
+import { SearchableSelect } from "@/components/ui/searchable-select";
+import { useStores } from "@/hooks/use-sites";
 
 const STOCK_COLUMNS: ExportColumn[] = [
   { header: "SKU", key: "sku" },
   { header: "Product Name", key: "name" },
   { header: "Category", key: "category.name" },
   { header: "Brand", key: "brand.name" },
-  { header: "Size", key: "size" },
   { header: "Stock", key: "currentStock" },
   { header: "Reorder Level", key: "reorderLevel" },
   { header: "Bin", key: "bin.code" },
@@ -40,7 +39,6 @@ interface ProductItem {
   id: string;
   sku: string;
   name: string;
-  size: string | null;
   status: string;
   currentStock: number;
   reorderLevel: number;
@@ -75,10 +73,6 @@ const QUICK_CHIPS: { key: QuickFilter; label: string }[] = [
   { key: "NEEDS_DETAILS", label: "Needs details" },
   { key: "INACTIVE", label: "Inactive" },
 ];
-
-// BICYCLE_SIZES lives in `@/lib/product-size`. The parse that used to produce these values
-// went with the Zoho item import; the list stays because it is what the size filter offers
-// and what a person picks from when editing a product.
 
 const log = createLogger("stock");
 
@@ -145,8 +139,12 @@ export default function StockPage() {
   const [showFilters, setShowFilters] = useState(false);
   const [selectedBrand, setSelectedBrand] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
-  const [selectedSize, setSelectedSize] = useState("");
   const [selectedBin, setSelectedBin] = useState("");
+  // The store scope (plan 0909-stock-store-and-warehouse-scoping, C2). "" is no scope. When
+  // set, the API answers with only what that store holds and every Stock figure on the page
+  // is that store's, not the global total — the caption under the control says so.
+  const [selectedStore, setSelectedStore] = useState("");
+  const { stores, loading: storesLoading, error: storesError } = useStores();
   const [brands, setBrands] = useState<BrandItem[]>([]);
   const [bins, setBins] = useState<BinItem[]>([]);
   const [page, setPage] = useState(1);
@@ -266,7 +264,7 @@ export default function StockPage() {
     );
   }, [bulkAction, bulkVendors.length]);
 
-  const activeFilterCount = [selectedBrand, selectedCategory, selectedSize, selectedBin].filter(Boolean).length;
+  const activeFilterCount = [selectedBrand, selectedCategory, selectedBin, selectedStore].filter(Boolean).length;
 
   const buildParams = useCallback((pageNum: number) => {
     const params = new URLSearchParams({ limit: String(PAGE_SIZE), page: String(pageNum), sortBy: "currentStock", sortOrder: "desc" });
@@ -281,10 +279,10 @@ export default function StockPage() {
     else if (quickFilter === "ALL" || quickFilter === "LOW_STOCK") { params.set("status", "ACTIVE"); }
     if (selectedBrand) params.set("brandId", selectedBrand);
     if (selectedCategory) params.set("categoryId", selectedCategory);
-    if (selectedSize) params.set("size", selectedSize);
     if (selectedBin) params.set("binId", selectedBin);
+    if (selectedStore) params.set("storeId", selectedStore);
     return params;
-  }, [debouncedSearch, quickFilter, selectedBrand, selectedCategory, selectedSize, selectedBin]);
+  }, [debouncedSearch, quickFilter, selectedBrand, selectedCategory, selectedBin, selectedStore]);
 
   const fetchProducts = useCallback((pageNum: number, append = false, silent = false) => {
     if (!silent) { if (append) setLoadingMore(true); else setLoading(true); }
@@ -354,8 +352,8 @@ export default function StockPage() {
   function clearFilters() {
     setSelectedBrand("");
     setSelectedCategory("");
-    setSelectedSize("");
     setSelectedBin("");
+    setSelectedStore("");
   }
 
   /**
@@ -388,13 +386,14 @@ export default function StockPage() {
   const filtered = quickFilter === "LOW_STOCK"
     ? products.filter(isLowStock)
     : debouncedSearch
-      ? products.filter((p) => fuzzySearchFields(debouncedSearch, [p.name, p.sku, p.brand?.name, p.size, p.category?.name]))
+      ? products.filter((p) => fuzzySearchFields(debouncedSearch, [p.name, p.sku, p.brand?.name, p.category?.name]))
       : products;
 
   const secondsAgo = Math.round((Date.now() - lastUpdated.getTime()) / 1000);
 
-  // Show size filter always
-  const showSizeFilter = true;
+  // The store the list is scoped to, for the caption under the Store control. Null when the
+  // filter is clear or the store set has not arrived yet.
+  const scopedStore = selectedStore ? stores.find((s) => s.id === selectedStore) ?? null : null;
 
   return (
     <div>
@@ -404,15 +403,24 @@ export default function StockPage() {
           {selectMode ? `${selectedIds.size} selected` : "Stock"}
         </h1>
         <div className="flex items-center gap-1.5">
-          {/* The only cross-link left on this page now that the view-tab bar is gone. It sits
-              in the header action row so it reads as a destination, not an orphaned tab, and
-              hides in select mode like the other actions beside it. */}
+          {/* The two scope cross-links — By Location (per warehouse) and By Store (the sum of
+              a store's warehouses; plan 0909-stock-store-and-warehouse-scoping, B4). They sit
+              in the header action row so they read as destinations, not orphaned tabs, and
+              hide in select mode like the other actions beside them. */}
           {!selectMode && (
             <Link
               href="/stock/by-bin"
               className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100"
             >
               <MapPin className="h-3.5 w-3.5" /> {BIN_TRACKING_ENABLED ? "By Bin" : "By Location"}
+            </Link>
+          )}
+          {!selectMode && (
+            <Link
+              href="/stock/by-store"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100"
+            >
+              <Store className="h-3.5 w-3.5" /> By Store
             </Link>
           )}
           {canBulkEdit && !selectMode && (
@@ -461,7 +469,7 @@ export default function StockPage() {
       <div className="relative mb-3">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
         <Input
-          placeholder="Search product, SKU, brand, or size..."
+          placeholder="Search product, SKU, brand, or category..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="pl-9"
@@ -505,32 +513,69 @@ export default function StockPage() {
         <Card className="mb-3 border-slate-200">
           <CardContent className="p-3 space-y-2.5">
             <div className="grid grid-cols-2 gap-2.5">
+              {/* All three pickers are searchable (owner, 9 Sep 2026 — Q7 for Store, D11 pulls
+                  Category and Brand along so the panel does not carry two dialects side by
+                  side). The dropdown is unportalled; this grid has no overflow class and Card
+                  sets none, so it is not clipped. The product count that the old <option>
+                  text carried in brackets is the row's hint now, so it is still searchable. */}
               <div>
-                <label className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Category</label>
-                <select
-                  value={selectedCategory}
-                  onChange={(e) => setSelectedCategory(e.target.value)}
-                  className="mt-0.5 flex h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
-                >
-                  <option value="">All Categories ({categories.length})</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name} ({c._count.products})</option>
-                  ))}
-                </select>
+                <label htmlFor="stock-filter-category" className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Category</label>
+                <SearchableSelect
+                  id="stock-filter-category"
+                  className="mt-0.5"
+                  options={categories.map((c) => ({
+                    id: c.id,
+                    label: c.name,
+                    hint: `${c._count.products} product${c._count.products === 1 ? "" : "s"}`,
+                  }))}
+                  value={selectedCategory || null}
+                  onChange={(id) => setSelectedCategory(id ?? "")}
+                  placeholder={`All Categories (${categories.length})`}
+                  emptyText="No matching category"
+                />
               </div>
 
               <div>
-                <label className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Brand</label>
-                <select
-                  value={selectedBrand}
-                  onChange={(e) => setSelectedBrand(e.target.value)}
-                  className="mt-0.5 flex h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
-                >
-                  <option value="">All Brands ({brands.length})</option>
-                  {brands.map((b) => (
-                    <option key={b.id} value={b.id}>{b.name} ({b._count.products})</option>
-                  ))}
-                </select>
+                <label htmlFor="stock-filter-brand" className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Brand</label>
+                <SearchableSelect
+                  id="stock-filter-brand"
+                  className="mt-0.5"
+                  options={brands.map((b) => ({
+                    id: b.id,
+                    label: b.name,
+                    hint: `${b._count.products} product${b._count.products === 1 ? "" : "s"}`,
+                  }))}
+                  value={selectedBrand || null}
+                  onChange={(id) => setSelectedBrand(id ?? "")}
+                  placeholder={`All Brands (${brands.length})`}
+                  emptyText="No matching brand"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="stock-filter-store" className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Store</label>
+                <SearchableSelect
+                  id="stock-filter-store"
+                  className="mt-0.5"
+                  options={stores.map((s) => ({
+                    id: s.id,
+                    label: s.name,
+                    hint: `${s.warehouses.length} location${s.warehouses.length === 1 ? "" : "s"}`,
+                  }))}
+                  value={selectedStore || null}
+                  onChange={(id) => setSelectedStore(id ?? "")}
+                  placeholder={storesLoading ? "Loading stores…" : "All stores"}
+                  emptyText="No matching store"
+                  disabled={storesLoading || !!storesError}
+                />
+                {storesError && (
+                  <p className="mt-1 text-[11px] text-red-500">Could not load stores</p>
+                )}
+                {scopedStore && (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Showing what {scopedStore.name} holds. Quantities are that store&apos;s.
+                  </p>
+                )}
               </div>
 
               {BIN_TRACKING_ENABLED && (
@@ -549,22 +594,6 @@ export default function StockPage() {
                 </div>
               )}
             </div>
-
-            {showSizeFilter && (
-              <div>
-                <label className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Size (Bicycles)</label>
-                <select
-                  value={selectedSize}
-                  onChange={(e) => setSelectedSize(e.target.value)}
-                  className="mt-0.5 flex h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
-                >
-                  <option value="">All Sizes</option>
-                  {BICYCLE_SIZES.map((s) => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
-              </div>
-            )}
 
             {activeFilterCount > 0 && (
               <button onClick={clearFilters} className="text-xs text-red-500 font-medium">
@@ -687,9 +716,6 @@ export default function StockPage() {
                               {p.category.name}
                             </span>
                           ))}
-                        {p.size && (
-                          <Badge variant="default" className="text-[10px] py-0 tabular-nums">{p.size}</Badge>
-                        )}
                       </div>
                       {/* Price. Selling price is safe for everyone — it is what a customer is
                           quoted. Cost price is NOT: it is gated by the `cost_price` module,

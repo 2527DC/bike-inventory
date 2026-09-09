@@ -88,7 +88,6 @@ export interface Product {
   maxStock: number;
   reorderLevel: number;
   reorderQty: number;
-  size?: string;
   color?: string;
   imageUrls: string[];
   tags: string[];

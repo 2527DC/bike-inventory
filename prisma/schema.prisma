@@ -280,8 +280,20 @@ model Store {
   deliveries  Delivery[]   @relation("DeliveryStore")
 }
 
-/// A godown. Stock lives here. One per store on day one, but the whole point of the model is
-/// that a second one is an INSERT rather than a migration — see the plan's §2.1.
+/// What kind of place a warehouse is. FLOOR is the shop — where a customer sees the bike;
+/// GODOWN is storage. Decided 9 Sep 2026 (plan 0909-stock-store-and-warehouse-scoping, D2):
+/// three call sites need "the shop of this store" — outbound ordering, the inbound default and
+/// the transfer form's store panel — and a naming convention cannot be enforced by anything.
+/// Not unique per store on purpose: a shop may have two display areas. "The floor" is the first
+/// by sortOrder.
+enum WarehouseKind {
+  FLOOR
+  GODOWN
+}
+
+/// A place that holds stock — a godown or the shop floor (see `kind`). One godown per store
+/// on day one, but the whole point of the model is that a second location is an INSERT rather
+/// than a migration — see the plan's §2.1. The floor is exactly that second row (D1).
 model Warehouse {
   id        String   @id @default(cuid())
   storeId   String
@@ -292,6 +304,7 @@ model Warehouse {
   store     Store    @relation(fields: [storeId], references: [id], onDelete: Restrict)
   code      String   @unique // "BCH_WAREHOUSE", "BCC_WAREHOUSE"
   name      String // "BCH Warehouse"
+  kind      WarehouseKind @default(GODOWN)
   isActive  Boolean  @default(true)
   sortOrder Int      @default(0)
   createdAt DateTime @default(now())
@@ -517,7 +530,7 @@ model Product {
   reorderQty    Int @default(0)
 
   // Bicycle specific
-  size      String? // For bicycles: 16", 20", 24", 26", etc.
+  size      String? // dropped next release — plan 0909-stock-screens-size-category-and-sidebar §5
   color     String?
   imageUrls String[] // Array of image URLs
   tags      String[] // Condition tags, custom tags

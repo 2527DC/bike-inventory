@@ -2,20 +2,15 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowLeft, AlertTriangle, Package, Store, Warehouse, Loader2 } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { ArrowLeft, Package, Loader2 } from "lucide-react";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+import { LocationCard, formatINR, type LocationCardData } from "../_components/location-card";
 
-interface LocationStock {
-  key: string;
-  label: string;
+const log = createLogger("stock:by-bin");
+
+interface LocationStock extends LocationCardData {
   site: "BCH" | "BCC";
-  kind: "Warehouse" | "Store";
-  totalStock: number;
-  totalValue: number;
-  productCount: number;
-  lowStockCount: number;
-  outOfStockCount: number;
 }
 
 const SITE_NAMES: Record<string, string> = {
@@ -23,20 +18,25 @@ const SITE_NAMES: Record<string, string> = {
   BCC: "Bharath Cycle Centre",
 };
 
-function formatINR(n: number) {
-  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n);
-}
-
 export default function StockByLocationPage() {
   const [locations, setLocations] = useState<LocationStock[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/stock/by-bin")
-      .then((r) => r.json())
-      .then((res) => { if (res.success && res.data?.locations) setLocations(res.data.locations); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    (async () => {
+      const res = await apiTry<{ locations?: LocationStock[] }>("/api/stock/by-bin");
+      if (cancelled) return;
+      if (res.data) {
+        setLocations(res.data.locations ?? []);
+      } else {
+        log.error("stock by location failed to load", { reason: res.error, status: res.status });
+        setError(res.error);
+      }
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   const totalStock = locations.reduce((s, l) => s + l.totalStock, 0);
@@ -53,7 +53,7 @@ export default function StockByLocationPage() {
   return (
     <div>
       <div className="flex items-center gap-3 mb-3">
-        <Link href="/stock" className="p-1">
+        <Link href="/stock" className="p-1" aria-label="Back to stock">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
         <div className="flex-1">
@@ -69,6 +69,10 @@ export default function StockByLocationPage() {
           <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
           <span className="text-sm text-slate-400">Loading...</span>
         </div>
+      ) : error ? (
+        <div className="text-center py-12">
+          <p className="text-sm text-red-600">{error}</p>
+        </div>
       ) : locations.length === 0 ? (
         <div className="text-center py-12">
           <Package className="h-10 w-10 text-slate-300 mx-auto mb-2" />
@@ -83,49 +87,14 @@ export default function StockByLocationPage() {
               </p>
               <div className="grid gap-3 sm:grid-cols-2">
                 {group.locs.map((loc) => (
-                  <Link key={loc.key} href={`/stock/by-location/${loc.key}`} className="block">
-                    <Card className="hover:border-slate-300 transition-colors">
-                    <CardContent className="p-4">
-                      <div className="flex items-center gap-3 mb-3">
-                        <div className={`h-10 w-10 rounded-xl flex items-center justify-center ${loc.kind === "Warehouse" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}`}>
-                          {loc.kind === "Warehouse" ? <Warehouse className="h-5 w-5" /> : <Store className="h-5 w-5" />}
-                        </div>
-                        <div className="flex-1">
-                          <p className="text-base font-semibold text-slate-900">{loc.label}</p>
-                          <p className="text-xs text-slate-500">{loc.productCount.toLocaleString("en-IN")} products in stock</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-lg font-bold text-slate-800">{loc.totalStock.toLocaleString("en-IN")}</p>
-                          <p className="text-[10px] text-slate-400">units</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center justify-between border-t border-slate-100 pt-2.5">
-                        <span className="text-xs text-slate-500">Stock value</span>
-                        <span className="text-sm font-semibold text-slate-700">{formatINR(loc.totalValue)}</span>
-                      </div>
-                      {(loc.lowStockCount > 0 || loc.outOfStockCount > 0) && (
-                        <div className="flex items-center gap-2 mt-2">
-                          {loc.lowStockCount > 0 && (
-                            <Badge variant="warning" className="text-[10px]">
-                              <AlertTriangle className="h-2.5 w-2.5 mr-0.5" />
-                              {loc.lowStockCount} low
-                            </Badge>
-                          )}
-                          {loc.outOfStockCount > 0 && (
-                            <Badge variant="danger" className="text-[10px]">{loc.outOfStockCount} out of stock</Badge>
-                          )}
-                        </div>
-                      )}
-                      <p className="text-[11px] font-medium text-blue-600 mt-2">View stock by brand →</p>
-                    </CardContent>
-                    </Card>
-                  </Link>
+                  <LocationCard key={loc.key} loc={loc} href={`/stock/by-location/${loc.key}`} />
                 ))}
               </div>
             </div>
           ))}
           <p className="text-[11px] text-slate-400 text-center pt-1">
             Move stock between locations using Transfers. Counts set each location&apos;s true quantity.
+            A floor that reads 0 has not been counted yet.
           </p>
         </div>
       )}

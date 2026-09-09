@@ -7,6 +7,8 @@ export interface WarehouseRef {
   id: string;
   code: string;
   name: string;
+  /** FLOOR is the shop, GODOWN is storage (plan 0909-stock-store-and-warehouse-scoping, D2). */
+  kind: "FLOOR" | "GODOWN";
   storeId: string;
   /**
    * The owning store's tax identity, for P14's document derivation, plus its `code`
@@ -54,6 +56,7 @@ export async function listWarehouses(): Promise<WarehouseRef[]> {
       id: true,
       code: true,
       name: true,
+      kind: true,
       storeId: true,
       // `code` ("BCH_STORE") rides along so /api/stock/by-bin can say which SITE a warehouse
       // belongs to without a second query. Its prefix is the site key the by-location screen

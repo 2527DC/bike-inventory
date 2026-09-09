@@ -49,7 +49,6 @@ export const productSchema = z.object({
   // (schema.prisma:514) — only this schema was missing, so a reorderVendorId sent to
   // PUT /api/products/[id] was silently STRIPPED by productUpdateSchema.partial().
   reorderVendorId: z.string().nullable().optional(),
-  size: z.string().optional(),
   color: z.string().optional(),
   imageUrls: z.array(z.string().url()).optional(),
   tags: z.array(z.string()).optional(),
@@ -1058,6 +1057,8 @@ export const warehouseSchema = z.object({
   storeId: z.string().min(1, "A store is required"),
   code: SITE_CODE,
   name: z.string().min(1, "Name is required").max(100),
+  /** FLOOR = the shop, GODOWN = storage. Optional: the column defaults to GODOWN (D2). */
+  kind: z.enum(["FLOOR", "GODOWN"]).optional(),
   sortOrder: z.number().int().min(0).optional(),
 });
 

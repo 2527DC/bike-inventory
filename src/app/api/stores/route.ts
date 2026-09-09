@@ -49,7 +49,7 @@ export async function GET() {
         sortOrder: true,
         warehouses: {
           where: { isActive: true },
-          select: { id: true, code: true, name: true, sortOrder: true },
+          select: { id: true, code: true, name: true, kind: true, sortOrder: true },
           orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
         },
       },

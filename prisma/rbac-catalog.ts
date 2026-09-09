@@ -759,6 +759,12 @@ export const MODULE_CATALOG: ModuleSeed[] = [
   // Two modules rather than one, decided 30 Aug 2026: "open a new store" and "add a warehouse
   // to an existing site" are different decisions, and a warehouse supervisor can reasonably
   // hold the second without the first.
+  //
+  // Only the FIRST child has a page. `warehouses` is permission-only (route: null, 9 Sep
+  // 2026): warehouses are created and edited inside /stores, and the module exists to hold
+  // the create/edit/delete grants that gate /api/warehouses. The heading therefore survives
+  // on `stores` alone — app-sidebar.tsx keeps a parent while at least one child has a route,
+  // so if `stores` were ever nulled too the whole Store Management heading would vanish.
   {
     key: "store_management",
     label: "Store Management",
@@ -785,7 +791,11 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     label: "Warehouses",
     description: "Warehouses under each store — where stock physically lives",
     icon: "Warehouse",
-    route: "/stores/warehouses",
+    // No page. Warehouses are managed inside /stores; this module exists to hold the
+    // `warehouses.create/edit/delete` grants that gate /api/warehouses. A routeless child
+    // renders nothing in the sidebar and cannot be pinned — plan
+    // 0909-stock-screens-size-category-and-sidebar, D14.
+    route: null,
     parentKey: "store_management",
     group: "Admin",
     sortOrder: 542,

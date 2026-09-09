@@ -89,6 +89,49 @@ export async function PUT(
       if (vendorError) return errorResponse(vendorError, 400);
     }
 
+    // A category or brand is validated ON CHANGE ONLY (plan 0909-stock-screens-size-category-
+    // and-sidebar, D2 / Q9). The edit form always sends both ids back, and a product already
+    // filed under an inactive category must stay editable — 15 products sit in one today — so
+    // an id equal to the row's current value is never looked up. Moving TO an unknown or
+    // inactive row is refused with the same wording POST and /reclassify use.
+    if (data.categoryId !== undefined || data.brandId !== undefined) {
+      const current = await prisma.product.findUnique({
+        where: { id },
+        select: { categoryId: true, brandId: true },
+      });
+      if (!current) return errorResponse("Product not found", 404);
+
+      if (data.categoryId !== undefined && data.categoryId !== current.categoryId) {
+        const category = await prisma.category.findUnique({
+          where: { id: data.categoryId },
+          select: { id: true, name: true, isActive: true },
+        });
+        if (!category) {
+          log.warn("product update refused", { productId: id, field: "categoryId", value: data.categoryId });
+          return errorResponse("Selected category no longer exists", 400);
+        }
+        if (!category.isActive) {
+          log.warn("product update refused", { productId: id, field: "categoryId", value: data.categoryId });
+          return errorResponse(`${category.name} is inactive. Activate it on /categories first.`, 400);
+        }
+      }
+
+      if (data.brandId !== undefined && data.brandId !== current.brandId) {
+        const brand = await prisma.brand.findUnique({
+          where: { id: data.brandId },
+          select: { id: true, name: true, isActive: true },
+        });
+        if (!brand) {
+          log.warn("product update refused", { productId: id, field: "brandId", value: data.brandId });
+          return errorResponse("Selected brand no longer exists", 400);
+        }
+        if (!brand.isActive) {
+          log.warn("product update refused", { productId: id, field: "brandId", value: data.brandId });
+          return errorResponse(`${brand.name} is inactive. Activate it on /brands first.`, 400);
+        }
+      }
+    }
+
     const product = await prisma.product.update({
       where: { id },
       data,

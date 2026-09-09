@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
       prisma.inventoryTransaction.findMany({
         where,
         include: {
-          product: { select: { name: true, sku: true, size: true, brand: { select: { name: true } } } },
+          product: { select: { name: true, sku: true, brand: { select: { name: true } } } },
           user: { select: { name: true } },
         },
         orderBy: { createdAt: "desc" },

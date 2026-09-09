@@ -33,6 +33,7 @@ export async function GET(req: NextRequest) {
         id: true,
         code: true,
         name: true,
+        kind: true,
         sortOrder: true,
         storeId: true,
         // gstin/stateCode ride along for P14's transfer-document derivation. Printed on the
@@ -81,15 +82,18 @@ export async function POST(req: NextRequest) {
         storeId: store.id,
         code,
         name: data.name.trim(),
+        // GODOWN when the client says nothing — the column default, spelled out so a caller
+        // that predates `kind` still creates storage, never a shop floor by accident.
+        kind: data.kind ?? "GODOWN",
         sortOrder: data.sortOrder ?? 0,
       },
       select: {
-        id: true, code: true, name: true, sortOrder: true, isActive: true,
+        id: true, code: true, name: true, kind: true, sortOrder: true, isActive: true,
         store: { select: { id: true, code: true, name: true } },
       },
     });
 
-    log.info("warehouse created", { warehouseId: warehouse.id, code: warehouse.code, storeId: store.id });
+    log.info("warehouse created", { warehouseId: warehouse.id, code: warehouse.code, kind: warehouse.kind, storeId: store.id });
     // A new warehouse is not in the cached set.
     // The cached array would otherwise outlive the change for the life of the process —
     // which is how a warehouse the picker offers gets refused by the server that offered it.

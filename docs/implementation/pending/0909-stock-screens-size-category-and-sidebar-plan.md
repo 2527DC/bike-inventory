@@ -1,6 +1,6 @@
 # Four stock screens catch up: brand-count starts at the store, inbound shows the time, Warehouses leaves the sidebar, and Size becomes the Category it always meant
 
-Status: pending — §1 Q6–Q7 and §1.3 Q8–Q11 answered (Q8 base branch deferred to implementation time); no code written
+Status: in-progress — 9 Sep 2026, Parts E and G building first on branch feat/0909-stock-po-expense (four plans share it); C′, D, F follow the sibling plan
 Branch: **`feat/stock-screens-size-category-sidebar`** — create it with exactly this name. **The base branch is not assumed:** the owner names it before anything is checked out.
 
 **This plan has NO migration.** Nothing in it changes `prisma/schema.prisma` in a way that needs

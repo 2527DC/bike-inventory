@@ -6,10 +6,14 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("use-sites");
 
+/** FLOOR is the shop, GODOWN is storage (plan 0909-stock-store-and-warehouse-scoping, D2). */
+export type WarehouseKind = "FLOOR" | "GODOWN";
+
 export interface WarehouseOption {
   id: string;
   code: string;
   name: string;
+  kind: WarehouseKind;
   sortOrder: number;
   storeId: string;
   /**
@@ -28,7 +32,7 @@ export interface StoreOption {
   id: string;
   code: string;
   name: string;
-  warehouses: Array<{ id: string; code: string; name: string; sortOrder: number }>;
+  warehouses: Array<{ id: string; code: string; name: string; kind: WarehouseKind; sortOrder: number }>;
 }
 
 /**

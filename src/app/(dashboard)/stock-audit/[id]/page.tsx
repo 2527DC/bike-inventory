@@ -34,7 +34,6 @@ interface StockCountItemData {
     name: string;
     sku: string;
     currentStock: number;
-    size: string | null;
     category: { name: string } | null;
     brand: { name: string } | null;
     bin: { code: string; location: string } | null;
@@ -169,8 +168,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                 fuzzyMatch(debouncedSearch, item.product.name) ||
                 fuzzyMatch(debouncedSearch, item.product.sku) ||
                 fuzzyMatch(debouncedSearch, item.product.brand?.name) ||
-                fuzzyMatch(debouncedSearch, item.product.category?.name) ||
-                fuzzyMatch(debouncedSearch, item.product.size)
+                fuzzyMatch(debouncedSearch, item.product.category?.name)
               );
               setItems(fuzzyResults);
               mergeServerCounts(fuzzyResults);
