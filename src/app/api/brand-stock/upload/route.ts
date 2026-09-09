@@ -6,6 +6,7 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { parseExcelBuffer } from "@/lib/excel-parser";
 import { parsePdfWithAI } from "@/lib/pdf-parser";
+import { toAiErrorResponse } from "@/lib/ai";
 import { runMatchPipeline, populateBchContext } from "@/lib/brand-stock-matcher";
 
 export async function POST(req: NextRequest) {
@@ -39,6 +40,10 @@ export async function POST(req: NextRequest) {
         parsedItems = await parsePdfWithAI(buffer, fileName);
       }
     } catch (e) {
+      // parsePdfWithAI lets AiError / AiNotConfiguredError propagate; map those to their
+      // own status (501 "Settings → AI", 502/503 by kind) before the generic 400.
+      const aiRes = toAiErrorResponse(e);
+      if (aiRes) return aiRes;
       return errorResponse(e instanceof Error ? e.message : "Failed to parse file", 400);
     }
 

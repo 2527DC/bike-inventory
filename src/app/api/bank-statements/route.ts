@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError, getServerSession } from "@/lib/auth-helpers";
 import { createLogger } from "@/lib/logger";
+import { runAi, toAiErrorResponse, aiErrorKind } from "@/lib/ai";
 
 const log = createLogger("bank-statements");
 
@@ -26,7 +27,7 @@ export async function GET() {
   }
 }
 
-// POST — Upload and parse bank statement via Claude AI
+// POST — Upload and parse a bank statement with the configured AI provider (src/lib/ai)
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession();
@@ -68,11 +69,7 @@ export async function POST(req: NextRequest) {
       sample: firstLines.slice(0, 200),
     });
 
-    // Get Claude API key from settings
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return errorResponse("Claude API key not configured. Add ANTHROPIC_API_KEY to .env", 400);
-
-    // Parse the CSV/XLS content using Claude — bank-specific hints
+    // Parse the CSV/XLS content with the AI provider — bank-specific hints
     const bankHints = bank === "ICICI"
       ? `ICICI bank statements typically have columns: S No., Value Date, Transaction Date, Cheque Number, Transaction Remarks, Withdrawal Amount (Dr), Deposit Amount (Cr), Balance. The date format is usually DD/MM/YYYY or DD-MM-YYYY. Some ICICI statements have headers spread across multiple rows or have a summary section at top — skip those and find the actual transaction rows.`
       : bank === "HDFC"
@@ -111,90 +108,64 @@ Rules:
 Bank statement data (${bank}):
 ${text.slice(0, 50000)}`;
 
-    // Helper: call Claude with retry for overloaded errors
-    const callClaude = async (prompt: string, retries = 2): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string }> => {
-      for (let attempt = 0; attempt <= retries; attempt++) {
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": apiKey!,
-            "anthropic-version": "2023-06-01",
-          },
-          body: JSON.stringify({
-            model: "claude-haiku-4-5-20251001",
-            max_tokens: 16384,
-            messages: [{ role: "user", content: prompt }],
-          }),
-        });
-        if (res.ok) return { ok: true, data: await res.json() };
-        const errText = await res.text();
-        const isOverloaded = errText.includes("overloaded") || res.status === 529;
-        if (isOverloaded && attempt < retries) {
-          await new Promise(r => setTimeout(r, 3000 * (attempt + 1))); // wait 3s, 6s
-          continue;
-        }
-        return { ok: false, error: isOverloaded
-          ? "AI service is temporarily busy. Please try again in a minute."
-          : `AI processing failed (${res.status}). Please try again.` };
-      }
-      return { ok: false, error: "AI service unavailable. Please try again later." };
-    };
-
     // Diagnostic info for error reporting
     const filePreview = text.split("\n").slice(0, 10).join("\n");
     const fileStats = { name: file.name, size: `${Math.round(file.size / 1024)}KB`, lines: text.split("\n").length, chars: text.length };
 
-    const claudeResult = await callClaude(parsePrompt);
-    if (!claudeResult.ok) {
-      return Response.json({ success: false, error: claudeResult.error, diagnostics: { step: "ai_call", fileStats, filePreview } }, { status: 503 });
-    }
-
-    const claudeData = claudeResult.data as { content?: Array<{ text?: string }> };
-    const responseText = claudeData.content?.[0]?.text || "";
-
-    // Extract JSON from response
+    // Call A — extract the transaction rows. runAi retries transient failures, refuses a
+    // truncated reply (AiError "max_tokens") and parses the JSON (AiError "parse"), so the
+    // only shape left to check here is "is it an array".
     let transactions: Array<{
       date: string; description: string; reference: string;
       amount: number; type: "CREDIT" | "DEBIT"; balance: number | null;
     }> = [];
+    let responseText = "";
 
     try {
-      const jsonMatch = responseText.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        transactions = JSON.parse(jsonMatch[0]);
-      } else {
-        // Handle truncated JSON — AI ran out of tokens mid-array
-        const arrayStart = responseText.indexOf("[");
-        if (arrayStart !== -1) {
-          let truncated = responseText.slice(arrayStart);
-          // Find last complete object (ends with })
-          const lastBrace = truncated.lastIndexOf("}");
-          if (lastBrace !== -1) {
-            truncated = truncated.slice(0, lastBrace + 1) + "]";
-            transactions = JSON.parse(truncated);
-          }
-        }
-      }
-    } catch {
-      // Second attempt: try to salvage partial JSON
-      try {
-        const arrayStart = responseText.indexOf("[");
-        if (arrayStart !== -1) {
-          let truncated = responseText.slice(arrayStart);
-          const lastBrace = truncated.lastIndexOf("}");
-          if (lastBrace !== -1) {
-            truncated = truncated.slice(0, lastBrace + 1) + "]";
-            transactions = JSON.parse(truncated);
-          }
-        }
-      } catch {
+      log.debug("-> runAi bank.statement_parse", { file: file.name, bank, promptChars: parsePrompt.length });
+      const parseResult = await runAi({
+        purpose: "bank.statement_parse",
+        prompt: parsePrompt,
+        maxTokens: 16384,
+        json: true,
+      });
+      responseText = parseResult.text;
+
+      const parsed: unknown = parseResult.json;
+      if (!Array.isArray(parsed)) {
+        log.error("statement parse returned JSON that is not an array", {
+          file: file.name,
+          model: parseResult.model,
+          type: parsed === null ? "null" : typeof parsed,
+        });
         return Response.json({
           success: false,
           error: "AI returned invalid JSON. Try re-uploading or use a different file format.",
           diagnostics: { step: "json_parse", fileStats, filePreview, aiResponse: responseText.slice(0, 500) },
         }, { status: 500 });
       }
+      transactions = parsed;
+      log.info("statement parsed", { file: file.name, bank, transactions: transactions.length, model: parseResult.model });
+    } catch (error) {
+      const aiRes = toAiErrorResponse(error);
+      if (!aiRes) {
+        log.error("statement parse threw a non-AI error", { file: file.name, kind: aiErrorKind(error) });
+        throw error;
+      }
+      // Same contract as before: { success: false, error, diagnostics: { step: "ai_call", ... } }
+      // with the status and message toAiErrorResponse chose for this kind of failure.
+      log.error("statement parse failed at the AI step", { file: file.name, status: aiRes.status, kind: aiErrorKind(error) });
+      let body: Record<string, unknown>;
+      try {
+        body = (await aiRes.json()) as Record<string, unknown>;
+      } catch (readError) {
+        log.warn("could not read the AI error body; falling back to the message", { kind: aiErrorKind(readError) });
+        body = { success: false, error: error instanceof Error ? error.message : "AI processing failed. Please try again." };
+      }
+      return Response.json(
+        { ...body, diagnostics: { step: "ai_call", fileStats, filePreview } },
+        { status: aiRes.status },
+      );
     }
 
     if (transactions.length === 0) {
@@ -243,7 +214,7 @@ ${text.slice(0, 50000)}`;
       include: { transactions: true },
     });
 
-    // Now use Claude to match transactions against vendors and bills
+    // Now use the AI provider to match transactions against vendors and bills
     const vendors = await prisma.vendor.findMany({
       where: { isActive: true },
       select: { id: true, name: true, code: true },
@@ -293,49 +264,75 @@ Flag suspicious transactions if:
 
 Return ONLY the JSON array.`;
 
-    const matchResult = await callClaude(matchPrompt);
-
+    // Call B — vendor / bill matching. Non-fatal: the statement is already saved, so a
+    // failure here leaves every transaction UNMATCHED for manual review.
     let matchedCount = 0;
     let flaggedCount = 0;
 
-    if (matchResult.ok) {
-      const matchText = (matchResult.data as { content?: Array<{ text?: string }> }).content?.[0]?.text || "";
+    try {
+      log.debug("-> runAi bank.vendor_resolve", {
+        statementId: statement.id,
+        transactions: statement.transactions.length,
+        vendors: vendors.length,
+        pendingBills: pendingBills.length,
+        promptChars: matchPrompt.length,
+      });
+      const matchResult = await runAi({
+        purpose: "bank.vendor_resolve",
+        prompt: matchPrompt,
+        maxTokens: 16384,
+        json: true,
+      });
 
-      try {
-        const jsonMatch = matchText.match(/\[[\s\S]*\]/);
-        if (jsonMatch) {
-          const matches: Array<{
-            txnId: string; vendorId: string | null; billId: string | null;
-            category: string; confidence: number; flagReason: string | null;
-          }> = JSON.parse(jsonMatch[0]);
+      const parsedMatches: unknown = matchResult.json;
+      if (Array.isArray(parsedMatches)) {
+        const matches: Array<{
+          txnId: string; vendorId: string | null; billId: string | null;
+          category: string; confidence: number; flagReason: string | null;
+        }> = parsedMatches;
+        log.info("vendor resolve finished", { statementId: statement.id, matches: matches.length, model: matchResult.model });
 
-          for (const match of matches) {
-            const updateData: Record<string, unknown> = {
-              confidence: match.confidence || 0,
-              suggestedCategory: match.category,
-            };
+        for (const match of matches) {
+          const updateData: Record<string, unknown> = {
+            confidence: match.confidence || 0,
+            suggestedCategory: match.category,
+          };
 
-            if (match.vendorId) updateData.suggestedVendorId = match.vendorId;
-            if (match.billId) updateData.suggestedBillId = match.billId;
+          if (match.vendorId) updateData.suggestedVendorId = match.vendorId;
+          if (match.billId) updateData.suggestedBillId = match.billId;
 
-            if (match.flagReason) {
-              updateData.matchStatus = "FLAGGED";
-              updateData.flagReason = match.flagReason;
-              flaggedCount++;
-            } else if (match.vendorId || match.category?.startsWith("EXPENSE")) {
-              updateData.matchStatus = "MATCHED";
-              matchedCount++;
-            }
-
-            await prisma.bankTransaction.update({
-              where: { id: match.txnId },
-              data: updateData,
-            }).catch(() => {}); // Skip if txnId doesn't match
+          if (match.flagReason) {
+            updateData.matchStatus = "FLAGGED";
+            updateData.flagReason = match.flagReason;
+            flaggedCount++;
+          } else if (match.vendorId || match.category?.startsWith("EXPENSE")) {
+            updateData.matchStatus = "MATCHED";
+            matchedCount++;
           }
+
+          await prisma.bankTransaction.update({
+            where: { id: match.txnId },
+            data: updateData,
+          }).catch((e: unknown) => {
+            // The model can invent a txnId. Skip that row — but say so, or a statement
+            // that comes back fully UNMATCHED has no trail to explain why.
+            log.warn("vendor resolve: transaction update skipped", {
+              statementId: statement.id,
+              txnId: match.txnId,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          });
         }
-      } catch {
-        // AI matching failed — transactions stay UNMATCHED, user can review manually
+      } else {
+        log.warn("vendor resolve skipped", {
+          statementId: statement.id,
+          kind: "not_an_array",
+          model: matchResult.model,
+        });
       }
+    } catch (error) {
+      // AI matching failed — transactions stay UNMATCHED, user can review manually
+      log.warn("vendor resolve skipped", { statementId: statement.id, kind: aiErrorKind(error) });
     }
 
     // Update statement counts

@@ -707,6 +707,22 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     parentKey: "settings",
   },
   {
+    // Added 8 Sep 2026 with docs/implementation/pending/0809-ai-provider-settings-and-shared-client-plan.md.
+    // `approve` is here for the same reason settings_storage has one: making a provider live
+    // with a bad key takes every AI feature offline at once — bank statement parsing, the
+    // payment screenshot scan, the catalogue PDF import. Saving a key or model is `edit`;
+    // POST /api/settings/ai/activate is `approve`, and it re-tests before it switches.
+    key: "settings_ai",
+    label: "AI",
+    description: "AI provider, model and API key used across the app",
+    icon: "Sparkles",
+    route: null, // routeless like its siblings — the Settings index links it by href
+    group: "Admin", // MUST equal the parent's — the seeder asserts it
+    sortOrder: 525, // storage 521, zoho 522, notifications 523, whatsapp 524
+    actions: ["view", "edit", "approve"],
+    parentKey: "settings",
+  },
+  {
     // RE-PARENTED under settings and routeless, 2 Sep 2026. THE KEY DOES NOT CHANGE.
     // Renaming it to `settings_whatsapp` would read better and would be a bug: seed-rbac.ts
     // deletes any module missing from this catalog, and Permission.module / RolePermission

@@ -40,6 +40,13 @@ const ENTRIES: Entry[] = [
     module: "zoho",
   },
   {
+    href: "/settings/ai",
+    title: "AI",
+    description: "Provider, model and API key behind statement parsing, screenshot scanning and catalogue import",
+    icon: "Sparkles",
+    module: "settings_ai",
+  },
+  {
     href: "/settings/notifications",
     title: "Notifications",
     description: "Email and push delivery — providers, credentials and per-event switches",
