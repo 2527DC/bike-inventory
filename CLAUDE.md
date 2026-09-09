@@ -7,6 +7,26 @@
 2. Read ALL files related to the change, not just the one mentioned
 3. Show a plan. Wait for approval.
 
+## A plan opens with the requirements. Always.
+
+Owner's instruction, 8 and 9 Sep 2026. **The first section of every new plan file is the
+requirement** — my words **verbatim**, then restated as a numbered list, `R1…Rn`. Not a
+summary of them, not a paraphrase, and not somewhere in the middle of the document.
+
+Everything after it is answerable to that list: §1 questions, §2 how it works today, §3 the
+build, §4 verification, §5 out of scope. Section order and the worked example are in
+`docs/implementation/README.md` → *"The requirement comes first"*; copy the headings from
+`docs/implementation/completed/0809-brand-category-inactive-and-audit-approval-plan.md`.
+
+Why it is a rule and not a preference: a plan that opens with the implementation cannot be
+checked against what was asked. The reader has to infer the ask from the build, which is
+exactly backwards, and a requirement that was quietly dropped becomes invisible.
+
+**This is enforced, not merely documented.** `.claude/hooks/plan-placement.cjs` **denies** a
+`Write` of a *new* `*-plan.md` whose first `##` section is not the requirement, or whose
+opening section lists nothing. Existing plans are never blocked — the rule is about how a
+plan starts, and the plans written before this convention would otherwise be unwritable.
+
 ## During implementation
 - Fix the ROOT CAUSE. Never patch symptoms.
 - Check every file that uses the code you changed.
