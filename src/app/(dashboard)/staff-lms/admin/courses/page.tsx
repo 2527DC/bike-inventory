@@ -268,12 +268,16 @@ export default function AdminCoursesPage() {
             const isExpanded = expandedLevels.has(level.id);
             return (
               <div key={level.id} className="bg-white rounded-2xl shadow-sm overflow-hidden">
-                <button
-                  onClick={() => toggleExpand(expandedLevels, level.id, setExpandedLevels)}
-                  className="w-full flex items-center justify-between p-4 text-left"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-sm font-bold">
+                {/* Header row is a flex container, not one big <button>. Delete is itself a
+                    <button>, and a button inside a button is invalid HTML — React's
+                    validateDOMNesting warns about it on every render. So delete and the chevron
+                    sit beside the title toggle as siblings; all three still expand the level. */}
+                <div className="w-full flex items-center justify-between p-4">
+                  <button
+                    onClick={() => toggleExpand(expandedLevels, level.id, setExpandedLevels)}
+                    className="flex-1 min-w-0 flex items-center gap-3 text-left"
+                  >
+                    <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-sm font-bold shrink-0">
                       {li + 1}
                     </div>
                     <div>
@@ -284,12 +288,18 @@ export default function AdminCoursesPage() {
                         {level.brand_focus ? ` · ${level.brand_focus}` : ''}
                       </p>
                     </div>
-                  </div>
+                  </button>
                   <div className="flex items-center gap-2">
-                    <button onClick={(e) => { e.stopPropagation(); deleteItem('level', level.id); }} className="text-red-400 p-1"><Trash2 size={14} /></button>
-                    {isExpanded ? <ChevronDown size={18} className="text-gray-400" /> : <ChevronRight size={18} className="text-gray-400" />}
+                    <button onClick={() => deleteItem('level', level.id)} className="text-red-400 p-1"><Trash2 size={14} /></button>
+                    <button
+                      onClick={() => toggleExpand(expandedLevels, level.id, setExpandedLevels)}
+                      aria-label={isExpanded ? 'Collapse level' : 'Expand level'}
+                      className="text-gray-400"
+                    >
+                      {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                    </button>
                   </div>
-                </button>
+                </div>
 
                 {isExpanded && (
                   <div className="border-t border-gray-50 p-4 space-y-3">

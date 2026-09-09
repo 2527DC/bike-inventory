@@ -488,9 +488,17 @@ export default function ReconcilePage({ params }: { params: Promise<{ id: string
           return (
             <Card key={`group-${gi}-${group.label}`} className="border-amber-200 bg-amber-50/30">
               <CardContent className="p-0">
-                {/* Group Header */}
-                <button onClick={() => toggleGroupCollapse(group.label)}
-                  className="w-full p-3 flex items-center gap-2 text-left">
+                {/* Group Header. It is a DIV, not a button: the select-all control below sits
+                    inside it, and a <button> inside a <button> is invalid HTML — React's
+                    validateDOMNesting warned on every render of this list. So collapse/expand is
+                    an absolutely-positioned overlay button covering the header, and the select
+                    button sits above it on z-10. Both stay real buttons; neither contains the other. */}
+                <div className="relative w-full p-3 flex items-center gap-2 text-left rounded-xl focus-within:ring-2 focus-within:ring-slate-900">
+                  <button
+                    onClick={() => toggleGroupCollapse(group.label)}
+                    aria-label={`${isCollapsed ? "Expand" : "Collapse"} ${group.label}`}
+                    className="absolute inset-0 z-0 rounded-xl focus:outline-none"
+                  />
                   <Layers className="h-4 w-4 text-amber-600 shrink-0" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
@@ -501,8 +509,8 @@ export default function ReconcilePage({ params }: { params: Promise<{ id: string
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     {actionable.length > 0 && (
-                      <button onClick={(e) => { e.stopPropagation(); toggleGroupSelect(group.txns); }}
-                        className="p-1">
+                      <button onClick={() => toggleGroupSelect(group.txns)}
+                        className="relative z-10 p-1">
                         {allGroupSelected
                           ? <CheckSquare className="h-4 w-4 text-blue-600" />
                           : <Square className="h-4 w-4 text-slate-300" />}
@@ -510,7 +518,7 @@ export default function ReconcilePage({ params }: { params: Promise<{ id: string
                     )}
                     {isCollapsed ? <ChevronDown className="h-4 w-4 text-slate-400" /> : <ChevronUp className="h-4 w-4 text-slate-400" />}
                   </div>
-                </button>
+                </div>
 
                 {/* Group Items (collapsible) */}
                 {!isCollapsed && (
