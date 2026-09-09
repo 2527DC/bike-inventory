@@ -371,8 +371,16 @@ export default function ReorderDashboardPage() {
             const zeroCount = group.products.filter((p) => p.currentStock === 0).length;
             return (
             <Card key={group.id}>
-              <button onClick={() => toggleGroup(group.id)}
-                className="w-full flex items-center justify-between p-3">
+              {/* The header row is a DIV, not a button. The WhatsApp share inside it is its own
+                  <button>, and a <button> inside a <button> is invalid HTML — React's
+                  validateDOMNesting warned on every render of this list. So the expand/collapse
+                  toggle is an absolutely-positioned overlay covering the row, and the share button
+                  sits above it on z-10. Both stay real buttons; neither contains the other. */}
+              <div className="relative w-full flex items-center justify-between p-3 rounded-xl focus-within:ring-2 focus-within:ring-slate-900">
+                <button onClick={() => toggleGroup(group.id)}
+                  aria-label={group.name}
+                  aria-expanded={expandedGroups.has(group.id)}
+                  className="absolute inset-0 z-0 rounded-xl focus:outline-none" />
                 <div className="flex-1 min-w-0 text-left">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-slate-900">{group.name}</span>
@@ -384,8 +392,8 @@ export default function ReorderDashboardPage() {
                   </p>
                 </div>
                 {groupBy === "vendor" && group.id !== "unassigned" && (
-                  <button onClick={(e) => { e.stopPropagation(); shareGroupOnWhatsApp(group); }}
-                    className="p-1.5 bg-green-100 rounded-lg mr-1">
+                  <button onClick={() => shareGroupOnWhatsApp(group)}
+                    className="relative z-10 p-1.5 bg-green-100 rounded-lg mr-1">
                     <MessageSquare className="h-3.5 w-3.5 text-green-600" />
                   </button>
                 )}
@@ -394,7 +402,7 @@ export default function ReorderDashboardPage() {
                 ) : (
                   <ChevronDown className="h-4 w-4 text-slate-400" />
                 )}
-              </button>
+              </div>
 
               {expandedGroups.has(group.id) && (
                 <CardContent className="px-3 pb-3 pt-0 space-y-1.5">
