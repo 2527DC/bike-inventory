@@ -2,11 +2,16 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { successResponse, errorResponse } from "@/lib/api-utils";
+import { successResponse, errorResponse, failure } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { ledgerGapSchema } from "@/lib/validations";
+import { createLogger } from "@/lib/logger";
+import { ledgerGapWriteSchema } from "@/lib/validations";
+import { GAP_STATUS_FROM_VIEW, GAP_TYPE_FROM_VIEW, isoDay } from "@/lib/brand-ledger/view-types";
+import type { GapStatus, GapType } from "@prisma/client";
 
-// GET — the claim register for one vendor.
+const log = createLogger("ledger:gaps");
+
+// GET — the claim register for one vendor, enum-shaped (the screen reads the view route instead).
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     await requireFeature("brand_ledger_gaps", "view");
@@ -40,51 +45,56 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed", 500);
+    return failure(error, { scope: "ledger:gaps" });
   }
 }
 
-// POST — raise a claim.
+// POST — raise a claim, in the ledger app's own vocabulary (GapForm, App.jsx:446-487).
+//
+// Per-vendor numbering continues the register's #1, #2 … convention (App.jsx:419), and the
+// first progress note is "Added" (App.jsx:420) — written in the same transaction so a claim
+// never exists without its history.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const user = await requireFeature("brand_ledger_gaps", "create");
     const { id } = await params;
-    const data = ledgerGapSchema.parse(await req.json());
+    const data = ledgerGapWriteSchema.parse(await req.json());
 
     const vendor = await prisma.vendor.findUnique({ where: { id }, select: { id: true } });
     if (!vendor) return errorResponse("Vendor not found", 404);
 
-    // Per-vendor numbering, continuing the existing register's #1, #2 … convention.
-    const last = await prisma.ledgerGap.findFirst({
-      where: { vendorId: id },
-      orderBy: { number: "desc" },
-      select: { number: true },
+    const created = await prisma.$transaction(async (tx) => {
+      const last = await tx.ledgerGap.findFirst({
+        where: { vendorId: id },
+        orderBy: { number: "desc" },
+        select: { number: true },
+      });
+      const gap = await tx.ledgerGap.create({
+        data: {
+          vendorId: id,
+          number: (last?.number ?? 0) + 1,
+          title: data.title,
+          gapType: GAP_TYPE_FROM_VIEW[data.type] as GapType,
+          status: GAP_STATUS_FROM_VIEW[data.status] as GapStatus,
+          amount: data.amt,
+          amountNote: data.amtText || null,
+          evidenceText: data.evidence || null,
+          action: data.action || null,
+          createdById: user.id,
+          notes: { create: { body: "Added", authorId: user.id } },
+        },
+        select: { id: true, number: true, status: true, createdAt: true },
+      });
+      return gap;
     });
 
-    const gap = await prisma.ledgerGap.create({
-      data: {
-        vendorId: id,
-        brandId: data.brandId || null,
-        number: (last?.number ?? 0) + 1,
-        title: data.title,
-        gapType: data.gapType,
-        tier: data.tier ?? null,
-        status: data.status ?? "OPEN",
-        amount: data.amount ?? null,
-        amountNote: data.amountNote || null,
-        promisedBy: data.promisedBy || null,
-        promisedOn: data.promisedOn ? new Date(data.promisedOn) : null,
-        evidenceText: data.evidenceText || null,
-        action: data.action || null,
-        result: data.result || null,
-        createdById: user.id,
-      },
-      include: { evidence: true },
-    });
-
-    return successResponse(gap, 201);
+    log.info("claim raised", { vendorId: id, gapId: created.id, number: created.number });
+    return successResponse(
+      { id: created.id, n: created.number, status: data.status, date: isoDay(created.createdAt) },
+      201
+    );
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed", 400);
+    return failure(error, { scope: "ledger:gaps", status: 400 });
   }
 }

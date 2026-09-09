@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { usePermissions } from "@/lib/use-permissions";
+import { apiFetch } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
 
 interface PermissionRow {
   id: string;
@@ -23,6 +25,8 @@ interface ModuleRow {
   group: string | null;
   /** null = a root module. Sub-modules render indented under their parent. */
   parentId: string | null;
+  /** false = admin-only: the system role holds it, no other role may. Greyed out below. */
+  assignable: boolean;
   permissions: PermissionRow[];
 }
 interface RoleRow {
@@ -36,6 +40,8 @@ interface RoleRow {
 }
 
 const ACTION_ORDER = ["view", "create", "edit", "delete", "approve", "fetch"];
+
+const log = createLogger("team:permissions");
 
 export default function PermissionsPage() {
   const { canEdit, canCreate, canDelete } = usePermissions();
@@ -70,38 +76,39 @@ export default function PermissionsPage() {
   // Load the catalog and the role list together.
   useEffect(() => {
     Promise.all([
-      fetch("/api/modules").then((r) => r.json()),
-      fetch("/api/roles").then((r) => r.json()),
+      apiFetch<{ modules: ModuleRow[] }>("/api/modules"),
+      apiFetch<{ roles: RoleRow[] }>("/api/roles"),
     ])
       .then(([m, r]) => {
-        if (m.success) setModules(m.data.modules);
-        if (r.success) {
-          setRoles(r.data.roles);
-          const first = r.data.roles.find((x: RoleRow) => !x.isSystem) || r.data.roles[0];
-          if (first) setSelectedRoleId(first.id);
-        }
+        setModules(m.modules);
+        setRoles(r.roles);
+        const first = r.roles.find((x) => !x.isSystem) || r.roles[0];
+        if (first) setSelectedRoleId(first.id);
       })
-      .catch(() => setError("Failed to load roles and modules"))
+      .catch((e) => {
+        log.warn("roles and modules failed to load", { error: e instanceof Error ? e.message : String(e) });
+        setError("Failed to load roles and modules");
+      })
       .finally(() => setLoading(false));
   }, []);
 
   // Load the selected role's grants.
   const loadGrants = useCallback((roleId: string) => {
     if (!roleId) return;
-    fetch(`/api/roles/${roleId}`)
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success) setGranted(new Set<string>(res.data.permissionIds));
-      })
-      .catch(() => setError("Failed to load role permissions"));
+    apiFetch<{ permissionIds: string[] }>(`/api/roles/${roleId}`)
+      .then((res) => setGranted(new Set<string>(res.permissionIds)))
+      .catch((e) => {
+        log.warn("role grants failed to load", { roleId, error: e instanceof Error ? e.message : String(e) });
+        setError("Failed to load role permissions");
+      });
   }, []);
 
   useEffect(() => {
     loadGrants(selectedRoleId);
   }, [selectedRoleId, loadGrants]);
 
-  const toggle = (permissionId: string) => {
-    if (readOnly) return;
+  const toggle = (permissionId: string, mod: ModuleRow) => {
+    if (readOnly || !mod.assignable) return;
     setGranted((prev) => {
       const next = new Set(prev);
       if (next.has(permissionId)) next.delete(permissionId);
@@ -111,7 +118,7 @@ export default function PermissionsPage() {
   };
 
   const toggleModule = (mod: ModuleRow) => {
-    if (readOnly) return;
+    if (readOnly || !mod.assignable) return;
     const ids = mod.permissions.map((p) => p.id);
     const allOn = ids.every((id) => granted.has(id));
     setGranted((prev) => {
@@ -130,17 +137,15 @@ export default function PermissionsPage() {
     setError("");
     setSuccess("");
     try {
-      const res = await fetch(`/api/roles/${selectedRoleId}`, {
+      await apiFetch(`/api/roles/${selectedRoleId}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ permissionIds: [...granted] }),
-      }).then((r) => r.json());
-
-      if (!res.success) throw new Error(res.error || "Save failed");
+        json: { permissionIds: [...granted] },
+      });
       setSuccess("Permissions saved. Affected users see the change on their next request.");
-      const rl = await fetch("/api/roles").then((r) => r.json());
-      if (rl.success) setRoles(rl.data.roles);
+      const rl = await apiFetch<{ roles: RoleRow[] }>("/api/roles");
+      setRoles(rl.roles);
     } catch (e) {
+      log.warn("role save failed", { roleId: selectedRoleId, error: e instanceof Error ? e.message : String(e) });
       setError(e instanceof Error ? e.message : "Save failed");
     } finally {
       setSaving(false);
@@ -151,17 +156,17 @@ export default function PermissionsPage() {
     const name = window.prompt("Role name (e.g. Store Manager)");
     if (!name?.trim()) return;
     const key = name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_");
-    const res = await fetch("/api/roles", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key, name: name.trim() }),
-    }).then((r) => r.json());
-
-    if (!res.success) return setError(res.error || "Could not create role");
-    const rl = await fetch("/api/roles").then((r) => r.json());
-    if (rl.success) {
-      setRoles(rl.data.roles);
-      setSelectedRoleId(res.data.id);
+    try {
+      const created = await apiFetch<{ id: string }>("/api/roles", {
+        method: "POST",
+        json: { key, name: name.trim() },
+      });
+      const rl = await apiFetch<{ roles: RoleRow[] }>("/api/roles");
+      setRoles(rl.roles);
+      setSelectedRoleId(created.id);
+    } catch (e) {
+      log.warn("role create failed", { key, error: e instanceof Error ? e.message : String(e) });
+      setError(e instanceof Error ? e.message : "Could not create role");
     }
   };
 
@@ -169,15 +174,14 @@ export default function PermissionsPage() {
     if (!selectedRole || selectedRole.isSystem) return;
     if (!window.confirm(`Delete the role "${selectedRole.name}"? This cannot be undone.`)) return;
 
-    const res = await fetch(`/api/roles/${selectedRole.id}`, { method: "DELETE" }).then((r) =>
-      r.json()
-    );
-    if (!res.success) return setError(res.error || "Could not delete role");
-
-    const rl = await fetch("/api/roles").then((r) => r.json());
-    if (rl.success) {
-      setRoles(rl.data.roles);
-      setSelectedRoleId(rl.data.roles[0]?.id || "");
+    try {
+      await apiFetch(`/api/roles/${selectedRole.id}`, { method: "DELETE" });
+      const rl = await apiFetch<{ roles: RoleRow[] }>("/api/roles");
+      setRoles(rl.roles);
+      setSelectedRoleId(rl.roles[0]?.id || "");
+    } catch (e) {
+      log.warn("role delete failed", { roleId: selectedRole.id, error: e instanceof Error ? e.message : String(e) });
+      setError(e instanceof Error ? e.message : "Could not delete role");
     }
   };
 
@@ -299,6 +303,9 @@ export default function PermissionsPage() {
             const sorted = [...mod.permissions].sort(
               (a, b) => ACTION_ORDER.indexOf(a.action) - ACTION_ORDER.indexOf(b.action)
             );
+            // An admin-only module is shown, not hidden, so the reader learns WHY the grant
+            // is unavailable rather than wondering where the module went.
+            const locked = readOnly || !mod.assignable;
 
             return (
               <Card key={mod.id} className={mod.parentId ? "ml-4" : undefined}>
@@ -312,6 +319,14 @@ export default function PermissionsPage() {
                           </span>
                         )}
                         {mod.label}
+                        {!mod.assignable && (
+                          <span
+                            title="Only the system role can hold this module's permissions"
+                            className="ml-2 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500 align-middle"
+                          >
+                            <Lock className="h-3 w-3" aria-hidden="true" /> Admin only
+                          </span>
+                        )}
                       </p>
                       {mod.description && (
                         <p className="text-[11px] text-slate-500">{mod.description}</p>
@@ -322,7 +337,7 @@ export default function PermissionsPage() {
                         cascading control would silently write grants nobody chose. */}
                     <button
                       onClick={() => toggleModule(mod)}
-                      disabled={readOnly}
+                      disabled={locked}
                       className="shrink-0 text-[11px] font-medium text-slate-500 hover:text-slate-900 disabled:opacity-40"
                     >
                       {allOn ? "Clear all" : "Select all"}
@@ -335,8 +350,8 @@ export default function PermissionsPage() {
                       return (
                         <button
                           key={p.id}
-                          onClick={() => toggle(p.id)}
-                          disabled={readOnly}
+                          onClick={() => toggle(p.id, mod)}
+                          disabled={locked}
                           title={p.key}
                           className={`rounded-md border px-2.5 py-1 text-xs font-medium capitalize transition-colors disabled:opacity-50 ${
                             on

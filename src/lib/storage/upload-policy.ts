@@ -17,8 +17,13 @@ export const ALLOWED_PREFIXES = [
   // rather than the allowlist, so it reads like a client bug rather than a missing prefix.
   "staff-lms/",
   // Transfer documents (P15): the tax invoice or delivery challan that has to travel with an
-  // inter-store movement. The ONLY prefix that accepts application/pdf — see PREFIX_TYPES.
+  // inter-store movement. Accepts application/pdf — see PREFIX_TYPES.
   "transfers/",
+  // Vendor ledger files (plan 0909-vendor-ledger-screens): a supplier's statement (PDF, sheet,
+  // CSV), a WhatsApp export (.txt or .zip), a screenshot, or a claim's evidence. Written
+  // server-side today by src/lib/brand-ledger/uploads.ts, which bypasses this allowlist; the
+  // entry is here so a later presigned path stays consistent with it — see PREFIX_TYPES.
+  "ledger/",
 ];
 
 /** Videos are compressed client-side; this is a hard backstop, not the expected size. */
@@ -55,6 +60,19 @@ export function checkKey(key: string): UploadCheck {
  */
 const PREFIX_TYPES: Record<string, (contentType: string) => boolean> = {
   "transfers/": (t) => t === "application/pdf" || t.startsWith("image/"),
+  // A ledger file is whatever the supplier or WhatsApp emitted: a PDF or a sheet for a
+  // statement, plain text or a zip for a chat export, an image for a screenshot, JSON for the
+  // one-time import. Video is deliberately absent — nothing about a ledger is a video.
+  "ledger/": (t) =>
+    t === "application/pdf" ||
+    t.startsWith("image/") ||
+    t === "text/plain" ||
+    t === "text/csv" ||
+    t === "application/zip" ||
+    t === "application/x-zip-compressed" ||
+    t === "application/vnd.ms-excel" ||
+    t === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    t === "application/json",
 };
 
 /**

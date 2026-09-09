@@ -246,10 +246,11 @@ export const userUpdateSchema = userSchema.partial().extend({
 export const ledgerEntrySchema = z.object({
   entryDate: z.string().min(1, "Date is required"),
   type: z.enum([
-    "OPENING", "INVOICE", "PAYMENT", "CREDIT_NOTE", "DEBIT_NOTE", "DISCOUNT", "ADJUSTMENT",
+    "OPENING", "INVOICE", "PAYMENT", "CREDIT_NOTE", "DEBIT_NOTE", "DISCOUNT", "ADJUSTMENT", "NOTE",
   ]),
   ref: z.string().max(80).optional(),
-  amount: z.number().positive("Amount must be greater than zero"),
+  // A NOTE row carries no money (direction 0); every other type must.
+  amount: z.number().positive("Amount must be greater than zero").nullable().optional(),
   // Omitted means "derive from the type". Sent explicitly for the rare case of a credit
   // posted on a sales voucher, where the label and the sign disagree.
   direction: z.union([z.literal(1), z.literal(-1)]).optional(),
@@ -291,6 +292,66 @@ export const ledgerGapSchema = z.object({
 });
 
 export const ledgerGapUpdateSchema = ledgerGapSchema.partial();
+
+// ─── Ledger screen writes — the shapes in src/lib/brand-ledger/view-types.ts ─────────────
+// The screen is a verbatim port of the ledger app, so its forms send the app's own
+// lower-case vocabulary; the routes map it onto the enums. Kept beside the enum-shaped
+// schemas above, which the JSON import and the AI accept step still use server-side.
+
+const LEDGER_VIEW_ENTRY_TYPES = [
+  "payment", "invoice", "credit-note", "debit-note", "discount", "adjustment", "note",
+] as const;
+const LEDGER_VIEW_GAP_TYPES = [
+  "discount-pending", "credit-note-pending", "short-credit", "dispute",
+  "reconciliation-difference", "documentation-gap", "balance-unconfirmed",
+  "operational-warranty", "commitment-pending", "invoice-discrepancy",
+  "scheme-entitlement", "reimbursement-pending",
+] as const;
+const LEDGER_VIEW_GAP_STATUSES = ["open", "promised", "verify", "resolved", "rejected"] as const;
+
+const ledgerBalanceSchema = z.object({
+  amount: z.number().nullable(),
+  label: z.string().max(200),
+});
+
+export const ledgerProfileWriteSchema = z
+  .object({
+    theirBal: ledgerBalanceSchema.optional(),
+    ourBal: ledgerBalanceSchema.optional(),
+    reviewed: z.boolean().optional(),
+  })
+  .refine((v) => v.theirBal !== undefined || v.ourBal !== undefined || v.reviewed === true, {
+    message: "Nothing to update",
+  });
+
+export const ledgerNoteWriteSchema = z.object({
+  text: z.string().trim().min(1, "Note is required").max(1000),
+});
+
+export const ledgerEntryWriteSchema = z
+  .object({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD"),
+    type: z.enum(LEDGER_VIEW_ENTRY_TYPES),
+    ref: z.string().max(80).default(""),
+    amount: z.number().nullable(),
+    note: z.string().max(500).default(""),
+  })
+  .refine((v) => v.type === "note" || (v.amount !== null && v.amount > 0), {
+    message: "Amount is required",
+    path: ["amount"],
+  });
+
+export const ledgerGapWriteSchema = z.object({
+  title: z.string().trim().min(1, "Title is required").max(300),
+  type: z.enum(LEDGER_VIEW_GAP_TYPES),
+  amt: z.number().nullable(),
+  amtText: z.string().max(200).default(""),
+  status: z.enum(LEDGER_VIEW_GAP_STATUSES),
+  evidence: z.string().max(2000).default(""),
+  action: z.string().max(1000).default(""),
+});
+
+export const ledgerGapWriteUpdateSchema = ledgerGapWriteSchema.partial();
 
 export const discountTermSchema = z.object({
   kind: z.enum(["CASH", "TRADE", "VOLUME", "TRANSPORT_SUPPORT", "MARKETING", "INCENTIVE", "OTHER"]),

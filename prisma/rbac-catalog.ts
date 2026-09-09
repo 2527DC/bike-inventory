@@ -44,6 +44,12 @@ export interface ModuleSeed {
    * See prisma/schema.prisma -> model Module for why each one fails silently.
    */
   parentKey?: string;
+  /**
+   * false = only the system role may hold this module's permissions; the permission editor
+   * greys the module out and the role-write routes refuse the grant for any role whose
+   * `isSystem` is false. Omit for the normal case (assignable to any role).
+   */
+  assignable?: boolean;
 }
 
 // Sidebar group order is NOT declared anywhere — it falls out of `sortOrder` below.
@@ -457,15 +463,21 @@ export const MODULE_CATALOG: ModuleSeed[] = [
   // Split into two modules on purpose. The ledger is a record; the claim register is a set of
   // live disputes and negotiating positions — "they owe us ₹1.3L and we have no written
   // agreement" is not something everyone who can read a statement should see.
+  //
+  // Both are ADMIN-ONLY (assignable: false) — the owner's instruction, 9 Sep 2026: these
+  // permissions cannot be granted to any other role. And `brand_ledger` has NO route on
+  // purpose (the `bills` precedent above): the ledger app's own listing is not wanted, so the
+  // screen at /ledger/[vendorId] is reached only from the Ledger button on /vendors/[id].
   {
     key: "brand_ledger",
     label: "Brand Ledgers",
-    description: "Supplier statements, reconciliation against our books, agreed discount terms",
+    description: "A supplier's ledger as the brand states it — entries, balances, monthly and table views",
     icon: "FileText",
-    route: "/ledger",
+    route: null,
     group: "Accounts",
     sortOrder: 340,
     actions: ["view", "create", "edit", "delete"],
+    assignable: false,
   },
   {
     key: "brand_ledger_gaps",
@@ -477,6 +489,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     sortOrder: 350,
     // `approve` = authority to mark a claim resolved or dropped, which is a financial call.
     actions: ["view", "create", "edit", "delete", "approve"],
+    assignable: false,
   },
 
   // ── Insights ──────────────────────────────────────────────────────────────

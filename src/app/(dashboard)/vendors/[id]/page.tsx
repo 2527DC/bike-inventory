@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, use } from "react";
 import Link from "next/link";
-import { ArrowLeft, Phone, MessageSquare, AlertCircle, Check, Loader2, Power, Trash2 } from "lucide-react";
+import { ArrowLeft, Phone, MessageSquare, AlertCircle, Check, Loader2, Power, Trash2, BookOpen } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,10 @@ import { SkeletonList } from "@/components/ui/skeleton";
 import type { Vendor, PurchaseOrder, VendorBill, VendorCredit } from "@/types";
 import { usePermissions } from "@/lib/use-permissions";
 import { apiFetch } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
 import { VendorBrands } from "./_components/vendor-brands";
+
+const log = createLogger("vendors:detail");
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
@@ -25,8 +28,11 @@ type VendorDetail = Vendor & {
 
 export default function VendorDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { canEdit: canEditCheck } = usePermissions();
+  const { canEdit: canEditCheck, canView } = usePermissions();
   const canEditBalance = canEditCheck("vendors");
+  // The brand ledger (the ledger app's per-vendor screen at /ledger/[id]) has no sidebar entry
+  // on purpose — this button is the only way in. Cosmetic gate; the API re-checks.
+  const canOpenLedger = canView("brand_ledger");
   const [vendor, setVendor] = useState<VendorDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"overview" | "pos" | "bills" | "credits" | "issues" | "ledger">("overview");
@@ -61,37 +67,35 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
     setActionError("");
     try {
       const num = contactNumber.trim();
-      const res = await fetch(`/api/vendors/${id}/contacts`, {
+      await apiFetch(`/api/vendors/${id}/contacts`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         // Save the one number to both fields so it works for WhatsApp (wa.me) and tel: calls.
-        body: JSON.stringify({ name: contactName.trim(), phone: num, whatsapp: num, isPrimary: contactPrimary }),
+        json: { name: contactName.trim(), phone: num, whatsapp: num, isPrimary: contactPrimary },
       });
-      const data = await res.json();
-      if (data.success) {
-        setContactName(""); setContactNumber(""); setContactPrimary(false); setShowAddContact(false);
-        loadVendor();
-      } else {
-        setActionError(data.error || "Failed to add contact");
-      }
-    } catch { setActionError("Network error"); }
+      setContactName(""); setContactNumber(""); setContactPrimary(false); setShowAddContact(false);
+      loadVendor();
+    } catch (e) {
+      log.warn("add contact failed", { vendorId: id, error: e instanceof Error ? e.message : String(e) });
+      setActionError(e instanceof Error ? e.message : "Failed to add contact");
+    }
     finally { setSavingContact(false); }
   }
 
   async function deleteContact(contactId: string) {
     if (!confirm("Remove this contact?")) return;
     try {
-      const res = await fetch(`/api/vendors/${id}/contacts/${contactId}`, { method: "DELETE" }).then((r) => r.json());
-      if (res.success) loadVendor();
-      else setActionError(res.error || "Failed to remove contact");
-    } catch { setActionError("Network error"); }
+      await apiFetch(`/api/vendors/${id}/contacts/${contactId}`, { method: "DELETE" });
+      loadVendor();
+    } catch (e) {
+      log.warn("remove contact failed", { vendorId: id, contactId, error: e instanceof Error ? e.message : String(e) });
+      setActionError(e instanceof Error ? e.message : "Failed to remove contact");
+    }
   }
 
   const loadVendor = useCallback(() => {
-    fetch(`/api/vendors/${id}`)
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setVendor(res.data); })
-      .catch(() => {})
+    apiFetch<VendorDetail>(`/api/vendors/${id}`)
+      .then((res) => setVendor(res))
+      .catch((e) => log.warn("vendor failed to load", { vendorId: id, error: e instanceof Error ? e.message : String(e) }))
       .finally(() => setLoading(false));
   }, [id]);
 
@@ -101,10 +105,9 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   useEffect(() => {
     if (tab === "ledger" && !ledger) {
       setLedgerLoading(true);
-      fetch(`/api/vendors/${id}/ledger`)
-        .then(r => r.json())
-        .then(res => { if (res.success) setLedger(res.data); })
-        .catch(() => {})
+      apiFetch<NonNullable<typeof ledger>>(`/api/vendors/${id}/ledger`)
+        .then((res) => setLedger(res))
+        .catch((e) => log.warn("vendor ledger failed to load", { vendorId: id, error: e instanceof Error ? e.message : String(e) }))
         .finally(() => setLedgerLoading(false));
     }
   }, [tab, id, ledger]);
@@ -176,12 +179,13 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
             onClick={async () => {
               const newStatus = !vendor.isActive;
               if (!confirm(`Mark this vendor as ${newStatus ? "Active" : "Inactive"}?`)) return;
-              const res = await fetch(`/api/vendors/${id}`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ isActive: newStatus }),
-              }).then(r => r.json());
-              if (res.success) setVendor({ ...vendor, isActive: newStatus });
+              try {
+                await apiFetch(`/api/vendors/${id}`, { method: "PUT", json: { isActive: newStatus } });
+                setVendor({ ...vendor, isActive: newStatus });
+              } catch (e) {
+                log.warn("vendor status change failed", { vendorId: id, error: e instanceof Error ? e.message : String(e) });
+                setActionError(e instanceof Error ? e.message : "Could not change vendor status");
+              }
             }}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
               vendor.isActive
@@ -214,6 +218,13 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
               <MessageSquare className="h-4 w-4 mr-1" /> WhatsApp
             </Button>
           </a>
+        )}
+        {canOpenLedger && (
+          <Link href={`/ledger/${id}`} className="flex-1">
+            <Button variant="outline" size="sm" className="w-full">
+              <BookOpen className="h-4 w-4 mr-1" /> Ledger
+            </Button>
+          </Link>
         )}
       </div>
 
@@ -269,16 +280,16 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                     onClick={async () => {
                       setSavingBalance(true);
                       try {
-                        const res = await fetch(`/api/vendors/${id}`, {
+                        await apiFetch(`/api/vendors/${id}`, {
                           method: "PUT",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ openingBalance: parseFloat(balanceValue) || 0 }),
-                        }).then(r => r.json());
-                        if (res.success) {
-                          setVendor({ ...vendor, openingBalance: parseFloat(balanceValue) || 0 });
-                          setEditingBalance(false);
-                        }
-                      } catch (e) { setActionError(e instanceof Error ? e.message : "Save balance failed"); } finally { setSavingBalance(false); }
+                          json: { openingBalance: parseFloat(balanceValue) || 0 },
+                        });
+                        setVendor({ ...vendor, openingBalance: parseFloat(balanceValue) || 0 });
+                        setEditingBalance(false);
+                      } catch (e) {
+                        log.warn("save opening balance failed", { vendorId: id, error: e instanceof Error ? e.message : String(e) });
+                        setActionError(e instanceof Error ? e.message : "Save balance failed");
+                      } finally { setSavingBalance(false); }
                     }}
                     disabled={savingBalance}
                     className="flex items-center gap-1 bg-slate-900 text-white px-2.5 py-1 rounded-md text-xs font-medium disabled:opacity-50"
@@ -348,6 +359,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                       setVendor(vendor ? { ...vendor, email: emailValue.trim() || undefined } : vendor);
                       setEditingEmail(false);
                     } catch (e) {
+                      log.warn("save email failed", { vendorId: id, error: e instanceof Error ? e.message : String(e) });
                       setEmailError(e instanceof Error ? e.message : "Could not save the email");
                     } finally {
                       setSavingEmail(false);
@@ -404,16 +416,13 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                       setSavingTerms(true);
                       try {
                         const val = parseInt(termsValue) || 0;
-                        const res = await fetch(`/api/vendors/${id}`, {
-                          method: "PUT",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ paymentTermDays: val }),
-                        }).then(r => r.json());
-                        if (res.success) {
-                          setVendor({ ...vendor, paymentTermDays: val });
-                          setEditingTerms(false);
-                        }
-                      } catch (e) { setActionError(e instanceof Error ? e.message : "Save terms failed"); } finally { setSavingTerms(false); }
+                        await apiFetch(`/api/vendors/${id}`, { method: "PUT", json: { paymentTermDays: val } });
+                        setVendor({ ...vendor, paymentTermDays: val });
+                        setEditingTerms(false);
+                      } catch (e) {
+                        log.warn("save payment terms failed", { vendorId: id, error: e instanceof Error ? e.message : String(e) });
+                        setActionError(e instanceof Error ? e.message : "Save terms failed");
+                      } finally { setSavingTerms(false); }
                     }}
                     disabled={savingTerms}
                     className="p-1 bg-slate-900 text-white rounded-md disabled:opacity-50"
@@ -465,16 +474,18 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                   onClick={async () => {
                     setSavingCd(true);
                     try {
-                      const res = await fetch(`/api/vendors/${id}`, {
+                      await apiFetch(`/api/vendors/${id}`, {
                         method: "PUT",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
+                        json: {
                           cdPercentage: parseFloat(cdPctValue) || 0,
                           cdTermsDays: parseInt(cdDaysValue) || 0,
-                        }),
-                      }).then(r => r.json());
-                      if (res.success) { loadVendor(); setEditingCd(false); }
-                    } catch (e) { setActionError(e instanceof Error ? e.message : "Save cash discount failed"); } finally { setSavingCd(false); }
+                        },
+                      });
+                      loadVendor(); setEditingCd(false);
+                    } catch (e) {
+                      log.warn("save cash discount failed", { vendorId: id, error: e instanceof Error ? e.message : String(e) });
+                      setActionError(e instanceof Error ? e.message : "Save cash discount failed");
+                    } finally { setSavingCd(false); }
                   }}
                   disabled={savingCd}
                   className="p-1 bg-slate-900 text-white rounded-md disabled:opacity-50"

@@ -313,6 +313,7 @@ error even if the price itself is exact — so these follow the money.
 | `brand_statements` | 2 | claimedClosing, computedClosing |
 | `service_jobs` | 2 | amount, estimatedHrs¹ |
 | `CustomerPayment`, `Expense`, `InboundShipment`, `brand_ledger_entries`, `ledger_gaps`, `price_items`, `vendor_discount_terms` | 1 each | amount / totalAmount / price / perUnitAmount |
+| `vendor_ledger_profiles` (added 9 Sep 2026, plan 0909-vendor-ledger-screens §3 A.1 — chosen Float knowingly because `ledgerOpeningAmount` is summed with `brand_ledger_entries.amount`; convert the ledger family together under item 5) | 4 | theirBalAmount / ourBalAmount / recovAmount / ledgerOpeningAmount |
 
 ¹ `estimatedHrs` is a duration, not money — the classifier grouped it by elimination. `Float`
 is defensible there; `Decimal(4,2)` is tidier.

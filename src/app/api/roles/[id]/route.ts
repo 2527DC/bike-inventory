@@ -2,9 +2,13 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { successResponse, errorResponse } from "@/lib/api-utils";
+import { successResponse, errorResponse, failure } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { roleUpdateSchema } from "@/lib/validations";
+import { reservedPermissionCount } from "@/lib/rbac";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("roles:write");
 
 // GET: one role plus the ids of the permissions it holds, for the editor grid.
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -32,7 +36,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     return successResponse({ ...rest, permissionIds: permissions.map((p) => p.permissionId) });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed", 500);
+    return failure(error, { scope: "roles" });
   }
 }
 
@@ -67,6 +71,16 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       }
     }
 
+    // An admin-only module (Module.assignable = false) may be held by the system role alone.
+    // The test is the role's isSystem column, not its name — CLAUDE.md rule 1.
+    if (!role.isSystem && data.permissionIds) {
+      const reserved = await reservedPermissionCount(data.permissionIds);
+      if (reserved > 0) {
+        log.warn("grant of admin-only permissions refused", { roleId: id, reserved });
+        return errorResponse("These permissions are reserved for the system role", 400);
+      }
+    }
+
     await prisma.$transaction(async (tx) => {
       await tx.role.update({
         where: { id },
@@ -93,7 +107,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     return successResponse({ saved: true });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed", 400);
+    return failure(error, { scope: "roles:write", status: 400 });
   }
 }
 
@@ -121,6 +135,6 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     return successResponse({ deleted: true });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed", 400);
+    return failure(error, { scope: "roles:write", status: 400 });
   }
 }

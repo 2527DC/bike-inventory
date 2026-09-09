@@ -2,9 +2,13 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { successResponse, errorResponse } from "@/lib/api-utils";
+import { successResponse, errorResponse, failure } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { roleCreateSchema } from "@/lib/validations";
+import { reservedPermissionCount } from "@/lib/rbac";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("roles:write");
 
 // GET: every role, with how many permissions it holds and how many users it is assigned to.
 export async function GET() {
@@ -28,7 +32,7 @@ export async function GET() {
     return successResponse({ roles });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed", 500);
+    return failure(error, { scope: "roles" });
   }
 }
 
@@ -42,6 +46,14 @@ export async function POST(req: NextRequest) {
 
     const existing = await prisma.role.findUnique({ where: { key } });
     if (existing) return errorResponse(`A role with key "${key}" already exists`, 409);
+
+    // A role created here is never a system role (below), so an admin-only module's
+    // permissions can never be part of its initial grant set.
+    const reserved = await reservedPermissionCount(data.permissionIds ?? []);
+    if (reserved > 0) {
+      log.warn("grant of admin-only permissions refused", { key, reserved });
+      return errorResponse("These permissions are reserved for the system role", 400);
+    }
 
     const role = await prisma.role.create({
       data: {
@@ -61,6 +73,6 @@ export async function POST(req: NextRequest) {
     return successResponse(role, 201);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed", 400);
+    return failure(error, { scope: "roles:write", status: 400 });
   }
 }

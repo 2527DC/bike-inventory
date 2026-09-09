@@ -61,3 +61,7 @@ next-env.d.ts
 
 # Database snapshots — never leave this machine
 backups/
+
+# Local storage provider (StorageConfig provider = LOCAL, default dir .storage): uploaded
+# statements, chat exports and evidence. Real supplier data — never committed.
+/.storage/

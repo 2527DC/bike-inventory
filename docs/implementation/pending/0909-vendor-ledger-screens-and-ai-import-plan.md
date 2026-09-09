@@ -1,10 +1,9 @@
 # The ledger app's vendor screens, exactly as they are, behind a Ledger button on the vendor page — with a one-time JSON import, S3 uploads and AI extraction
 
-Status: pending — 9 Sep 2026, every question in §1 answered by the owner the same day; **not started** until the owner says "implement" and names the base branch (Q9).
-Branch: **to be named by the owner** before anything is checked out (see Q9). The working tree
-on `feat/0909-stock-po-expense` carries **uncommitted** PO-sheet work in `prisma/schema.prisma`,
-`src/lib/ai/*`, `src/lib/validations.ts` and `src/lib/po-extraction/*`; this plan touches the
-first three, so it cannot start until that work is committed.
+Status: in-progress — built 9 Sep 2026 (Parts A–F, uncommitted on `feat/0909-vendor-ledger-screens`); the API side verified against local `bch` by curl the same day; awaiting the owner's `npm run build` and the browser walk in `docs/manual-testing/0909-vendor-ledger-verification.md`. Build record in §6.
+Branch: **`feat/0909-vendor-ledger-screens`** — cut from `feat/0909-stock-po-expense` @ `39dfb81`
+on 9 Sep 2026 once the owner named it (Q9); the PO-sheet work this plan waited on is commit
+`54fd2d4` on that base.
 
 Everything in §2 and §3 was read from the code on disk on **9 Sep 2026**: the ledger app at
 `F:\bharath  Cycle\ledgers\app`, and this repository. Nothing is carried over from
@@ -557,6 +556,116 @@ context objects use `provider`/`model`, as `src/lib/ai/index.ts:50` does).
 8. Delete file → the object is gone from the bucket (check in the S3 console), the row shows
    "deleted", the run's proposals still open, and the old URL now returns the bucket's 404.
 9. `LOG_LEVEL=0` shows the debug lines from §3 Logging; no prompt text, no key.
+
+---
+
+## 6. Build record — 9 Sep 2026
+
+Built the same day, once the owner named the branch: Part A first (schema, migration, catalog,
+seed, the two role-write routes, the permissions screen), then B–E by four agents in parallel
+with file ownership (B the API, C the UI port, D the JSON import, E uploads and AI), then F.
+`npx tsc --noEmit` exit 0 — its only output is stale entries under `.next/types/` for the two
+deleted pages, which a build regenerates; `eslint` clean on every touched file. **`npm run build`
+was NOT run** — the owner runs it. **Nothing is committed**: HEAD is still `39dfb81`, the
+branch's base; everything below is in the working tree.
+
+**Branch.** `feat/0909-vendor-ledger-screens`, cut from `feat/0909-stock-po-expense` @ `39dfb81`.
+
+**Migration.** `prisma/migrations/20260909162948_vendor_ledger_profile_uploads/migration.sql` —
+written by `migrate dev` on localhost `bch`, applied there and nowhere else. Read in full:
+
+| Statement | Count | What |
+|---|---|---|
+| `CREATE TYPE` | 3 | `LedgerUploadKind`, `LedgerAiTask`, `LedgerAiRunStatus` |
+| `ALTER TYPE … ADD VALUE` | 1 | `LedgerEntryType.NOTE` |
+| `ADD COLUMN` | 2 | `ledger_gap_evidence.capturedLabel`, `modules.assignable … DEFAULT true` |
+| `CREATE TABLE` | 3 | `vendor_ledger_profiles`, `ledger_uploads`, `ledger_ai_runs` |
+| `CREATE INDEX` | 3 | `(vendorId, createdAt)` twice, `ledger_ai_runs(uploadId)` |
+| `ADD CONSTRAINT … FOREIGN KEY` | 6 | vendor, user and upload relations |
+
+Nothing drops, nothing alters a column type, nothing sets `NOT NULL` on a populated table.
+`migrate status` up to date on local `bch` afterwards.
+
+**Files.** From `git status --short` on 9 Sep 2026: 26 tracked files changed (+565 / −1,171)
+and 39 new files (5,911 lines).
+
+| Part | Created | Changed | Deleted |
+|---|---|---|---|
+| A schema + RBAC | `prisma/migrations/20260909162948_vendor_ledger_profile_uploads/migration.sql` | `prisma/schema.prisma` · `prisma/rbac-catalog.ts` · `prisma/seed-rbac.ts` · `src/lib/rbac.ts` (`reservedPermissionCount`) · `src/app/api/roles/route.ts` · `src/app/api/roles/[id]/route.ts` · `src/app/api/modules/route.ts` · `src/app/(dashboard)/team/permissions/page.tsx` | — |
+| B API | `src/app/api/ledger/vendors/[id]/profile/route.ts` · `src/app/api/ledger/gaps/[id]/notes/route.ts` · `src/app/api/ledger/gaps/[id]/evidence/route.ts` · `src/app/api/ledger/evidence/[id]/route.ts` · `src/lib/brand-ledger/view.ts` · `src/lib/brand-ledger/view-types.ts` | `src/app/api/ledger/vendors/[id]/route.ts` · `src/app/api/ledger/vendors/[id]/entries/route.ts` · `src/app/api/ledger/vendors/[id]/gaps/route.ts` · `src/app/api/ledger/gaps/[id]/route.ts` · `src/app/api/ledger/entries/[id]/review/route.ts` · `src/lib/validations.ts` | `src/app/api/ledger/vendors/route.ts` (staged) |
+| C UI port | `src/app/(dashboard)/ledger/[id]/ledger.css` and the 20 files of `src/app/(dashboard)/ledger/[id]/_components/`: `balance-editor` · `brand-page` · `collapsible` · `entry-explain` · `entry-form` · `evidence-upload` · `evidence` · `files-card` · `gap-form` · `gap-shots` · `gaps-tab` · `import-json-card` · `ledger-api` · `ledger-helpers` · `ledger-tab` · `monthly-tab` · `progress-note` · `review-card` · `share-tab` · `table-tab` | `src/app/(dashboard)/ledger/[id]/page.tsx` (now the shell) · `src/app/(dashboard)/vendors/[id]/page.tsx` (the button) | `src/app/(dashboard)/ledger/[id]/gaps/new/page.tsx` |
+| D JSON import | `src/lib/brand-ledger/import-json.ts` · `src/app/api/ledger/vendors/[id]/import-json/route.ts` (the card is `import-json-card.tsx` above) | — | — |
+| E uploads + AI | `src/lib/brand-ledger/uploads.ts` · `src/lib/brand-ledger/ai-prompts.ts` · `src/lib/brand-ledger/ai-run.ts` · `src/app/api/ledger/vendors/[id]/uploads/route.ts` · `src/app/api/ledger/uploads/[id]/route.ts` · `src/app/api/ledger/uploads/[id]/run/route.ts` · `src/app/api/ledger/runs/[id]/route.ts` · `src/app/api/ledger/runs/[id]/accept/route.ts` · `src/app/api/ledger/runs/[id]/discard/route.ts` (the cards are `files-card.tsx`, `review-card.tsx`, `evidence-upload.tsx` above) | `src/lib/storage/upload-policy.ts` (`ledger/` prefix and its types) · `package.json` + `package-lock.json` (`fflate ^0.8.3`) | — |
+| F removal + docs | `docs/manual-testing/0909-vendor-ledger-verification.md` | `docs/brand-ledger-flow.md` · `docs/implementation/pending/ledger-merge-plan.md` · `docs/implementation/README.md` · `docs/schema-review.md` (one row: `vendor_ledger_profiles` joins the Float-money list, item 5) · this file | `src/app/(dashboard)/ledger/page.tsx` |
+
+Untracked and **not part of the change**: `.storage/` — the Local storage provider's directory
+(`DEFAULT_LOCAL_DIR`, `src/lib/storage/local.ts:17`), holding two leftover objects from the pass.
+It is not in `.gitignore`. It must not be committed: delete it or ignore it.
+
+**Verified 9 Sep 2026 against local `bch`** — dev server, an authenticated `curl` session, no
+browser (none was available; the browser pass is the owner's, see below):
+
+| Area | What was exercised | Result |
+|---|---|---|
+| Migration | `migrate dev` on localhost; SQL read | additive only (table above) |
+| RBAC seed | `npm run db:seed:rbac` | `brand_ledger` and `brand_ledger_gaps`: route null, `assignable` false; ADMIN 174/174 |
+| Type check, lint | `tsc --noEmit`, `eslint` | clean (stale `.next/types` only) |
+| Admin-only (A.3) | `POST /api/roles`, `PUT /api/roles/[id]` with a `brand_ledger` permission id | 400 `These permissions are reserved for the system role`; `GET /api/modules` exposes `assignable: false` |
+| Pages | `/ledger/<id>`, `/vendors/<id>`, `/ledger` | 200, 200, 404 |
+| Import (D) — aoki | the seed export → AOKI MOBILITY | 48 entries, 18 gaps; computed closing ₹5,12,960 = the app's own figure; their books ₹6,00,621; code AOKI; a second import 409 |
+| Import (D) — lucifer | the seed export → LUCIFER BIKES | 120 entries, 34 gaps, 40 audit links; closing ₹18,48,717, ties the app |
+| Profile (B.2) | `PUT …/profile` | Reviewed stamps `lastReviewed`; balances persist |
+| Entries (B.6, B.7) | `POST …/entries`, `DELETE …/entries?entryId=`, `PUT /api/ledger/entries/[id]/review` | NOTE with no amount accepted; payment accepted; a MANUAL row deleted; an imported row refused (400); IGNORED via review |
+| Gaps (B.3–B.5) | `POST …/gaps`, notes, `PUT` and `DELETE /api/ledger/gaps/[id]` | #19 created with the "Added" note; a progress note; resolved → the "Marked resolved" note; deleted |
+| Uploads (E.1, E.5) | a CSV statement to TRINITY CYCLES | stored; `STATEMENT_ROWS` ran with no AI → proposals with the tie-out; accept refused (409) while it did not tie; delete → object gone from `.storage/`; run after delete → 410 |
+| AI (E.3) | a chat upload → `CLAIMS_FROM_CHAT` | read, chunked, sent; Anthropic refused with `Your credit balance is too low` — the code path worked, the provider did not |
+| Evidence (B.8) | `POST /api/ledger/gaps/[id]/evidence` on gap 1 | row with `capturedLabel = "2024-08 orders"`, shown in the view; delete-gap-with-evidence 409; `DELETE /api/ledger/evidence/[id]` OK |
+
+**Two bugs found on the way, fixed before this record:**
+
+1. `src/lib/validations.ts` — `ledgerEntryWriteSchema.date` had lost the backslashes of its
+   regex (`^d{4}-d{2}-d{2}$` where `^\d{4}-\d{2}-\d{2}$` was meant), so every add-entry from the
+   screen was refused with "Date must be YYYY-MM-DD". Found by the first `POST …/entries`.
+2. `src/lib/brand-ledger/ai-run.ts` `statementFromSheet` — the sheet reader now opens the
+   workbook with `cellDates: true` and reads the grid with `raw: true`, so a date cell arrives
+   as a Date (read back with the local getters) and an amount as a number rather than formatted
+   text; and an opening or closing line's figure is taken as a **magnitude** (`Math.abs`)
+   whichever column it sits in. Found by the Trinity CSV run, whose tie-out read the wrong figures.
+
+**Built as planned, with these deviations and additions:**
+
+| Where | What differs from §3, and why |
+|---|---|
+| A.1 | `LedgerUploadKind` has no `JSON_EXPORT` — the import file is read once and never stored (Part D), so the value would name nothing. `LedgerAiRun` gains `chunks Int @default(1)` (how many pieces a chat export was sent in), and `provider` / `model` are nullable because a sheet run has no AI. |
+| B.1 | The view also carries `code`, `source` and `ignored` per entry, `shots` per gap, `canSeeGaps` and `isEmpty` (the import card's condition). Without `brand_ledger_gaps.view` the view returns `gaps: []` and the entries keep only the gap number. |
+| B.6 / D3 | The × on an imported row keeps the app's "Delete …?" confirm; the outcome is IGNORED. The row stays visible, dimmed, with an `ignored` chip, and leaves the balance, Monthly and Table. |
+| B.8 | `DELETE /api/ledger/evidence/[id]` exists and was verified by curl, but **the screen has no button for it** — `GapShots` is the app's component and the app had no delete there. The owner decides whether one is wanted. The free-text date is stored in `capturedLabel`; when it parses as a date, `capturedOn` is set too. |
+| B.9 | Dropped, as Q1 decided. Local files open through `/api/media/<key>` (session required); S3 files through the bucket URL. |
+| C.4 | The header shows `Vendor.name` (AOKI MOBILITY), not the export's brand name (Aoki); `‹ Back` goes to `/vendors/[id]`; CSV file names carry the vendor id. |
+| D | The card preselects the brand whose id appears in the vendor's name, else the first brand; it renders only while `isEmpty` (no entries, no gaps, no profile). File cap 5 MB. `LEDGER_JSON_IMPORT_ENABLED` lives at `src/lib/brand-ledger/import-json.ts:38`. |
+| E.1 | A DOCUMENT or SCREENSHOT upload may run either `CLAIMS_FROM_IMAGE` or `STATEMENT_ROWS`; the task select offers both. Caps: upload 100 MB, AI attachment 30 MB. |
+| E.3 | Prompt cap 500 characters (`USER_PROMPT_MAX_CHARS`); refused on ignore / override / system prompt / jailbreak / developer message, **before** a run row is created. `maxDuration = 60`. Chat chunks of 1,500 messages (`CHAT_CHUNK_MESSAGES`). |
+| E.4 | Tie tolerance ₹1 (`reconcile.ts:102`, mirrored in the review card). Accept re-runs the check server-side and answers 409 with the difference; the review card lets the person edit the opening as well as the claimed closing. |
+| E.5 | A storage delete that fails answers **502** and leaves the row live; a URL the live provider never issued deletes the row and leaves the object, with a warn line. |
+| AI errors | A provider refusal reaches the screen as the `src/lib/ai/http.ts` sentence (Anthropic's 400 → 502 "AI processing failed. Please try again.") while the run row keeps the provider's own message. |
+
+**Owner steps still owed**, in this order:
+
+1. `.env` — every `DATABASE_URL` / `DIRECT_URL` line is commented out at the moment (2–3 the
+   cloud TEST project, 9–10 the other Supabase project, 13–14 localhost) and **line 13 spells the
+   user `pstgres`**. Fix the typo and uncomment 13–14 (or export both in the shell) before
+   anything below — the build needs a reachable database.
+2. `npm run build` — 21–45 minutes, background it, report the exit code.
+3. The browser walk: `docs/manual-testing/0909-vendor-ledger-verification.md` (13 sections,
+   84 cases).
+4. The cloud test database (`nfemnakgiahcxbnmknjg`), by hand: `npx prisma migrate status`, then
+   `npx prisma migrate deploy` with `DIRECT_URL` on 5432, then `npm run db:seed:rbac`.
+5. Anthropic credit — the account has none; Settings → AI → Test and every PDF, chat and image
+   task fail until it is topped up. A sheet statement needs no AI.
+6. Create the Tata Stryder vendor, import the eight brands, attach the five Cultsport evidence
+   files by hand (walk §13.2), then flip `LEDGER_JSON_IMPORT_ENABLED` to false.
+7. `.storage/` — delete it or add it to `.gitignore`; it must not be committed.
+8. Commit — nothing on this branch is committed yet. Claude commits only when asked.
 
 ---
 
