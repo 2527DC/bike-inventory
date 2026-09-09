@@ -431,14 +431,15 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     actions: ["view", "create", "edit", "delete", "approve"],
   },
   {
-    // route: null — hidden from the sidebar, not removed. See the note on `bills` above;
-    // `expenses` is checked by 5 files and /expenses stays reachable by URL and from the
-    // dashboard card. Restore by putting "/expenses" back.
+    // Back in the sidebar since 9 Sep 2026 (plan 0909-expense-multi-entry-flow, R1): the
+    // stepped entry flow is something a person clicks into. It was route: null from 31 Aug
+    // (sidebar-categories-and-accounts-trim-plan) — reachable only by URL and the dashboard card.
+    // Applied by `npm run db:seed:rbac`; the seeder upserts `route`.
     key: "expenses",
     label: "Expenses",
-    description: "Expense entry and approval",
+    description: "Expense entry, several to one submit",
     icon: "Receipt",
-    route: null,
+    route: "/expenses",
     group: "Accounts",
     sortOrder: 310,
     actions: ["view", "create", "edit", "delete", "approve"],

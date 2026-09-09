@@ -462,13 +462,54 @@ export const vendorCreditSchema = z.object({
   notes: z.string().optional(),
 });
 
+// ---- Expenses ----
+
+// Mirrors the Prisma enums (schema.prisma ExpenseCategory / PaymentMode). All six payment
+// modes are listed: CREDIT_ADJUSTMENT was always in the enum but unreachable from the old
+// flat form, which offered five.
+export const EXPENSE_CATEGORIES = [
+  "DELIVERY", "TRANSPORT", "SHOP_MAINTENANCE", "UTILITIES",
+  "SALARY_ADVANCE", "FOOD_TEA", "STATIONERY", "MISCELLANEOUS",
+] as const;
+export const EXPENSE_PAYMENT_MODES = ["CASH", "CHEQUE", "NEFT", "RTGS", "UPI", "CREDIT_ADJUSTMENT"] as const;
+
+/**
+ * One expense as the stepped entry flow sends it (0909-expense-multi-entry-flow-plan, Part B).
+ *
+ * `paidBy` is deliberately absent. The batch route stamps it from the session (decision D2), so
+ * a client cannot record an expense under someone else's name — the server derives it, the
+ * client never supplies it. `date` is absent too: it is shared by the whole batch (D6).
+ */
+export const expenseRowSchema = z.object({
+  amount: z.number().min(0.01, "Amount must be positive"),
+  category: z.enum(EXPENSE_CATEGORIES),
+  description: z.string().min(1, "Description is required").max(500),
+  paymentMode: z.enum(EXPENSE_PAYMENT_MODES),
+  /** One receipt photo, already uploaded through /api/media/presign. Null when none. */
+  receiptUrl: z.string().url().optional(),
+  referenceNo: z.string().optional(),
+  notes: z.string().optional(),
+});
+
+/** The body of POST /api/expenses/batch: one date and one payer, many rows (D6). */
+export const expenseBatchSchema = z.object({
+  date: z.string().min(1, "Date is required"),
+  expenses: z
+    .array(expenseRowSchema)
+    .min(1, "Add at least one expense")
+    .max(50, "A batch can hold at most 50 expenses"),
+});
+
+// Single-row shape, kept for PUT /api/expenses/[id]. `paidBy` is optional here only because
+// PUT still edits historical rows that carry a typed name; POST /api/expenses no longer reads
+// it from the body and stamps the session user instead (D2).
 export const expenseSchema = z.object({
   date: z.string().min(1, "Date is required"),
   amount: z.number().min(0.01, "Amount must be positive"),
-  category: z.enum(["DELIVERY", "TRANSPORT", "SHOP_MAINTENANCE", "UTILITIES", "SALARY_ADVANCE", "FOOD_TEA", "STATIONERY", "MISCELLANEOUS"]),
+  category: z.enum(EXPENSE_CATEGORIES),
   description: z.string().min(1, "Description is required"),
-  paidBy: z.string().min(1, "Paid by is required"),
-  paymentMode: z.enum(["CASH", "CHEQUE", "NEFT", "RTGS", "UPI", "CREDIT_ADJUSTMENT"]),
+  paidBy: z.string().min(1, "Paid by is required").optional(),
+  paymentMode: z.enum(EXPENSE_PAYMENT_MODES),
   referenceNo: z.string().optional(),
   notes: z.string().optional(),
 });

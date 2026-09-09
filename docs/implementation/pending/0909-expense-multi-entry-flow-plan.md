@@ -1,6 +1,6 @@
 # One expense module, entered a step at a time, several expenses to a single submit
 
-Status: pending
+Status: in-progress — 9 Sep 2026, Parts B–E building on branch feat/0909-stock-po-expense (four plans share it; not off main)
 Branch: **`feat/expense-multi-entry`** — create it with exactly this name, off `main`.
 
 Written 9 Sep 2026. Nothing built. Every claim in §2 was read off the code on disk that day
