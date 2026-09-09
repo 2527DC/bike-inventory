@@ -200,6 +200,8 @@ export async function runAi(req: AiRequest): Promise<AiResult> {
       attachments: attachments.length,
       attachmentBytes: attachments.reduce((n, a) => n + a.base64.length, 0),
       maxOut: req.maxTokens ?? null,
+      hasSchema: Boolean(req.jsonSchema),
+      effort: req.effort ?? null,
     });
 
     const adapter = getAdapter(provider);
@@ -227,7 +229,8 @@ export async function runAi(req: AiRequest): Promise<AiResult> {
       throw new AiError("refusal", `The model declined the ${req.purpose} request.`, { provider });
     }
 
-    const json = req.json ? parseJsonReply(completion.text) : undefined;
+    // A schema implies JSON: the caller wants the parsed value, not the text.
+    const json = req.json || req.jsonSchema ? parseJsonReply(completion.text) : undefined;
     const latencyMs = Date.now() - started;
 
     log.info("ai call finished", {

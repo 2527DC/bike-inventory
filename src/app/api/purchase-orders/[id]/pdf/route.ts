@@ -59,15 +59,17 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         },
         items: {
           select: {
+            // The description is the line's own `name` (plan 0909, D2): a line raised from the
+            // vendor's sheet has no product at all. SKU and HSN come from the product only when
+            // the line is linked; hsnCode lives on Product, NOT on PurchaseOrderItem — the
+            // column that does not exist there is exactly what made the old brand-stock PO
+            // generator (deleted 9 Sep 2026) throw for months.
+            name: true,
             quantity: true,
             unitPrice: true,
             gstRate: true,
             amount: true,
-            // hsnCode lives on Product, NOT on PurchaseOrderItem — the column that does not
-            // exist there is exactly what made the old brand-stock PO generator (deleted
-            // 9 Sep 2026) throw for months. The quotation import on /purchase-orders/new
-            // never writes it either: createPurchaseOrder does not build that field.
-            product: { select: { sku: true, name: true, hsnCode: true } },
+            product: { select: { sku: true, hsnCode: true } },
           },
           orderBy: { createdAt: "asc" },
         },
@@ -79,9 +81,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const company = await loadCompanyIdentity();
 
     const items: PoPdfLine[] = po.items.map((it) => ({
-      sku: it.product.sku,
-      name: it.product.name,
-      hsnCode: it.product.hsnCode,
+      sku: it.product?.sku ?? null,
+      name: it.name,
+      hsnCode: it.product?.hsnCode ?? null,
       quantity: it.quantity,
       unitPrice: it.unitPrice,
       gstRate: it.gstRate,

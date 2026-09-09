@@ -106,8 +106,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         },
         items: {
           select: {
-            quantity: true, unitPrice: true, gstRate: true, amount: true,
-            product: { select: { sku: true, name: true, hsnCode: true } },
+            // `name` is the line's own description (plan 0909, D2); the product is optional.
+            name: true, quantity: true, unitPrice: true, gstRate: true, amount: true,
+            product: { select: { sku: true, hsnCode: true } },
           },
           orderBy: { createdAt: "asc" },
         },
@@ -149,9 +150,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     const company = await loadCompanyIdentity();
     const items: PoPdfLine[] = po.items.map((it) => ({
-      sku: it.product.sku,
-      name: it.product.name,
-      hsnCode: it.product.hsnCode,
+      sku: it.product?.sku ?? null,
+      name: it.name,
+      hsnCode: it.product?.hsnCode ?? null,
       quantity: it.quantity,
       unitPrice: it.unitPrice,
       gstRate: it.gstRate,

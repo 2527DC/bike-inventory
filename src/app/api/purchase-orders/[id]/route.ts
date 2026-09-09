@@ -30,6 +30,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
             },
           },
         },
+        // Every scalar of the line comes back, `name` included — the description as ordered.
+        // `product` is null for a line raised from the vendor's sheet (plan 0909, D2); the
+        // screen shows currentStock only when it is present.
         items: { include: { product: { select: { name: true, sku: true, currentStock: true } } } },
         createdBy: { select: { name: true } },
         approvedBy: { select: { name: true } },

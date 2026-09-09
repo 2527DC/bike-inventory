@@ -127,6 +127,7 @@ export const googleAdapter: AiAdapter = {
       promptChars: req.prompt.length,
       hasSystem: Boolean(req.system),
       maxOut,
+      hasSchema: Boolean(req.jsonSchema),
     };
     log.debug("-> models.generateContent", ctx);
 
@@ -140,8 +141,12 @@ export const googleAdapter: AiAdapter = {
           ...(req.system ? { systemInstruction: req.system } : {}),
           maxOutputTokens: maxOut,
           // Gemini's native JSON mode: the reply is guaranteed to parse, so the resolver's
-          // fence-stripping becomes a no-op instead of a rescue.
-          ...(req.json ? { responseMimeType: "application/json" } : {}),
+          // fence-stripping becomes a no-op instead of a rescue. A schema goes as
+          // `responseJsonSchema` (GenerateContentConfig, @google/genai 2.21 — plain JSON
+          // Schema, and `responseMimeType` is required beside it). `effort` has no Gemini
+          // equivalent and is ignored here.
+          ...(req.json || req.jsonSchema ? { responseMimeType: "application/json" } : {}),
+          ...(req.jsonSchema ? { responseJsonSchema: req.jsonSchema } : {}),
         },
       });
     } catch (err) {

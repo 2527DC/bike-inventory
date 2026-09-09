@@ -925,8 +925,14 @@ model PurchaseOrderItem {
   id              String        @id @default(cuid())
   purchaseOrderId String
   purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
-  productId       String
-  product         Product       @relation(fields: [productId], references: [id])
+  /// Optional since 9 Sep 2026 (plan 0909-po-sheet-ai-extraction, D2): a line raised from the
+  /// vendor's sheet is the item NAME the sheet gave, and nothing from the products table. The
+  /// link stays for older lines and for a later plan that wants optional linking.
+  productId       String?
+  product         Product?      @relation(fields: [productId], references: [id])
+  /// The item name as ordered — from the sheet for sheet-built lines, backfilled from the
+  /// product for lines that predate the column. The PDF's Description column reads this.
+  name            String
   quantity        Int
   receivedQty     Int           @default(0)
   unitPrice       Float
@@ -3460,6 +3466,15 @@ model PoExtraction {
   createdById  String
   createdBy    User     @relation("PoExtractionCreatedBy", fields: [createdById], references: [id])
   createdAt    DateTime @default(now())
+  /// "columns" while the person confirms which column is what; "review" once rows exist.
+  stage        String   @default("columns")
+  /// The AI's column proposal per sheet, then the confirmed one: [{ sheet, headerRow,
+  /// columns: [{ index, header, role }] }]. Kept so "Columns" can be reopened (plan §3.2).
+  columnRoles  Json?
+  /// The colour legend read from the sheet, [{ rgb, label }], null when it has none.
+  legend       Json?
+  /// The optional hint the person typed for the column step (capped, sanitised — plan §3.6).
+  hint         String?
 
   items PoExtractionItem[]
 
@@ -3482,11 +3497,17 @@ model PoExtractionItem {
   /// relation): a review row is short-lived, so losing a match is the right outcome, not a block.
   productId       String?
   product         Product?     @relation("PoExtractionItemProduct", fields: [productId], references: [id])
-  matchStatus     String       @default("UNMATCHED") // AUTO | FUZZY | MANUAL | UNMATCHED
-  matchConfidence Float?
+  matchStatus     String       @default("UNMATCHED") // AUTO | FUZZY | MANUAL | UNMATCHED — no longer written (D2); dropped next release
+  matchConfidence Float?                              // no longer written (D2); dropped next release
   selected        Boolean      @default(false)
   orderQty        Int?
   sortOrder       Int          @default(0)
+  /// Sheet-built rows (plan 0909-po-sheet-ai-extraction, §3.3). Only rawName and qty travel to
+  /// the PO line (D2); `columns` is what the review SHOWS, in the sheet's own column order.
+  sheetName       String?
+  rowIndex        Int?
+  rowColor        String?      // "FF0000" — the item-name cell's fill; null when the cell has none
+  columns         Json?        // [{ header, value }]
 
   @@index([extractionId])
   @@index([productId])

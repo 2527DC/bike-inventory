@@ -6,21 +6,37 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
+/**
+ * One line of a purchase order in the making (plan 0909-po-sheet-ai-extraction, §3.4, D2).
+ *
+ * A line is a NAME plus what the person types — Qty, Unit Price, GST %. It does not come
+ * from the products table (R3): the sheet flow never sets `productId`. The one path that
+ * still carries a product is the handoff from /reorder, whose lines are catalogue products
+ * by definition; it fills `productId` so that order stays linked to what was low.
+ */
 export interface POLineItem {
-  productId: string;
-  productName: string;
-  sku: string;
+  /** Stable React key and dedupe key — the extraction item id, or the product id from /reorder. */
+  key: string;
+  name: string;
   quantity: number;
   unitPrice: number;
   gstRate: number;
+  /** Only from the /reorder handoff. Never set by the sheet flow. */
+  productId?: string;
 }
 
+/**
+ * The 409 payload from the duplicate rule. `names` is what the sheet flow clashes on (a
+ * normalised item name); `productIds` / `productNames` are the older product key, still
+ * sent for lines that carry a product. Every list is optional so either server shape reads.
+ */
 export interface PoConflict {
   poId: string;
   poNumber: string;
   status: string;
-  productIds: string[];
-  productNames: string[];
+  productIds?: string[];
+  productNames?: string[];
+  names?: string[];
 }
 
 export interface VendorOption {
@@ -172,18 +188,20 @@ export function VendorSection({
             {items.length > 0 && (
               <div className="space-y-2">
                 {items.map((item, index) => (
-                  <div key={item.productId} className="rounded-lg border border-slate-200 p-2.5">
-                    <div className="flex items-start justify-between mb-2">
+                  <div key={item.key} className="rounded-lg border border-slate-200 p-2.5">
+                    <div className="flex items-start justify-between gap-2 mb-2">
                       <div className="min-w-0">
-                        <p className="text-sm font-medium text-slate-900 truncate">{item.productName}</p>
-                        <p className="text-xs text-slate-500">{item.sku}</p>
+                        {/* The name only — a sheet-built line has no SKU (D2). break-words, not
+                            truncate: the vendor's item name is the whole identity of the line
+                            and a clipped one cannot be checked against the sheet. */}
+                        <p className="text-sm font-medium text-slate-900 break-words">{item.name}</p>
                       </div>
                       <button
                         type="button"
                         onClick={() => remove(index)}
                         disabled={running || busy}
-                        aria-label={`Remove ${item.productName}`}
-                        className="p-1 text-red-400 hover:text-red-600 disabled:opacity-40"
+                        aria-label={`Remove ${item.name}`}
+                        className="min-h-[44px] min-w-[44px] -m-2 flex items-center justify-center shrink-0 text-red-400 hover:text-red-600 disabled:opacity-40"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -269,7 +287,7 @@ export function VendorSection({
                         {c.poNumber}
                       </Link>
                       <span className="text-amber-600"> · {c.status.replace(/_/g, " ").toLowerCase()}</span>
-                      <p className="mt-0.5 break-words">{c.productNames.join(", ")}</p>
+                      <p className="mt-0.5 break-words">{(c.names ?? c.productNames ?? []).join(", ")}</p>
                     </div>
                   ))}
                 </div>
@@ -331,7 +349,7 @@ export function VendorSection({
                 {!section.vendorId
                   ? "Select a vendor to continue"
                   : items.length === 0
-                    ? "Add at least one product to continue"
+                    ? "Add at least one item from a sheet to continue"
                     : "Every line needs a rate"}
               </p>
             )}

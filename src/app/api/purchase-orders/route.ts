@@ -52,6 +52,7 @@ export async function GET(req: NextRequest) {
         where,
         include: {
           vendor: { select: { name: true, code: true } },
+          // `name` rides with the line's scalars; `product` is null for a sheet-built line (D2).
           items: { include: { product: { select: { name: true, sku: true } } } },
           createdBy: { select: { name: true } },
         },

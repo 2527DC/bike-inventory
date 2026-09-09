@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, use } from "react";
 import Link from "next/link";
-import { ArrowLeft, Check, Send, MessageSquare, Undo2, XCircle, SendHorizonal, Mail } from "lucide-react";
+import { ArrowLeft, Check, Download, Send, MessageSquare, Undo2, XCircle, SendHorizonal, Mail } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -48,7 +48,10 @@ interface PODetail {
     unitPrice: number;
     gstRate: number;
     amount: number;
-    product: { name: string; sku: string; currentStock: number };
+    /** The description as ordered — the sheet's item name, or the product's name for older lines. */
+    name: string;
+    /** Null for a line raised from the vendor's sheet (plan 0909, D2). */
+    product: { name: string; sku: string; currentStock: number } | null;
   }>;
   createdBy: { name: string };
   approvedBy?: { name: string };
@@ -151,9 +154,13 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
   function getWhatsAppLink() {
     if (!po?.vendor.whatsappNumber) return null;
     const phone = `91${po.vendor.whatsappNumber.replace(/\D/g, "").slice(-10)}`;
-    const itemsList = po.items.map((i) => `- ${i.product.name} (${i.product.sku}): ${i.quantity} pcs @ ${formatCurrency(i.unitPrice)}`).join("\n");
+    const itemsList = po.items
+      .map((i) => `- ${i.name || i.product?.name || "Item"}${i.product ? ` (${i.product.sku})` : ""}: ${i.quantity} pcs @ ${formatCurrency(i.unitPrice)}`)
+      .join("\n");
+    // Plain text on purpose — no WhatsApp markup (the `*bold*` asterisks it used to carry).
+    // Owner, 9 Sep 2026: "the WhatsApp export should be in normal text format".
     const msg = encodeURIComponent(
-      `*Purchase Order: ${po.poNumber}*\n\nDear ${po.vendor.name},\n\nPlease find our order below:\n\n${itemsList}\n\n*Total: ${formatCurrency(po.grandTotal)}*\n${po.expectedDate ? `Expected by: ${new Date(po.expectedDate).toLocaleDateString("en-IN")}` : ""}\n\nPlease confirm.`
+      `Purchase Order: ${po.poNumber}\n\nDear ${po.vendor.name},\n\nPlease find our order below:\n\n${itemsList}\n\nTotal: ${formatCurrency(po.grandTotal)}\n${po.expectedDate ? `Expected by: ${new Date(po.expectedDate).toLocaleDateString("en-IN")}` : ""}\n\nPlease confirm.`
     );
     return `https://wa.me/${phone}?text=${msg}`;
   }
@@ -204,6 +211,17 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
         <Badge variant={po.status === "RECEIVED" || po.status === "APPROVED" ? "success" : po.status === "CANCELLED" ? "danger" : "warning"}>
           {po.status.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase())}
         </Badge>
+        {/* Every status (plan 0909, R10 / Q8 a): a draft printed for a phone call is normal. The
+            PDF becomes an offer only when it is SENT, and sending stays gated on approval. The
+            route serves any status under purchase_orders.view — which this page already needs. */}
+        <a
+          href={`/api/purchase-orders/${id}/pdf`}
+          download
+          aria-label={`Download ${po.poNumber} as PDF`}
+          className="inline-flex items-center gap-1.5 min-h-[44px] px-3 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-sm font-medium text-slate-700 shrink-0"
+        >
+          <Download className="h-4 w-4" /> <span className="hidden sm:inline">Download</span> PDF
+        </a>
       </div>
 
       {/* ─── Actions, by state ────────────────────────────────────────────────────────────
@@ -427,8 +445,12 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
             <CardContent className="p-3">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="text-sm font-medium text-slate-900">{item.product.name}</p>
-                  <p className="text-xs text-slate-500 tabular-nums">{item.product.sku} | Stock: {item.product.currentStock}</p>
+                  <p className="text-sm font-medium text-slate-900 break-words">{item.name || item.product?.name}</p>
+                  {/* SKU and stock exist only when the line is a catalogue product; a sheet-built
+                      line has neither (D2) and shows nothing rather than a dash nobody asked for. */}
+                  {item.product && (
+                    <p className="text-xs text-slate-500 tabular-nums">{item.product.sku} | Stock: {item.product.currentStock}</p>
+                  )}
                 </div>
                 <p className="text-sm font-bold text-slate-900 tabular-nums shrink-0">{formatCurrency(item.amount * (1 + item.gstRate / 100))}</p>
               </div>

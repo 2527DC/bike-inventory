@@ -117,8 +117,27 @@ export const anthropicAdapter: AiAdapter = {
         { type: "text", text: req.prompt },
       ];
 
+      // Structured output and effort both live under `output_config` (OutputConfig in
+      // @anthropic-ai/sdk resources/messages/messages.d.ts: `effort?: 'low'|'medium'|'high'|
+      // 'xhigh'|'max'|null; format?: JSONOutputFormat|null`, where JSONOutputFormat is
+      // `{ type: 'json_schema'; schema: Record<string, unknown> }`). The key is sent only
+      // when something is set, so a plain request is byte-for-byte what it was before.
+      const outputConfig: Anthropic.OutputConfig | undefined =
+        req.jsonSchema || req.effort
+          ? {
+              ...(req.jsonSchema ? { format: { type: "json_schema", schema: req.jsonSchema } } : {}),
+              ...(req.effort ? { effort: req.effort } : {}),
+            }
+          : undefined;
+
       // Context keys deliberately avoid `token`/`key` — logger.ts redact() blanks those names.
-      log.debug("-> messages.stream", { model: cfg.model, blocks: content.length, maxOut: maxTokens });
+      log.debug("-> messages.stream", {
+        model: cfg.model,
+        blocks: content.length,
+        maxOut: maxTokens,
+        hasSchema: Boolean(req.jsonSchema),
+        effort: req.effort ?? null,
+      });
 
       // Streamed not for progress — nobody watches this — but because a 16k-token reply over
       // a plain request can outlive the HTTP timeout. No `thinking` and no `temperature`:
@@ -130,6 +149,7 @@ export const anthropicAdapter: AiAdapter = {
           max_tokens: maxTokens,
           system: req.system,
           messages: [{ role: "user", content }],
+          ...(outputConfig ? { output_config: outputConfig } : {}),
         })
         .finalMessage();
 

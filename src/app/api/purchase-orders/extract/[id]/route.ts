@@ -4,7 +4,6 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { userCan } from "@/lib/rbac";
 import { createLogger } from "@/lib/logger";
 import { discardExtractions, loadExtraction } from "@/lib/po-extraction/store";
 
@@ -21,12 +20,11 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
   try {
     const user = await requireFeature("purchase_orders", "create");
     const { id } = await params;
-    const canSeeCost = await userCan(user.id, "cost_price", "view");
 
-    const view = await loadExtraction(id, user.id, canSeeCost);
+    const view = await loadExtraction(id, user.id);
     if (!view) return errorResponse("Extraction not found", 404);
 
-    log.debug("extraction loaded", { extractionId: id, items: view.items.length });
+    log.debug("extraction loaded", { extractionId: id, stage: view.stage, items: view.items.length });
     return successResponse(view);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);

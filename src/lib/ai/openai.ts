@@ -139,6 +139,10 @@ export const openaiAdapter: AiAdapter = {
       promptChars: req.prompt.length,
       hasSystem: Boolean(req.system),
       maxOut,
+      // A jsonSchema is not sent to OpenAI: this adapter keeps the prompt path and the
+      // resolver's json.ts salvage, so the prompt itself must describe the shape. Logged so
+      // a schema-shaped call is recognisable in the log next to the other providers'.
+      hasSchema: Boolean(req.jsonSchema),
     };
     log.debug("-> responses.create", ctx);
 
