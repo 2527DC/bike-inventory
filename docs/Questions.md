@@ -36,13 +36,22 @@ where i need to implment the email thing where it has to send the email with the
 
 PI.  Implment the po and the complete cycle of the aplication  
 PI.  Get to know the legdger flow
+       implmenattion plan : where i need the the ui of the legder app where in the vendor listing and whren i selct the  one vendore i see the details and i need the button  as ledgere wheee in clicking it i must  get the screen taht the  legeger aplication has respected to the vendor 
+
+       --> need to know how are all the data stored and shown in the ledger aplication 
+       -->  and i should rnd regarding should i add any  table  if what type should i use the json  body data  which will be stored in s3  or which type i can use in the aplication of bch managemnt 
+       ---> the screen ans  the actions remains the ui must remain same the legedger application 
+
+
 PI.  Build line implemnetation :
 reuiremnt  -> the build line is ntg but the assamle audit 
     Q1 -> is this module a dependent on any other module 
       eg -> the dependent module operation   must be done before  getting into this module 
     # operation steps 
      1. when a assable audit  cration is done what thing is created i need screen what it must have and what is the flow 
-
+ -->  this module  happens after the inword means it sould maintaine the track of where did the inwarded has been placed that is called as bins where the bins are scopred to both the  warehosue and store level  
+ ---> where the bins hols the product or item or kits  
+ --> and the inward items  has to be assembled  where this system must track the  items assesmbled by a user  where the assembled item will be given a sku id which must be unique auto generated 
 
 2. tell the scope of stock holding as of now the stocks are holded at the warehouse level not the store level
  if u need it in both the level then tell me this  how does the stock and from where do u want to reduce 

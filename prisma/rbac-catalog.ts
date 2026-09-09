@@ -142,44 +142,6 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     actions: ["view", "create", "edit", "delete"],
   },
   {
-    // Brand stock sheets: upload a brand's availability file (Excel/CSV/PDF/image), review
-    // what it matched against our catalogue, then raise a PO for the rows worth ordering.
-    //
-    // The screens (`/brand-stock`, `/brand-stock/upload`, `/brand-stock/[id]`) already
-    // existed and worked, but had NO module of their own, so nothing rendered a link to
-    // them — the sidebar, the phone tab bar and the Stock Management hub are all derived
-    // from this catalog (see src/lib/nav-config.ts for why the hardcoded lists were
-    // deleted). The feature was reachable only by typing the URL.
-    //
-    // Guarded on `purchase_orders` until now, which is why it could be left out of the
-    // catalog and still work. That split is the failure P4 documents at length — a module's
-    // `view` decides what the menu shows while the route checks something else, so a role
-    // can hold the entry and not the route, or the route and not the entry. The four
-    // read/write routes move onto `brand_stock`; `generate-po` keeps `purchase_orders.create`
-    // ON TOP of `brand_stock.view`, because the row it writes is a PurchaseOrder and this
-    // must not become a second, weaker way to mint one.
-    //
-    // No `delete` action: nothing deletes a BrandStockUpload — there is no route for it.
-    // Declaring one would put a grant on /team/permissions that controls nothing.
-    //
-    // sortOrder 102 is the slot product_types vacated in P3 of the 0409 plan, so this fills
-    // the gap rather than renumbering rows that already exist.
-    //
-    // ⚠ RUN `npm run db:seed:rbac` AFTER DEPLOY, then grant Brand Stock on
-    //   /team/permissions — a new module is granted to nobody, and ADMIN holds every
-    //   permission only because it is re-seeded with them. Anyone using the URL today has
-    //   `purchase_orders` and will lose the screen until they are granted this.
-    key: "brand_stock",
-    label: "Brand Stock",
-    description: "Brand availability sheets, matching and PO generation",
-    icon: "FileSpreadsheet",
-    route: "/brand-stock",
-    parentKey: "stock_management",
-    group: "Operations", // MUST equal the parent's — the seeder asserts it
-    sortOrder: 102,
-    actions: ["view", "create", "edit"],
-  },
-  {
     key: "inbound",
     label: "Inbound Tracking",
     description: "Incoming shipments, receiving, putaway",
@@ -268,7 +230,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
   {
     key: "purchase_orders",
     label: "Purchase Orders",
-    description: "POs and brand stock uploads",
+    description: "Purchase orders and quotation imports",
     icon: "ShoppingCart",
     route: "/purchase-orders",
     group: "Purchase",

@@ -220,7 +220,8 @@ export async function PATCH(
  * named them, and a `?force=true` branch that hand-rolled a nine-table cascade
  * (SerialTransactionItem -> SerialItem -> InventoryTransaction -> StockLevel ->
  * InboundLineItem -> PurchaseOrderItem -> TransferOrderItem -> StockCountItem ->
- * BrandSkuMapping, then the product) because NOTHING in the schema cascades onto Product —
+ * BrandSkuMapping — scheduled for removal with the rest of brand-stock, 0909 plan P5 — then
+ * the product) because NOTHING in the schema cascades onto Product —
  * every foreign key to it is a default Restrict.
  *
  * That cascade was the problem. Deleting a product with history does not tidy the catalog; it

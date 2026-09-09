@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
+import type { ExtractionView } from "@/lib/po-extraction/types";
 import {
   VendorSection,
   formatCurrency,
@@ -16,8 +17,14 @@ import {
   type PoConflict,
   type VendorOption,
 } from "./_components/vendor-section";
+import { QuotationImport } from "./_components/quotation-import";
 
 const log = createLogger("purchase-orders:new");
+
+/** sessionStorage key for the open quotation review, so a refresh reloads it (plan 0909, Q3). */
+const EXTRACTION_KEY = "po-extraction-id";
+
+type ImportMode = "search" | "upload";
 
 interface ProductOption {
   id: string;
@@ -106,6 +113,53 @@ export default function NewPurchaseOrderPage() {
 
   const [productSearch, setProductSearch] = useState("");
   const [productResults, setProductResults] = useState<ProductOption[]>([]);
+
+  // ─── the quotation import (plan 0909-po-ai-upload, P3) ────────────────────────────────
+  // The review rows live on the server; the page holds the loaded view and its id goes into
+  // sessionStorage so a refresh reloads it instead of paying for the AI read again.
+  const [importMode, setImportMode] = useState<ImportMode>("search");
+  const [extraction, setExtraction] = useState<ExtractionView | null>(null);
+
+  useEffect(() => {
+    let id: string | null = null;
+    try {
+      id = sessionStorage.getItem(EXTRACTION_KEY);
+    } catch (e) {
+      log.warn("sessionStorage unavailable", { message: e instanceof Error ? e.message : String(e) });
+      return;
+    }
+    if (!id) return;
+    apiTry<ExtractionView>(`/api/purchase-orders/extract/${encodeURIComponent(id)}`).then(({ data, error, status }) => {
+      if (data) {
+        log.debug("extraction reloaded", { extractionId: data.id, items: data.items.length });
+        setExtraction(data);
+        setImportMode("upload");
+        // The review belongs to one vendor (Q2); put the manual section back on it.
+        setSections((prev) => prev.map((s) => (s.key === MANUAL_KEY && !s.vendorId ? { ...s, vendorId: data.vendorId } : s)));
+        return;
+      }
+      // 404: it was consumed or discarded in another tab. Forget it rather than nag.
+      if (status === 404) {
+        try {
+          sessionStorage.removeItem(EXTRACTION_KEY);
+        } catch (e) {
+          log.warn("could not clear the extraction id", { message: e instanceof Error ? e.message : String(e) });
+        }
+        return;
+      }
+      log.error("extraction reload failed", { extractionId: id, message: error });
+      setPageError(error ?? "Could not reload the uploaded quotation. Upload it again.");
+    });
+  }, []);
+
+  useEffect(() => {
+    try {
+      if (extraction) sessionStorage.setItem(EXTRACTION_KEY, extraction.id);
+      else sessionStorage.removeItem(EXTRACTION_KEY);
+    } catch (e) {
+      log.warn("could not persist the extraction id", { message: e instanceof Error ? e.message : String(e) });
+    }
+  }, [extraction]);
 
   useEffect(() => {
     // limit=500 is what parseSearchParams clamps to; asking for more silently gets 500.
@@ -218,6 +272,23 @@ export default function NewPurchaseOrderPage() {
     setProductResults([]);
   }
 
+  /**
+   * The ticked review rows become the manual section's lines. Merged, not replaced: a line
+   * already on the section keeps the qty and rate somebody typed, so a second "Use selected"
+   * adds the newly ticked rows without undoing edits to the first batch.
+   */
+  function useSelectedLines(lines: POLineItem[]) {
+    const manual = sections.find((s) => s.key === MANUAL_KEY);
+    if (!manual) return;
+    const have = new Set(manual.items.map((i) => i.productId));
+    const fresh = lines.filter((l) => !have.has(l.productId));
+    // Two review rows mapped to the same product collapse to one line — the first wins.
+    const seen = new Set<string>();
+    const unique = fresh.filter((l) => (seen.has(l.productId) ? false : (seen.add(l.productId), true)));
+    log.debug("selected rows used", { offered: lines.length, added: unique.length, alreadyPresent: lines.length - fresh.length });
+    patch(MANUAL_KEY, { items: [...manual.items, ...unique] });
+  }
+
   /** Create ONE vendor's order. Returns true when a purchase order now exists. */
   const submitSection = useCallback(
     async (key: string, submitForApproval: boolean): Promise<boolean> => {
@@ -236,6 +307,9 @@ export default function NewPurchaseOrderPage() {
             expectedDate,
             notes,
             submit: submitForApproval,
+            // The open review, if this order came out of one: the server deletes it (and the
+            // uploaded file) once the PO exists — nothing from the upload outlives the PO.
+            ...(key === MANUAL_KEY && extraction && extraction.vendorId === s.vendorId ? { extractionId: extraction.id } : {}),
             items: s.items.map(({ productId, quantity, unitPrice, gstRate }) => ({ productId, quantity, unitPrice, gstRate })),
           },
         }
@@ -244,6 +318,10 @@ export default function NewPurchaseOrderPage() {
       if (data) {
         patch(key, { status: "created", poId: data.id, poNumber: data.poNumber, error: null, conflicts: null });
         log.info("purchase order created", { vendorId: s.vendorId, poNumber: data.poNumber });
+        if (key === MANUAL_KEY && extraction) {
+          log.debug("extraction consumed by purchase order", { extractionId: extraction.id, poNumber: data.poNumber });
+          setExtraction(null);
+        }
         return true;
       }
 
@@ -257,7 +335,7 @@ export default function NewPurchaseOrderPage() {
       patch(key, { status: "failed", error: error ?? "Could not create this purchase order", conflicts: null });
       return false;
     },
-    [sections, expectedDate, notes, patch]
+    [sections, expectedDate, notes, patch, extraction]
   );
 
   /**
@@ -382,10 +460,51 @@ export default function NewPurchaseOrderPage() {
                 are what the resolver decided, and adding to it by hand would put a product on
                 a vendor that does not supply it — which the server would then refuse. */}
             {s.key === MANUAL_KEY && (
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-700">
                   Add Products <span className="text-red-500">*</span>
                 </label>
+                {/* Two ways in, one editor out (Q1). The upload needs a vendor first (Q2):
+                    the file is that vendor's quotation and the matcher is scoped to what
+                    they supply, so the tab is disabled — not hidden — until one is chosen. */}
+                <div className="flex gap-1 rounded-lg bg-slate-100 p-1" role="tablist" aria-label="How to add products">
+                  {(
+                    [
+                      { mode: "search", label: "Search products" },
+                      { mode: "upload", label: "Upload a quotation" },
+                    ] as Array<{ mode: ImportMode; label: string }>
+                  ).map((t) => (
+                    <button
+                      key={t.mode}
+                      type="button"
+                      role="tab"
+                      aria-selected={importMode === t.mode}
+                      onClick={() => setImportMode(t.mode)}
+                      disabled={t.mode === "upload" && !s.vendorId}
+                      className={`flex-1 min-h-[44px] rounded-md text-sm font-medium transition-colors disabled:opacity-40 ${
+                        importMode === t.mode ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+                {!s.vendorId && (
+                  <p className="text-[11px] text-slate-500">Choose the vendor first to upload their quotation.</p>
+                )}
+
+                {importMode === "upload" && s.vendorId && (
+                  <QuotationImport
+                    vendorId={s.vendorId}
+                    vendorName={vendors.find((v) => v.id === s.vendorId)?.name ?? null}
+                    extraction={extraction}
+                    onExtractionChange={setExtraction}
+                    onUseSelected={useSelectedLines}
+                    disabled={runningAll || s.status === "running"}
+                  />
+                )}
+
+                {importMode === "search" && (
                 <div className="relative">
                   <Input
                     placeholder="Search product by name or SKU..."
@@ -412,10 +531,16 @@ export default function NewPurchaseOrderPage() {
                     </div>
                   )}
                 </div>
+                )}
               </div>
             )}
           </VendorSection>
         ))}
+
+        {/* The step people cannot guess (plan 0909, §5.4): the PDF is not sent from here. */}
+        <p className="text-[11px] text-slate-500">
+          After a purchase order is approved, its PDF is emailed to the vendor from the order&apos;s own page.
+        </p>
 
         {/* One button for the whole run, only when there is more than one order to make. */}
         {creatable.length > 1 && (

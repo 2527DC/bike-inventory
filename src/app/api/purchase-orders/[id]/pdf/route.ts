@@ -64,7 +64,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
             gstRate: true,
             amount: true,
             // hsnCode lives on Product, NOT on PurchaseOrderItem — the column that does not
-            // exist there is exactly what made brand-stock's PO generator throw for months.
+            // exist there is exactly what made the old brand-stock PO generator (deleted
+            // 9 Sep 2026) throw for months. The quotation import on /purchase-orders/new
+            // never writes it either: createPurchaseOrder does not build that field.
             product: { select: { sku: true, name: true, hsnCode: true } },
           },
           orderBy: { createdAt: "asc" },

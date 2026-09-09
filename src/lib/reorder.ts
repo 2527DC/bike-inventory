@@ -23,12 +23,7 @@
  *    later sale.
  * 3. `desktop/stock/page.tsx` filters `currentStock > 0 && currentStock <= 5` — a hardcoded
  *    threshold that ignores `reorderLevel` entirely and excludes zero stock.
- * 4. `lib/brand-stock-matcher.ts` and `api/brand-stock/uploads/[id]/items` compute a shortfall
- *    that floors at 0, subtracts `available`, and ignores `reorderQty` — because a 0 there is
- *    a SIGNAL meaning "not selected". `suggestedOrderQty` floors at 1, so swapping it in would
- *    auto-select every matched row.
- * 5. `brand-stock/[id]/page.tsx` compares a nullable snapshot column with no `> 0` guard.
- * 6. Two raw-SQL copies (`api/stock/summary`, `api/stock/by-bin`) express the same rule in
+ * 4. Two raw-SQL copies (`api/stock/summary`, `api/stock/by-bin`) express the same rule in
  *    Postgres and cannot call a TypeScript helper. If the rule here changes, those two change
  *    by hand or they drift.
  */

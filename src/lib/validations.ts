@@ -377,19 +377,47 @@ export const purchaseOrderSchema = z.object({
    * that skipped the review step entirely — is what made the approval state meaningless.
    */
   submit: z.boolean().default(true),
+  /**
+   * The quotation import's review row this order was built from (plan 0909-po-ai-upload).
+   * Optional: the manual search path has none. After the PO is created the extraction and
+   * its stored file are deleted — nothing from the upload outlives the PO (owner, 9 Sep 2026).
+   */
+  extractionId: z.string().min(1).optional(),
   items: z.array(z.object({
     productId: z.string().min(1, "Product is required"),
     quantity: z.number().int().min(1, "Quantity must be at least 1"),
-    // Still min(0) here, NOT min(0.01). The zero rule is enforced in createPurchaseOrder,
-    // because it is not the same rule for both callers: /purchase-orders/new refuses a ₹0 line
-    // (a blank rate there is a typo), while the brand-stock sheet skips priceless rows and
-    // reports them (a blank price cell there is missing data — owner, 6 Sep). A schema cannot
-    // express "depends who is asking", and putting min(0.01) here would make the message
-    // "Price must be positive" on a screen where the right answer is to leave the line out.
+    // Still min(0) here, NOT min(0.01). The zero rule is enforced in createPurchaseOrder
+    // through its `onPricelessLine` option, not here: a schema cannot express "depends who is
+    // asking". Today every caller — manual entry AND the quotation import, which both submit
+    // through POST /api/purchase-orders — passes "reject", because a ₹0 line is a written
+    // offer of nothing and the review screen lets a person fix or drop a priceless row before
+    // submitting (owner, 9 Sep 2026, Q7). The "skip" option stays for a caller that treats a
+    // blank price as missing data rather than a typo; the brand-stock sheet was that caller
+    // until 9 Sep 2026 and nothing passes it now.
     unitPrice: z.number().min(0, "Price cannot be negative"),
     gstRate: z.number().min(0).max(100).optional(),
   })).min(1, "At least one item is required"),
 });
+
+/** The non-file fields of the multipart body POST /api/purchase-orders/extract receives. */
+export const poExtractRequestSchema = z.object({
+  vendorId: z.string().min(1, "Vendor is required"),
+});
+
+/**
+ * One review row's edits. `productId: null` clears a wrong match (the row becomes UNMATCHED and
+ * unselected); a string maps it by hand (MANUAL). At least one field must be present — an
+ * empty PATCH is a client bug, not a no-op.
+ */
+export const poExtractionItemPatchSchema = z
+  .object({
+    productId: z.string().min(1).nullable().optional(),
+    selected: z.boolean().optional(),
+    orderQty: z.number().int().min(1, "Quantity must be at least 1").nullable().optional(),
+  })
+  .refine((v) => v.productId !== undefined || v.selected !== undefined || v.orderQty !== undefined, {
+    message: "Nothing to change",
+  });
 
 /**
  * The header fields a PO's PUT may change.

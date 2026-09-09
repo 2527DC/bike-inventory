@@ -6,6 +6,7 @@ import { successResponse, errorResponse, paginatedResponse, parseSearchParams } 
 import { purchaseOrderSchema, purchaseOrderListQuerySchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { createPurchaseOrder, PoCreateError } from "@/lib/purchase-orders/create";
+import { discardExtractions } from "@/lib/po-extraction/store";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("purchase-orders");
@@ -69,27 +70,48 @@ export async function GET(req: NextRequest) {
 }
 
 /**
- * Create a purchase order from the /purchase-orders/new screen.
+ * Create a purchase order from the /purchase-orders/new screen — whether its lines were
+ * searched for by hand or came out of the quotation import's review.
  *
  * The whole write lives in `createPurchaseOrder` — the advisory lock, the duplicate check,
- * the number allocation, the insert and the activity row — because the brand-stock sheet
- * creates POs too and two independent creators is what P9 exists to end. See that file for
- * why the lock is transaction-scoped.
+ * the number allocation, the insert and the activity row — because there used to be two
+ * independent creators and that is what P9 exists to end. See that file for why the lock is
+ * transaction-scoped.
  */
 export async function POST(req: NextRequest) {
   try {
     const user = await requireFeature("purchase_orders", "create");
-    const data = purchaseOrderSchema.parse(await req.json());
+    const { extractionId, ...data } = purchaseOrderSchema.parse(await req.json());
 
     // "reject": on this screen a blank rate is a typo somebody can fix in the field they are
-    // looking at. The brand-stock caller passes "skip" instead.
+    // looking at. The quotation import is the same screen and gets the same rule — a ₹0 line
+    // blocks submission there too (plan 0909-po-ai-upload, Q7), because the PDF goes to the
+    // vendor. "skip" is still offered by createPurchaseOrder for a caller whose blank price
+    // is missing data rather than a typo; nothing uses it today.
     const { po } = await createPurchaseOrder(data, user, {
       onPricelessLine: "reject",
-      // ON here, OFF for the brand-stock caller. On this screen the vendor was chosen
-      // deliberately, so a product resolving to a different vendor means the wrong one was
-      // picked — and P10 makes the vendor read-only precisely so that cannot happen silently.
+      // ON: on this screen the vendor was chosen deliberately — before the upload, in the
+      // import's case (Q2) — so a product resolving to a different vendor means the wrong one
+      // was picked, and P10 makes the vendor read-only precisely so that cannot happen silently.
       verifyVendorSupplies: true,
     });
+
+    // The review this order came from is scratch, not provenance: nothing from the upload
+    // outlives the PO (owner, 9 Sep 2026). Scoped to the caller so an id in the body cannot
+    // delete somebody else's review. A failure here must NOT fail the PO — it exists now.
+    if (extractionId) {
+      try {
+        const gone = await discardExtractions({ id: extractionId, createdById: user.id });
+        if (gone.length > 0) log.info("extraction consumed", { extractionId, poId: po.id });
+        else log.warn("extraction not consumed", { extractionId, poId: po.id, reason: "not found or not the caller's" });
+      } catch (e) {
+        log.warn("extraction not consumed", {
+          extractionId,
+          poId: po.id,
+          reason: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
 
     return successResponse(po, 201);
   } catch (error) {
