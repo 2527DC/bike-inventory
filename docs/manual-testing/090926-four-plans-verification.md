@@ -129,3 +129,35 @@ a case that fails gets the observed behaviour written in, not a cross.
 When every section passes, say so and the four plans move to `completed` with `/ship-plan`
 and the branch is pushed. A failed case goes back as: the case number, what you saw, and the
 server log line if there is one — not a screenshot alone.
+
+---
+
+## 6. Transfers — mode, required document, GST off the store form (added 9 Sep 2026 evening)
+
+Plan `docs/implementation/pending/0909-transfer-mode-and-document-attachment-plan.md`, commit
+after `e3589d3`. **Before 6.1:** Settings → Storage must have an **active** provider (Local is
+enough on this machine) — with none, every upload says "Storage is not configured" and no
+transfer is created. **And** the source store resolves to its **floor**, which holds 0 until the
+opening split (case 1.12) is done — do 1.12 first or every transfer is refused for stock.
+
+| # | Case | Steps | Expected | ✓ |
+|---|---|---|---|---|
+| 6.1 | No GST on the store form | `/stores` → New store, and Edit an existing one | **No GSTIN field, no state code, no amber "No GSTIN" badge** anywhere. Save still works. | |
+| 6.2 | Two modes | `/transfers/new` | Two buttons: **Store → Store** and **Store → Warehouse**. Nothing is pre-selected. No GSTIN wording anywhere on the page. | |
+| 6.3 | Store → Store panels | Pick Store → Store | Left lists the stores; pick BCH Store → a hint reads "Stock leaves from BCH Store's floor (BCH Floor)". Right lists the **other** store only. The line under the panels says a **tax invoice** is required. | |
+| 6.4 | Store → Warehouse panels | Switch to Store → Warehouse | The destination clears and the attached file (if any) clears. Right lists **every** active warehouse grouped by store, minus BCH Floor. The line says a **delivery challan** is required. | |
+| 6.5 | File is required | Add an item, leave the file empty | Submit is disabled; the hint names the missing document. Number and date are optional. | |
+| 6.6 | Non-document refused | Attach a `.docx` | Refused with a sentence; only PDF or an image is accepted. | |
+| 6.7 | Create with a PDF | Store → Store, one item with stock on the floor, attach a PDF, submit | Lands on `/transfers/TRF-…`. The chip reads **Store → Store**; the Document card shows the tax invoice with the file; the database row has `mode = STORE_TO_STORE`, `fromStoreId`, `toStoreId`, `docUrl`, and `transferType` is **null**. | |
+| 6.8 | Create with a photo | Store → Warehouse to BCC Warehouse, attach a photo from the gallery | Same, chip reads **Store → Warehouse**, document type delivery challan, `toStoreId` null. | |
+| 6.9 | Upload failure creates nothing | Deactivate storage, try to submit | The helper's "Storage is not configured…" line; **no transfer row** was created (`SELECT count(*) FROM "TransferOrder"` unchanged). | |
+| 6.10 | Same place refused | Store → Warehouse from BCH Store to **BCH Floor** (via direct POST — the UI hides it) | 400 naming the warehouse. | |
+| 6.11 | Stock short on the floor | Any transfer for a product with 0 on the source floor | Refused for stock, naming the floor — expected until 1.12 is done. | |
+| 6.12 | Dispatch gate still works | Approve 6.7 → Dispatch | Allowed (document present). An old order with no document is still refused. | |
+| 6.13 | Draft survives a reload | Pick mode, stores, items → reload | Mode, stores and items restore; the file does not (re-attach). An old `-v2` draft from before this change is ignored. | |
+| 6.14 | Phone width | 375 px | The two panels stack, source above destination. | |
+| 6.15 | Old transfers | Open any transfer created before this change (none exist on local `bch`; skip if none) | Chip falls back to the old "Inter-store / Within one store" wording; nothing errors. | |
+
+| Section | Cases | Passed | Failed (case numbers) | Tested on (db host) | Date |
+|---|---|---|---|---|---|
+| 6 Transfers | 15 | | | | |
