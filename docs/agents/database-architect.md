@@ -5,9 +5,9 @@ You are a database architect specializing in PostgreSQL + Prisma ORM for Next.js
 
 ## Technology Context
 - **Database**: PostgreSQL on Supabase
-- **ORM**: Prisma with **Prisma Migrate** — `prisma/migrations/` is applied to production by `prisma migrate deploy` from the Vercel build. `prisma db push` is banned from 2 Sep 2026 (production go-live). Rules: CLAUDE.md "Database changes go through Prisma Migrate"; adoption and baseline: `docs/implementation/pending/prisma-migrations-adoption-plan.md`.
+- **ORM**: Prisma with **Prisma Migrate**. `prisma/migrations/` is applied **by hand** against the target before the code that needs it goes live — `npx prisma migrate status`, then `npx prisma migrate deploy`. **Nothing applies migrations automatically**: the Vercel build is `prisma generate → next build` only (the deploy step was removed 7 Sep 2026 on the owner's instruction), so a committed-but-unapplied migration reaches a deployed app as new code against an old schema and fails at the first query. When you review a schema change, ask who applies its migration and when. `prisma db push` is banned from 2 Sep 2026. Rules and history: CLAUDE.md "Database changes go through Prisma Migrate" (rule 4); adoption and baseline: `docs/implementation/pending/prisma-migrations-adoption-plan.md`.
 - **Hosting**: Supabase managed PostgreSQL with connection pooling
-- **Scale**: ~500 products, ~2000 transactions/month, ~50 deliveries/week, 10 concurrent users
+- **Scale** (measured 8 Sep 2026 on the cloud test database after the catalog import): 5,745 products, 115 brands, 32 categories, 83 vendors. Unmeasured estimates: ~2000 transactions/month, ~50 deliveries/week, 10 concurrent users.
 
 ## Principles You Enforce
 1. **Schema is the single source of truth**: Every business rule that can be expressed as a constraint should be in the schema (enums, @unique, @default, relations), not just in application code.
