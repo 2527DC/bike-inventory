@@ -1,6 +1,6 @@
 # Transfer mode is chosen, the document is attached, and GST leaves the store form
 
-Status: pending — plan complete; Q1 answered by the scoping plan; Q2–Q11 and the §7 questions await the owner. Nothing built.
+Status: in-progress — 9 Sep 2026 evening, building on branch feat/0909-stock-po-expense after the owner answered Q2–Q14 (see §7, second round)
 Branch: **not cut yet** — tell me which branch to base it on before I create one.
 
 ---
@@ -463,3 +463,47 @@ an earlier session; every row was re-read the same day.
 - **Q13 — `/stores` scope.** Owner's words were "on edit"; the page is one form for create and edit, so §4.5 removes the inputs from both. Default: both.
 - **Q14 — `document/route.ts:91` `includes`.** Tighten to `startsWith` while touching the create flow, or leave and file it in §5 with the storage gaps. Default: leave.
 - **Q3 timing note.** After scoping Part A the floor holds 0 until the D3 audits run, so the §6 browser walk needs the opening split done first or every Store → Store transfer is refused for stock.
+
+### Answers — owner, 9 Sep 2026, second round (verbatim, then applied)
+
+> see this implmenation is not done properly /transfers/new in this Set the GSTIN for BCH Store
+> and BCC Store on /stores before transferring between stores. Open /stores where it must be
+> document uploding where it must not be there where in the in the /store edit when i edit the
+> store and enter the store gst nmuber then it not saving teh gst why after saving and if seee
+> edidt the gst data is not here the requiremnet is that in the /transfer/new while creating if
+> the transfer is from the store to store i must attach a file where as a gstn and store to
+> warehouse means dc file upload i need in that screen a required filed of file upload of kind
+> and not the store gst filed must not make any validation in the transfer sceen its just we
+> upload a file related to shope store to store means gts and stor to warehosue menas dc file
+> upload update respeceted to this requiremnt use multiple agent and complete the requiremnet fast
+
+- **Why the GSTIN never saved** — §3.4 already had it: `save()` on `/stores` posted only code,
+  name, address, phone and invoice prefix; the typed GSTIN was discarded. Not fixed — removed,
+  as the requirement asks (Q6 below).
+- **Q2** — yes. The mode alone decides the document; the GSTIN is never consulted.
+- **Q3** — **the file is REQUIRED when the transfer is created** ("a required field of file
+  upload"). Different from the recommendation. Consequence for §4.4 step 5: the browser uploads
+  the file FIRST (key `transfers/new/<ts>-<rand>.<ext>`) and then creates the order with
+  `document.url` in the same request, so a transfer can never exist without its document and
+  the "created but the document did not upload" state cannot occur.
+- **Q4** — the document **number is optional**, date optional ("it's just we upload a file").
+  `document/route.ts` relaxes `docNumber` to optional to match.
+- **Q5** — as recommended: `TransferMode` enum, `mode`, `fromStoreId`, `toStoreId`; migration
+  `transfer_mode_and_store_lane`, applied to local `bch` by Claude, to the cloud test database by
+  the owner.
+- **Q6 / Q13** — remove the GSTIN and state-code inputs, helper line and the amber badge from
+  `/stores`, create and edit alike. Columns, API and the lib selects stay (the PO PDF reads
+  `Store.gstin`; there is no UI to fill it — still flagged for a Settings field).
+- **Q7** — yes, every active warehouse, grouped by store, minus the resolved source.
+- **Q9** — stacked on a phone, two columns from `sm:`.
+- **Q10** — "Store → Store" / "Store → Warehouse"; old rows with `mode = null` keep today's wording.
+- **Q11** — untouched.
+- **Q12 (godown → floor)** — **not decided by the owner; two modes only were built**, exactly as
+  the requirement lists them. Consequence: nothing moves stock from a godown to a floor except a
+  warehouse-scoped audit, and a store picked as the source resolves to its **floor**, which holds
+  0 until the opening split (scoping plan D3) is done. Raised again in the manual-testing file;
+  option (b), a third button Warehouse → Store, is still the recommendation.
+- **Q14** — leave `includes`.
+- **Storage** — still data, not code: Settings → Storage must have an active provider before any
+  upload works; without it the create screen shows the helper's "Storage is not configured" line
+  and no transfer is created.

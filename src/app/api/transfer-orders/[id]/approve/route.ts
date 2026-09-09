@@ -8,7 +8,6 @@ import { z } from "zod";
 import { getWarehouseBreakdown } from "@/lib/stock-location";
 import { warehouseById } from "@/lib/warehouses";
 import { assertTransition, TransitionError } from "@/lib/transfers/transitions";
-import { deriveTransferPolicy } from "@/lib/transfers/policy";
 import { logActivity } from "@/lib/activity-log";
 import { createLogger } from "@/lib/logger";
 
@@ -58,7 +57,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         fromWarehouseId: true,
         toWarehouseId: true,
         requiredDocType: true,
-        transferType: true,
         items: {
           select: {
             productId: true,
@@ -142,20 +140,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
 
     // A transfer raised before the document policy existed has a null `requiredDocType`.
-    // Approving it is the natural moment to settle one, because the order is being looked at
-    // by somebody with authority and has not moved yet. If the two stores still have no GSTIN
-    // the derivation refuses — and that refusal is correct: it is the same missing master data
-    // that would otherwise produce a delivery challan for what is legally a supply.
-    let derivedDocType = order.requiredDocType;
-    let derivedType = order.transferType;
-    if (!derivedDocType && order.fromWarehouseId && order.toWarehouseId) {
-      const toWh = await warehouseById(order.toWarehouseId);
-      if (toWh) {
-        const policyResult = deriveTransferPolicy(sourceWh, toWh);
-        if ("error" in policyResult) return errorResponse(policyResult.error, 400);
-        derivedDocType = policyResult.policy.requiredDocType;
-        derivedType = policyResult.policy.transferType;
-      }
+    // This used to be backfilled here from the two stores' GSTINs; that derivation was deleted
+    // on 9 Sep 2026 (the document is decided by the mode chosen at creation, never by the
+    // GSTIN). A null one is left alone rather than guessed at — the dispatch gate already
+    // treats null as "predates the policy" and lets it through. There are no such rows today.
+    if (!order.requiredDocType) {
+      log.warn("approving a transfer with no requiredDocType; left null", {
+        orderId: order.id,
+        orderNo: order.orderNo,
+      });
     }
 
     const claimed = await prisma.$transaction(async (tx) => {
@@ -165,8 +158,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           status: "APPROVED",
           reviewedById: user.id,
           reviewedAt: new Date(),
-          requiredDocType: derivedDocType,
-          transferType: derivedType,
         },
       });
       if (claim.count !== 1) return false;
@@ -191,13 +182,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     log.info("transfer approved", {
       orderId: order.id,
       orderNo: order.orderNo,
-      requiredDocType: derivedDocType,
+      requiredDocType: order.requiredDocType,
     });
 
     return successResponse({
       message: "Transfer order approved",
       status: "APPROVED",
-      requiredDocType: derivedDocType,
+      requiredDocType: order.requiredDocType,
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);

@@ -44,16 +44,20 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const user = await requireFeature("transfers", "view");
     const { id } = await params;
 
+    // `include`, not `select`: every scalar on the header — `mode`, `fromStoreId`, `toStoreId`
+    // among them — rides along without being named, and `...order` below hands them to the
+    // screen. The store sub-selects carry only what the Route card prints; the GSTIN no longer
+    // decides anything here (plan 0909-transfer-mode-and-document-attachment §4.6).
     const order = await prisma.transferOrder.findUnique({
       where: { id },
       include: {
         createdBy: { select: { id: true, name: true } },
         reviewedBy: { select: { id: true, name: true } },
         fromWarehouse: {
-          select: { id: true, code: true, name: true, store: { select: { id: true, name: true, gstin: true, stateCode: true } } },
+          select: { id: true, code: true, name: true, store: { select: { id: true, name: true } } },
         },
         toWarehouse: {
-          select: { id: true, code: true, name: true, store: { select: { id: true, name: true, gstin: true, stateCode: true } } },
+          select: { id: true, code: true, name: true, store: { select: { id: true, name: true } } },
         },
         items: {
           include: {

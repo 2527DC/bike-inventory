@@ -14,7 +14,8 @@ const log = createLogger("transfer-orders:document");
 
 const schema = z.object({
   docType: z.enum(["DELIVERY_CHALLAN", "TAX_INVOICE"]),
-  docNumber: z.string().trim().min(1, "The document number is required").max(40),
+  // Optional since 9 Sep 2026 (owner: "it's just we upload a file"). Blank is stored as null.
+  docNumber: z.string().trim().max(40).optional(),
   docDate: z.string().optional(),
   docUrl: z.string().min(1, "The uploaded file is required"),
   eWayBillNo: z.string().trim().max(30).optional(),
@@ -106,7 +107,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       where: { id },
       data: {
         docType: input.docType,
-        docNumber: input.docNumber,
+        docNumber: input.docNumber?.trim() || null,
         docDate,
         docUrl: input.docUrl,
         docUploadedById: user.id,
@@ -121,7 +122,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       entityType: "TransferOrder",
       entityId: order.id,
       entityRef: order.orderNo,
-      details: `${docTypeLabel(input.docType)} ${input.docNumber}${replacing ? " (replaced)" : ""}`,
+      details: `${docTypeLabel(input.docType)}${input.docNumber?.trim() ? ` ${input.docNumber.trim()}` : ""}${replacing ? " (replaced)" : ""}`,
       userId: user.id,
       userName: user.name,
     });

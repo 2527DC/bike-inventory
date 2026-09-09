@@ -36,8 +36,6 @@ interface StoreRow {
   address: string | null;
   phone: string | null;
   invoicePrefix: string | null;
-  gstin: string | null;
-  stateCode: string | null;
   sortOrder: number;
   warehouses: WarehouseRow[];
 }
@@ -53,7 +51,7 @@ interface DeleteOutcome {
 // of the same name on Warehouse. The column is carried as `warehouseKind` in this state so
 // the two never collide; the API field is still `kind`.
 type Draft =
-  | { kind: "store"; id: string | null; code: string; name: string; address: string; phone: string; invoicePrefix: string; gstin: string; stateCode: string }
+  | { kind: "store"; id: string | null; code: string; name: string; address: string; phone: string; invoicePrefix: string }
   | { kind: "warehouse"; id: string | null; storeId: string; code: string; name: string; warehouseKind: WarehouseKind };
 
 export default function StoresPage() {
@@ -165,7 +163,7 @@ export default function StoresPage() {
           <Button
             size="sm"
             className="bg-blue-600 hover:bg-blue-700"
-            onClick={() => setDraft({ kind: "store", id: null, code: "", name: "", address: "", phone: "", invoicePrefix: "", gstin: "", stateCode: "" })}
+            onClick={() => setDraft({ kind: "store", id: null, code: "", name: "", address: "", phone: "", invoicePrefix: "" })}
           >
             <Plus className="h-3.5 w-3.5 mr-1" />New store
           </Button>
@@ -242,24 +240,6 @@ export default function StoresPage() {
                     onChange={(e) => setDraft({ ...draft, invoicePrefix: e.target.value })}
                     className={`${inputCls} font-mono`}
                   />
-                  {/* Upper-cased as you type: the schema's GSTIN pattern is uppercase-only, so
-                      a lower-case entry would be refused on save rather than accepted. Same
-                      thing /vendors/new does for the vendor GSTIN. */}
-                  <Input
-                    placeholder="GSTIN (e.g. 29ABCDE1234F1Z5)"
-                    value={draft.gstin}
-                    maxLength={15}
-                    onChange={(e) => setDraft({ ...draft, gstin: e.target.value.toUpperCase() })}
-                    className={`${inputCls} font-mono`}
-                  />
-                  <Input
-                    placeholder="State code (e.g. 29)"
-                    value={draft.stateCode}
-                    inputMode="numeric"
-                    maxLength={2}
-                    onChange={(e) => setDraft({ ...draft, stateCode: e.target.value.replace(/[^0-9]/g, "").slice(0, 2) })}
-                    className={`${inputCls} tabular-nums`}
-                  />
                 </>
               )}
             </div>
@@ -274,10 +254,7 @@ export default function StoresPage() {
                 An invoice numbered <code className="font-mono">BCH/0042</code> deducts from the
                 store whose prefix is <code className="font-mono">BCH/</code>.{" "}
                 <strong>Leave it blank and this store&rsquo;s sales deduct from the first store
-                instead.</strong>{" "}
-                The <strong>GSTIN</strong> is what decides a transfer document: two stores with
-                different GSTINs need a tax invoice, movement inside one store needs only a
-                delivery challan.
+                instead.</strong>
               </p>
             )}
             <div className="flex gap-2">
@@ -337,18 +314,6 @@ export default function StoresPage() {
                           {[s.address, s.phone].filter(Boolean).join(" · ")}
                         </p>
                       )}
-                      {/* Under the address, per the plan. Amber when absent, because P14
-                          refuses an inter-store transfer without it rather than guessing the
-                          document type — so a blank GSTIN is a thing to go and fix, not a
-                          neutral empty field. */}
-                      {s.gstin ? (
-                        <p className="text-[11px] text-slate-400 mt-0.5 font-mono">
-                          {s.gstin}
-                          {s.stateCode ? <span className="text-slate-300"> · state {s.stateCode}</span> : null}
-                        </p>
-                      ) : (
-                        <p className="text-[11px] text-amber-600 mt-0.5">No GSTIN</p>
-                      )}
                     </div>
                     <div className="flex gap-1 shrink-0">
                       {canEdit("stores") && (
@@ -357,10 +322,6 @@ export default function StoresPage() {
                           onClick={() => setDraft({
                             kind: "store", id: s.id, code: s.code, name: s.name,
                             address: s.address ?? "", phone: s.phone ?? "", invoicePrefix: s.invoicePrefix ?? "",
-                            // Seeded from the row, NOT left blank. The form submits every field
-                            // it holds, so an unseeded one would arrive as "" and clear a
-                            // GSTIN somebody had already entered — on the second save, silently.
-                            gstin: s.gstin ?? "", stateCode: s.stateCode ?? "",
                           })}
                         >
                           <Pencil className="h-3.5 w-3.5" />

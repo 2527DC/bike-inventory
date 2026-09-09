@@ -13,16 +13,20 @@ import { userCan } from "@/lib/rbac";
 import { z } from "zod";
 import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
 import { getWarehouseBreakdown } from "@/lib/stock-location";
-import { listWarehouses } from "@/lib/warehouses";
+import { listWarehouses, type WarehouseRef } from "@/lib/warehouses";
 import { nextSequence } from "@/lib/sequence";
 import { trfSeedSql, trfSequenceKey, currentTransferYm, TRF_SEQUENCE_PAD } from "@/lib/transfers/sequence";
-import { deriveTransferPolicy } from "@/lib/transfers/policy";
+import { docTypeForMode, resolveStoreWarehouse } from "@/lib/transfers/mode";
+import { tryGetStorage } from "@/lib/storage";
 import { logActivity } from "@/lib/activity-log";
 import { istDayBounds } from "@/lib/services/timezone";
 import { createLogger } from "@/lib/logger";
 import type { TransferOrderStatus } from "@prisma/client";
 
 const log = createLogger("transfer-orders");
+
+/** The key prefix every transfer document is filed under — see `ALLOWED_PREFIXES`. */
+const TRANSFER_DOC_PREFIX = "transfers/";
 
 const ALL_STATUSES: TransferOrderStatus[] = [
   "PENDING",
@@ -47,15 +51,45 @@ const itemSchema = z.object({
   toWarehouseId: z.string().min(1).optional(),
 });
 
-const createSchema = z.object({
-  // THE LANE IS ON THE HEADER NOW. An order is dispatched and received as one thing — one van,
-  // one document, one e-way bill — so it has exactly one route. Per-item lanes made "dispatch
-  // this order" a question with several answers.
-  fromWarehouseId: z.string().min(1, "A source warehouse is required"),
-  toWarehouseId: z.string().min(1, "A destination warehouse is required"),
+/**
+ * The document that travels with the transfer, attached AT CREATION (owner, 9 Sep 2026: the
+ * file is required; the number and date are optional — "it's just we upload a file"). The
+ * file has already been PUT to storage by the browser under `transfers/…`; `url` is what the
+ * bucket answered. Its type is not chosen here: `docTypeForMode` decides it.
+ */
+const documentSchema = z.object({
+  url: z.string().trim().min(1, "The document file is required"),
+  number: z.string().trim().max(40, "The document number is at most 40 characters").optional(),
+  date: z.string().trim().optional(),
+});
+
+// THE LANE IS ON THE HEADER. An order is dispatched and received as one thing — one van, one
+// document, one e-way bill — so it has exactly one route. Per-item lanes made "dispatch this
+// order" a question with several answers.
+//
+// The header is a DISCRIMINATED UNION on `mode`, not four optional ids, so the server cannot
+// be handed a half-filled body (a `toStoreId` beside a `toWarehouseId`, or neither). The
+// source is always a STORE — it resolves to that store's floor — and the destination is a
+// store in one mode and any active warehouse in the other.
+const commonSchema = {
+  fromStoreId: z.string().min(1, "A source store is required"),
   items: z.array(itemSchema).min(1, "At least one item is required"),
   notes: z.string().max(1000).optional(),
-});
+  document: documentSchema,
+};
+
+const createSchema = z.discriminatedUnion("mode", [
+  z.object({
+    mode: z.literal("STORE_TO_STORE"),
+    toStoreId: z.string().min(1, "A destination store is required"),
+    ...commonSchema,
+  }),
+  z.object({
+    mode: z.literal("STORE_TO_WAREHOUSE"),
+    toWarehouseId: z.string().min(1, "A destination warehouse is required"),
+    ...commonSchema,
+  }),
+]);
 
 // GET: List transfer orders
 export async function GET(req: NextRequest) {
@@ -168,42 +202,111 @@ export async function GET(req: NextRequest) {
  *    "TRF-202609-00010", so past nine-hundred-odd transfers in a month it would have started
  *    handing out numbers that already existed.
  *
- * 4. THE DOCUMENT POLICY IS DERIVED AND STORED. A missing GSTIN refuses rather than defaulting
- *    to a delivery challan — see `deriveTransferPolicy`.
+ * 4. THE DOCUMENT IS CHOSEN BY THE MODE AND ATTACHED HERE. Store → Store carries a tax invoice,
+ *    Store → Warehouse a delivery challan (`docTypeForMode`), and the file is required in the
+ *    create body. The stores' GSTINs are NOT consulted — the rule that refused a transfer while
+ *    a GSTIN was blank (`deriveTransferPolicy`) was deleted on the owner's instruction,
+ *    9 Sep 2026. `requiredDocType` is still written, because the dispatch gate, the detail
+ *    chip and the document card all read it.
+ *
+ * 5. A STORE IS PICKED, A WAREHOUSE IS STORED. Stock lives in warehouses, so the store on the
+ *    form resolves to its floor (`resolveStoreWarehouse`) and the lane columns hold warehouse
+ *    ids as before. `fromStoreId`/`toStoreId` are kept as a snapshot of what was chosen, so a
+ *    store whose floor is re-pointed later still reads correctly in history.
  */
 export async function POST(req: NextRequest) {
   try {
     const user = await requireFeature("transfers", "create");
     const body = await req.json();
     const data = createSchema.parse(body);
+    const { mode, fromStoreId } = data;
+    const toStoreId = mode === "STORE_TO_STORE" ? data.toStoreId : null;
 
-    if (data.fromWarehouseId === data.toWarehouseId) {
-      return errorResponse("Source and destination must be different warehouses", 400);
+    // ── The lane ─────────────────────────────────────────────────────────────────────────
+    // The source is always a store, resolved to its floor. The destination is a store in
+    // STORE_TO_STORE (resolved the same way) and any active warehouse in STORE_TO_WAREHOUSE.
+    // `listWarehouses()` membership is what proves an id names a real, ACTIVE warehouse — zod
+    // can only assert that a string arrived.
+    const fromResolved = await resolveStoreWarehouse(fromStoreId);
+    if ("error" in fromResolved) {
+      log.warn("transfer refused: source store", { mode, fromStoreId });
+      return errorResponse(fromResolved.error, 400);
+    }
+    const fromWh = fromResolved.warehouse;
+
+    let toWh: WarehouseRef | undefined;
+    if (mode === "STORE_TO_STORE") {
+      const toResolved = await resolveStoreWarehouse(data.toStoreId);
+      if ("error" in toResolved) {
+        log.warn("transfer refused: destination store", { mode, toStoreId: data.toStoreId });
+        return errorResponse(toResolved.error, 400);
+      }
+      toWh = toResolved.warehouse;
+    } else {
+      const warehouses = await listWarehouses();
+      toWh = warehouses.find((w) => w.id === data.toWarehouseId);
+      if (!toWh) {
+        log.warn("transfer refused: destination warehouse", { mode, toWarehouseId: data.toWarehouseId });
+        return errorResponse("Destination is not an active warehouse", 400);
+      }
     }
 
-    // One query for the whole request. Membership in this list is what proves an id names a
-    // real, ACTIVE warehouse — zod can only assert that a string arrived.
-    const warehouses = await listWarehouses();
-    const byId = new Map(warehouses.map((w) => [w.id, w]));
-    const fromWh = byId.get(data.fromWarehouseId);
-    const toWh = byId.get(data.toWarehouseId);
-    if (!fromWh) return errorResponse("Source is not an active warehouse", 400);
-    if (!toWh) return errorResponse("Destination is not an active warehouse", 400);
+    // Two stores can resolve to one warehouse (a store with no floor falls back to its first
+    // warehouse), and in STORE_TO_WAREHOUSE the picked warehouse may be the very floor the
+    // source store resolved to. Either way the stock would move to itself.
+    if (fromWh.id === toWh.id) {
+      log.warn("transfer refused: same warehouse", { mode, fromStoreId, toStoreId, warehouseId: fromWh.id });
+      return errorResponse(
+        `Source and destination must be different: both resolve to ${fromWh.name} (${fromWh.code}).`,
+        400
+      );
+    }
 
     // An item lane that disagrees with the header is a client that has not been updated, and
     // guessing which one it meant could move stock out of the wrong building.
     for (const item of data.items) {
-      if (item.fromWarehouseId && item.fromWarehouseId !== data.fromWarehouseId) {
+      if (item.fromWarehouseId && item.fromWarehouseId !== fromWh.id) {
         return errorResponse("Every line moves along the order's route. Remove the per-line source warehouse.", 400);
       }
-      if (item.toWarehouseId && item.toWarehouseId !== data.toWarehouseId) {
+      if (item.toWarehouseId && item.toWarehouseId !== toWh.id) {
         return errorResponse("Every line moves along the order's route. Remove the per-line destination warehouse.", 400);
       }
     }
 
-    const policyResult = deriveTransferPolicy(fromWh, toWh);
-    if ("error" in policyResult) return errorResponse(policyResult.error, 400);
-    const { transferType, requiredDocType } = policyResult.policy;
+    // ── The document ─────────────────────────────────────────────────────────────────────
+    // `document.url` is a client-supplied string the server never saw written. It must be a
+    // URL the LIVE provider issued (`keyFromUrl` answers null for anything else) and the key
+    // must sit under `transfers/` — the one prefix that accepts a PDF. Without this a caller
+    // could point the record at any object in the bucket, or at a foreign host. The order
+    // number does not exist yet, so the per-order folder check the replace route makes
+    // (`transfers/<orderNo>/`) cannot apply here.
+    const requiredDocType = docTypeForMode(mode);
+    const storage = await tryGetStorage();
+    if (!storage) {
+      log.warn("transfer refused: storage not configured", { mode, fromStoreId });
+      return errorResponse("Storage is not configured, so the document cannot be checked. Set it up in Settings → Storage.", 400);
+    }
+    const docKey = storage.keyFromUrl(data.document.url);
+    if (!docKey || !docKey.startsWith(TRANSFER_DOC_PREFIX)) {
+      log.warn("transfer refused: document url not a transfer upload", {
+        mode,
+        fromStoreId,
+        provider: storage.key,
+        keyPrefix: docKey ? docKey.split("/")[0] : null,
+      });
+      return errorResponse("That file was not uploaded as a transfer document.", 400);
+    }
+
+    let docDate: Date | null = null;
+    if (data.document.date) {
+      const parsed = new Date(data.document.date);
+      if (Number.isNaN(parsed.getTime())) {
+        log.warn("transfer refused: bad document date", { mode, fromStoreId });
+        return errorResponse("That document date is not a valid date.", 400);
+      }
+      docDate = parsed;
+    }
+    const docNumber = data.document.number?.trim() || null;
 
     const productIds = [...new Set(data.items.map((i) => i.productId))];
     const products = await prisma.product.findMany({
@@ -255,10 +358,21 @@ export async function POST(req: NextRequest) {
           createdById: user.id,
           reviewedById: isAutoApprove ? user.id : null,
           reviewedAt: isAutoApprove ? new Date() : null,
+          mode,
+          fromStoreId,
+          toStoreId,
           fromWarehouseId: fromWh.id,
           toWarehouseId: toWh.id,
-          transferType,
+          // `transferType` is no longer written; it is dropped a release after this (rule 7).
           requiredDocType,
+          // The document, attached at creation. `docType` mirrors `requiredDocType` because the
+          // mode decided both — the dispatch gate compares them and must find them equal.
+          docType: requiredDocType,
+          docUrl: data.document.url,
+          docNumber,
+          docDate,
+          docUploadedById: user.id,
+          docUploadedAt: new Date(),
           items: {
             create: data.items.map((item) => ({
               productId: item.productId,
@@ -297,13 +411,13 @@ export async function POST(req: NextRequest) {
       return order;
     });
 
-    log.info("transfer order created", {
+    log.info("transfer created", {
       orderId: result.id,
       orderNo: result.orderNo,
+      mode,
       status,
-      transferType,
       requiredDocType,
-      lines: data.items.length,
+      itemCount: data.items.length,
     });
 
     return successResponse(result, 201);
