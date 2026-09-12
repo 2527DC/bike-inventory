@@ -248,6 +248,7 @@ export async function userCan(
   action: PermAction = READ_ACTION
 ): Promise<boolean> {
   const access = await getAccess(userId);
+  if (access.roleKey === "ADMIN") return true;
   return access.permissions[moduleKey]?.[action] === true;
 }
 

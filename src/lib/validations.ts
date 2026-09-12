@@ -157,9 +157,13 @@ export const brandSchema = z.object({
 export const binSchema = z.object({
   code: z.string().min(1, "Code is required").max(20),
   name: z.string().min(1, "Name is required").max(100),
-  location: z.string().min(1, "Location is required"),
+  warehouseId: z.string().min(1, "Warehouse is required"),
+  location: z.string().optional(),
+  directions: z.string().optional(),
+  floor: z.string().optional(),
   zone: z.string().optional(),
   capacity: z.number().int().min(0).optional(),
+  isAssemblyArea: z.boolean().optional(),
   isActive: z.boolean().optional(),
 });
 
@@ -190,6 +194,7 @@ export const stockCountSchema = z.object({
   storeId: z.string().min(1, "Choose a store"),
   /** Omit for a whole-store (verify-only) audit. Must belong to `storeId` — the route checks. */
   warehouseId: z.string().min(1).optional(),
+  binId: z.string().optional(),
 });
 
 export const stockCountUpdateSchema = z.object({
@@ -1279,3 +1284,20 @@ export const zohoPullSchema = z.object({
   apiCalls: z.number().int().min(0).optional(),
   allErrors: z.array(z.string()).optional(),
 });
+
+// ─── Assembly & Cycle Complaints ─────────────────────────────────────────────
+
+export const complaintCreateSchema = z.object({
+  unitCode: z.string().min(1, "Bicycle unit code is required"),
+  customerName: z.string().min(1, "Customer name is required"),
+  customerPhone: z.string().min(1, "Customer phone is required"),
+  description: z.string().min(1, "Complaint description is required"),
+  photoUrl: z.string().optional().nullable(),
+});
+
+export const complaintAttributeSchema = z.object({
+  isAssemblyFault: z.boolean(),
+  faultMechanicId: z.string().optional().nullable(),
+  notes: z.string().optional(),
+});
+

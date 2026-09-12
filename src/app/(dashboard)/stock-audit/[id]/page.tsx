@@ -53,7 +53,7 @@ interface StockCountSummary {
   notes: string | null;
   assignedTo: { name: string };
   assignedToId: string;
-  bin: { code: string; name: string; location: string } | null;
+  bin: { id: string; code: string; name: string; location: string | null; directions: string | null; floor: string | null; zone: string | null } | null;
   // Scope (R2). scopeLabel is built by the API so every screen words it identically;
   // canCorrectStock is false for a whole-store or legacy audit — see section 5.1.
   scopeLabel: string;
@@ -470,8 +470,13 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
             {summary.assignedTo.name} | Due: {new Date(summary.dueDate).toLocaleDateString("en-IN")}
             {/* WHERE to count. An assigned audit used to say only who and when. */}
             {summary.scopeLabel && ` | ${summary.scopeLabel}`}
-            {summary.bin && ` | ${summary.bin.name} (${summary.bin.location})`}
+            {summary.bin && ` | Bin ${summary.bin.code} (${summary.bin.name})${summary.bin.floor ? ` Fl ${summary.bin.floor}` : ""}${summary.bin.zone ? ` Zone ${summary.bin.zone}` : ""}`}
           </p>
+          {summary.bin?.directions && (
+            <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 mt-1 inline-block">
+              📍 Landmark & Directions: {summary.bin.directions}
+            </p>
+          )}
         </div>
         <Badge variant={STATUS_STYLE[summary.status] as "warning" | "info" | "success" | "danger"}>
           {summary.status === "IN_PROGRESS" ? "In Progress" : summary.status.charAt(0) + summary.status.slice(1).toLowerCase()}

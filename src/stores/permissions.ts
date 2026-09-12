@@ -155,14 +155,42 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
 
   // A permission is granted only when the backend said so. Unknown module, unloaded state
   // and failed fetch all resolve to false — the same answer the API guard would give.
-  can: (moduleKey, action = "view") => get().permissions[moduleKey]?.[action] === true,
+  can: (moduleKey, action = "view") => {
+    const s = get();
+    if (s.role?.key === "ADMIN") return true;
+    return s.permissions[moduleKey]?.[action] === true;
+  },
 
-  canView: (m) => get().permissions[m]?.view === true,
-  canCreate: (m) => get().permissions[m]?.create === true,
-  canEdit: (m) => get().permissions[m]?.edit === true,
-  canDelete: (m) => get().permissions[m]?.delete === true,
-  canApprove: (m) => get().permissions[m]?.approve === true,
-  canFetch: (m) => get().permissions[m]?.fetch === true,
+  canView: (m) => {
+    const s = get();
+    if (s.role?.key === "ADMIN") return true;
+    return s.permissions[m]?.view === true;
+  },
+  canCreate: (m) => {
+    const s = get();
+    if (s.role?.key === "ADMIN") return true;
+    return s.permissions[m]?.create === true;
+  },
+  canEdit: (m) => {
+    const s = get();
+    if (s.role?.key === "ADMIN") return true;
+    return s.permissions[m]?.edit === true;
+  },
+  canDelete: (m) => {
+    const s = get();
+    if (s.role?.key === "ADMIN") return true;
+    return s.permissions[m]?.delete === true;
+  },
+  canApprove: (m) => {
+    const s = get();
+    if (s.role?.key === "ADMIN") return true;
+    return s.permissions[m]?.approve === true;
+  },
+  canFetch: (m) => {
+    const s = get();
+    if (s.role?.key === "ADMIN") return true;
+    return s.permissions[m]?.fetch === true;
+  },
 }));
 
 /**

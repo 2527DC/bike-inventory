@@ -52,7 +52,7 @@ interface StockCountData {
   scopeLabel: string;
   canCorrectStock: boolean;
   correctionWarehouses: Array<{ id: string; name: string }>;
-  bin: { code: string; name: string; location: string } | null;
+  bin: { id: string; code: string; name: string; location: string | null; directions: string | null; floor: string | null; zone: string | null } | null;
   totalItems: number;
   countedItems: number;
   totalVariance: number;
@@ -100,6 +100,7 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
   const { data: session } = useSession();
   const { canApprove: canApproveCheck } = usePermissions();
   const canApprove = canApproveCheck("stock_audit");
+  const canCorrectStockPerm = canApproveCheck("stock_correction");
   // WHOSE audit this is. The API refuses an assignee who tries to sign off their own count;
   // the screen says so up front instead of offering a button that will be refused.
   const currentUserId = (session?.user as { userId?: string } | undefined)?.userId;
@@ -285,9 +286,15 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
         <div className="flex-1 min-w-0">
           <h1 className="text-lg font-bold text-slate-900 truncate">{data.title}</h1>
           <p className="text-xs text-slate-500">
-            {data.assignedTo.name} | {data.scopeLabel}{data.bin ? ` | ${data.bin.name} (${data.bin.location})` : ""}
+            {data.assignedTo.name} | {data.scopeLabel}
+            {data.bin ? ` | Bin ${data.bin.code} (${data.bin.name})${data.bin.floor ? ` Fl ${data.bin.floor}` : ""}${data.bin.zone ? ` Zone ${data.bin.zone}` : ""}` : ""}
             {data.completedAt && ` | Completed: ${new Date(data.completedAt).toLocaleDateString("en-IN")}`}
           </p>
+          {data.bin?.directions && (
+            <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 mt-1 inline-block">
+              📍 Directions: {data.bin.directions}
+            </p>
+          )}
         </div>
         <Badge variant={data.status === "COMPLETED" ? "success" : data.status === "APPROVED" ? "success" : data.status === "REJECTED" ? "danger" : "info"}>
           {data.status === "IN_PROGRESS" ? "In Progress" : data.status.charAt(0) + data.status.slice(1).toLowerCase()}
@@ -378,29 +385,38 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
                 </span>
               </label>
               {data.canCorrectStock ? (
-                <label className={`flex items-start gap-2.5 rounded-lg border p-2.5 cursor-pointer ${mode === "apply" ? "border-slate-900 bg-slate-50" : "border-slate-200"}`}>
-                  <input type="radio" name="approve-mode" className="mt-0.5" checked={mode === "apply"} onChange={() => setMode("apply")} />
-                  <span className="flex-1 min-w-0">
-                    <span className="block text-sm font-medium text-slate-900">Set system stock to the counts</span>
-                    <span className="block text-[11px] text-slate-500">
-                      {isWholeStore
-                        ? "Every counted line becomes the store's stock. A surplus is booked to the warehouse you choose; a shortage is taken from the store's warehouses in picker order. An adjustment entry is written for each line that changes."
-                        : `Every counted line becomes the stock at ${data.scopeLabel}. An adjustment entry is written for each line that changes.`}
+                canCorrectStockPerm ? (
+                  <label className={`flex items-start gap-2.5 rounded-lg border p-2.5 cursor-pointer ${mode === "apply" ? "border-slate-900 bg-slate-50" : "border-slate-200"}`}>
+                    <input type="radio" name="approve-mode" className="mt-0.5" checked={mode === "apply"} onChange={() => setMode("apply")} />
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-sm font-medium text-slate-900">Set system stock to the counts</span>
+                      <span className="block text-[11px] text-slate-500">
+                        {isWholeStore
+                          ? "Every counted line becomes the store's stock. A surplus is booked to the warehouse you choose; a shortage is taken from the store's warehouses in picker order. An adjustment entry is written for each line that changes."
+                          : `Every counted line becomes the stock at ${data.scopeLabel}. An adjustment entry is written for each line that changes.`}
+                      </span>
+                      {isWholeStore && mode === "apply" && (
+                        <select
+                          value={correctionWarehouseId}
+                          onChange={(e) => setCorrectionWarehouseId(e.target.value)}
+                          className="mt-2 w-full h-9 rounded-lg border border-slate-200 px-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"
+                        >
+                          <option value="">Choose the warehouse that receives a surplus…</option>
+                          {data.correctionWarehouses.map((w) => (
+                            <option key={w.id} value={w.id}>{w.name}</option>
+                          ))}
+                        </select>
+                      )}
                     </span>
-                    {isWholeStore && mode === "apply" && (
-                      <select
-                        value={correctionWarehouseId}
-                        onChange={(e) => setCorrectionWarehouseId(e.target.value)}
-                        className="mt-2 w-full h-9 rounded-lg border border-slate-200 px-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"
-                      >
-                        <option value="">Choose the warehouse that receives a surplus…</option>
-                        {data.correctionWarehouses.map((w) => (
-                          <option key={w.id} value={w.id}>{w.name}</option>
-                        ))}
-                      </select>
-                    )}
-                  </span>
-                </label>
+                  </label>
+                ) : (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-500">
+                    <p className="font-medium text-slate-700">Set system stock to the counts (Disabled)</p>
+                    <p className="text-[11px] text-amber-700 mt-0.5">
+                      Requires <code>stock_correction.approve</code> module permission to apply audit counts to live system stock.
+                    </p>
+                  </div>
+                )
               ) : (
                 <p className="text-[11px] text-slate-500 rounded-lg border border-dashed border-slate-200 p-2.5">
                   {isWholeStore

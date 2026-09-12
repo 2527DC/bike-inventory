@@ -191,6 +191,27 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         }
       }
 
+      // Also relocate received units to destination warehouse
+      const transferUnits = await tx.transferOrderUnit.findMany({
+        where: { transferOrderId: id, receivedAt: null },
+      });
+
+      for (const tu of transferUnits) {
+        await tx.transferOrderUnit.update({
+          where: { id: tu.id },
+          data: { receivedAt: new Date() },
+        });
+
+        await tx.inventoryUnit.update({
+          where: { id: tu.unitId },
+          data: {
+            warehouseId: destId,
+            binId: null, // ready for put-away into destination warehouse bin
+            status: "PUT_AWAY",
+          },
+        });
+      }
+
       await logActivity(tx, {
         module: "transfers",
         action: "received",

@@ -18,6 +18,7 @@ const schema = z.object({
   vehicleNo: z.string().max(30).optional(),
   transporterName: z.string().max(100).optional(),
   eWayBillNo: z.string().max(30).optional(),
+  unitIds: z.array(z.string()).optional(),
 });
 
 /**
@@ -170,6 +171,29 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           toLabel: destWh?.name,
           userId: user.id,
         });
+      }
+
+      // Record dispatched unit barcodes
+      if (input.unitIds && input.unitIds.length > 0) {
+        for (const unitId of input.unitIds) {
+          await tx.transferOrderUnit.upsert({
+            where: { transferOrderId_unitId: { transferOrderId: id, unitId } },
+            update: { dispatchedAt: new Date() },
+            create: {
+              transferOrderId: id,
+              unitId,
+              dispatchedAt: new Date(),
+            },
+          });
+
+          await tx.inventoryUnit.update({
+            where: { id: unitId },
+            data: {
+              status: "TRANSFERRED",
+              binId: null,
+            },
+          });
+        }
       }
 
       await tx.transferOrder.update({

@@ -13,6 +13,7 @@ import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
 import { resolveWarehouse } from "@/lib/warehouses";
 import { adjustWarehouseQty, deductAnywhere } from "@/lib/stock-location";
 import { inboundReceiveLineSchema, inboundCategorySchema } from "@/lib/validations";
+import { nextUnitCode } from "@/lib/sequence";
 import { logActivity } from "@/lib/activity-log";
 import { finaliseDelivered, scheduleDeliveredSideEffects } from "@/lib/inbound/complete-shipment";
 import { createLogger } from "@/lib/logger";
@@ -251,6 +252,50 @@ export async function PUT(
               },
             });
             await adjustWarehouseQty(tx, matchedProduct.id, warehouse.id, qty);
+          }
+
+          // ── Mint company-wide unit codes U-xxxxxx for bicycles (R2, R6, R19) ──
+          const shipmentCat = existing.categoryId
+            ? await tx.category.findUnique({ where: { id: existing.categoryId }, select: { name: true } })
+            : null;
+          const isCycle =
+            shipmentCat?.name.toLowerCase().includes("cycle") ||
+            shipmentCat?.name.toLowerCase().includes("bike") ||
+            matchedProduct.tags.some((t) => t.toLowerCase().includes("bicycle") || t.toLowerCase().includes("cycle"));
+
+          if (isCycle) {
+            for (let i = 0; i < qty; i++) {
+              const unitCode = await nextUnitCode(tx);
+              await tx.inventoryUnit.create({
+                data: {
+                  unitCode,
+                  productId: matchedProduct.id,
+                  warehouseId: warehouse.id,
+                  binId: primaryBinId,
+                  status: primaryBinId ? "PUT_AWAY" : "RECEIVED",
+                  inboundShipmentId: id,
+                },
+              });
+            }
+          }
+
+          if (primaryBinId) {
+            await tx.binStock.upsert({
+              where: { binId_productId: { binId: primaryBinId, productId: matchedProduct.id } },
+              update: { quantity: { increment: qty } },
+              create: { binId: primaryBinId, productId: matchedProduct.id, quantity: qty },
+            });
+            await tx.binMovementLog.create({
+              data: {
+                warehouseId: warehouse.id,
+                productId: matchedProduct.id,
+                quantity: qty,
+                fromBinId: null,
+                toBinId: primaryBinId,
+                reason: "Inbound receiving put-away",
+                movedById: user.id,
+              },
+            });
           }
 
           // Auto-create delivery for pre-booked items so outwards clerk can see it
