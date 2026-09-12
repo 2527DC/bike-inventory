@@ -332,6 +332,12 @@ model Warehouse {
   orderTransfersFrom TransferOrder[] @relation("TransferOrderFromWarehouse")
   orderTransfersTo   TransferOrder[] @relation("TransferOrderToWarehouse")
 
+  bins           Bin[]
+  homeBinRules   HomeBinRule[]
+  inventoryUnits InventoryUnit[]
+  assemblyTasks  AssemblyTask[]
+  binMovements   BinMovementLog[]
+
   // `code` is globally unique above, which already prevents a duplicate. This pair is kept
   // because the natural key of a warehouse is (site, code) and a future rename that relaxes
   // the global constraint must not silently allow two "MAIN" warehouses under one store.
@@ -431,6 +437,14 @@ model User {
   uploadedGapEvidence  LedgerGapEvidence[]  @relation("GapEvidenceUploadedBy")
   createdDiscountTerms VendorDiscountTerm[] @relation("DiscountTermCreatedBy")
 
+  // Assembly & Build-line
+  assembledUnits        InventoryUnit[]  @relation("UnitAssembler")
+  assignedAssemblyTasks AssemblyTask[]   @relation("AssignedMechanic")
+  createdAssemblyTasks  AssemblyTask[]   @relation("TaskAssignedBy")
+  binMovements          BinMovementLog[]
+  complaintFaults       Complaint[]      @relation("MechanicAssemblyFaults")
+  attributedComplaints  Complaint[]      @relation("ComplaintAttributedBy")
+
   // Staff LMS (merged from bch-sales-training). There is ONE user table: a learner is an
   // ordinary User holding a staff_lms grant, not a separate account. The source app's
   // `users` row — plaintext 4-digit pin, unsigned session cookie — was deleted on merge.
@@ -474,6 +488,7 @@ model Category {
 
   products         Product[]
   inboundShipments InboundShipment[]
+  homeBinRules     HomeBinRule[]
 }
 
 model Brand {
@@ -512,6 +527,7 @@ model Brand {
   ledgerGaps    LedgerGap[]          @relation("BrandLedgerGaps")
   discountTerms VendorDiscountTerm[] @relation("BrandDiscountTerms")
   vendors       BrandVendor[]        @relation("BrandVendors")
+  homeBinRules  HomeBinRule[]
 }
 
 model Product {
@@ -564,6 +580,10 @@ model Product {
   purchaseOrderItems PurchaseOrderItem[]
   transferOrderItems TransferOrderItem[]
   inboundLineItems   InboundLineItem[]
+  binStocks          BinStock[]
+  homeBinRules       HomeBinRule[]
+  inventoryUnits     InventoryUnit[]
+  binMovements       BinMovementLog[]
   brandStockMatches  BrandStockItem[]       @relation("BrandStockMatches")
   brandSkuMappings   BrandSkuMapping[]      @relation("BrandSkuMappingProducts")
 
@@ -652,15 +672,20 @@ model SerialTransactionItem {
 }
 
 model Bin {
-  id        String   @id @default(cuid())
-  code      String   @unique // e.g., "A-01-03" (Aisle-Rack-Shelf)
-  name      String
-  location  String // "Store" or "Warehouse"
-  zone      String? // Zone within location
-  capacity  Int?
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String      @id @default(cuid())
+  code            String      // e.g. "A1", "ASM"
+  name            String      // e.g. "Shelf Rack 1"
+  warehouseId     String      @map("warehouse_id")
+  warehouse       Warehouse   @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  location        String?     // legacy "Store" or "Warehouse"
+  directions      String?     // "Ground floor, left of entrance, first rack"
+  floor           String?     // "Ground", "1st Floor"
+  zone            String?     // Zone within location e.g. "Zone A"
+  capacity        Int?        // Optional capacity
+  isAssemblyArea  Boolean     @default(false) @map("is_assembly_area")
+  isActive        Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 
   products         Product[]
   serialItems      SerialItem[]
@@ -669,6 +694,207 @@ model Bin {
   transfersTo      TransferOrderItem[] @relation("TransferToBin")
   secondHandCycles SecondHandCycle[]   @relation("SecondHandBin")
   inboundLineItems InboundLineItem[]
+
+  binStocks       BinStock[]
+  units           InventoryUnit[]
+  homeBinRules    HomeBinRule[]
+  fromMovements   BinMovementLog[] @relation("MoveFromBin")
+  toMovements     BinMovementLog[] @relation("MoveToBin")
+
+  @@unique([warehouseId, code])
+  @@index([warehouseId, isActive])
+  @@map("bins")
+}
+
+model BinStock {
+  id          String    @id @default(cuid())
+  binId       String    @map("bin_id")
+  bin         Bin       @relation(fields: [binId], references: [id], onDelete: Cascade)
+  productId   String    @map("product_id")
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  quantity    Int       @default(0)
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([binId, productId])
+  @@index([productId])
+  @@map("bin_stocks")
+}
+
+model HomeBinRule {
+  id          String     @id @default(cuid())
+  warehouseId String     @map("warehouse_id")
+  warehouse   Warehouse  @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  brandId     String?    @map("brand_id")
+  brand       Brand?     @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  categoryId  String?    @map("category_id")
+  category    Category?  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  productId   String?    @map("product_id")
+  product     Product?   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  binId       String     @map("bin_id")
+  bin         Bin        @relation(fields: [binId], references: [id], onDelete: Cascade)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([warehouseId, brandId, categoryId])
+  @@map("home_bin_rules")
+}
+
+model InventoryUnit {
+  id                String              @id @default(cuid())
+  unitCode          String              @unique @map("unit_code") // "U-000481"
+  productId         String              @map("product_id")
+  product           Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
+  warehouseId       String              @map("warehouse_id")
+  warehouse         Warehouse           @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  binId             String?             @map("bin_id")
+  bin               Bin?                @relation(fields: [binId], references: [id], onDelete: SetNull)
+  frameNumber       String?             @map("frame_number")
+  status            UnitStatus          @default(RECEIVED)
+  inboundShipmentId String?             @map("inbound_shipment_id")
+  inboundShipment   InboundShipment?    @relation(fields: [inboundShipmentId], references: [id])
+  
+  // Assembly attribution
+  assembledById     String?             @map("assembled_by_id")
+  assembledBy       User?               @relation("UnitAssembler", fields: [assembledById], references: [id])
+  assembledAt       DateTime?           @map("assembled_at")
+  assemblyLevel     AssemblyLevel?      @map("assembly_level")
+
+  // Sales linkage
+  saleInvoiceNo     String?             @map("sale_invoice_no")
+  soldAt            DateTime?           @map("sold_at")
+  customerName      String?             @map("customer_name")
+  customerPhone     String?             @map("customer_phone")
+
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  assemblyTasks     AssemblyTask[]
+  complaints        Complaint[]
+  transferItems     TransferOrderUnit[]
+  movements         BinMovementLog[]
+
+  @@index([warehouseId, status])
+  @@index([productId, status])
+  @@index([binId])
+  @@map("inventory_units")
+}
+
+enum UnitStatus {
+  RECEIVED
+  PUT_AWAY
+  ASSIGNED
+  IN_ASSEMBLY
+  ASSEMBLED
+  RESERVED
+  SOLD
+  RETURNED
+  DAMAGED
+  TRANSFERRED
+  LOST
+}
+
+enum AssemblyLevel {
+  A50   // 50%
+  A85   // 85%
+  FULL  // 100%
+}
+
+model AssemblyTask {
+  id               String             @id @default(cuid())
+  unitId           String             @map("unit_id")
+  unit             InventoryUnit      @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  warehouseId      String             @map("warehouse_id")
+  warehouse        Warehouse          @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  level            AssemblyLevel
+  status           AssemblyTaskStatus @default(PENDING)
+  
+  assignedToId     String             @map("assigned_to_id")
+  assignedTo       User               @relation("AssignedMechanic", fields: [assignedToId], references: [id])
+  assignedById     String             @map("assigned_by_id")
+  assignedBy       User               @relation("TaskAssignedBy", fields: [assignedById], references: [id])
+  assignedAt       DateTime           @default(now()) @map("assigned_at")
+
+  startedAt        DateTime?          @map("started_at")
+  holdStartedAt    DateTime?          @map("hold_started_at")
+  totalHoldSeconds Int                @default(0) @map("total_hold_seconds")
+  holdReason       String?            @map("hold_reason")
+  completedAt      DateTime?          @map("completed_at")
+  photoUrl         String?            @map("photo_url")
+  notes            String?
+
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@index([warehouseId, status])
+  @@index([assignedToId, status])
+  @@map("assembly_tasks")
+}
+
+enum AssemblyTaskStatus {
+  PENDING
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+model BinMovementLog {
+  id          String         @id @default(cuid())
+  warehouseId String         @map("warehouse_id")
+  warehouse   Warehouse      @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  unitId      String?        @map("unit_id")
+  unit        InventoryUnit? @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  productId   String?        @map("product_id")
+  product     Product?       @relation(fields: [productId], references: [id], onDelete: SetNull)
+  quantity    Int            @default(1)
+  fromBinId   String?        @map("from_bin_id")
+  fromBin     Bin?           @relation("MoveFromBin", fields: [fromBinId], references: [id])
+  toBinId     String?        @map("to_bin_id")
+  toBin       Bin?           @relation("MoveToBin", fields: [toBinId], references: [id])
+  reason      String         // "Put-away round 1", "Moved by assignment", "Manual relocation"
+  movedById   String         @map("moved_by_id")
+  movedBy     User           @relation(fields: [movedById], references: [id])
+  createdAt   DateTime       @default(now())
+
+  @@index([warehouseId, createdAt])
+  @@index([unitId])
+  @@map("bin_movement_logs")
+}
+
+model TransferOrderUnit {
+  id              String        @id @default(cuid())
+  transferOrderId String        @map("transfer_order_id")
+  transferOrder   TransferOrder @relation(fields: [transferOrderId], references: [id], onDelete: Cascade)
+  unitId          String        @map("unit_id")
+  unit            InventoryUnit @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  dispatchedAt    DateTime?     @map("dispatched_at")
+  receivedAt      DateTime?     @map("received_at")
+
+  @@unique([transferOrderId, unitId])
+  @@map("transfer_order_units")
+}
+
+model Complaint {
+  id              String         @id @default(cuid())
+  ticketNo        String         @unique @map("ticket_no") // Auto: CMP-YYYYMM-NNNN
+  unitId          String         @map("unit_id")
+  unit            InventoryUnit  @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  customerName    String         @map("customer_name")
+  customerPhone   String         @map("customer_phone")
+  description     String
+  photoUrl        String?        @map("photo_url")
+  isAssemblyFault Boolean        @default(false) @map("is_assembly_fault")
+  faultMechanicId String?        @map("fault_mechanic_id")
+  faultMechanic   User?          @relation("MechanicAssemblyFaults", fields: [faultMechanicId], references: [id])
+  attributedById  String?        @map("attributed_by_id")
+  attributedBy    User?          @relation("ComplaintAttributedBy", fields: [attributedById], references: [id])
+  status          String         @default("OPEN")
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([unitId])
+  @@index([faultMechanicId])
+  @@map("complaints")
 }
 
 model InventoryTransaction {
@@ -1785,6 +2011,7 @@ enum TransferDocType {
 enum TransferMode {
   STORE_TO_STORE
   STORE_TO_WAREHOUSE
+  GODOWN_TO_FLOOR
 }
 
 model TransferOrder {
@@ -1858,6 +2085,7 @@ model TransferOrder {
   updatedAt DateTime @updatedAt
 
   items TransferOrderItem[]
+  units TransferOrderUnit[]
 
   @@index([status])
   @@index([createdById])
@@ -1954,8 +2182,9 @@ model InboundShipment {
   vendorBill   VendorBill? @relation(fields: [vendorBillId], references: [id])
   zohoBillId   String? // Zoho Books bill_id
 
-  lineItems   InboundLineItem[]
-  preBookings PreBooking[]
+  lineItems      InboundLineItem[]
+  preBookings    PreBooking[]
+  inventoryUnits InventoryUnit[]
 
   @@index([status])
   @@index([brandId])

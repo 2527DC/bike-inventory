@@ -68,7 +68,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         approvedBy: { select: { name: true } },
         store: { select: { id: true, name: true } },
         warehouse: { select: { id: true, name: true } },
-        bin: { select: { code: true, name: true, location: true } },
+        bin: { select: { id: true, code: true, name: true, location: true, directions: true, floor: true, zone: true } },
         items: {
           include: {
             product: {
@@ -204,12 +204,21 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     // Stock Count is VERIFY-ONLY by default: approving records the count + variance but does
     // not change inventory (Inwards is the way stock is added). Only an approver who
-    // explicitly sends applyToStock=true pushes the counted quantities onto stock. The
-    // approver decides — `stock_audit.approve` is the whole gate (owner, 8 Sep 2026, Q11).
+    // explicitly sends applyToStock=true pushes the counted quantities onto stock.
+    // Per R16 / owner decision, applying counts to live system stock requires the dedicated
+    // `stock_correction.approve` permission (or admin bypass).
+    const canApplyCorrection = await userCan(user.id, "stock_correction", "approve");
+    if (data.status === "APPROVED" && data.applyToStock === true && !canApplyCorrection) {
+      return errorResponse(
+        "You do not have permission to apply stock corrections to live inventory (requires stock_correction.approve)",
+        403
+      );
+    }
+
     const applyToStock =
       data.status === "APPROVED" &&
       data.applyToStock === true &&
-      canApprove;
+      canApplyCorrection;
 
     // ─── RESOLVE THE CORRECTION TARGET BEFORE THE TRANSACTION ─────────────────────────────
     //
@@ -428,6 +437,40 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
             // warehouses inside this transaction, so the amount never exceeds what is held
             // and `deductFromStore`'s insufficiency refusal cannot fire here.
             await deductFromStore(tx, product.id, target.storeId, -delta, label);
+          }
+
+          // If this audit was scoped to a bin, sync the BinStock record and log movement
+          if (existing.binId) {
+            await tx.binStock.upsert({
+              where: {
+                binId_productId: {
+                  binId: existing.binId,
+                  productId: product.id,
+                },
+              },
+              create: {
+                binId: existing.binId,
+                productId: product.id,
+                quantity: counted,
+              },
+              update: {
+                quantity: counted,
+              },
+            });
+
+            if (delta !== 0 && existing.warehouseId) {
+              await tx.binMovementLog.create({
+                data: {
+                  warehouseId: existing.warehouseId,
+                  productId: product.id,
+                  quantity: Math.abs(delta),
+                  fromBinId: delta < 0 ? existing.binId : null,
+                  toBinId: delta > 0 ? existing.binId : null,
+                  reason: `Stock Count Audit Correction (${existing.countNo || existing.title})`,
+                  movedById: user.id,
+                },
+              });
+            }
           }
 
           // Keep the `[STOCK_COUNT]` prefix: DELETE of a completed count reverses by it.

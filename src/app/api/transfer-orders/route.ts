@@ -89,6 +89,12 @@ const createSchema = z.discriminatedUnion("mode", [
     toWarehouseId: z.string().min(1, "A destination warehouse is required"),
     ...commonSchema,
   }),
+  z.object({
+    mode: z.literal("GODOWN_TO_FLOOR"),
+    fromWarehouseId: z.string().min(1, "A source godown is required").optional(),
+    toWarehouseId: z.string().min(1, "A destination floor is required"),
+    ...commonSchema,
+  }),
 ]);
 
 // GET: List transfer orders
@@ -227,27 +233,48 @@ export async function POST(req: NextRequest) {
     // STORE_TO_STORE (resolved the same way) and any active warehouse in STORE_TO_WAREHOUSE.
     // `listWarehouses()` membership is what proves an id names a real, ACTIVE warehouse — zod
     // can only assert that a string arrived.
-    const fromResolved = await resolveStoreWarehouse(fromStoreId);
-    if ("error" in fromResolved) {
-      log.warn("transfer refused: source store", { mode, fromStoreId });
-      return errorResponse(fromResolved.error, 400);
-    }
-    const fromWh = fromResolved.warehouse;
-
+    let fromWh: WarehouseRef | undefined;
     let toWh: WarehouseRef | undefined;
-    if (mode === "STORE_TO_STORE") {
-      const toResolved = await resolveStoreWarehouse(data.toStoreId);
-      if ("error" in toResolved) {
-        log.warn("transfer refused: destination store", { mode, toStoreId: data.toStoreId });
-        return errorResponse(toResolved.error, 400);
-      }
-      toWh = toResolved.warehouse;
-    } else {
+
+    if (mode === "GODOWN_TO_FLOOR") {
       const warehouses = await listWarehouses();
+      if (data.fromWarehouseId) {
+        fromWh = warehouses.find((w) => w.id === data.fromWarehouseId);
+      } else {
+        fromWh = warehouses.find((w) => w.storeId === fromStoreId && w.kind === "GODOWN");
+      }
+      if (!fromWh) {
+        log.warn("transfer refused: godown warehouse", { mode, fromStoreId, fromWarehouseId: data.fromWarehouseId });
+        return errorResponse("Source godown warehouse not found or not active", 400);
+      }
+
       toWh = warehouses.find((w) => w.id === data.toWarehouseId);
       if (!toWh) {
-        log.warn("transfer refused: destination warehouse", { mode, toWarehouseId: data.toWarehouseId });
-        return errorResponse("Destination is not an active warehouse", 400);
+        log.warn("transfer refused: destination floor", { mode, toWarehouseId: data.toWarehouseId });
+        return errorResponse("Destination floor warehouse not found or not active", 400);
+      }
+    } else {
+      const fromResolved = await resolveStoreWarehouse(fromStoreId);
+      if ("error" in fromResolved) {
+        log.warn("transfer refused: source store", { mode, fromStoreId });
+        return errorResponse(fromResolved.error, 400);
+      }
+      fromWh = fromResolved.warehouse;
+
+      if (mode === "STORE_TO_STORE") {
+        const toResolved = await resolveStoreWarehouse(data.toStoreId);
+        if ("error" in toResolved) {
+          log.warn("transfer refused: destination store", { mode, toStoreId: data.toStoreId });
+          return errorResponse(toResolved.error, 400);
+        }
+        toWh = toResolved.warehouse;
+      } else {
+        const warehouses = await listWarehouses();
+        toWh = warehouses.find((w) => w.id === data.toWarehouseId);
+        if (!toWh) {
+          log.warn("transfer refused: destination warehouse", { mode, toWarehouseId: data.toWarehouseId });
+          return errorResponse("Destination is not an active warehouse", 400);
+        }
       }
     }
 

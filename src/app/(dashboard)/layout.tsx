@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { Header } from "@/components/header";
 import { BottomNav } from "@/components/bottom-nav";
 import { AppSidebar } from "@/components/app-sidebar";
+import { PwaInstallBanner } from "@/components/pwa-install-banner";
 import { useBottomNav } from "@/lib/use-bottom-nav";
 import { cn } from "@/lib/utils";
 
@@ -51,6 +52,9 @@ export default function DashboardLayout({
         <main className="flex-1 pb-nav lg:pb-10">
           <div className="max-w-lg lg:max-w-6xl xl:max-w-7xl mx-auto px-4 py-4 lg:px-8 lg:py-6">{children}</div>
         </main>
+
+        {/* PWA Install Banner */}
+        <PwaInstallBanner />
 
         {/* Mobile bottom nav (hidden on desktop) */}
         <div className="lg:hidden">

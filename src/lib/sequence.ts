@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("sequence");
@@ -122,3 +122,24 @@ export async function nextSequence(
   log.debug("sequence allocated", { key, current, seedUsed: current === seed + 1 });
   return padded;
 }
+
+/**
+ * Allocate sequential company-wide unit code for physical bicycles (U-000481).
+ */
+export async function nextUnitCode(db: Db): Promise<string> {
+  const seedSql = Prisma.sql`SELECT COALESCE(MAX(NULLIF(regexp_replace("unit_code", '\\D', '', 'g'), '')::int), 0) FROM "inventory_units"`;
+  const num = await nextSequence(db, "INVENTORY_UNIT", 6, seedSql);
+  return `U-${num}`;
+}
+
+/**
+ * Allocate sequential ticket number for customer complaints (CMP-YYYYMM-0001).
+ */
+export async function nextComplaintTicket(db: Db, date = new Date()): Promise<string> {
+  const ym = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}`;
+  const prefix = `CMP-${ym}-`;
+  const seedSql = Prisma.sql`SELECT COALESCE(MAX(NULLIF(regexp_replace("ticket_no", '\\D', '', 'g'), '')::int), 0) FROM "complaints" WHERE "ticket_no" LIKE ${`${prefix}%`}`;
+  const num = await nextSequence(db, `CMP-${ym}`, 4, seedSql);
+  return `${prefix}${num}`;
+}
+

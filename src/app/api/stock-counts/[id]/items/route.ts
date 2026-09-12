@@ -95,7 +95,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
           },
         },
       },
-      orderBy: { product: { name: "asc" } },
+      orderBy: searchParams.get("sort") === "name" 
+        ? { product: { name: "asc" } }
+        : [{ systemQty: "desc" }, { product: { name: "asc" } }],
       ...(searchParams.get("limit") ? { take: parseInt(searchParams.get("limit")!) } : { take: 500 }),
     });
 
