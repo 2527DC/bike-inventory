@@ -91,7 +91,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       select: {
         id: true, poNumber: true, status: true, sendCount: true,
         orderDate: true, expectedDate: true, notes: true, deliveryAddress: true,
-        subtotal: true, gstTotal: true, grandTotal: true,
         approvedAt: true, approvedBy: { select: { name: true } },
         vendor: {
           select: {
@@ -107,8 +106,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         items: {
           select: {
             // `name` is the line's own description (plan 0909, D2). Nothing is read from the
-            // product — the PDF prints no SKU or HSN since plan 1509 (R6).
-            name: true, quantity: true, unitPrice: true, gstRate: true, amount: true,
+            // product — the PDF prints no SKU or HSN since plan 1509 (R6) — and no price: rate,
+            // GST and amount left the document and the email with plan
+            // 1509-po-product-and-quantity-only (R1, R6), on every PO.
+            name: true, quantity: true,
           },
           orderBy: { createdAt: "asc" },
         },
@@ -149,13 +150,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
 
     const company = await loadCompanyIdentity();
-    const items: PoPdfLine[] = po.items.map((it) => ({
-      name: it.name,
-      quantity: it.quantity,
-      unitPrice: it.unitPrice,
-      gstRate: it.gstRate,
-      amount: it.amount,
-    }));
+    const items: PoPdfLine[] = po.items.map((it) => ({ name: it.name, quantity: it.quantity }));
 
     // PENDING before the SMTP call, so a second request in flight sees it via the cooldown.
     const sendRow = await prisma.purchaseOrderSend.create({
@@ -187,9 +182,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           expectedDate: po.expectedDate,
           notes: po.notes,
           deliveryAddress: po.deliveryAddress,
-          subtotal: po.subtotal,
-          gstTotal: po.gstTotal,
-          grandTotal: po.grandTotal,
           approvedByName: po.approvedBy?.name ?? null,
           approvedAt: po.approvedAt,
           vendor: {
@@ -220,7 +212,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         orderDate: po.orderDate,
         expectedDate: po.expectedDate,
         itemCount: po.items.length,
-        grandTotal: po.grandTotal,
         vendorName: po.vendor.name,
         note,
       },

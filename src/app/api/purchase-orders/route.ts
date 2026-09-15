@@ -6,7 +6,7 @@ import { successResponse, errorResponse, paginatedResponse, parseSearchParams } 
 import { purchaseOrderSchema, purchaseOrderListQuerySchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { createPurchaseOrder, PoCreateError } from "@/lib/purchase-orders/create";
-import { applySheetPrices, discardExtractions } from "@/lib/po-extraction/store";
+import { discardExtractions } from "@/lib/po-extraction/store";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("purchase-orders");
@@ -84,22 +84,9 @@ export async function POST(req: NextRequest) {
     const user = await requireFeature("purchase_orders", "create");
     const { extractionId, ...data } = purchaseOrderSchema.parse(await req.json());
 
-    // The price lock (plan 1509-po-sheet-mrp-price, Q2 a): a sheet line's rate is read from its
-    // stored review row, never from the request. Refused — not guessed — when the row is gone
-    // (its sheet was replaced) or has no price.
-    const sheetPrices = await applySheetPrices(data.items, { extractionId, vendorId: data.vendorId, userId: user.id });
-    if (!sheetPrices.ok) return errorResponse(sheetPrices.message, 400, { names: sheetPrices.names });
-    if (sheetPrices.priced > 0) {
-      log.info("sheet prices applied", { extractionId, vendorId: data.vendorId, lines: sheetPrices.priced });
-    }
-
-    // "reject": on this screen a blank rate is a typo somebody can fix in the field they are
-    // looking at. The quotation import is the same screen and gets the same rule — a ₹0 line
-    // blocks submission there too (plan 0909-po-ai-upload, Q7), because the PDF goes to the
-    // vendor. "skip" is still offered by createPurchaseOrder for a caller whose blank price
-    // is missing data rather than a typo; nothing uses it today.
-    const { po } = await createPurchaseOrder({ ...data, items: sheetPrices.items }, user, {
-      onPricelessLine: "reject",
+    // Lines are a name and a quantity (plan 1509-po-product-and-quantity-only, R4): the schema
+    // above has already dropped any price the request carried.
+    const { po } = await createPurchaseOrder(data, user, {
       // ON: on this screen the vendor was chosen deliberately — before the upload, in the
       // import's case (Q2) — so a product resolving to a different vendor means the wrong one
       // was picked, and P10 makes the vendor read-only precisely so that cannot happen silently.

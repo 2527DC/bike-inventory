@@ -6,25 +6,9 @@ export interface PoEmailInput {
   orderDate: Date;
   expectedDate: Date | null;
   itemCount: number;
-  grandTotal: number;
   vendorName: string;
   /** The buyer's own note, typed on the send sheet. Optional. */
   note?: string | null;
-}
-
-/**
- * The rupee sign is fine HERE.
- *
- * The PDF cannot draw it — jsPDF's built-in fonts are WinAnsi-encoded — but an email body is
- * UTF-8 and every mail client renders ₹. So the message uses the real symbol and the
- * attachment says "Rs.", which looks inconsistent side by side and is nonetheless the correct
- * answer in both places.
- */
-function inr(amount: number): string {
-  return `₹${new Intl.NumberFormat("en-IN", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(amount)}`;
 }
 
 function shortDate(d: Date | null): string {
@@ -49,8 +33,9 @@ function escapeHtml(v: string): string {
  * The covering message a vendor reads before opening the attachment.
  *
  * Deliberately short. The purchase order IS the PDF; this exists so the email is not a bare
- * attachment from an unfamiliar address, and so the essentials — which order, how much, by
- * when — survive on a phone that will not open the PDF.
+ * attachment from an unfamiliar address, and so the essentials — which order, how many lines,
+ * by when — survive on a phone that will not open the PDF. It states no total: a purchase order
+ * carries no price (plan 1509-po-product-and-quantity-only, R6).
  *
  * `replyTo` is the notification `fromEmail`. `Store` has no email column, so there is nothing
  * more specific to fall back to; without this a reply goes to the SMTP account, which may be a
@@ -70,7 +55,6 @@ export function buildPoEmail(
     `Order number: ${po.poNumber}`,
     `Date: ${shortDate(po.orderDate)}`,
     `Items: ${po.itemCount}`,
-    `Total: ${inr(po.grandTotal)}`,
     ...(po.expectedDate ? [`Expected by: ${shortDate(po.expectedDate)}`] : []),
     ...(po.note ? ["", po.note] : []),
     "",
@@ -95,7 +79,6 @@ export function buildPoEmail(
     ${row("Order number", po.poNumber)}
     ${row("Date", shortDate(po.orderDate))}
     ${row("Items", String(po.itemCount))}
-    ${row("Total", inr(po.grandTotal))}
     ${po.expectedDate ? row("Expected by", shortDate(po.expectedDate)) : ""}
   </table>
   ${po.note ? `<p style="font-size:15px;margin:0 0 20px;padding:12px;background:#f8fafc;border-left:3px solid #cbd5e1;white-space:pre-wrap">${escapeHtml(po.note)}</p>` : ""}

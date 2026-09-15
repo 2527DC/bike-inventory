@@ -466,23 +466,11 @@ export const purchaseOrderSchema = z.object({
      */
     name: z.string().trim().min(1, "Item name is required").max(300, "Item name is too long"),
     productId: z.string().min(1).optional(),
-    /**
-     * The review row a sheet line came from (plan 1509-po-sheet-mrp-price, Q2). When present
-     * the server takes the unit price from that stored row — the sheet's MRP, else its Price —
-     * and discards `unitPrice` below. The lock on the screen is cosmetic; this is the gate.
-     */
-    extractionItemId: z.string().min(1).optional(),
     quantity: z.number().int().min(1, "Quantity must be at least 1"),
-    // Still min(0) here, NOT min(0.01). The zero rule is enforced in createPurchaseOrder
-    // through its `onPricelessLine` option, not here: a schema cannot express "depends who is
-    // asking". Today every caller — manual entry AND the quotation import, which both submit
-    // through POST /api/purchase-orders — passes "reject", because a ₹0 line is a written
-    // offer of nothing and the review screen lets a person fix or drop a priceless row before
-    // submitting (owner, 9 Sep 2026, Q7). The "skip" option stays for a caller that treats a
-    // blank price as missing data rather than a typo; the brand-stock sheet was that caller
-    // until 9 Sep 2026 and nothing passes it now.
-    unitPrice: z.number().min(0, "Price cannot be negative"),
-    gstRate: z.number().min(0).max(100).optional(),
+    // No unitPrice, gstRate or extractionItemId since 15 Sep 2026 (plan 1509-po-product-and-
+    // quantity-only, R4): a purchase order is the product and the quantity, and carries no
+    // money. z.object strips unknown keys, so a rate an old tab still sends is dropped here —
+    // this is the gate, not the screen.
   })).min(1, "At least one item is required"),
 });
 

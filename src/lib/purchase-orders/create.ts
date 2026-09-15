@@ -30,11 +30,13 @@ export interface PoLineInput {
    * this. When present the product must exist, and the vendor check below applies to it.
    */
   productId?: string;
-  /** The item name as ordered — the PDF's Description column. Stored on the line. */
+  /** The item name as ordered — the PDF's Product column. Stored on the line. */
   name: string;
+  /**
+   * The whole of what a line says besides its name. No price and no GST since 15 Sep 2026
+   * (plan 1509-po-product-and-quantity-only, R4): a purchase order carries no money.
+   */
   quantity: number;
-  unitPrice: number;
-  gstRate?: number;
 }
 
 export interface CreatePoInput {
@@ -49,22 +51,6 @@ export interface CreatePoInput {
 
 export interface CreatePoOptions {
   /**
-   * What to do with a line whose unit price is 0.
-   *
-   * "reject" — refuse the whole request with a 400. Right for /purchase-orders/new, where a
-   *            blank rate is a typo somebody can fix on the spot.
-   * "skip"   — leave those lines off the PO and name them back to the caller. Written for the
-   *            brand-stock sheet (deleted 9 Sep 2026), where a blank price cell was missing
-   *            DATA, not a mistake: failing forty rows because three had no price made the
-   *            screen unusable (owner, 6 Sep). NO caller passes it today: the quotation import
-   *            that replaced brand-stock submits through the same POST as manual entry and
-   *            passes "reject", because its review step lets a person fix or drop a priceless
-   *            row before the PDF becomes an offer (owner, 9 Sep 2026, Q7). Kept, not removed,
-   *            so the next bulk caller does not have to rediscover the distinction.
-   */
-  onPricelessLine?: "reject" | "skip";
-
-  /**
    * Refuse the order when a product is not supplied by the chosen vendor.
    *
    * OFF by default, and that default is load-bearing for library callers: a matched
@@ -77,14 +63,6 @@ export interface CreatePoOptions {
    * screen shows a vendor-mismatch notice for exactly that reason.
    */
   verifyVendorSupplies?: boolean;
-}
-
-export interface SkippedLine {
-  /** Null for a line that has no product. */
-  productId: string | null;
-  sku: string | null;
-  name: string;
-  reason: string;
 }
 
 export class PoCreateError extends Error {
@@ -101,8 +79,6 @@ export class PoCreateError extends Error {
 
 export interface CreatePoResult {
   po: Awaited<ReturnType<typeof createPurchaseOrderRow>>;
-  /** Lines left off because they had no price. Empty unless onPricelessLine is "skip". */
-  skipped: SkippedLine[];
 }
 
 type Tx = Prisma.TransactionClient;
@@ -180,8 +156,6 @@ export async function createPurchaseOrder(
   user: { id: string; name: string },
   options: CreatePoOptions = {}
 ): Promise<CreatePoResult> {
-  const onPricelessLine = options.onPricelessLine ?? "reject";
-
   if (input.items.length === 0) {
     throw new PoCreateError("At least one item is required", 400);
   }
@@ -243,54 +217,22 @@ export async function createPurchaseOrder(
     }
   }
 
-  // ─── ₹0 lines ──────────────────────────────────────────────────────────────────────────
-  // A zero rate must never reach a purchase order silently: P12 emails the PDF to the vendor,
-  // so a ₹0 line is a written offer to be supplied free. What differs between callers is
-  // whether a missing price is a typo (refuse) or missing data (skip) — see CreatePoOptions.
-  const skipped: SkippedLine[] = [];
-  const priced: PoLineInput[] = [];
-
-  for (const item of input.items) {
-    if (item.unitPrice > 0) {
-      priced.push(item);
-      continue;
-    }
-    // The line's own name, not the product's: a sheet-built line has no product, and the
-    // name is what the person is looking at on the screen.
-    const p = item.productId ? byId.get(item.productId) : undefined;
-    if (onPricelessLine === "reject") {
-      throw new PoCreateError(`Line "${item.name.trim()}" has no rate — enter a unit price`, 400);
-    }
-    skipped.push({
-      productId: p?.id ?? null,
-      sku: p?.sku ?? null,
-      name: item.name.trim(),
-      reason: "No unit price on the line",
-    });
-  }
-
-  if (priced.length === 0) {
-    throw new PoCreateError(
-      skipped.length > 0
-        ? `None of the ${skipped.length} selected item(s) has a price. Enter a unit price on each line.`
-        : "At least one item is required",
-      400
-    );
-  }
-
-  const lines = priced.map((item) => ({
+  // ─── no money on a purchase order ─────────────────────────────────────────────────────
+  // Owner, 15 Sep 2026 (plan 1509-po-product-and-quantity-only, R4): a PO is the product and
+  // the quantity — "we don't need the money in the PO itself". Nothing about price reaches
+  // this function (PoLineInput has no field for it). The money columns are NOT NULL and are
+  // still read by reports, bills and settlement, so they are written as 0 rather than left
+  // for a later migration to drop.
+  const lines = input.items.map((item) => ({
     // Written only when the line is linked; null is the sheet-built line (D2).
     productId: item.productId ?? null,
     name: item.name.trim(),
     quantity: item.quantity,
-    unitPrice: item.unitPrice,
-    gstRate: item.gstRate ?? 18,
-    amount: item.quantity * item.unitPrice,
+    unitPrice: 0,
+    gstRate: 0,
+    amount: 0,
   }));
   const linkedLines = lines.filter((l) => l.productId !== null).length;
-
-  const subtotal = lines.reduce((sum, l) => sum + l.amount, 0);
-  const gstTotal = lines.reduce((sum, l) => sum + l.amount * (l.gstRate / 100), 0);
 
   const result = await prisma.$transaction(
     async (tx) => {
@@ -329,9 +271,9 @@ export async function createPurchaseOrder(
           deliveryAddress: input.deliveryAddress ?? null,
           notes: input.notes ?? null,
           createdById: user.id,
-          subtotal,
-          gstTotal,
-          grandTotal: subtotal + gstTotal,
+          subtotal: 0,
+          gstTotal: 0,
+          grandTotal: 0,
           items: { create: lines },
         },
       });
@@ -343,9 +285,7 @@ export async function createPurchaseOrder(
         entityId: po.id,
         entityRef: po.poNumber,
         toValue: po.status,
-        details: `${lines.length} line(s) for ${po.vendor.name}${
-          skipped.length > 0 ? ` · ${skipped.length} skipped, no price` : ""
-        }`,
+        details: `${lines.length} line(s) for ${po.vendor.name}`,
         userId: user.id,
         userName: user.name,
       });
@@ -366,10 +306,9 @@ export async function createPurchaseOrder(
     lines: lines.length,
     linkedLines,
     snapshotLines: lines.length - linkedLines,
-    skipped: skipped.length,
   });
 
-  return { po: result, skipped };
+  return { po: result };
 }
 
 export type { PoConflict };
