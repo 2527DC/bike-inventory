@@ -132,8 +132,10 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
   // The line awaiting confirmation. Receiving adds stock, so it asks first.
   const [confirmReceive, setConfirmReceive] = useState<LineItem | null>(null);
 
-  // Per-item bin selections: lineItemId → array of binIds (one per unit)
-  const [binSelections, setBinSelections] = useState<Record<string, string[]>>({});
+  // Per-LINE bin selection: lineItemId → binId. One bin per line (plan
+  // 1509-assembly-queue-single-bin-and-product-assembly-level, D2) — it used to be one bin per
+  // unit, but the server only ever honoured the first, so a split line put everything there.
+  const [binSelections, setBinSelections] = useState<Record<string, string>>({});
   // Putaway matched rule metadata per line item: lineItemId → { suggestedBin, matchedRule }
   const [putawayItems, setPutawayItems] = useState<
     Record<string, { suggestedBin?: Bin | null; matchedRule?: { type: string; label: string } | null }>
@@ -172,18 +174,15 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
       }
       if (binRes.data) setBins(binRes.data);
       if (putawayRes.data?.items) {
-        const initialBins: Record<string, string[]> = {};
+        const initialBins: Record<string, string> = {};
         const suggestionsMap: Record<string, { suggestedBin?: Bin | null; matchedRule?: { type: string; label: string } | null }> = {};
         for (const it of putawayRes.data.items) {
           suggestionsMap[it.id] = {
             suggestedBin: it.suggestedBin,
             matchedRule: it.matchedRule,
           };
-          if (it.suggestedBin?.id) {
-            const li = shipRes.data?.lineItems.find((l) => l.id === it.id);
-            const count = li?.quantity || 1;
-            initialBins[it.id] = new Array(count).fill(it.suggestedBin.id);
-          }
+          // The home-bin rule's suggestion is the line's pre-selected bin.
+          if (it.suggestedBin?.id) initialBins[it.id] = it.suggestedBin.id;
         }
         setPutawayItems(suggestionsMap);
         setBinSelections((prev) => ({ ...initialBins, ...prev }));
@@ -205,34 +204,9 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
 
 
 
-  // Set bin for a specific unit of a line item
-  const setBinForUnit = (lineItemId: string, unitIndex: number, binId: string, totalQty: number) => {
-    setBinSelections((prev) => {
-      const current = prev[lineItemId] || new Array(totalQty).fill("");
-      const updated = [...current];
-      // Ensure array is the right length
-      while (updated.length < totalQty) updated.push("");
-      updated[unitIndex] = binId;
-      return { ...prev, [lineItemId]: updated };
-    });
-  };
-
-  // Set all units of a line item to the same bin
-  const setBinForAll = (lineItemId: string, binId: string, totalQty: number) => {
-    setBinSelections((prev) => ({
-      ...prev,
-      [lineItemId]: new Array(totalQty).fill(binId),
-    }));
-  };
-
-  // Get bin selections as grouped allocations [{binId, qty}]
-  const getBinAllocations = (lineItemId: string): Array<{ binId: string; qty: number }> => {
-    const selections = binSelections[lineItemId] || [];
-    const groups: Record<string, number> = {};
-    for (const binId of selections) {
-      if (binId) groups[binId] = (groups[binId] || 0) + 1;
-    }
-    return Object.entries(groups).map(([binId, qty]) => ({ binId, qty }));
+  // The whole line goes into this one bin (D2).
+  const setBinForLine = (lineItemId: string, binId: string) => {
+    setBinSelections((prev) => ({ ...prev, [lineItemId]: binId }));
   };
 
   // The `|| isAdmin` bypass is DELETED, not mapped to a permission (plan §8 Q3).
@@ -304,92 +278,81 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
   };
 
   const handleMarkItemDelivered = async (li: LineItem) => {
-    if (BIN_TRACKING_ENABLED) {
-      const selections = binSelections[li.id] || [];
-      const allFilled = selections.length === li.quantity && selections.every((b) => b);
-      if (!allFilled) {
-        setConfirmation({
-          type: "error",
-          title: "Bin Assignment Required",
-          referenceId: shipment?.shipmentNo || "",
-          items: [
-            { label: "Product", value: li.productName },
-            { label: "Units", value: `${li.quantity}` },
-          ],
-          details: `Please select a bin for all ${li.quantity} unit(s) before marking delivered.`,
-        });
-        return;
-      }
+    const binId = binSelections[li.id] || "";
+    if (BIN_TRACKING_ENABLED && !binId) {
+      setConfirmation({
+        type: "error",
+        title: "Bin Assignment Required",
+        referenceId: shipment?.shipmentNo || "",
+        items: [
+          { label: "Product", value: li.productName },
+          { label: "Units", value: `${li.quantity}` },
+        ],
+        details: "Select the bin this line goes into before marking it delivered.",
+      });
+      return;
     }
     setItemLoading(li.id);
-    try {
-      const binAllocations = getBinAllocations(li.id);
-      const res = await fetch(`/api/inbound/${id}`, {
+    // `warehouseId` on BOTH branches — the route's schema requires it. With a bin, the server
+    // records the stock in the bin's own warehouse (D2), so a Floor bin is not booked into
+    // the default godown.
+    const { error } = await apiTry<{ updated: boolean; alreadyReceived: boolean; shipmentDelivered: boolean }>(
+      `/api/inbound/${id}`,
+      {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        // `warehouseId` on BOTH branches. The route's schema requires it now, so the bin
-        // branch — dormant while BIN_TRACKING_ENABLED is false — would have 400'd the day
-        // somebody switched bins on. Stock still lands in a warehouse; the bins are an extra
-        // axis on top of it, not a replacement for one.
-        body: JSON.stringify(
-          BIN_TRACKING_ENABLED
-            ? { lineItemId: li.id, deliveredQty: li.quantity, warehouseId: receiveLocation, binAllocations }
-            : { lineItemId: li.id, deliveredQty: li.quantity, warehouseId: receiveLocation }
-        ),
-      }).then((r) => r.json());
-      if (res.success) {
-        setActionError("");
-        setBinSelections((prev) => { const n = { ...prev }; delete n[li.id]; return n; });
-        await refreshShipment();
-        setConfirmation({
-          type: "success",
-          title: BIN_TRACKING_ENABLED ? "Item Received & Binned" : "Item Received",
-          referenceId: shipment?.shipmentNo || "",
-          items: [
-            { label: "Product", value: li.productName },
-            { label: "Quantity", value: `${li.quantity} units` },
-            BIN_TRACKING_ENABLED
-              ? { label: "Bin", value: bins.find(b => b.id === (binSelections[li.id]?.[0]))?.code || "Assigned" }
-              : { label: "Location", value: warehouses.find((w) => w.id === receiveLocation)?.name ?? "—" },
-          ],
-          details: `Bill: ${shipment?.billNo}`,
-        });
-      } else {
-        setActionError(res.error || `Failed to mark "${li.productName}" as delivered`);
+        json: BIN_TRACKING_ENABLED
+          ? { lineItemId: li.id, deliveredQty: li.quantity, warehouseId: receiveLocation, binId }
+          : { lineItemId: li.id, deliveredQty: li.quantity, warehouseId: receiveLocation },
+        timeoutMs: 30_000,
       }
-    } catch (e) { setActionError(e instanceof Error ? e.message : "Mark delivered failed"); }
-    finally { setItemLoading(null); }
+    );
+    if (error) {
+      log.error("mark delivered failed", { shipmentId: id, lineItemId: li.id, binId: binId || null, message: error });
+      setActionError(error);
+    } else {
+      setActionError("");
+      setBinSelections((prev) => { const n = { ...prev }; delete n[li.id]; return n; });
+      await refreshShipment();
+      setConfirmation({
+        type: "success",
+        title: BIN_TRACKING_ENABLED ? "Item Received & Binned" : "Item Received",
+        referenceId: shipment?.shipmentNo || "",
+        items: [
+          { label: "Product", value: li.productName },
+          { label: "Quantity", value: `${li.quantity} units` },
+          BIN_TRACKING_ENABLED
+            ? { label: "Bin", value: bins.find((b) => b.id === binId)?.code || "Assigned" }
+            : { label: "Location", value: warehouses.find((w) => w.id === receiveLocation)?.name ?? "—" },
+        ],
+        details: `Bill: ${shipment?.billNo}`,
+      });
+    }
+    setItemLoading(null);
   };
 
   const handlePutaway = async () => {
     const items = Object.entries(binSelections)
-      .filter(([lineItemId]) => {
+      .filter(([lineItemId, binId]) => {
         const li = shipment?.lineItems.find((l) => l.id === lineItemId);
-        return li?.isDelivered && !li.binId;
+        return Boolean(binId) && li?.isDelivered && !li.binId;
       })
-      .map(([lineItemId]) => ({
-        lineItemId,
-        binId: (binSelections[lineItemId] || [])[0] || "",
-      }))
-      .filter((i) => i.binId);
+      .map(([lineItemId, binId]) => ({ lineItemId, binId }));
 
     if (items.length === 0) return;
     setPutawayLoading(true);
-    try {
-      const res = await fetch(`/api/inbound/${id}/putaway`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items }),
-      }).then((r) => r.json());
-      if (res.success) {
-        setActionError("");
-        setBinSelections({});
-        await refreshShipment();
-      } else {
-        setActionError(res.error || "Putaway failed");
-      }
-    } catch (e) { setActionError(e instanceof Error ? e.message : "Putaway failed"); }
-    finally { setPutawayLoading(false); }
+    const { error } = await apiTry<{ updated: number; round: number }>(`/api/inbound/${id}/putaway`, {
+      method: "POST",
+      json: { items },
+    });
+    if (error) {
+      log.error("putaway failed", { shipmentId: id, lines: items.length, message: error });
+      setActionError(error);
+    } else {
+      setActionError("");
+      setBinSelections({});
+      await refreshShipment();
+    }
+    setPutawayLoading(false);
   };
 
   // `handleRevert` is GONE with the Undo button and api/inbound/[id]/status.
@@ -469,10 +432,9 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
     setIssueSaving(false);
   };
 
-  // Render bin selectors for a line item (one per unit)
+  // ONE bin selector per line (D2). The per-unit selectors let a line be split across bins,
+  // which the server never honoured beyond the first.
   const renderBinSelectors = (li: LineItem, variant: "default" | "amber" = "default") => {
-    const qty = li.quantity;
-    const selections = binSelections[li.id] || [];
     const borderClass = variant === "amber" ? "border-amber-200" : "border-slate-200";
     const bgClass = variant === "amber" ? "bg-amber-50" : "bg-white";
 
@@ -484,55 +446,18 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
       );
     }
 
-    if (qty === 1) {
-      return (
-        <select
-          value={selections[0] || ""}
-          onChange={(e) => setBinForUnit(li.id, 0, e.target.value, qty)}
-          className={`mt-2 w-full text-xs border ${borderClass} rounded-lg px-2 py-1.5 ${bgClass} text-slate-700`}
-        >
-          <option value="">Select bin *</option>
-          {bins.map((b) => (
-            <option key={b.id} value={b.id}>{b.code} — {b.name} ({b.location})</option>
-          ))}
-        </select>
-      );
-    }
-
-    // Multiple units — show "Apply to all" + per-unit selectors
-    const allSame = selections.length > 0 && selections.every((b) => b && b === selections[0]);
     return (
-      <div className="mt-2 space-y-1.5">
-        {/* Apply to all shortcut */}
-        <div className="flex items-center gap-2">
-          <select
-            value={allSame ? selections[0] : ""}
-            onChange={(e) => { if (e.target.value) setBinForAll(li.id, e.target.value, qty); }}
-            className={`flex-1 text-xs border ${borderClass} rounded-lg px-2 py-1.5 ${bgClass} text-slate-700`}
-          >
-            <option value="">Apply same bin to all {qty} units</option>
-            {bins.map((b) => (
-              <option key={b.id} value={b.id}>{b.code} — {b.name} ({b.location})</option>
-            ))}
-          </select>
-        </div>
-        {/* Per-unit selectors */}
-        {Array.from({ length: qty }).map((_, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <span className="text-xs text-slate-400 w-10 shrink-0">#{i + 1}</span>
-            <select
-              value={selections[i] || ""}
-              onChange={(e) => setBinForUnit(li.id, i, e.target.value, qty)}
-              className={`flex-1 text-xs border ${borderClass} rounded-lg px-2 py-1.5 ${bgClass} text-slate-700`}
-            >
-              <option value="">Select bin *</option>
-              {bins.map((b) => (
-                <option key={b.id} value={b.id}>{b.code} — {b.name} ({b.location})</option>
-              ))}
-            </select>
-          </div>
+      <select
+        value={binSelections[li.id] || ""}
+        onChange={(e) => setBinForLine(li.id, e.target.value)}
+        aria-label={`Bin for ${li.productName}`}
+        className={`mt-2 w-full min-h-[44px] text-xs border ${borderClass} rounded-lg px-2 py-1.5 ${bgClass} text-slate-700`}
+      >
+        <option value="">{li.quantity > 1 ? `Select bin for all ${li.quantity} units *` : "Select bin *"}</option>
+        {bins.map((b) => (
+          <option key={b.id} value={b.id}>{b.code} — {b.name}{b.location ? ` (${b.location})` : ""}</option>
         ))}
-      </div>
+      </select>
     );
   };
 
@@ -560,9 +485,9 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
     label: shipment.status === "PARTIALLY_DELIVERED" ? "Partial" : getStatusLabel(shipment.status),
   };
 
-  const putawayReady = Object.entries(binSelections).filter(([liId]) => {
+  const putawayReady = Object.entries(binSelections).filter(([liId, binId]) => {
     const li = shipment.lineItems.find((l) => l.id === liId);
-    return li?.isDelivered && !li.binId;
+    return Boolean(binId) && li?.isDelivered && !li.binId;
   }).length;
 
   return (
@@ -743,7 +668,7 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
               const undelivered = shipment.lineItems.filter((li) => !li.isDelivered);
               const newSelections = { ...binSelections };
               for (const li of undelivered) {
-                newSelections[li.id] = new Array(li.quantity).fill(binId);
+                newSelections[li.id] = binId;
               }
               setBinSelections(newSelections);
               e.target.value = "";
