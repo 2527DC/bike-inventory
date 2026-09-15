@@ -1451,6 +1451,31 @@ model AiProvider {
   @@map("ai_provider")
 }
 
+// AI call spend and token audit log.
+// Append-only record of every AI request across all modules.
+model AiCallLog {
+  id           String   @id @default(cuid())
+  purpose      String   // e.g. "bank.statement_parse", "po.sheet_columns", "payments.screenshot_scan", etc.
+  providerKey  String   // "anthropic" | "google" | "openai"
+  model        String   // "claude-opus-5", "gemini-3.8-flash", etc.
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  totalTokens  Int      @default(0)
+  costUsd      Decimal  @db.Decimal(10, 6)
+  costInr      Decimal  @db.Decimal(10, 4)
+  latencyMs    Int
+  stopReason   String?
+  ok           Boolean  @default(true)
+  errorKind    String?  // null if ok, or "rate_limit" | "max_tokens" | "parse" | etc.
+  userId       String?  // bare string, no relation — outlives a deleted user
+  createdAt    DateTime @default(now())
+
+  @@index([purpose, createdAt])
+  @@index([providerKey, createdAt])
+  @@index([createdAt])
+  @@map("ai_call_log")
+}
+
 // ─── Notifications ─────────────────────────────────────────────────────────────
 //
 // Push (FCM, to the browser PWA and to the separate Expo app) and email (SMTP), raised by
