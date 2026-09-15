@@ -4,17 +4,25 @@ import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { ArrowLeft, MapPin, Package } from "lucide-react";
+import { ArrowLeft, Loader2, Package } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { useBinTracking } from "@/hooks/use-bin-tracking";
 import { useStores } from "@/hooks/use-sites";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
 
+const log = createLogger("stock-audit:new");
+
+// GET /api/bins returns each bin's warehouse, which is what lets the bin step show only the
+// bins inside the warehouse that was picked. `location` is the legacy free-text column — it is
+// nullable and nothing here reads it any more (plan 1509-stock-count-scope-by-warehouse, A4).
 interface Bin {
   id: string;
   code: string;
   name: string;
-  location: string;
+  location: string | null;
+  warehouse: { id: string; name: string; kind: "FLOOR" | "GODOWN" };
   _count: { products: number };
 }
 
@@ -29,7 +37,7 @@ interface User {
 
 export default function NewStockAuditPage() {
   const { isBinTrackingEnabled: BIN_TRACKING_ENABLED } = useBinTracking();
-  const { stores } = useStores();
+  const { stores, loading: storesLoading } = useStores();
   const router = useRouter();
   const { data: session } = useSession();
   const user = session?.user as { userId?: string; role?: string } | undefined;
@@ -37,13 +45,12 @@ export default function NewStockAuditPage() {
   const [title, setTitle] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [notes, setNotes] = useState("");
-  const [scope, setScope] = useState<"bin" | "location" | "all">(BIN_TRACKING_ENABLED ? "bin" : "all");
-  // Scope (R2). storeId is required; warehouseId empty means the whole store, which is
-  // verify-only — see the caption in the picker and section 5.1 of the 0409 plan.
+  // Scope (plan 1509, D1): a store, then exactly ONE of its warehouses — the Floor or a
+  // Godown. There is no whole-store count any more, in either bin mode. The bin is optional:
+  // "" means the whole warehouse (Q2).
   const [storeId, setStoreId] = useState<string>("");
   const [warehouseId, setWarehouseId] = useState<string>("");
   const [selectedBin, setSelectedBin] = useState("");
-  const [selectedLocation, setSelectedLocation] = useState("");
   const [bins, setBins] = useState<Bin[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [assignedTo, setAssignedTo] = useState("");
@@ -61,109 +68,97 @@ export default function NewStockAuditPage() {
 
   useEffect(() => {
     if (BIN_TRACKING_ENABLED) {
-      fetch("/api/bins").then((r) => r.json()).then((res) => { if (res.success) setBins(res.data); }).catch(() => {});
+      (async () => {
+        const { data, error: err } = await apiTry<Bin[]>("/api/bins");
+        // A person without the `bins` view grant lands here too. The bin step then offers
+        // only "Whole warehouse", which is still a valid count.
+        if (err) log.warn("bins load failed", { message: err });
+        else setBins(data ?? []);
+      })();
     }
     // Load team members for assignment
     fetch("/api/users").then((r) => r.json()).then((res) => { if (res.success) setUsers(res.data); }).catch(() => {});
   }, [BIN_TRACKING_ENABLED]);
 
-  // Group bins by location
-  const locationGroups = useMemo(() => {
-    const groups: Record<string, { bins: Bin[]; totalProducts: number }> = {};
-    bins.forEach((b) => {
-      if (!groups[b.location]) groups[b.location] = { bins: [], totalProducts: 0 };
-      groups[b.location].bins.push(b);
-      groups[b.location].totalProducts += b._count.products;
-    });
-    return groups;
-  }, [bins]);
-
-  const locations = Object.keys(locationGroups).sort();
-
   const selectedStore = stores.find((s) => s.id === storeId) ?? null;
   const selectedWarehouse = selectedStore?.warehouses.find((w) => w.id === warehouseId) ?? null;
-  const scopeLabel = selectedWarehouse?.name ?? (selectedStore ? `${selectedStore.name} — whole store` : "");
+  const warehouseBins = useMemo(
+    () => bins.filter((b) => b.warehouse?.id === warehouseId),
+    [bins, warehouseId]
+  );
+  const pickedBin = warehouseBins.find((b) => b.id === selectedBin) ?? null;
 
-  // Estimated item count for preview
-  const estimatedItems = useMemo(() => {
-    if (scope === "bin" && selectedBin) {
-      const bin = bins.find((b) => b.id === selectedBin);
-      return bin?._count.products || 0;
-    }
-    if (scope === "location" && selectedLocation) {
-      return locationGroups[selectedLocation]?.totalProducts || 0;
-    }
-    if (scope === "all") {
-      return bins.reduce((sum, b) => sum + b._count.products, 0);
-    }
-    return 0;
-  }, [scope, selectedBin, selectedLocation, bins, locationGroups]);
-
-  // Auto-set title
+  // Name the audit after what it actually covers — the same rule in both bin modes.
   useEffect(() => {
-    if (scope === "bin" && selectedBin) {
-      const bin = bins.find((b) => b.id === selectedBin);
-      if (bin) setTitle(`Stock Count - ${bin.code}`);
-    } else if (scope === "location" && selectedLocation) {
-      setTitle(`Stock Count - ${selectedLocation}`);
-    }
-  }, [selectedBin, selectedLocation, scope, bins]);
+    if (!selectedWarehouse) return;
+    setTitle(
+      pickedBin
+        ? `Stock Count - ${selectedWarehouse.name} · Bin ${pickedBin.code}`
+        : `Stock Count - ${selectedWarehouse.name}`
+    );
+  }, [selectedWarehouse?.name, pickedBin?.code]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Warehouse mode: name the audit after what it actually covers.
-  useEffect(() => {
-    if (BIN_TRACKING_ENABLED) return;
-    if (scopeLabel) setTitle(`Stock Count - ${scopeLabel}`);
-  }, [scopeLabel]);
+  const selectStore = (id: string) => {
+    setStoreId(id);
+    // A warehouse or bin picked under another store must not survive the switch — the server
+    // refuses the pair, and the person would not know why.
+    setWarehouseId("");
+    setSelectedBin("");
+  };
+
+  const selectWarehouse = (id: string) => {
+    setWarehouseId(id);
+    setSelectedBin("");
+  };
 
   const handleSubmit = async () => {
+    if (!storeId) { setError("Choose a store"); return; }
+    if (!warehouseId) { setError("Choose a warehouse"); return; }
     if (!title || !dueDate) return;
-    if (scope === "bin" && !selectedBin) return;
-    if (scope === "location" && !selectedLocation) return;
-    if (!BIN_TRACKING_ENABLED && !storeId) { setError("Choose a store"); return; }
     setSubmitting(true);
     setError("");
-    try {
-      const body: Record<string, unknown> = {
-        title,
-        dueDate,
-        notes: notes || undefined,
-        assignedToId: assignedTo || user?.userId,
-      };
 
-      if (!BIN_TRACKING_ENABLED) {
-        body.storeId = storeId;
-        // Omitted entirely for a whole-store audit — the API reads absence as "whole store".
-        if (warehouseId) body.warehouseId = warehouseId;
-      } else if (scope === "bin" && selectedBin) {
-        body.binId = selectedBin;
-      } else if (scope === "location" && selectedLocation) {
-        body.location = selectedLocation;
-      }
-      const res = await fetch("/api/stock-counts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+    const body: Record<string, unknown> = {
+      title,
+      dueDate,
+      notes: notes || undefined,
+      assignedToId: assignedTo || user?.userId,
+      storeId,
+      warehouseId,
+    };
+    if (pickedBin) body.binId = pickedBin.id;
+
+    const { data, error: err, status } = await apiTry<{ id: string; countNo?: string }>(
+      "/api/stock-counts",
+      { method: "POST", json: body }
+    );
+    setSubmitting(false);
+
+    if (err || !data) {
+      log.error("stock count create failed", {
+        status,
+        storeId,
+        warehouseId,
+        binId: pickedBin?.id ?? null,
       });
-      const data = await res.json();
-      if (data.success) {
-        const assignedUser = users.find((u) => u.id === (assignedTo || user?.userId));
-        setConfirmation({
-          type: "success",
-          title: "Stock Count Created",
-          referenceId: data.data.countNo || data.data.id,
-          items: [
-            { label: "Title", value: title },
-            { label: "Assigned To", value: assignedUser?.name || "—" },
-            { label: "Due Date", value: new Date(dueDate).toLocaleDateString("en-IN") },
-            { label: "Scope", value: !BIN_TRACKING_ENABLED ? scopeLabel : scope === "bin" ? `Bin: ${bins.find((b) => b.id === selectedBin)?.code || selectedBin}` : scope === "location" ? `Location: ${selectedLocation}` : "All Products" },
-          ],
-          redirectTo: `/stock-audit/${data.data.id}`,
-        });
-      } else setError(data.error || "Failed to create stock count");
-    } catch {
-      setError("Network error. Please try again.");
+      setError(err || "Failed to create stock count");
+      return;
     }
-    finally { setSubmitting(false); }
+
+    const assignedUser = users.find((u) => u.id === (assignedTo || user?.userId));
+    const scopeText = `${selectedWarehouse?.name ?? "—"} · ${selectedStore?.name ?? "—"}${pickedBin ? ` · Bin ${pickedBin.code}` : ""}`;
+    setConfirmation({
+      type: "success",
+      title: "Stock Count Created",
+      referenceId: data.countNo || data.id,
+      items: [
+        { label: "Title", value: title },
+        { label: "Assigned To", value: assignedUser?.name || "—" },
+        { label: "Due Date", value: new Date(dueDate).toLocaleDateString("en-IN") },
+        { label: "Scope", value: scopeText },
+      ],
+      redirectTo: `/stock-audit/${data.id}`,
+    });
   };
 
   return (
@@ -176,177 +171,128 @@ export default function NewStockAuditPage() {
       </div>
 
       <div className="space-y-3">
-        {/* Scope — bin/location scoping is bin-derived; hidden while bins are dormant */}
-        {BIN_TRACKING_ENABLED && (
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Count Scope</label>
-            <div className="flex gap-2">
-              <button onClick={() => { setScope("bin"); setSelectedLocation(""); }}
-                className={`flex-1 min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
-                  scope === "bin" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
-                }`}>By Bin</button>
-              <button onClick={() => { setScope("location"); setSelectedBin(""); }}
-                className={`flex-1 min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
-                  scope === "location" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
-                }`}>By Location</button>
-              <button onClick={() => { setScope("all"); setSelectedBin(""); setSelectedLocation(""); }}
-                className={`flex-1 min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
-                  scope === "all" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
-                }`}>All Products</button>
+        {/* SCOPE — store, then ONE warehouse inside it, then (bins on) an optional bin.
+            The same steps whatever bin mode says: the old bin-mode toggle sent no store at
+            all, which is the "storeId … received undefined" error plan 1509 fixes. */}
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-2">Store *</label>
+          {storesLoading && stores.length === 0 ? (
+            <div className="flex items-center justify-center gap-2 py-4 text-xs text-slate-400">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading stores…
             </div>
-          </div>
-        )}
-
-        {/* SCOPE — two steps, store then what inside it (R2, §5.1).
-            Replaces a flat list of every warehouse in the business, which asked the person
-            raising the audit to know which building belonged to which shop. */}
-        {!BIN_TRACKING_ENABLED && (
-          <>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">Store *</label>
-              <div className="grid grid-cols-2 gap-2">
-                {stores.map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => { setStoreId(s.id); setWarehouseId(""); }}
-                    className={`min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
-                      storeId === s.id ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
-                    }`}
-                  >
-                    {s.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {selectedStore && (
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Count *</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => setWarehouseId("")}
-                    className={`min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
-                      warehouseId === "" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
-                    }`}
-                  >
-                    Whole store
-                  </button>
-                  {/* Warehouses by NAME. A "floor" is just a warehouse named that way — there
-                      is no kind/type column, by decision (MIG-1a). */}
-                  {selectedStore.warehouses.map((w) => (
-                    <button
-                      key={w.id}
-                      onClick={() => setWarehouseId(w.id)}
-                      className={`min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
-                        warehouseId === w.id ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
-                      }`}
-                    >
-                      {w.name}
-                    </button>
-                  ))}
-                </div>
-                {/* The caption is the whole point of §5.1: a whole-store count produces one
-                    number per product while stock is held per warehouse, so the variance
-                    cannot be written back anywhere without inventing a location. */}
-                {warehouseId === "" && (
-                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1 mt-2">
-                    Verify only — to correct stock, audit one warehouse.
-                  </p>
-                )}
-                {selectedStore.warehouses.length === 0 && (
-                  <p className="text-[11px] text-slate-500 mt-2">
-                    {selectedStore.name} has no active warehouses, so only a verify-only
-                    whole-store count is possible.
-                  </p>
-                )}
-              </div>
-            )}
-          </>
-        )}
-
-        {/* Bin Selector */}
-        {scope === "bin" && (
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Select Bin *</label>
-            <div className="space-y-2 max-h-[50vh] overflow-y-auto">
-              {locations.map((loc) => (
-                <div key={loc}>
-                  <p className="text-xs font-semibold text-slate-700 px-1 py-1 sticky top-0 bg-white">{loc}</p>
-                  <div className="space-y-1.5 pl-1">
-                    {locationGroups[loc].bins.map((b) => {
-                      const isSelected = selectedBin === b.id;
-                      return (
-                        <button key={b.id} onClick={() => setSelectedBin(b.id)}
-                          className={`w-full text-left px-3 py-2.5 rounded-lg border transition-all ${
-                            isSelected
-                              ? "border-slate-900 bg-slate-50 ring-1 ring-slate-900"
-                              : "border-slate-200 bg-white"
-                          }`}>
-                          <div className="flex items-center justify-between">
-                            <div className="min-w-0">
-                              <span className="text-sm font-medium text-slate-900">{b.code}</span>
-                              <span className="text-sm text-slate-500"> — {b.name}</span>
-                            </div>
-                            <span className={`shrink-0 ml-2 text-xs px-2 py-0.5 rounded-full ${
-                              b._count.products > 0 ? "bg-blue-50 text-blue-600" : "bg-slate-100 text-slate-400"
-                            }`}>
-                              {b._count.products} items
-                            </span>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
+          ) : stores.length === 0 ? (
+            <p className="text-xs text-slate-400 text-center py-4">No stores available</p>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              {stores.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => selectStore(s.id)}
+                  className={`min-h-[44px] rounded-lg text-sm font-medium transition-colors focus-ring ${
+                    storeId === s.id ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
+                  }`}
+                >
+                  {s.name}
+                </button>
               ))}
             </div>
+          )}
+        </div>
+
+        {selectedStore && (
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Warehouse *</label>
+            {/* Each warehouse carries its kind, so nobody has to know which building is the
+                shop (Floor) and which is storage (Godown). */}
+            <div className="grid grid-cols-2 gap-2">
+              {selectedStore.warehouses.map((w) => {
+                const isSelected = warehouseId === w.id;
+                return (
+                  <button
+                    key={w.id}
+                    onClick={() => selectWarehouse(w.id)}
+                    className={`min-h-[44px] rounded-lg px-2 py-1.5 text-sm font-medium transition-colors focus-ring flex flex-col items-center justify-center gap-0.5 ${
+                      isSelected ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    <span className="leading-tight text-center">{w.name}</span>
+                    <span
+                      className={`text-[10px] font-normal px-1.5 rounded-full ${
+                        isSelected
+                          ? "bg-white/20 text-white"
+                          : w.kind === "FLOOR"
+                          ? "bg-blue-50 text-blue-700"
+                          : "bg-amber-50 text-amber-700"
+                      }`}
+                    >
+                      {w.kind === "FLOOR" ? "Floor" : "Godown"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {selectedStore.warehouses.length === 0 && (
+              <p className="text-[11px] text-slate-500 mt-2">
+                {selectedStore.name} has no active warehouse — add one before counting here.
+              </p>
+            )}
           </div>
         )}
 
-        {/* Location Selector */}
-        {scope === "location" && (
+        {/* Bin — only the bins inside the picked warehouse, never a flat list of the whole
+            business. Optional: "Whole warehouse" is the default (Q2). */}
+        {BIN_TRACKING_ENABLED && selectedWarehouse && (
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Select Location *</label>
-            <div className="space-y-2">
-              {locations.map((loc) => {
-                const group = locationGroups[loc];
-                const isSelected = selectedLocation === loc;
+            <label className="block text-sm font-medium text-slate-700 mb-1">Bin</label>
+            <div className="space-y-1.5 max-h-[50vh] overflow-y-auto">
+              <button
+                onClick={() => setSelectedBin("")}
+                className={`w-full min-h-[44px] text-left px-3 py-2.5 rounded-lg border transition-all ${
+                  selectedBin === ""
+                    ? "border-slate-900 bg-slate-50 ring-1 ring-slate-900"
+                    : "border-slate-200 bg-white"
+                }`}
+              >
+                <span className="text-sm font-medium text-slate-900">Whole warehouse</span>
+                <span className="text-sm text-slate-500"> — {selectedWarehouse.name}</span>
+              </button>
+              {warehouseBins.map((b) => {
+                const isSelected = selectedBin === b.id;
                 return (
-                  <button key={loc} onClick={() => setSelectedLocation(loc)}
-                    className={`w-full text-left p-3 rounded-lg border transition-all ${
+                  <button key={b.id} onClick={() => setSelectedBin(b.id)}
+                    className={`w-full min-h-[44px] text-left px-3 py-2.5 rounded-lg border transition-all ${
                       isSelected
                         ? "border-slate-900 bg-slate-50 ring-1 ring-slate-900"
                         : "border-slate-200 bg-white"
                     }`}>
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <MapPin className={`h-4 w-4 ${isSelected ? "text-slate-900" : "text-slate-400"}`} />
-                        <span className="text-sm font-medium text-slate-900">{loc}</span>
+                      <div className="min-w-0">
+                        <span className="text-sm font-medium text-slate-900">{b.code}</span>
+                        <span className="text-sm text-slate-500"> — {b.name}</span>
                       </div>
-                      <span className="text-xs text-slate-500">
-                        {group.bins.length} bin{group.bins.length !== 1 ? "s" : ""} · {group.totalProducts} items
+                      <span className={`shrink-0 ml-2 text-xs px-2 py-0.5 rounded-full ${
+                        b._count.products > 0 ? "bg-blue-50 text-blue-600" : "bg-slate-100 text-slate-400"
+                      }`}>
+                        {b._count.products} items
                       </span>
-                    </div>
-                    <div className="mt-1.5 flex flex-wrap gap-1 ml-6">
-                      {group.bins.map((b) => (
-                        <span key={b.id} className="px-2 py-0.5 bg-slate-100 rounded text-xs text-slate-600">
-                          {b.code} ({b._count.products})
-                        </span>
-                      ))}
                     </div>
                   </button>
                 );
               })}
             </div>
+            {warehouseBins.length === 0 && (
+              <p className="text-[11px] text-slate-500 mt-2">No bins in this warehouse.</p>
+            )}
           </div>
         )}
 
-        {/* Baseline mode notice */}
-        {(scope === "bin" || scope === "location") && (
+        {/* Baseline mode notice — a bin count lists every active product when the bin holds
+            nothing yet, and what is counted is assigned to the bin. */}
+        {pickedBin && (
           <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
             <Package className="h-4 w-4 text-amber-600 shrink-0" />
             <p className="text-xs text-amber-700">
-              <span className="font-medium">Baseline Mode:</span> All active products will be listed. Count what you physically find — items counted with {'>'} 0 will be assigned to this {scope === "bin" ? "bin" : "location"}.
+              <span className="font-medium">Baseline Mode:</span> All active products will be listed. Count what you physically find — items counted with {'>'} 0 will be assigned to bin {pickedBin.code}.
             </p>
           </div>
         )}
@@ -393,9 +339,8 @@ export default function NewStockAuditPage() {
 
         {(() => {
           const missing: string[] = [];
-          if (!BIN_TRACKING_ENABLED && !storeId) missing.push("store");
-          if (scope === "bin" && !selectedBin) missing.push("bin");
-          if (scope === "location" && !selectedLocation) missing.push("location");
+          if (!storeId) missing.push("store");
+          if (!warehouseId) missing.push("warehouse");
           if (!title) missing.push("title");
           if (!dueDate) missing.push("due date");
           if (!assignedTo) missing.push("assignee");

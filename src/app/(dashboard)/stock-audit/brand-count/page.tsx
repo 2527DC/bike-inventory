@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useBinTracking } from "@/hooks/use-bin-tracking";
 import { useStores } from "@/hooks/use-sites";
+import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("stock-audit:brand-count");
@@ -25,7 +26,12 @@ interface WarehouseRow {
   kind?: "FLOOR" | "GODOWN";
   storeId: string; storeName: string;
 }
-interface BinOption { id: string; code: string; name: string; location: string }
+// `location` is the legacy free-text column and is nullable — never read it. A bin belongs to
+// exactly one warehouse, which is what the picker filters on (plan 1509, B3).
+interface BinOption {
+  id: string; code: string; name: string; location: string | null;
+  warehouse: { id: string; name: string; kind: "FLOOR" | "GODOWN" };
+}
 interface CategoryOption { id: string; name: string }
 interface ProductItem {
   id: string; sku: string; name: string;
@@ -115,15 +121,24 @@ export default function BrandCountPage() {
       };
       if (d.step && d.step !== "submitted" && d.selectedBrand) {
         setSelectedBrand(d.selectedBrand);
-        if (d.selectedBin) setSelectedBin(d.selectedBin);
+        // A draft saved before plan 1509 can hold a bin with no store or warehouse — the bin
+        // path used to skip both. Such a draft goes back to the location step, and a bin is
+        // kept only when it sits in the restored warehouse, so the submit never sends a bin
+        // the server would refuse.
+        const hasScope = !!d.selectedStoreId && !!d.selectedLocation;
         if (d.selectedStoreId) setSelectedStoreId(d.selectedStoreId);
         if (d.selectedLocation) setSelectedLocation(d.selectedLocation);
+        if (hasScope && d.selectedBin && d.selectedBin.warehouse?.id === d.selectedLocation) {
+          setSelectedBin(d.selectedBin);
+        }
         if (Array.isArray(d.products) && d.products.length) setProducts(d.products);
         if (d.counts) setCounts(d.counts);
-        setStep(d.step);
+        setStep(d.step === "count" && !hasScope ? "bin" : d.step);
         setDraftRestored(true);
       }
-    } catch { /* ignore */ }
+    } catch (e) {
+      log.warn("draft restore failed", { message: e instanceof Error ? e.message : String(e) });
+    }
   }, []);
 
   // Auto-save the in-progress count on every change (skip the empty/done states).
@@ -199,6 +214,8 @@ export default function BrandCountPage() {
 
   const handleSelectStore = (storeId: string) => {
     setSelectedStoreId(storeId);
+    // A bin belongs to one warehouse, so it never survives a store switch.
+    setSelectedBin(null);
     // A warehouse picked under another store must not survive the switch — the server would
     // refuse the pair (api/stock-counts/route.ts) and the person would not know why.
     if (selectedLocation && selectedWarehouseFor(selectedLocation)?.storeId !== storeId) {
@@ -206,8 +223,16 @@ export default function BrandCountPage() {
     }
   };
 
+  // Bins off: the warehouse is the whole scope, so go straight to counting. Bins on: the
+  // warehouse is selected and the bin list for it opens below (plan 1509, B1).
   const handleSelectLocation = (loc: string) => {
     setSelectedLocation(loc);
+    setSelectedBin(null);
+    if (!BIN_TRACKING_ENABLED) setStep("count");
+  };
+
+  const handleSelectWholeWarehouse = () => {
+    setSelectedBin(null);
     setStep("count");
   };
 
@@ -279,12 +304,15 @@ export default function BrandCountPage() {
 
   const handleSubmit = async () => {
     if (!selectedBrand) return;
-    if (BIN_TRACKING_ENABLED && !selectedBin) return;
-    if (!BIN_TRACKING_ENABLED && (!selectedStoreId || !selectedLocation)) { setError("Select a store and location first"); return; }
+    // Store and warehouse are required in both modes; the bin is optional (plan 1509, B2).
+    if (!selectedStoreId || !selectedLocation) { setError("Select a store and location first"); return; }
     const selectedWarehouse = selectedWarehouseFor(selectedLocation);
-    if (!BIN_TRACKING_ENABLED && !selectedWarehouse) { setError("That warehouse is no longer available — pick another"); return; }
-    if (!BIN_TRACKING_ENABLED && selectedWarehouse && selectedWarehouse.storeId !== selectedStoreId) {
+    if (!selectedWarehouse) { setError("That warehouse is no longer available — pick another"); return; }
+    if (selectedWarehouse.storeId !== selectedStoreId) {
       setError("That warehouse belongs to a different store — pick the location again"); return;
+    }
+    if (selectedBin && selectedBin.warehouse?.id !== selectedLocation) {
+      setError(`Bin ${selectedBin.code} is not in ${selectedWarehouse.name} — pick the bin again`); return;
     }
     const counted = Object.entries(counts).filter(([, c]) => c.qty !== null);
     if (counted.length === 0) { setError("Count at least one item"); return; }
@@ -296,43 +324,39 @@ export default function BrandCountPage() {
       const userId = (session?.user as { userId?: string })?.userId;
       if (!userId) { setError("Not logged in"); return; }
 
-      const title = BIN_TRACKING_ENABLED && selectedBin
-        ? `${selectedBrand.name} @ ${selectedBin.name} — Brand Count`
-        : `${selectedBrand.name} @ ${locationName(selectedLocation)} — Brand Count`;
-      const res = await fetch("/api/stock-counts", {
+      const title = `${selectedBrand.name} @ ${locationName(selectedLocation)}${selectedBin ? ` · Bin ${selectedBin.code}` : ""} — Brand Count`;
+      const { data: created, error: createError, status } = await apiTry<{ id: string }>("/api/stock-counts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        json: {
           title,
-          // Scope as store + warehouse. The store is chosen first and the warehouse comes
-          // from that store's own list, so both ids are the person's explicit picks. A brand
-          // count is always warehouse-scoped — there is no whole-store option (D12) — which
-          // is what makes it correctable. The server refuses a warehouse that is not the
-          // store's (api/stock-counts/route.ts).
-          ...(BIN_TRACKING_ENABLED && selectedBin
-            ? { binId: selectedBin.id, storeId: selectedWarehouse?.storeId }
-            : { storeId: selectedStoreId, warehouseId: selectedLocation }),
+          // Scope as store + warehouse, in both modes. The store is chosen first and the
+          // warehouse comes from that store's own list, so both ids are the person's explicit
+          // picks. A brand count is always warehouse-scoped — there is no whole-store option
+          // (D12) — which is what makes it correctable. The bin is optional and must sit in
+          // that warehouse; the server refuses anything else (api/stock-counts/route.ts).
+          storeId: selectedStoreId,
+          warehouseId: selectedLocation,
+          ...(selectedBin ? { binId: selectedBin.id } : {}),
           productIds: products.map((p) => p.id),
           assignedToId: userId,
           selfCount: true,
           dueDate: new Date().toISOString(),
-        }),
+        },
       });
-      const createJson = await res.json();
-      if (!res.ok || !createJson.success) {
+      if (createError || !created) {
         log.error("create failed", {
-          status: res.status,
+          status,
           brandId: selectedBrand.id,
           storeId: selectedStoreId,
           warehouseId: selectedLocation,
           binId: selectedBin?.id ?? null,
-          error: createJson.error,
+          message: createError,
         });
-        setError(createJson.error || "Failed to create count");
+        setError(createError || "Failed to create count");
         return;
       }
 
-      const countId = createJson.data.id;
+      const countId = created.id;
 
       const startRes = await fetch(`/api/stock-counts/${countId}`, {
         method: "PUT",
@@ -428,8 +452,9 @@ export default function BrandCountPage() {
   // Auto-expand all categories when user is searching
   const isCategoryExpanded = (cat: string) => search.length > 0 || expandedCategories.has(cat);
 
-  const warehouseBins = bins.filter((b) => b.location.toLowerCase().includes("warehouse"));
-  const otherBins = bins.filter((b) => !b.location.toLowerCase().includes("warehouse"));
+  // "<warehouse> · <store>", plus " · Bin <code>" when a bin was picked — one label for the
+  // header, the sticky bar and the success copy, in both modes.
+  const scopeLabel = `${locationLabel(selectedLocation)}${selectedBin ? ` · Bin ${selectedBin.code}` : ""}`;
 
   return (
     <div className="pb-32">
@@ -440,11 +465,9 @@ export default function BrandCountPage() {
           <p className="text-[10px] text-slate-500">
             {step === "brand" && "Step 1: Select brand"}
             {step === "bin" && (BIN_TRACKING_ENABLED
-              ? `Step 2: ${selectedBrand?.name} — Select bin`
+              ? `Step 2: ${selectedBrand?.name} — Select location and bin`
               : `Step 2: ${selectedBrand?.name} — Select location`)}
-            {step === "count" && (BIN_TRACKING_ENABLED
-              ? `Step 3: Count ${selectedBrand?.name} items in ${selectedBin?.name}`
-              : `Step 3: Count ${selectedBrand?.name} at ${locationLabel(selectedLocation)}`)}
+            {step === "count" && `Step 3: Count ${selectedBrand?.name} at ${scopeLabel}`}
             {step === "submitted" && "Done! Waiting for approval"}
           </p>
         </div>
@@ -518,12 +541,17 @@ export default function BrandCountPage() {
         </div>
       )}
 
-      {/* ── STEP 2: Select Location (bins dormant) — store first, then that store's warehouses.
+      {/* ── STEP 2: Select Location — store first, then that store's warehouses, in BOTH modes.
           Replaces a flat list of every warehouse in the business. No "Whole store" button: a
-          brand count corrects stock, and correction is per warehouse (D12). ── */}
-      {step === "bin" && !BIN_TRACKING_ENABLED && (() => {
+          brand count corrects stock, and correction is per warehouse (D12). With bins on, the
+          bins of the chosen warehouse follow, plus "Whole warehouse" (plan 1509, B1). The old
+          bins-on step was a flat bin list that skipped store and warehouse entirely, which is
+          how a count went out with no storeId. ── */}
+      {step === "bin" && (() => {
         const selectedStore = stores.find((s) => s.id === selectedStoreId) ?? null;
         const storeWarehouses = warehouses.filter((w) => w.storeId === selectedStoreId);
+        const pickedWarehouse = storeWarehouses.find((w) => w.id === selectedLocation) ?? null;
+        const warehouseBins = pickedWarehouse ? bins.filter((b) => b.warehouse?.id === pickedWarehouse.id) : [];
         return (
           <div className="space-y-3">
             <div>
@@ -556,7 +584,11 @@ export default function BrandCountPage() {
                 <p className="text-xs text-slate-600">Which location in {selectedStore.name}?</p>
                 {storeWarehouses.map((loc) => (
                   <button key={loc.id} onClick={() => handleSelectLocation(loc.id)}
-                    className="w-full flex items-center justify-between p-3 bg-white border border-slate-200 rounded-lg hover:border-blue-400 transition-colors text-left">
+                    className={`w-full flex items-center justify-between p-3 border rounded-lg hover:border-blue-400 transition-colors text-left ${
+                      BIN_TRACKING_ENABLED && selectedLocation === loc.id
+                        ? "border-slate-900 bg-slate-50 ring-1 ring-slate-900"
+                        : "bg-white border-slate-200"
+                    }`}>
                     <div className="flex items-center gap-2">
                       <MapPin className="h-4 w-4 text-amber-500" />
                       <div>
@@ -583,59 +615,45 @@ export default function BrandCountPage() {
               </div>
             )}
 
+            {/* Bins on: the bin is picked INSIDE the chosen warehouse, and is optional. */}
+            {BIN_TRACKING_ENABLED && pickedWarehouse && (
+              <div className="space-y-2">
+                <p className="text-xs text-slate-600">Which bin in {pickedWarehouse.name}?</p>
+                <button onClick={handleSelectWholeWarehouse}
+                  className="w-full min-h-[44px] flex items-center justify-between p-3 bg-white border border-slate-200 rounded-lg hover:border-blue-400 transition-colors text-left">
+                  <div className="flex items-center gap-2">
+                    <MapPin className="h-4 w-4 text-amber-500" />
+                    <div>
+                      <p className="text-sm font-medium text-slate-900">Whole warehouse</p>
+                      <p className="text-[10px] text-slate-500">Count {selectedBrand?.name} anywhere in {pickedWarehouse.name}</p>
+                    </div>
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-slate-400" />
+                </button>
+                {warehouseBins.map((b) => (
+                  <button key={b.id} onClick={() => handleSelectBin(b)}
+                    className="w-full min-h-[44px] flex items-center justify-between p-3 bg-white border border-slate-200 rounded-lg hover:border-blue-400 transition-colors text-left">
+                    <div className="flex items-center gap-2">
+                      <MapPin className="h-4 w-4 text-blue-500" />
+                      <div>
+                        <p className="text-sm font-medium text-slate-900">{b.name}</p>
+                        <p className="text-[10px] text-slate-500 font-mono">{b.code}</p>
+                      </div>
+                    </div>
+                    <ChevronRight className="h-4 w-4 text-slate-400" />
+                  </button>
+                ))}
+                {warehouseBins.length === 0 && (
+                  <p className="text-[11px] text-slate-500">No bins in this warehouse.</p>
+                )}
+              </div>
+            )}
+
             <button onClick={() => { setStep("brand"); setSelectedBrand(null); }}
               className="text-xs text-blue-600 mt-2 underline">← Change brand</button>
           </div>
         );
       })()}
-
-      {/* ── STEP 2: Select Bin ── */}
-      {step === "bin" && BIN_TRACKING_ENABLED && (
-        <div className="space-y-2">
-          <p className="text-xs text-slate-600 mb-2">Where are the {selectedBrand?.name} items stored?</p>
-
-          {warehouseBins.length > 0 && (
-            <div className="mb-3">
-              <p className="text-[10px] font-semibold text-slate-500 uppercase mb-1">Warehouse Bins</p>
-              {warehouseBins.map((b) => (
-                <button key={b.id} onClick={() => handleSelectBin(b)}
-                  className="w-full flex items-center justify-between p-3 bg-white border border-slate-200 rounded-lg hover:border-blue-400 transition-colors text-left mb-1.5">
-                  <div className="flex items-center gap-2">
-                    <MapPin className="h-4 w-4 text-blue-500" />
-                    <div>
-                      <p className="text-sm font-medium text-slate-900">{b.name}</p>
-                      <p className="text-[10px] text-slate-500">{b.code} · {b.location}</p>
-                    </div>
-                  </div>
-                  <ChevronRight className="h-4 w-4 text-slate-400" />
-                </button>
-              ))}
-            </div>
-          )}
-
-          {otherBins.length > 0 && (
-            <div>
-              <p className="text-[10px] font-semibold text-slate-500 uppercase mb-1">Store Bins</p>
-              {otherBins.map((b) => (
-                <button key={b.id} onClick={() => handleSelectBin(b)}
-                  className="w-full flex items-center justify-between p-3 bg-white border border-slate-200 rounded-lg hover:border-slate-300 transition-colors text-left mb-1.5">
-                  <div className="flex items-center gap-2">
-                    <MapPin className="h-4 w-4 text-slate-400" />
-                    <div>
-                      <p className="text-sm font-medium text-slate-900">{b.name}</p>
-                      <p className="text-[10px] text-slate-500">{b.code} · {b.location}</p>
-                    </div>
-                  </div>
-                  <ChevronRight className="h-4 w-4 text-slate-400" />
-                </button>
-              ))}
-            </div>
-          )}
-
-          <button onClick={() => { setStep("brand"); setSelectedBrand(null); }}
-            className="text-xs text-blue-600 mt-2 underline">← Change brand</button>
-        </div>
-      )}
 
       {/* ── STEP 3: Count Items ── */}
       {step === "count" && (
@@ -869,13 +887,17 @@ export default function BrandCountPage() {
                 )}
               </div>
 
-              {BIN_TRACKING_ENABLED ? (
-                <button onClick={() => { setStep("bin"); setSelectedBin(null); }}
-                  className="text-xs text-blue-600 mt-4 underline">← Change bin</button>
-              ) : (
-                <button onClick={() => { setStep("bin"); setSelectedLocation(null); }}
-                  className="text-xs text-blue-600 mt-4 underline">← Change location</button>
-              )}
+              {/* Bins on: back to the bin list of the same warehouse. Bins off: the warehouse
+                  was the whole choice, so it is cleared, as before. */}
+              <button
+                onClick={() => {
+                  setStep("bin");
+                  setSelectedBin(null);
+                  if (!BIN_TRACKING_ENABLED) setSelectedLocation(null);
+                }}
+                className="text-xs text-blue-600 mt-4 underline">
+                {BIN_TRACKING_ENABLED ? "← Change location or bin" : "← Change location"}
+              </button>
             </>
           )}
         </div>
@@ -888,7 +910,7 @@ export default function BrandCountPage() {
           <div>
             <p className="text-lg font-bold text-green-900">Count Submitted!</p>
             <p className="text-sm text-slate-600 mt-1">
-              {countedCount} items counted for {selectedBrand?.name}{BIN_TRACKING_ENABLED && selectedBin ? ` in ${selectedBin.name}` : selectedLocation ? ` at ${locationLabel(selectedLocation)}` : ""}
+              {countedCount} items counted for {selectedBrand?.name}{selectedLocation ? ` at ${scopeLabel}` : ""}
             </p>
             <p className="text-xs text-slate-500 mt-2">
               This is a verification count — it records the numbers and any variance, but does not change stock. Stock is added through Inwards.
@@ -920,7 +942,7 @@ export default function BrandCountPage() {
             <div>
               <p className="text-xs text-slate-600"><strong>{countedCount}</strong> of {totalProducts} counted</p>
               <p className="text-[10px] text-slate-400">
-                by {userName} · {selectedBrand?.name}{BIN_TRACKING_ENABLED && selectedBin ? ` · ${selectedBin.code}` : selectedLocation ? ` · ${locationLabel(selectedLocation)}` : ""}
+                by {userName} · {selectedBrand?.name}{selectedLocation ? ` · ${scopeLabel}` : ""}
               </p>
             </div>
             <button onClick={handleSubmit} disabled={submitting}
