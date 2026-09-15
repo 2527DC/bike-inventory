@@ -6,7 +6,7 @@ import { successResponse, errorResponse, paginatedResponse, parseSearchParams } 
 import { stockCountSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
-import { getWarehouseQtyMap, getStoreQtyMap } from "@/lib/stock-location";
+import { getWarehouseQtyMap } from "@/lib/stock-location";
 import { nextSequence } from "@/lib/sequence";
 import { logActivity } from "@/lib/activity-log";
 import { createLogger } from "@/lib/logger";
@@ -92,7 +92,16 @@ export async function POST(req: NextRequest) {
   try {
     const user = await requireFeature("stock_audit", "create");
     const body = await req.json();
-    const data = stockCountSchema.parse(body);
+    // safeParse, not parse: a thrown ZodError used to reach the catch below and go back to the
+    // screen as its raw JSON issue list ("expected string, received undefined" under a
+    // "storeId" path). The person needs the sentence, and the log needs the field.
+    const parsed = stockCountSchema.safeParse(body);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      log.warn("stock count refused", { field: issue?.path.join("."), code: issue?.code });
+      return errorResponse(issue?.message ?? "Invalid stock count", 400);
+    }
+    const data = parsed.data;
 
     // Must assign to someone
     if (!data.assignedToId) return errorResponse("You must assign the stock count to a team member", 400);
@@ -100,13 +109,19 @@ export async function POST(req: NextRequest) {
     if (data.assignedToId === user.id && !isSelfCount) return errorResponse("You cannot assign a stock count to yourself", 400);
 
     let productIds = data.productIds;
-    const binId = body.binId as string | undefined;
+    const binId = data.binId;
 
     // ─── SCOPE (R2) ───────────────────────────────────────────────────────────────────────
     //
     // Replaces the free-text `location` string plus a product type. An audit used to be
     // scoped by a value nothing validated, which is why an assigned audit could open on an
     // empty page: the counter was told neither which store nor which building.
+    //
+    // Since plan 1509-stock-count-scope-by-warehouse (D1, D2) every new count is ONE warehouse
+    // — a Floor or a Godown — of one store. There is no whole-store create any more, and the
+    // store is never derived from a bin: the schema requires both ids, so a caller that sends
+    // neither is refused with a sentence instead of guessed at. Whole-store audits already
+    // saved still approve through [id]/route.ts (D3).
     //
     // The store is loaded WITH its active warehouses so both checks below are one query.
     const store = await prisma.store.findUnique({
@@ -124,19 +139,14 @@ export async function POST(req: NextRequest) {
     }
 
     // A warehouse from another store would silently count the wrong building.
-    let scopedWarehouse: { id: string; name: string } | null = null;
-    if (data.warehouseId) {
-      const match = store.warehouses.find((w) => w.id === data.warehouseId);
-      if (!match) {
-        return errorResponse(
-          `That warehouse is not an active warehouse of ${store.name}`,
-          400
-        );
-      }
-      scopedWarehouse = match;
+    const scopedWarehouse = store.warehouses.find((w) => w.id === data.warehouseId);
+    if (!scopedWarehouse) {
+      log.warn("stock count refused", { reason: "warehouse not in store", storeId: store.id, warehouseId: data.warehouseId });
+      return errorResponse(`That warehouse is not an active warehouse of ${store.name}`, 400);
     }
 
-    // Bin scope (R15): Validate bin and resolve its warehouse if not explicit
+    // Bin scope (R15): optional, and only inside the chosen warehouse. Before 1509 a bin from
+    // another store was accepted and its warehouse written under the wrong store.
     let scopedBin: { id: string; code: string; name: string; warehouseId: string; directions: string | null; floor: string | null; zone: string | null } | null = null;
     if (binId) {
       scopedBin = await prisma.bin.findUnique({
@@ -145,14 +155,9 @@ export async function POST(req: NextRequest) {
       });
       if (!scopedBin) return errorResponse("Bin not found", 400);
 
-      if (scopedWarehouse && scopedBin.warehouseId !== scopedWarehouse.id) {
-        return errorResponse(`Bin ${scopedBin.code} does not belong to warehouse ${scopedWarehouse.name}`, 400);
-      }
-      if (!scopedWarehouse) {
-        const binWarehouse = store.warehouses.find((w) => w.id === scopedBin!.warehouseId);
-        if (binWarehouse) {
-          scopedWarehouse = binWarehouse;
-        }
+      if (scopedBin.warehouseId !== scopedWarehouse.id) {
+        log.warn("stock count refused", { reason: "bin not in warehouse", binId, warehouseId: scopedWarehouse.id });
+        return errorResponse(`Bin ${scopedBin.code} is not in ${scopedWarehouse.name}`, 400);
       }
     }
 
@@ -220,9 +225,7 @@ export async function POST(req: NextRequest) {
       select: { id: true, currentStock: true, binId: true },
     });
 
-    const scopeQtyMap = scopedWarehouse
-      ? await getWarehouseQtyMap(productIds, scopedWarehouse.id)
-      : await getStoreQtyMap(productIds, store.id);
+    const scopeQtyMap = await getWarehouseQtyMap(productIds, scopedWarehouse.id);
 
     const now = new Date();
     const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -255,7 +258,7 @@ export async function POST(req: NextRequest) {
           assignedToId: data.assignedToId || user.id,
           binId: scopedBin?.id ?? null,
           storeId: store.id,
-          warehouseId: scopedWarehouse?.id ?? (scopedBin ? scopedBin.warehouseId : null),
+          warehouseId: scopedWarehouse.id,
           dueDate: new Date(data.dueDate),
           notes: data.notes,
           items: {
@@ -280,10 +283,8 @@ export async function POST(req: NextRequest) {
         entityRef: created.countNo,
         toValue: "PENDING",
         details: scopedBin
-          ? `${store.name} · Bin ${scopedBin.code} · ${products.length} products`
-          : scopedWarehouse
-          ? `${store.name} · ${scopedWarehouse.name} · ${products.length} products`
-          : `${store.name} · whole store (verify only) · ${products.length} products`,
+          ? `${store.name} · ${scopedWarehouse.name} · Bin ${scopedBin.code} · ${products.length} products`
+          : `${store.name} · ${scopedWarehouse.name} · ${products.length} products`,
         userId: user.id,
         userName: user.name,
       });
@@ -294,7 +295,8 @@ export async function POST(req: NextRequest) {
     log.info("stock count created", {
       countNo: stockCount.countNo,
       storeId: store.id,
-      warehouseId: scopedWarehouse?.id ?? null,
+      warehouseId: scopedWarehouse.id,
+      binId: scopedBin?.id ?? null,
       items: products.length,
       assignedToId: stockCount.assignedToId,
     });

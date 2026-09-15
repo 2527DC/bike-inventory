@@ -191,10 +191,18 @@ export const stockCountSchema = z.object({
   dueDate: z.string().min(1, "Due date is required"),
   notes: z.string().optional(),
   productIds: z.array(z.string()).optional(),
-  storeId: z.string().min(1, "Choose a store"),
-  /** Omit for a whole-store (verify-only) audit. Must belong to `storeId` — the route checks. */
-  warehouseId: z.string().min(1).optional(),
-  binId: z.string().optional(),
+  // `error` on the base type as well as on `.min`: `.min`'s message only covers an EMPTY
+  // string. A MISSING field fails the type check first and fell through to zod's default
+  // ("Invalid input: expected string, received undefined"), which is what reached the screen.
+  storeId: z.string({ error: "Choose a store" }).min(1, "Choose a store"),
+  /**
+   * Required since plan 1509-stock-count-scope-by-warehouse (D1): every new count is one
+   * warehouse — a Floor or a Godown — of `storeId`, which the route checks. Whole-store
+   * audits saved before then still exist and still approve; they just cannot be created.
+   */
+  warehouseId: z.string({ error: "Choose a warehouse" }).min(1, "Choose a warehouse"),
+  /** Optional. Must be a bin inside `warehouseId` — the route checks. */
+  binId: z.string().min(1).optional(),
 });
 
 export const stockCountUpdateSchema = z.object({
