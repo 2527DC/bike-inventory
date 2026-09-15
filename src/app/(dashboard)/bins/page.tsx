@@ -33,6 +33,10 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useBinTracking } from "@/hooks/use-bin-tracking";
 import { formatDateTime } from "@/lib/utils";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("bins:page");
 
 interface Warehouse {
   id: string;
@@ -69,18 +73,6 @@ interface InventoryUnitDetail {
   frameNumber?: string | null;
   status: string;
   assembledBy?: { id: string; name: string } | null;
-  product: {
-    id: string;
-    sku: string;
-    name: string;
-    brand: { id: string; name: string };
-    category: { id: string; name: string };
-  };
-}
-
-interface BinStockDetail {
-  id: string;
-  quantity: number;
   product: {
     id: string;
     sku: string;
@@ -197,7 +189,6 @@ export default function BinsPage() {
   // Details Modal State
   const [binDetailsLoading, setBinDetailsLoading] = useState(false);
   const [detailedUnits, setDetailedUnits] = useState<InventoryUnitDetail[]>([]);
-  const [detailedStocks, setDetailedStocks] = useState<BinStockDetail[]>([]);
   const [detailedMovements, setDetailedMovements] = useState<MovementLog[]>([]);
 
   // Move Modal State
@@ -468,19 +459,20 @@ export default function BinsPage() {
   async function openBinDetail(bin: BinSummary) {
     setSelectedBinForDetail(bin);
     setBinDetailsLoading(true);
-    try {
-      const res = await fetch(`/api/bins/${bin.id}/inventory`);
-      const json = await res.json();
-      if (json.success) {
-        setDetailedUnits(json.data.units || []);
-        setDetailedStocks(json.data.binStocks || []);
-        setDetailedMovements(json.data.recentMovements || []);
-      }
-    } catch (err) {
-      console.error("Failed to fetch bin inventory", err);
-    } finally {
-      setBinDetailsLoading(false);
+    // The route still returns `binStocks`; the drawer no longer shows them as "loose parts"
+    // (plan 1509-assembly-queue-single-bin-and-product-assembly-level, R4). Every received
+    // product is a coded bicycle now, so the bin's contents ARE its units.
+    const { data, error } = await apiTry<{
+      units: InventoryUnitDetail[];
+      recentMovements: MovementLog[];
+    }>(`/api/bins/${bin.id}/inventory`);
+    if (error) {
+      log.error("bin inventory load failed", { binId: bin.id, message: error });
+    } else if (data) {
+      setDetailedUnits(data.units || []);
+      setDetailedMovements(data.recentMovements || []);
     }
+    setBinDetailsLoading(false);
   }
 
   // Create Bin
@@ -769,12 +761,22 @@ export default function BinsPage() {
 
   // Compute aggregate stats from filtered bins
   const totalUnits = filteredBins.reduce((acc, b) => acc + (b._count.units || 0), 0);
-  const totalLoose = filteredBins.reduce((acc, b) => acc + (b._count.binStocks || 0), 0);
   const assemblyBinsCount = filteredBins.filter((b) => b.isAssemblyArea).length;
+
+  // The bin drawer lists its bicycles grouped by product, with a count per product — the
+  // "items" view that replaced the Bicycles / Loose split (R4).
+  const unitsByProduct = useMemo(() => {
+    const groups = new Map<string, { product: InventoryUnitDetail["product"]; units: InventoryUnitDetail[] }>();
+    for (const u of detailedUnits) {
+      const g = groups.get(u.product.id);
+      if (g) g.units.push(u);
+      else groups.set(u.product.id, { product: u.product, units: [u] });
+    }
+    return Array.from(groups.values()).sort((a, b) => a.product.name.localeCompare(b.product.name));
+  }, [detailedUnits]);
 
   function renderBinCard(bin: BinSummary) {
     const hasCycles = (bin._count.units || 0) > 0;
-    const hasLoose = (bin._count.binStocks || 0) > 0;
 
     return (
       <Card
@@ -831,14 +833,6 @@ export default function BinsPage() {
                   {bin._count.units || 0}
                 </span>
                 <span className="text-[10px] text-slate-400">Cycles</span>
-              </div>
-
-              <div className="flex items-center gap-1 text-xs">
-                <Boxes className={`h-4 w-4 ${hasLoose ? "text-blue-600" : "text-slate-300"}`} />
-                <span className={`font-semibold ${hasLoose ? "text-blue-700 dark:text-blue-400" : "text-slate-400"}`}>
-                  {bin._count.binStocks || 0}
-                </span>
-                <span className="text-[10px] text-slate-400">Loose</span>
               </div>
             </div>
 
@@ -1084,7 +1078,7 @@ export default function BinsPage() {
       </div>
 
       {/* KPI Stats Banner */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
         <Card className="border-slate-200/80 bg-white/50 backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/50">
           <CardContent className="p-4">
             <div className="text-xs font-medium text-slate-500 dark:text-slate-400">Total Bins</div>
@@ -1114,14 +1108,8 @@ export default function BinsPage() {
             <div className="mt-1 text-xs text-emerald-700/70 dark:text-emerald-400/70">Coded units in bins</div>
           </CardContent>
         </Card>
-
-        <Card className="border-slate-200/80 bg-white/50 backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/50">
-          <CardContent className="p-4">
-            <div className="text-xs font-medium text-slate-500 dark:text-slate-400">Loose Parts Stock</div>
-            <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{totalLoose}</div>
-            <div className="mt-1 text-xs text-slate-400">Bulk products & spares</div>
-          </CardContent>
-        </Card>
+        {/* "Loose Parts Stock" is gone (R4): every received product is a coded bicycle, so the
+            count of distinct BinStock rows it showed double-counted the bicycles above. */}
       </div>
 
       {/* Directory View / Single Warehouse View */}
@@ -1888,89 +1876,72 @@ export default function BinsPage() {
                 <div className="py-12 text-center text-xs text-slate-400">Loading contents...</div>
               ) : (
                 <>
-                  {/* Coded Bicycles in this Bin */}
+                  {/* Items in this bin — its bicycles, grouped by product with a count (R4).
+                      The separate "Loose Items / Parts" list is gone: every received product
+                      is a coded bicycle (D1), so it only repeated these same bicycles. */}
                   <div>
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2 text-xs font-bold uppercase text-slate-900 dark:text-white">
                         <Bike className="h-4 w-4 text-emerald-600" />
-                        <span>Bicycles Shelved Here ({detailedUnits.length})</span>
+                        <span>Items in this bin ({detailedUnits.length})</span>
                       </div>
                     </div>
 
                     {detailedUnits.length === 0 ? (
                       <div className="mt-2 rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-400 dark:border-slate-800">
-                        No bicycles currently in this bin.
+                        No items currently in this bin.
                       </div>
                     ) : (
-                      <div className="mt-3 divide-y divide-slate-100 rounded-xl border border-slate-200 bg-slate-50/50 dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900/40">
-                        {detailedUnits.map((u) => (
-                          <div key={u.id} className="flex items-center justify-between p-3 text-xs">
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
-                                  {u.unitCode}
-                                </span>
-                                <Badge variant="default" className="text-[10px]">
-                                  {u.status}
-                                </Badge>
-                                {u.frameNumber && (
-                                  <span className="font-mono text-[10px] text-slate-400">
-                                    Frame: {u.frameNumber}
-                                  </span>
-                                )}
+                      <div className="mt-3 space-y-3">
+                        {unitsByProduct.map((g) => (
+                          <div key={g.product.id} className="rounded-xl border border-slate-200 bg-slate-50/50 dark:border-slate-800 dark:bg-slate-900/40">
+                            <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-2 dark:border-slate-800">
+                              <div className="min-w-0">
+                                <div className="truncate text-xs font-semibold text-slate-800 dark:text-slate-200">
+                                  {g.product.name}
+                                </div>
+                                <div className="font-mono text-[11px] text-slate-400">
+                                  {g.product.sku} · {g.product.brand.name} · {g.product.category.name}
+                                </div>
                               </div>
-                              <div className="mt-1 font-medium text-slate-800 dark:text-slate-200">
-                                {u.product.name}
-                              </div>
-                              <div className="text-[11px] text-slate-400">
-                                {u.product.brand.name} · {u.product.category.name}
-                                {u.assembledBy && ` · Built by ${u.assembledBy.name}`}
-                              </div>
+                              <Badge variant="default" className="shrink-0 text-[11px]">
+                                ×{g.units.length}
+                              </Badge>
                             </div>
+                            <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                              {g.units.map((u) => (
+                                <div key={u.id} className="flex items-center justify-between p-3 text-xs">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                                      {u.unitCode}
+                                    </span>
+                                    <Badge variant="default" className="text-[10px]">
+                                      {u.status}
+                                    </Badge>
+                                    {u.frameNumber && (
+                                      <span className="font-mono text-[10px] text-slate-400">
+                                        Frame: {u.frameNumber}
+                                      </span>
+                                    )}
+                                    {u.assembledBy && (
+                                      <span className="text-[11px] text-slate-400">Built by {u.assembledBy.name}</span>
+                                    )}
+                                  </div>
 
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => {
-                                setMoveUnitId(u.id);
-                                setMoveFromBinId(selectedBinForDetail.id);
-                                setShowMoveModal(true);
-                              }}
-                              className="h-7 text-xs text-indigo-600 hover:bg-indigo-50"
-                            >
-                              Relocate
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Loose Stocks */}
-                  <div>
-                    <div className="flex items-center gap-2 text-xs font-bold uppercase text-slate-900 dark:text-white">
-                      <Boxes className="h-4 w-4 text-blue-600" />
-                      <span>Loose Items / Parts ({detailedStocks.length})</span>
-                    </div>
-
-                    {detailedStocks.length === 0 ? (
-                      <div className="mt-2 rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-400 dark:border-slate-800">
-                        No loose items or parts in this bin.
-                      </div>
-                    ) : (
-                      <div className="mt-3 divide-y divide-slate-100 rounded-xl border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
-                        {detailedStocks.map((s) => (
-                          <div key={s.id} className="flex items-center justify-between p-3 text-xs">
-                            <div>
-                              <div className="font-medium text-slate-800 dark:text-slate-200">
-                                {s.product.name}
-                              </div>
-                              <div className="font-mono text-[11px] text-slate-400">
-                                {s.product.sku} · {s.product.brand.name}
-                              </div>
-                            </div>
-                            <div className="text-sm font-bold text-blue-600 dark:text-blue-400">
-                              {s.quantity} units
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => {
+                                      setMoveUnitId(u.id);
+                                      setMoveFromBinId(selectedBinForDetail.id);
+                                      setShowMoveModal(true);
+                                    }}
+                                    className="h-7 text-xs text-indigo-600 hover:bg-indigo-50"
+                                  >
+                                    Relocate
+                                  </Button>
+                                </div>
+                              ))}
                             </div>
                           </div>
                         ))}

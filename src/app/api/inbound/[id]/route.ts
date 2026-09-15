@@ -165,7 +165,7 @@ export async function PUT(
         where: { id: lineItemId },
         include: {
           shipment: { include: { brand: { select: { name: true } } } },
-          product: { select: { id: true, categoryId: true, tags: true } },
+          product: { select: { id: true } },
           preBooking: true,
         },
       });
@@ -184,14 +184,55 @@ export async function PUT(
 
       const resolved = await resolveWarehouse(warehouseId);
       if ("error" in resolved) return errorResponse(resolved.error, 400);
-      const warehouse = resolved.warehouse;
 
+      // ── ONE BIN PER LINE (plan 1509-assembly-queue-single-bin-and-product-assembly-level, D2) ──
+      //
+      // Replaces `binAllocations` — a per-UNIT list of bins. The screen let one line be split
+      // across several bins, but only the first was ever honoured: Product.binId, every
+      // InventoryUnit and the whole BinStock increment went to it, so the other bins got an
+      // InventoryTransaction and nothing on the shelf. A line now names exactly one bin.
+      //
+      // Read off the raw body because `inboundReceiveLineSchema` (validations.ts) carries no
+      // bin field; the string check below is its validation. Ignored when bin tracking is off,
+      // where stock is held per warehouse only and the line lands in "Unmatched Inbound".
       const binTrackingEnabled = await isBinTrackingEnabled();
-      const binAllocations: Array<{ binId: string; qty: number }> = body.binAllocations || (body.binId ? [{ binId: body.binId, qty }] : []);
-      if (binTrackingEnabled && binAllocations.length === 0) {
-        return errorResponse("Bin assignment is required when marking items delivered", 400);
+      const binId =
+        binTrackingEnabled && typeof body.binId === "string" && body.binId.trim() ? body.binId.trim() : null;
+      if (binTrackingEnabled && !binId) {
+        return errorResponse("Choose the bin this line goes into", 400);
       }
-      const primaryBinId = binAllocations[0]?.binId ?? null;
+
+      // The bin decides the building. With bin tracking on the screen has no warehouse picker
+      // and sends the default godown, so a Floor bin would otherwise leave its units recorded
+      // in a warehouse that is not the one they are shelved in.
+      let warehouse: { id: string; name: string } = resolved.warehouse;
+      if (binId) {
+        const bin = await prisma.bin.findUnique({
+          where: { id: binId },
+          select: {
+            id: true,
+            code: true,
+            isActive: true,
+            warehouse: { select: { id: true, name: true, isActive: true } },
+          },
+        });
+        if (!bin || !bin.isActive) {
+          return errorResponse("That bin does not exist or is not active — pick another", 400);
+        }
+        if (!bin.warehouse.isActive) {
+          return errorResponse(`${bin.warehouse.name} is not active — pick a bin in an active warehouse`, 400);
+        }
+        if (bin.warehouse.id !== warehouse.id) {
+          log.info("receive warehouse taken from bin", {
+            shipmentId: id,
+            lineItemId,
+            binId,
+            sentWarehouseId: warehouse.id,
+            binWarehouseId: bin.warehouse.id,
+          });
+          warehouse = { id: bin.warehouse.id, name: bin.warehouse.name };
+        }
+      }
 
       const outcome = await prisma.$transaction(async (tx) => {
         // ── THE IDEMPOTENT CLAIM ──
@@ -202,7 +243,7 @@ export async function PUT(
         // that impossible: exactly one caller gets count === 1.
         const claim = await tx.inboundLineItem.updateMany({
           where: { id: lineItemId, isDelivered: false },
-          data: { isDelivered: true, deliveredQty: qty, ...(primaryBinId ? { binId: primaryBinId } : {}) },
+          data: { isDelivered: true, deliveredQty: qty, ...(binId ? { binId } : {}) },
         });
         if (claim.count === 0) {
           return { updated: false, alreadyReceived: true, shipmentDelivered: false, snapshot: null };
@@ -221,27 +262,25 @@ export async function PUT(
           }
 
           let runningStock = matchedProduct.currentStock;
-          if (binTrackingEnabled && binAllocations.length) {
-            // Create one inventory transaction per bin allocation
-            for (const alloc of binAllocations) {
-              const previousStock = runningStock;
-              runningStock += alloc.qty;
-              await tx.inventoryTransaction.create({
-                data: {
-                  type: "INWARD",
-                  productId: matchedProduct.id,
-                  quantity: alloc.qty,
-                  previousStock,
-                  newStock: runningStock,
-                  referenceNo: lineItem.shipment.shipmentNo,
-                  notes: `[INBOUND] Brand: ${lineItem.shipment.brand.name} | Bill: ${lineItem.shipment.billNo} | ${lineItem.productName} x${alloc.qty} → Bin: ${alloc.binId.slice(-6)}`,
-                  userId: user.id,
-                },
-              });
-            }
+          if (binId) {
+            // One line, one bin, one transaction (D2).
+            const previousStock = runningStock;
+            runningStock += qty;
+            await tx.inventoryTransaction.create({
+              data: {
+                type: "INWARD",
+                productId: matchedProduct.id,
+                quantity: qty,
+                previousStock,
+                newStock: runningStock,
+                referenceNo: lineItem.shipment.shipmentNo,
+                notes: `[INBOUND] Brand: ${lineItem.shipment.brand.name} | Bill: ${lineItem.shipment.billNo} | ${lineItem.productName} x${qty} → Bin: ${binId.slice(-6)}`,
+                userId: user.id,
+              },
+            });
             await tx.product.update({
               where: { id: matchedProduct.id },
-              data: { currentStock: runningStock, binId: primaryBinId },
+              data: { currentStock: runningStock, binId },
             });
           } else {
             // Location mode: add qty to the chosen location; currentStock recomputes as the sum.
@@ -262,40 +301,35 @@ export async function PUT(
             await adjustWarehouseQty(tx, matchedProduct.id, warehouse.id, qty);
           }
 
-          // ── Mint company-wide unit codes U-xxxxxx for bicycles (R2, R6, R19) ──
-          const shipmentCat = existing.categoryId
-            ? await tx.category.findUnique({ where: { id: existing.categoryId }, select: { name: true } })
-            : null;
-          const productCat = matchedProduct.categoryId
-            ? await tx.category.findUnique({ where: { id: matchedProduct.categoryId }, select: { name: true } })
-            : null;
-          const combinedCatName = (productCat?.name || shipmentCat?.name || "").toLowerCase();
-          const isCycle =
-            combinedCatName.includes("cycle") ||
-            combinedCatName.includes("bike") ||
-            matchedProduct.tags.some((t) => t.toLowerCase().includes("bicycle") || t.toLowerCase().includes("cycle"));
-
-          if (isCycle) {
-            for (let i = 0; i < qty; i++) {
-              const unitCode = await nextUnitCode(tx);
-              await tx.inventoryUnit.create({
-                data: {
-                  unitCode,
-                  productId: matchedProduct.id,
-                  warehouseId: warehouse.id,
-                  binId: primaryBinId,
-                  status: primaryBinId ? "PUT_AWAY" : "RECEIVED",
-                  inboundShipmentId: id,
-                },
-              });
-            }
+          // ── Mint company-wide unit codes U-xxxxxx — for EVERY received product (R2, R6, R19) ──
+          //
+          // Everything this business inbounds is a bicycle (plan 1509-assembly-queue…, D1). The
+          // old test — category name containing "cycle"/"bike", or a "bicycle"/"cycle" tag —
+          // left any other product as bulk stock with no unit rows, so it never reached
+          // /assembly and showed on /bins as "loose parts". Same in both bin-tracking modes:
+          // with a bin the units are PUT_AWAY there, without one they are RECEIVED and wait
+          // in "Unmatched Inbound" for a bin.
+          for (let i = 0; i < qty; i++) {
+            const unitCode = await nextUnitCode(tx);
+            await tx.inventoryUnit.create({
+              data: {
+                unitCode,
+                productId: matchedProduct.id,
+                warehouseId: warehouse.id,
+                binId,
+                status: binId ? "PUT_AWAY" : "RECEIVED",
+                inboundShipmentId: id,
+              },
+            });
           }
 
-          if (primaryBinId) {
+          if (binId) {
+            // BinStock stays: stock counts and transfers read it (plan §5). Only the "loose"
+            // presentation of it on /bins went.
             await tx.binStock.upsert({
-              where: { binId_productId: { binId: primaryBinId, productId: matchedProduct.id } },
+              where: { binId_productId: { binId, productId: matchedProduct.id } },
               update: { quantity: { increment: qty } },
-              create: { binId: primaryBinId, productId: matchedProduct.id, quantity: qty },
+              create: { binId, productId: matchedProduct.id, quantity: qty },
             });
             await tx.binMovementLog.create({
               data: {
@@ -303,7 +337,7 @@ export async function PUT(
                 productId: matchedProduct.id,
                 quantity: qty,
                 fromBinId: null,
-                toBinId: primaryBinId,
+                toBinId: binId,
                 reason: "Inbound receiving put-away",
                 movedById: user.id,
               },
@@ -402,6 +436,8 @@ export async function PUT(
         lineItemId,
         qty,
         warehouseId: warehouse.id,
+        binId,
+        unitsCreated: outcome.updated ? qty : 0,
         alreadyReceived: outcome.alreadyReceived,
         shipmentDelivered: outcome.shipmentDelivered,
       });
