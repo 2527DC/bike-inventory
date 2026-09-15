@@ -38,9 +38,6 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         expectedDate: true,
         notes: true,
         deliveryAddress: true,
-        subtotal: true,
-        gstTotal: true,
-        grandTotal: true,
         approvedAt: true,
         approvedBy: { select: { name: true } },
         vendor: {
@@ -61,12 +58,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
           select: {
             // The description is the line's own `name` (plan 0909, D2): a line raised from the
             // vendor's sheet has no product at all. Nothing is read from the product — the PDF
-            // prints no SKU or HSN since plan 1509 (R6).
+            // prints no SKU or HSN since plan 1509 (R6) — and no price: rate, GST and amount
+            // left the document with plan 1509-po-product-and-quantity-only (R1), on every PO.
             name: true,
             quantity: true,
-            unitPrice: true,
-            gstRate: true,
-            amount: true,
           },
           orderBy: { createdAt: "asc" },
         },
@@ -77,13 +72,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
     const company = await loadCompanyIdentity();
 
-    const items: PoPdfLine[] = po.items.map((it) => ({
-      name: it.name,
-      quantity: it.quantity,
-      unitPrice: it.unitPrice,
-      gstRate: it.gstRate,
-      amount: it.amount,
-    }));
+    const items: PoPdfLine[] = po.items.map((it) => ({ name: it.name, quantity: it.quantity }));
 
     const pdf = await renderPurchaseOrderPdf(
       {
@@ -92,9 +81,6 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         expectedDate: po.expectedDate,
         notes: po.notes,
         deliveryAddress: po.deliveryAddress,
-        subtotal: po.subtotal,
-        gstTotal: po.gstTotal,
-        grandTotal: po.grandTotal,
         approvedByName: po.approvedBy?.name ?? null,
         approvedAt: po.approvedAt,
         vendor: {

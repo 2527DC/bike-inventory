@@ -16,17 +16,15 @@ import type { CompanyIdentity } from "./company";
 const log = createLogger("purchase-orders:pdf");
 
 /**
- * One printed line. SKU and HSN were removed from the document on the owner's instruction,
- * 15 Sep 2026 (plan 1509, R6).
+ * One printed line: the product and the quantity, nothing else. SKU and HSN were removed from
+ * the document on the owner's instruction, 15 Sep 2026 (plan 1509, R6); rate, GST % and the
+ * line amount the same day (plan 1509-po-product-and-quantity-only, R1). The stored price
+ * columns still exist on the row — this document simply never prints them, on any PO (Q8).
  */
 export interface PoPdfLine {
   /** `PurchaseOrderItem.name` — the description as ordered, never read from the product. */
   name: string;
   quantity: number;
-  unitPrice: number;
-  gstRate: number;
-  /** The STORED amount. Never recomputed here — see the note in renderPurchaseOrderPdf. */
-  amount: number;
 }
 
 export interface PoPdfInput {
@@ -35,9 +33,6 @@ export interface PoPdfInput {
   expectedDate: Date | null;
   notes: string | null;
   deliveryAddress: string | null;
-  subtotal: number;
-  gstTotal: number;
-  grandTotal: number;
   approvedByName: string | null;
   approvedAt: Date | null;
   vendor: {
@@ -52,28 +47,6 @@ export interface PoPdfInput {
     contactName: string | null;
   };
   items: PoPdfLine[];
-}
-
-/**
- * "Rs. 1,23,456.00".
- *
- * NOT the ₹ sign, and not `style: "currency"`. jsPDF's fourteen built-in fonts are WinAnsi
- * (cp1252) encoded and U+20B9 has no slot in that table, so a ₹ renders as a wrong glyph or
- * nothing at all. Embedding a Unicode TTF would fix it and add roughly 300 KB to every PDF;
- * the only font asset in this repo is a woff2, which jsPDF cannot embed anyway.
- *
- * The existing client-side exporter has this bug today — `purchase-orders/page.tsx`,
- * `bills/page.tsx` and `vendor-ledger/page.tsx` all feed literal ₹ into `exportToPDF`.
- *
- * Two decimals, unlike the app's `formatINR` which uses maximumFractionDigits: 0. A purchase
- * order is a financial document a vendor reconciles against; rounding to whole rupees on the
- * page while the database holds paise is how a ₹0.50 disagreement becomes an argument.
- */
-function rs(amount: number): string {
-  return `Rs. ${new Intl.NumberFormat("en-IN", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(amount)}`;
 }
 
 function shortDate(d: Date | null): string {
@@ -93,14 +66,6 @@ function shortDate(d: Date | null): string {
  *
  * `doc.output("arraybuffer")`, never `doc.save()`. On the node build `save` calls
  * `require("fs")` and writes to the server's filesystem, which is not what a route wants.
- *
- * ─── THE AMOUNTS ARE READ, NOT RECOMPUTED ────────────────────────────────────────────────
- *
- * `item.amount`, `subtotal`, `gstTotal` and `grandTotal` all come from the stored row. A
- * document sent to a vendor must say what the purchase order says; recomputing here would let
- * a rounding difference, or a later change to how totals are derived, produce a PDF that
- * disagrees with the record it claims to represent — and the vendor would be holding the
- * version nobody can reproduce.
  */
 export async function renderPurchaseOrderPdf(
   po: PoPdfInput,
@@ -192,25 +157,17 @@ export async function renderPurchaseOrderPdf(
   autoTable(doc, {
     startY: y,
     margin: { left: M, right: M },
-    head: [["#", "Description", "Qty", "Rate", "GST %", "Amount"]],
-    body: po.items.map((it, i) => [
-      String(i + 1),
-      it.name,
-      String(it.quantity),
-      rs(it.unitPrice),
-      `${it.gstRate}%`,
-      rs(it.amount),
-    ]),
+    // Product and quantity only (plan 1509-po-product-and-quantity-only, R1). No rate, GST %
+    // or amount column, and no totals block after the table.
+    head: [["#", "Product", "Qty"]],
+    body: po.items.map((it, i) => [String(i + 1), it.name, String(it.quantity)]),
     styles: { fontSize: 8, cellPadding: 1.8, textColor: 40, lineColor: 225, lineWidth: 0.1 },
     headStyles: { fillColor: [30, 41, 59], textColor: 255, fontStyle: "bold", fontSize: 8 },
     alternateRowStyles: { fillColor: [248, 250, 252] },
-    // Column 1 (Description) has no fixed width, so it takes the space SKU and HSN freed.
+    // Column 1 (Product) has no fixed width, so it takes everything the other two leave.
     columnStyles: {
       0: { cellWidth: 8, halign: "right" },
-      2: { cellWidth: 12, halign: "right" },
-      3: { cellWidth: 24, halign: "right" },
-      4: { cellWidth: 14, halign: "right" },
-      5: { cellWidth: 26, halign: "right" },
+      2: { cellWidth: 16, halign: "right" },
     },
   });
 
@@ -218,31 +175,10 @@ export async function renderPurchaseOrderPdf(
   // is not picked up under this project's moduleResolution.
   y = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y) + 8;
 
-  // ─── totals, right-aligned ──────────────────────────────────────────────────────────────
-  const labelX = rightX - 40;
-  doc.setFontSize(9);
-  doc.setTextColor(90);
-  doc.text("Subtotal", labelX, y, { align: "right" });
-  doc.setTextColor(0);
-  doc.text(rs(po.subtotal), rightX, y, { align: "right" });
-
-  doc.setTextColor(90);
-  doc.text("GST", labelX, y + 5, { align: "right" });
-  doc.setTextColor(0);
-  doc.text(rs(po.gstTotal), rightX, y + 5, { align: "right" });
-
-  doc.setDrawColor(200);
-  doc.line(labelX - 20, y + 8, rightX, y + 8);
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
-  doc.text("Grand Total", labelX, y + 14, { align: "right" });
-  doc.text(rs(po.grandTotal), rightX, y + 14, { align: "right" });
-  doc.setFont("helvetica", "normal");
-
-  y += 24;
-
   // ─── delivery address, notes, approval ──────────────────────────────────────────────────
+  // The font is set explicitly: the totals block used to leave it at normal weight, and this
+  // section must not depend on whatever state the table left behind.
+  doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   for (const [label, value] of [
     ["Deliver to", po.deliveryAddress],
