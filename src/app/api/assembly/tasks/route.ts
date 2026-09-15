@@ -14,11 +14,13 @@ export async function GET(req: NextRequest) {
     const warehouseId = searchParams.get("warehouseId");
     const status = searchParams.get("status");
     const level = searchParams.get("level") as AssemblyLevel | null;
+    const mine = searchParams.get("mine") === "1";
 
     const isSupervisor = await userCan(user.id, "assembly", "approve");
+    const returnSupervisorData = isSupervisor && !mine;
 
     const where: Record<string, unknown> = {};
-    if (!isSupervisor) {
+    if (!isSupervisor || mine) {
       where.assignedToId = user.id;
     }
     if (warehouseId) where.warehouseId = warehouseId;
@@ -49,8 +51,8 @@ export async function GET(req: NextRequest) {
         },
         orderBy: [{ status: "asc" }, { createdAt: "desc" }],
       }),
-      // For supervisors: also return unassembled bicycles available to be assigned
-      isSupervisor
+      // For supervisors: also return unassembled bicycles available to be assigned (unless mine=1)
+      returnSupervisorData
         ? prisma.inventoryUnit.findMany({
             where: {
               ...(warehouseId ? { warehouseId } : {}),
@@ -76,7 +78,7 @@ export async function GET(req: NextRequest) {
           })
         : Promise.resolve([]),
       // Active mechanics list for assignment
-      isSupervisor
+      returnSupervisorData
         ? prisma.user.findMany({
             where: { isActive: true },
             select: { id: true, name: true, email: true },

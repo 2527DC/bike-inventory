@@ -6,6 +6,7 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { createLogger } from "@/lib/logger";
 import { poExtractionSelectSchema } from "@/lib/validations";
+import { PRICED_ROW } from "@/lib/po-extraction/store";
 
 const log = createLogger("purchase-orders:extract");
 
@@ -35,15 +36,17 @@ export async function POST(req: NextRequest, { params }: Ctx) {
 
     const { updated, selectedCount } = await prisma.$transaction(async (tx) => {
       const res = await tx.poExtractionItem.updateMany({
-        where: { extractionId: id, id: { in: itemIds } },
+        // Ticking skips a row with no price in the sheet (plan 1509, R5); unticking clears any.
+        where: { extractionId: id, id: { in: itemIds }, ...(selected ? PRICED_ROW : {}) },
         data: { selected },
       });
       const count = await tx.poExtractionItem.count({ where: { extractionId: id, selected: true } });
       return { updated: res.count, selectedCount: count };
     });
 
-    log.info("extraction rows selected", { extractionId: id, requested: itemIds.length, updated, selected, selectedCount });
-    return successResponse({ selectedCount });
+    const skipped = itemIds.length - updated;
+    log.info("extraction rows selected", { extractionId: id, requested: itemIds.length, updated, skipped, selected, selectedCount });
+    return successResponse({ selectedCount, skipped });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
     log.error("extraction select failed", { message: error instanceof Error ? error.message : String(error) });

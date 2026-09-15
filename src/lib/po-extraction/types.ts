@@ -1,8 +1,9 @@
 /**
  * The shape a sheet extraction takes on the wire — plan 0909-po-sheet-ai-extraction-and-
  * catalogue-free-lines, §3.2–3.5. Rewritten 9 Sep 2026 from the quotation-import shape:
- * there is no product match any more (D2) — a row is what the sheet said, and only its item
- * name and quantity travel to the PO line.
+ * there is no product match any more (D2) — a row is what the sheet said. Its item name and
+ * quantity travel to the PO line, and since plan 1509-po-sheet-mrp-price (15 Sep 2026) so does
+ * its unit price: the MRP, else the dealer Price.
  *
  * Types only, so the screen can import them without dragging Prisma into the client bundle.
  * `store.ts` builds these on the server; `sheet-review.tsx` and `columns-step.tsx` render them.
@@ -77,15 +78,26 @@ export interface SheetColumnsConfirm {
   columns: Array<{ index: number; role: ColumnRole }>;
 }
 
+/** Which sheet column a line's unit price was read from (plan 1509). */
+export type PriceSource = "mrp" | "price";
+
 export interface ExtractionItemView {
   id: string;
   sheetName: string | null;
   /** 0-based row index in its sheet, for "row 42 of Pargaon WH". */
   rowIndex: number | null;
-  /** The item name — the only text that reaches the PO line (D2). */
+  /** The item name — the PO line's description. */
   name: string;
   /** The sheet's quantity column when it has one — prefills the line's Qty (D2). */
   quantity: number | null;
+  /**
+   * The line's unit price — the row's MRP, else its dealer Price (plan 1509-po-sheet-mrp-price,
+   * D1/Q1). Locked on the line. Null means the sheet gave neither, and the row cannot be
+   * selected (R5).
+   */
+  unitPrice: number | null;
+  /** Which column `unitPrice` came from, so the line can say so. Null with `unitPrice`. */
+  priceSource: PriceSource | null;
   /** The item-name cell's fill, six hex digits, or null. */
   rowColor: string | null;
   /** The legend label for rowColor, when the sheet has a legend that names it. */
@@ -124,12 +136,18 @@ export interface ExtractionView {
   items: ExtractionItemView[];
 }
 
-/** The line the review hands to the vendor section — Qty, price and GST are typed there (R8). */
+/**
+ * The line the review hands to the vendor section. The unit price is the sheet's — locked, and
+ * re-read by the server from `extractionItemId`; Qty and GST stay editable (plan 1509, R2–R4).
+ */
 export interface SheetLine {
   /** The extraction item id; the React key and the dedupe key. */
   key: string;
+  /** The same id, sent with the PO so the server takes the price from the stored row. */
+  extractionItemId: string;
   name: string;
   quantity: number;
   unitPrice: number;
+  priceSource: PriceSource | null;
   gstRate: number;
 }

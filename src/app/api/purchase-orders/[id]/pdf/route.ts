@@ -60,16 +60,13 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         items: {
           select: {
             // The description is the line's own `name` (plan 0909, D2): a line raised from the
-            // vendor's sheet has no product at all. SKU and HSN come from the product only when
-            // the line is linked; hsnCode lives on Product, NOT on PurchaseOrderItem — the
-            // column that does not exist there is exactly what made the old brand-stock PO
-            // generator (deleted 9 Sep 2026) throw for months.
+            // vendor's sheet has no product at all. Nothing is read from the product — the PDF
+            // prints no SKU or HSN since plan 1509 (R6).
             name: true,
             quantity: true,
             unitPrice: true,
             gstRate: true,
             amount: true,
-            product: { select: { sku: true, hsnCode: true } },
           },
           orderBy: { createdAt: "asc" },
         },
@@ -81,9 +78,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const company = await loadCompanyIdentity();
 
     const items: PoPdfLine[] = po.items.map((it) => ({
-      sku: it.product?.sku ?? null,
       name: it.name,
-      hsnCode: it.product?.hsnCode ?? null,
       quantity: it.quantity,
       unitPrice: it.unitPrice,
       gstRate: it.gstRate,

@@ -97,9 +97,10 @@ const normName = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
  * ─── WHERE THE LINES COME FROM (plan 0909-po-sheet-ai-extraction, R3) ────────────────────
  *
  * The manual section takes its lines from the vendor's uploaded sheet and nowhere else. There
- * is no product search on this screen: a line is the item name the sheet said, with Qty, Unit
- * Price and GST % typed here. The only lines that carry a catalogue product are the ones
- * handed over from /reorder, which are products by definition.
+ * is no product search on this screen: a line is the item name the sheet said and its MRP as
+ * the unit price — locked, and re-read by the server (plan 1509-po-sheet-mrp-price) — with Qty
+ * and GST % editable here. The only lines that carry a catalogue product are the ones handed
+ * over from /reorder, which are products by definition.
  */
 export default function NewPurchaseOrderPage() {
   const router = useRouter();
@@ -236,7 +237,7 @@ export default function NewPurchaseOrderPage() {
 
   /**
    * The ticked review rows become the manual section's lines (R8). Merged, not replaced: a
-   * line already on the section keeps the qty and rate somebody typed, so a second "Use
+   * line already on the section keeps the qty and GST somebody typed, so a second "Use
    * selected" adds the newly ticked rows without undoing edits to the first batch. Deduped
    * on `key` — the extraction item id — so a row used twice is one line.
    */
@@ -249,7 +250,15 @@ export default function NewPurchaseOrderPage() {
     for (const l of lines) {
       if (have.has(l.key) || seen.has(l.key)) continue;
       seen.add(l.key);
-      fresh.push({ key: l.key, name: l.name, quantity: l.quantity, unitPrice: l.unitPrice, gstRate: l.gstRate });
+      fresh.push({
+        key: l.key,
+        name: l.name,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+        gstRate: l.gstRate,
+        extractionItemId: l.extractionItemId,
+        priceSource: l.priceSource,
+      });
     }
     log.debug("selected rows used", { offered: lines.length, added: fresh.length, alreadyPresent: lines.length - fresh.length });
     patch(MANUAL_KEY, { items: [...manual.items, ...fresh] });
@@ -276,13 +285,16 @@ export default function NewPurchaseOrderPage() {
             // The open extraction, if this order came out of one: the server deletes it (and
             // the uploaded file) once the PO exists — nothing from the upload outlives it (R9).
             ...(key === MANUAL_KEY && extraction && extraction.vendorId === s.vendorId ? { extractionId: extraction.id } : {}),
-            // A line is a name plus what was typed. productId travels only on /reorder lines.
-            items: s.items.map(({ name, quantity, unitPrice, gstRate, productId }) => ({
+            // A sheet line's rate is re-read on the server from extractionItemId (plan 1509,
+            // Q2) — the unitPrice sent here is not trusted for it. productId travels only on
+            // /reorder lines.
+            items: s.items.map(({ name, quantity, unitPrice, gstRate, productId, extractionItemId }) => ({
               name,
               quantity,
               unitPrice,
               gstRate,
               ...(productId ? { productId } : {}),
+              ...(extractionItemId ? { extractionItemId } : {}),
             })),
           },
         }

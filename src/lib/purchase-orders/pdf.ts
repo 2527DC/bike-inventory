@@ -15,13 +15,13 @@ import type { CompanyIdentity } from "./company";
 
 const log = createLogger("purchase-orders:pdf");
 
+/**
+ * One printed line. SKU and HSN were removed from the document on the owner's instruction,
+ * 15 Sep 2026 (plan 1509, R6).
+ */
 export interface PoPdfLine {
-  /** The linked product's SKU, or null for a line raised from the vendor's sheet (plan 0909, D2). */
-  sku: string | null;
   /** `PurchaseOrderItem.name` — the description as ordered, never read from the product. */
   name: string;
-  /** The linked product's HSN, or null when the line has no product. Prints as "—". */
-  hsnCode: string | null;
   quantity: number;
   unitPrice: number;
   gstRate: number;
@@ -192,12 +192,10 @@ export async function renderPurchaseOrderPdf(
   autoTable(doc, {
     startY: y,
     margin: { left: M, right: M },
-    head: [["#", "SKU", "Description", "HSN", "Qty", "Rate", "GST %", "Amount"]],
+    head: [["#", "Description", "Qty", "Rate", "GST %", "Amount"]],
     body: po.items.map((it, i) => [
       String(i + 1),
-      it.sku ?? "—",
       it.name,
-      it.hsnCode ?? "—",
       String(it.quantity),
       rs(it.unitPrice),
       `${it.gstRate}%`,
@@ -206,14 +204,13 @@ export async function renderPurchaseOrderPdf(
     styles: { fontSize: 8, cellPadding: 1.8, textColor: 40, lineColor: 225, lineWidth: 0.1 },
     headStyles: { fillColor: [30, 41, 59], textColor: 255, fontStyle: "bold", fontSize: 8 },
     alternateRowStyles: { fillColor: [248, 250, 252] },
+    // Column 1 (Description) has no fixed width, so it takes the space SKU and HSN freed.
     columnStyles: {
       0: { cellWidth: 8, halign: "right" },
-      1: { cellWidth: 24 },
-      3: { cellWidth: 16 },
-      4: { cellWidth: 12, halign: "right" },
-      5: { cellWidth: 24, halign: "right" },
-      6: { cellWidth: 14, halign: "right" },
-      7: { cellWidth: 26, halign: "right" },
+      2: { cellWidth: 12, halign: "right" },
+      3: { cellWidth: 24, halign: "right" },
+      4: { cellWidth: 14, halign: "right" },
+      5: { cellWidth: 26, halign: "right" },
     },
   });
 

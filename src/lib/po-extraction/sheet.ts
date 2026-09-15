@@ -56,6 +56,10 @@ export interface ExtractedRow {
   rowIndex: number;
   name: string;
   quantity: number | null;
+  /** The confirmed Price column, parsed; null when there is none or the cell is not a price. */
+  price: number | null;
+  /** The confirmed MRP column, parsed — the line's unit price when present (plan 1509, D1). */
+  mrp: number | null;
   /** The item-name cell's solid fill, six upper-case hex digits, or null (none, or white). */
   rowColor: string | null;
   /** Every column whose confirmed role is not `ignore`, in sheet order. */
@@ -261,7 +265,9 @@ export async function proposeColumns(
         prompt,
         jsonSchema: COLUMNS_SCHEMA,
         effort: "low",
-        maxTokens: 2000,
+        // A ceiling, not spend. Thinking models draw their reasoning from this budget: at 2000,
+        // Gemini spent 1,923 on thoughts and cut the JSON off after 63.
+        maxTokens: 8000,
       });
     } catch (error) {
       log.error("column proposal failed", { sheet: name, kind: aiErrorKind(error) });
@@ -325,6 +331,24 @@ function parseQuantity(text: string): number | null {
   return q > 0 ? q : null;
 }
 
+/**
+ * A price cell → a positive number to the paisa, or null (plan 1509). Strips what Indian price
+ * lists wrap a number in — `₹`, `Rs.`, `INR`, a trailing `/-`, thousands commas — and refuses
+ * anything that is still not a plain number: "On request", "-", "0" and "" are all "no price",
+ * which makes the row unselectable rather than a ₹0 line (R5).
+ */
+export function parsePrice(text: string): number | null {
+  if (!text) return null;
+  const cleaned = text
+    .trim()
+    .replace(/^(?:₹|rs\.?|inr)\s*/i, "")
+    .replace(/\/-$/, "")
+    .replace(/[,\s]/g, "");
+  if (!/^\d+(?:\.\d+)?$/.test(cleaned)) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
+}
+
 function isTotalsRow(firstCell: string, itemCell: string, hint: string | null): boolean {
   const first = firstCell.toUpperCase();
   const item = itemCell.toUpperCase();
@@ -365,6 +389,11 @@ export function extractRows(
     for (const c of conf.columns) if (Number.isInteger(c.index) && c.index >= 0 && c.index < sheet.width) roleAt.set(c.index, c.role);
     const nameCol = [...roleAt.entries()].find(([, role]) => role === "itemName")?.[0];
     const qtyCol = [...roleAt.entries()].find(([, role]) => role === "quantity")?.[0];
+    // The leftmost Price and MRP columns (plan 1509, Q5 — the column step allows one of each).
+    const firstOf = (role: ColumnRole) =>
+      [...roleAt.entries()].filter(([, r]) => r === role).map(([index]) => index).sort((a, b) => a - b)[0];
+    const priceCol = firstOf("price");
+    const mrpCol = firstOf("mrp");
     const shown = [...roleAt.entries()].filter(([, role]) => role !== "ignore").map(([index]) => index).sort((a, b) => a - b);
 
     const headerRow = conf.headerRow;
@@ -398,6 +427,8 @@ export function extractRows(
     let skippedTotals = 0;
     let skippedBands = 0;
     let added = 0;
+    let withMrp = 0;
+    let withPrice = 0;
 
     for (let r = headerRow + 1; r <= sheet.lastRow; r++) {
       const row = sheet.grid[r];
@@ -414,11 +445,17 @@ export function extractRows(
       }
       const rowColor = fillOf(ws, r, nameCol);
       if (rowColor) colours += 1;
+      const price = priceCol === undefined ? null : parsePrice(row[priceCol]);
+      const mrp = mrpCol === undefined ? null : parsePrice(row[mrpCol]);
+      if (mrp !== null) withMrp += 1;
+      if (price !== null) withPrice += 1;
       rows.push({
         sheetName: conf.sheet,
         rowIndex: r,
         name,
         quantity: qtyCol === undefined ? null : parseQuantity(row[qtyCol]),
+        price,
+        mrp,
         rowColor,
         columns: shown.map((index, i) => ({ header: headers[i], value: row[index] })),
         sortOrder: sortOrder++,
@@ -435,6 +472,8 @@ export function extractRows(
       skippedBands,
       shownColumns: shown.length,
       hasQuantity: qtyCol !== undefined,
+      rowsWithMrp: withMrp,
+      rowsWithPrice: withPrice,
     });
   }
 
@@ -492,6 +531,8 @@ export async function extractRowsWithAi(
     rowIndex: i,
     name: r.name,
     quantity: r.quantity,
+    price: r.price,
+    mrp: r.mrp,
     rowColor: null,
     columns: r.columns,
     sortOrder: i,

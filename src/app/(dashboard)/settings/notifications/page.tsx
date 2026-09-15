@@ -206,13 +206,6 @@ function EmailTab({ config, canEdit, onConfigChange, refreshConfig }: TabProps) 
   const [testSubject, setTestSubject] = useState("");
   const [testMessage, setTestMessage] = useState("");
 
-  // Default test email to current session user's email if empty
-  useEffect(() => {
-    if (!testToEmail && session?.user?.email) {
-      setTestToEmail(session.user.email);
-    }
-  }, [session?.user?.email, testToEmail]);
-
   const set = <K extends keyof EmailForm>(key: K, value: EmailForm[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
 

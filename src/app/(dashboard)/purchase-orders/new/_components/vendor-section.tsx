@@ -7,12 +7,15 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
 /**
- * One line of a purchase order in the making (plan 0909-po-sheet-ai-extraction, §3.4, D2).
+ * One line of a purchase order in the making (plan 0909-po-sheet-ai-extraction, §3.4, D2,
+ * amended by plan 1509-po-sheet-mrp-price).
  *
- * A line is a NAME plus what the person types — Qty, Unit Price, GST %. It does not come
- * from the products table (R3): the sheet flow never sets `productId`. The one path that
- * still carries a product is the handoff from /reorder, whose lines are catalogue products
- * by definition; it fills `productId` so that order stays linked to what was low.
+ * A sheet line is the item NAME, the sheet's quantity (editable), the sheet's MRP — else its
+ * Price — as the unit price (LOCKED; the server re-reads it from `extractionItemId`), and
+ * GST % (default 0, editable). It does not come from the products table (R3): the sheet flow
+ * never sets `productId`. The one path that still carries a product is the handoff from
+ * /reorder, whose lines are catalogue products by definition; it fills `productId` so that
+ * order stays linked to what was low, and its rate stays typed.
  */
 export interface POLineItem {
   /** Stable React key and dedupe key — the extraction item id, or the product id from /reorder. */
@@ -23,6 +26,10 @@ export interface POLineItem {
   gstRate: number;
   /** Only from the /reorder handoff. Never set by the sheet flow. */
   productId?: string;
+  /** Only on sheet lines: the review row the price is read from. Its presence locks the rate. */
+  extractionItemId?: string;
+  /** Which sheet column the locked rate came from. */
+  priceSource?: "mrp" | "price" | null;
 }
 
 /**
@@ -81,6 +88,11 @@ export function formatCurrency(amount: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
 }
 
+/** A rate to the paisa — a locked MRP of ₹1,249.50 must not read as ₹1,250 (plan 1509). */
+export function formatRate(amount: number) {
+  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(amount);
+}
+
 /**
  * One purchase order in the making: one vendor, its lines, its totals, its own outcome.
  *
@@ -123,8 +135,12 @@ export function VendorSection({
   const running = section.status === "running";
   const blocked = !section.vendorId || items.length === 0 || unpriced.length > 0;
 
+  // A sheet line's rate is the sheet's (plan 1509, R2): the field is text, and this refuses the
+  // change too, so nothing on the screen can drift from what the server re-reads.
   const update = (index: number, field: "quantity" | "unitPrice" | "gstRate", value: number) =>
-    onItemsChange(items.map((it, i) => (i === index ? { ...it, [field]: value } : it)));
+    onItemsChange(
+      items.map((it, i) => (i === index && !(field === "unitPrice" && it.extractionItemId) ? { ...it, [field]: value } : it))
+    );
 
   const remove = (index: number) => onItemsChange(items.filter((_, i) => i !== index));
 
@@ -219,6 +235,20 @@ export function VendorSection({
                           className="text-sm min-h-[44px] tabular-nums"
                         />
                       </div>
+                      {item.extractionItemId ? (
+                        // The sheet's MRP (else its Price), not editable (plan 1509, R1–R2). Text,
+                        // not a disabled input: a greyed box reads as "unavailable for now", this
+                        // reads as "decided by the sheet".
+                        <div>
+                          <p className="block text-[11px] font-medium text-slate-600 mb-0.5">Unit Price</p>
+                          <div className="min-h-[44px] rounded-lg border border-slate-200 bg-slate-50 px-3 flex flex-col justify-center">
+                            <span className="text-sm font-semibold text-slate-900 tabular-nums">{formatRate(item.unitPrice)}</span>
+                            <span className="text-[10px] text-slate-500 leading-tight">
+                              {item.priceSource === "price" ? "Price" : "MRP"} from sheet
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
                       <div>
                         <label className="block text-[11px] font-medium text-slate-600 mb-0.5">
                           Unit Price <span className="text-red-500">*</span>
@@ -240,6 +270,7 @@ export function VendorSection({
                           className={`text-sm min-h-[44px] tabular-nums ${item.unitPrice > 0 ? "" : "border-amber-400 bg-amber-50"}`}
                         />
                       </div>
+                      )}
                       <div>
                         <label className="block text-[11px] font-medium text-slate-600 mb-0.5">GST %</label>
                         <Input

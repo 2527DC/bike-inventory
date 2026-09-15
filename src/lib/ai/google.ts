@@ -7,14 +7,37 @@
 // Retries belong to the resolver (./index.ts). The SDK's own loop defaults to 5 attempts
 // with exponential backoff up to 60 s, which would turn one 429 into five and hide the
 // real wait behind a single slow call — so it is switched off here (attempts: 1).
-import { ApiError, FinishReason, GoogleGenAI } from "@google/genai";
-import type { Candidate, Content, GenerateContentResponse, Part } from "@google/genai";
+import { ApiError, FinishReason, GoogleGenAI, ThinkingLevel } from "@google/genai";
+import type { Candidate, Content, GenerateContentResponse, Part, ThinkingConfig } from "@google/genai";
 import { createLogger } from "@/lib/logger";
-import { AiError, type AiAdapter, type AiCompletion, type AiErrorKind } from "./types";
+import { AiError, type AiAdapter, type AiCompletion, type AiErrorKind, type AiRequest } from "./types";
 
 const log = createLogger("ai:google");
 
 const DEFAULT_MAX_TOKENS = 16000;
+
+type Effort = NonNullable<AiRequest["effort"]>;
+
+const THINKING_LEVEL: Record<Effort, ThinkingLevel> = {
+  low: ThinkingLevel.LOW,
+  medium: ThinkingLevel.MEDIUM,
+  high: ThinkingLevel.HIGH,
+};
+
+/** Gemini 2.5 has no thinking level — only a token budget (2.5 Pro floors it at 128). */
+const THINKING_BUDGET: Record<Effort, number> = { low: 1024, medium: 4096, high: 16384 };
+
+/**
+ * `effort` as Gemini's thinkingConfig. This matters because Gemini draws its thinking from
+ * `maxOutputTokens`: at the default depth, po.sheet_columns spent 1,923 of a 2,000 cap on
+ * thoughts and was cut off after 63 tokens of answer. Gemini 3.x takes `thinkingLevel`;
+ * 2.5 takes `thinkingBudget`. With no effort, nothing is sent and the model's default applies.
+ */
+function thinkingFor(effort: AiRequest["effort"], model: string): ThinkingConfig | undefined {
+  if (!effort) return undefined;
+  if (/^gemini-2\./.test(model)) return { thinkingBudget: THINKING_BUDGET[effort] };
+  return { thinkingLevel: THINKING_LEVEL[effort] };
+}
 
 /** Finish reasons that mean the model declined, as opposed to finished or ran out of room. */
 const REFUSAL_FINISH: ReadonlySet<FinishReason> = new Set([
@@ -118,6 +141,7 @@ export const googleAdapter: AiAdapter = {
     ];
     const contents: Content[] = [{ role: "user", parts }];
     const maxOut = req.maxTokens ?? DEFAULT_MAX_TOKENS;
+    const thinking = thinkingFor(req.effort, cfg.model);
 
     // Context keys deliberately avoid "token"/"key" — redact() blanks those names.
     const ctx = {
@@ -128,6 +152,8 @@ export const googleAdapter: AiAdapter = {
       hasSystem: Boolean(req.system),
       maxOut,
       hasSchema: Boolean(req.jsonSchema),
+      effort: req.effort ?? null,
+      thinking: thinking?.thinkingLevel ?? thinking?.thinkingBudget ?? null,
     };
     log.debug("-> models.generateContent", ctx);
 
@@ -140,11 +166,12 @@ export const googleAdapter: AiAdapter = {
         config: {
           ...(req.system ? { systemInstruction: req.system } : {}),
           maxOutputTokens: maxOut,
+          // `effort` → thinkingConfig; see thinkingFor(). Thinking counts against maxOutputTokens.
+          ...(thinking ? { thinkingConfig: thinking } : {}),
           // Gemini's native JSON mode: the reply is guaranteed to parse, so the resolver's
           // fence-stripping becomes a no-op instead of a rescue. A schema goes as
           // `responseJsonSchema` (GenerateContentConfig, @google/genai 2.21 — plain JSON
-          // Schema, and `responseMimeType` is required beside it). `effort` has no Gemini
-          // equivalent and is ignored here.
+          // Schema, and `responseMimeType` is required beside it).
           ...(req.json || req.jsonSchema ? { responseMimeType: "application/json" } : {}),
           ...(req.jsonSchema ? { responseJsonSchema: req.jsonSchema } : {}),
         },
@@ -169,6 +196,7 @@ export const googleAdapter: AiAdapter = {
     const usage = {
       input: response.usageMetadata?.promptTokenCount ?? 0,
       output: response.usageMetadata?.candidatesTokenCount ?? 0,
+      thoughts: response.usageMetadata?.thoughtsTokenCount ?? 0,
     };
     const text = textOf(response);
 

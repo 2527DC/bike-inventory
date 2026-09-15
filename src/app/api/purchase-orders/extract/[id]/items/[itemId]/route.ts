@@ -6,7 +6,7 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { createLogger } from "@/lib/logger";
 import { poExtractionItemPatchSchema } from "@/lib/validations";
-import { readLegend, serializeItem } from "@/lib/po-extraction/store";
+import { readLegend, serializeItem, unitPriceOf } from "@/lib/po-extraction/store";
 
 const log = createLogger("purchase-orders:extract");
 
@@ -15,7 +15,8 @@ type Ctx = { params: Promise<{ id: string; itemId: string }> };
 /**
  * Tick or untick one review row. Body: `{ selected: boolean }` — nothing else. The product
  * match and the order quantity the old PATCH accepted are gone (plan 0909, D2/Q10): a row is
- * what the sheet said, and Qty is typed on the line after "Use selected".
+ * what the sheet said, and Qty is typed on the line after "Use selected". A row with no price
+ * in the sheet cannot be ticked (plan 1509, R5); unticking is always allowed.
  *
  * Answers the row and the extraction's selected count in one round trip, so the header the
  * review shows never disagrees with its rows.
@@ -31,9 +32,14 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
     const item = await prisma.poExtractionItem.findFirst({
       where: { id: itemId, extractionId: id, extraction: { createdById: user.id } },
-      select: { id: true, extraction: { select: { legend: true } } },
+      select: { id: true, mrp: true, price: true, extraction: { select: { legend: true } } },
     });
     if (!item) return errorResponse("Extraction row not found", 404);
+    // Unticking stays open so a row selected before prices were stored can still be cleared.
+    if (selected && unitPriceOf(item).unitPrice === null) {
+      log.warn("extraction row select refused", { extractionId: id, itemId, reason: "no price" });
+      return errorResponse("This row has no price in the sheet, so it cannot be ordered.", 400);
+    }
 
     const { row, selectedCount } = await prisma.$transaction(async (tx) => {
       const updated = await tx.poExtractionItem.update({ where: { id: itemId }, data: { selected } });

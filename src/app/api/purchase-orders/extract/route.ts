@@ -191,6 +191,9 @@ async function readDocument({ userId, vendorId, fileName, fileType, bytes }: Upl
   if (replaced.length > 0) log.info("earlier extractions replaced", { userId, replaced });
 
   const money = (v: number | null) => (v === null || v === undefined ? "" : String(v));
+  // The stored price and MRP (plan 1509): only a real, positive number — a NaN out of the AI
+  // reply's parseFloat, or a 0, is "no price" and leaves the row unselectable (R5).
+  const positive = (v: number | null) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null);
 
   const extraction = await prisma.$transaction(async (tx) => {
     const row = await tx.poExtraction.create({
@@ -211,11 +214,13 @@ async function readDocument({ userId, vendorId, fileName, fileType, bytes }: Upl
         extractionId: row.id,
         rawName: it.rawName,
         qty: it.brandAvailableQty > 0 ? it.brandAvailableQty : null,
+        price: positive(it.brandPrice),
+        mrp: positive(it.brandMrp),
         sheetName: null,
         rowIndex: null,
         rowColor: null,
         // A fixed column set so the dynamic review renders a PDF the same way it renders a
-        // sheet. Only rawName and qty reach the PO line (D2).
+        // sheet. The name, the qty and the MRP (else Price) reach the PO line (plan 1509).
         columns: [
           { header: "Item", value: it.rawName },
           { header: "Code", value: it.rawSku ?? "" },
