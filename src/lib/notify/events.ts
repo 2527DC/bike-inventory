@@ -48,7 +48,7 @@ export const NOTIFICATION_EVENTS = {
   "zoho.pull_finished": {
     label: "Zoho pull finished",
     description: "A pull ended — clean, or partial with errors",
-    defaults: { push: true, email: true },
+    defaults: { push: true, email: false },
   },
 } as const satisfies Record<string, EventDefinition>;
 

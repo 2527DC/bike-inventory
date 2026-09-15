@@ -7,7 +7,7 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 
 // GET: Retrieve shipment items for put-away with suggested HomeBinRules and existing bin assignments
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -27,7 +27,9 @@ export async function GET(
                 name: true,
                 sku: true,
                 brandId: true,
+                brand: { select: { id: true, name: true } },
                 categoryId: true,
+                category: { select: { id: true, name: true } },
                 binId: true,
                 bin: { select: { id: true, code: true, name: true, directions: true } },
               },
@@ -40,58 +42,73 @@ export async function GET(
 
     if (!shipment) return errorResponse("Shipment not found", 404);
 
-    // Fetch warehouse: get first godown warehouse or associated warehouse
-    const godownWarehouse = await prisma.warehouse.findFirst({
-      where: { kind: "GODOWN", isActive: true },
-      select: { id: true, name: true, code: true },
+    const { searchParams } = new URL(req.url);
+    const queryWarehouseId = searchParams.get("warehouseId");
+
+    // Fetch all home bin rules for active warehouse(s)
+    const homeRules = await prisma.homeBinRule.findMany({
+      where: queryWarehouseId
+        ? { warehouseId: queryWarehouseId, warehouse: { isActive: true } }
+        : { warehouse: { isActive: true } },
+      include: {
+        bin: { select: { id: true, code: true, name: true, directions: true, isAssemblyArea: true, warehouse: { select: { id: true, name: true, kind: true } } } },
+      },
     });
 
-    const warehouseId = godownWarehouse?.id;
-
-    // Fetch all home bin rules for this warehouse
-    const homeRules = warehouseId
-      ? await prisma.homeBinRule.findMany({
-          where: { warehouseId },
-          include: {
-            bin: { select: { id: true, code: true, name: true, directions: true, isAssemblyArea: true } },
-          },
-        })
-      : [];
-
-    // Map each line item with suggested home bin rule
+    // Map each line item with suggested home bin rule based on item-level brand and category
     const itemsWithSuggestions = shipment.lineItems.map((item) => {
       let suggestedBin = null;
+      let matchedRule: { type: string; label: string } | null = null;
+
       if (item.productId) {
+        // Resolve item brand and category: item/product level takes absolute priority
+        const itemBrandId = item.product?.brandId || shipment.brandId;
+        const itemCategoryId = item.product?.categoryId || shipment.categoryId;
+
         // 1. Check direct product rule
         const prodRule = homeRules.find((r) => r.productId === item.productId);
         if (prodRule) {
           suggestedBin = prodRule.bin;
+          matchedRule = { type: "product", label: "Product Rule" };
         } else {
           // 2. Check brand + category rule
           const brandCatRule = homeRules.find(
-            (r) =>
-              r.brandId === (item.product?.brandId || shipment.brandId) &&
-              r.categoryId === (item.product?.categoryId || shipment.categoryId)
+            (r) => r.brandId && r.categoryId && r.brandId === itemBrandId && r.categoryId === itemCategoryId
           );
           if (brandCatRule) {
             suggestedBin = brandCatRule.bin;
+            matchedRule = { type: "brand_category", label: "Brand + Category Rule" };
           } else {
-            // 3. Check category-only rule
-            const catRule = homeRules.find((r) => r.categoryId === (item.product?.categoryId || shipment.categoryId));
+            // 3. Check category-only rule (where rule has no specific brand restriction)
+            const catRule = itemCategoryId
+              ? homeRules.find((r) => !r.brandId && r.categoryId === itemCategoryId)
+              : null;
             if (catRule) {
               suggestedBin = catRule.bin;
+              matchedRule = { type: "category", label: "Category Rule" };
             } else {
-              // 4. Check brand-only rule
-              const brandRule = homeRules.find((r) => r.brandId === (item.product?.brandId || shipment.brandId));
-              if (brandRule) suggestedBin = brandRule.bin;
+              // 4. Check brand-only rule (where rule has no specific category restriction)
+              const brandRule = itemBrandId
+                ? homeRules.find((r) => r.brandId === itemBrandId && !r.categoryId)
+                : null;
+              if (brandRule) {
+                suggestedBin = brandRule.bin;
+                matchedRule = { type: "brand", label: "Brand Rule" };
+              }
             }
           }
         }
       }
 
+      const finalBin = suggestedBin || item.product?.bin || null;
+      if (!matchedRule && item.product?.bin) {
+        matchedRule = { type: "product_default", label: "Product Default Bin" };
+      }
+
       return {
         ...item,
-        suggestedBin: suggestedBin || item.product?.bin || null,
+        suggestedBin: finalBin,
+        matchedRule,
       };
     });
 
@@ -115,7 +132,7 @@ export async function GET(
       },
       items: itemsWithSuggestions,
       units,
-      warehouseId,
+      warehouseId: queryWarehouseId ?? null,
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);

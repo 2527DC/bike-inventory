@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "savedAt": "2026-09-14T10:00:00.000Z",
+  "brands": [
+    {
+      "id": "cultsport",
+      "name": "CULTSPORT",
+      "theirBal": { "amount": 25000, "label": "Statement as of Sep 1" },
+      "ourBal": { "amount": 23500, "label": "BCH books" },
+      "ledger": {
+        "opening": { "date": "2026-04-01", "amount": 5000 },
+        "matchable": true
+      },
+      "entries": [
+        {
+          "id": "man-1",
+          "date": "2026-04-05",
+          "type": "invoice",
+          "ref": "INV-1001",
+          "amount": 20000,
+          "note": "Initial supply",
+          "dir": 1,
+          "side": "vendor",
+          "audit": {
+            "s": "ok"
+          }
+        },
+        {
+          "id": "man-2",
+          "date": "2026-04-10",
+          "type": "payment",
+          "ref": "NEFT-123",
+          "amount": 15000,
+          "note": "Part payment",
+          "dir": -1,
+          "side": "bch",
+          "audit": {
+            "s": "info"
+          }
+        }
+      ],
+      "gaps": [
+        {
+          "n": 1,
+          "title": "Missing 2% discount on INV-1001",
+          "type": "discount-pending",
+          "amt": 400,
+          "status": "open",
+          "progress": [
+            {
+              "date": "2026-04-12",
+              "text": "Emailed vendor requesting discount credit note."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hero",
+      "name": "HERO",
+      "entries": [],
+      "gaps": []
+    }
+  ]
+}

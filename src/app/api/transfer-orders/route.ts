@@ -11,7 +11,7 @@ import {
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { z } from "zod";
-import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
 import { getWarehouseBreakdown } from "@/lib/stock-location";
 import { listWarehouses, type WarehouseRef } from "@/lib/warehouses";
 import { nextSequence } from "@/lib/sequence";
@@ -358,7 +358,8 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (BIN_TRACKING_ENABLED) {
+    const binTrackingEnabled = await isBinTrackingEnabled();
+    if (binTrackingEnabled) {
       for (const item of data.items) {
         if (!item.fromBinId || !item.toBinId) {
           return errorResponse("Source and destination bins are required", 400);
@@ -404,8 +405,8 @@ export async function POST(req: NextRequest) {
             create: data.items.map((item) => ({
               productId: item.productId,
               quantity: item.quantity,
-              fromBinId: BIN_TRACKING_ENABLED ? item.fromBinId : null,
-              toBinId: BIN_TRACKING_ENABLED ? item.toBinId : null,
+              fromBinId: binTrackingEnabled ? item.fromBinId : null,
+              toBinId: binTrackingEnabled ? item.toBinId : null,
               // Mirrored from the header. Kept so the item columns stay readable this release
               // and so anything still reading the item lane sees the same answer.
               fromWarehouseId: fromWh.id,

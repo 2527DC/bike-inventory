@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { createLogger } from "@/lib/logger";
-import { LocalProvider, tryGetStorage } from "@/lib/storage";
+import { tryGetStorage } from "@/lib/storage";
 import { buildKey } from "@/lib/storage/upload-policy";
 import type {
   ColumnRole,
@@ -165,6 +165,18 @@ export async function loadExtraction(id: string, userId: string): Promise<Extrac
 
   const legend = readLegend(row.legend);
   const stage: ExtractionStage = row.stage === "review" ? "review" : "columns";
+  const sheets = readSheetColumns(row.columnRoles);
+
+  /**
+   * The AI is considered "confident" when it proposed exactly one itemName column on every
+   * sheet, so the client can skip the column-confirmation dialog and fire the extract call
+   * automatically. Only meaningful (and only set) while stage === "columns".
+   */
+  const autoConfident =
+    stage === "columns" &&
+    sheets.length > 0 &&
+    sheets.every((s) => s.columns.filter((c) => c.role === "itemName").length === 1);
+
   return {
     id: row.id,
     vendorId: row.vendorId,
@@ -175,7 +187,8 @@ export async function loadExtraction(id: string, userId: string): Promise<Extrac
     source: row.source,
     aiModel: row.aiModel,
     stage,
-    sheets: readSheetColumns(row.columnRoles),
+    autoConfident: autoConfident || undefined,
+    sheets,
     legend,
     totalItems: row.totalItems,
     createdAt: row.createdAt.toISOString(),
@@ -219,12 +232,8 @@ export async function storeQuotationFile(
  * Read the stored file back for the column step's deterministic extraction and for the
  * rescue read. The workbook is NOT kept in the database — the schema has no bytes column,
  * and the file store already holds it (plan 0909, §3.3) — so the confirm step re-reads the
- * object the upload wrote:
- *
- *   - LOCAL: `LocalProvider.read(key)` — the same call `/api/media` serves files with. Not on
- *     the `StorageProvider` interface, hence the instanceof;
- *   - S3: a plain `fetch` of the public URL. Objects are world-readable by design — that is how
- *     every stored image is displayed — so no signed GET is needed.
+ * object the upload wrote, using the provider's authenticated GET (not the public URL, which
+ * may be inaccessible for private paths like purchase-orders/quotations/).
  *
  * Null when the file is gone, the URL was issued by a different provider, or storage is no
  * longer configured. The caller turns null into a sentence asking for a fresh upload.
@@ -241,25 +250,13 @@ export async function readQuotationFile(extractionId: string, fileUrl: string): 
     return null;
   }
   try {
-    if (storage instanceof LocalProvider) {
-      const buf = await storage.read(key);
-      if (!buf) {
-        log.warn("quotation file not readable", { extractionId, key, provider: storage.key, reason: "not found" });
-        return null;
-      }
-      log.debug("quotation file read", { extractionId, key, provider: storage.key, bytes: buf.byteLength });
-      // A Buffer may be a view into a larger pooled ArrayBuffer; copy exactly its bytes.
-      return new Uint8Array(buf).slice().buffer;
-    }
-    log.debug("-> GET stored quotation", { extractionId, key, provider: storage.key });
-    const res = await fetch(fileUrl, { cache: "no-store" });
-    if (!res.ok) {
-      log.warn("quotation file not readable", { extractionId, key, provider: storage.key, status: res.status });
+    const buf = await storage.read(key);
+    if (!buf) {
+      log.warn("quotation file not readable", { extractionId, key, provider: storage.key, reason: "not found" });
       return null;
     }
-    const bytes = await res.arrayBuffer();
-    log.debug("quotation file read", { extractionId, key, provider: storage.key, bytes: bytes.byteLength });
-    return bytes;
+    log.debug("quotation file read", { extractionId, key, provider: storage.key, bytes: buf.byteLength });
+    return buf;
   } catch (e) {
     log.warn("quotation file not readable", {
       extractionId,

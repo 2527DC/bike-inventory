@@ -4,7 +4,7 @@ import { useState, useEffect, use } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Phone, CheckCircle2, Calendar, MapPin, Save, Trash2, ShieldCheck, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Phone, CheckCircle2, Calendar, MapPin, Save, Trash2, ShieldCheck, AlertTriangle, Sparkles, Info } from "lucide-react";
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -12,37 +12,23 @@ import { Badge } from "@/components/ui/badge";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { usePermissions } from "@/lib/use-permissions";
-import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { useBinTracking } from "@/hooks/use-bin-tracking";
 import { useWarehouses } from "@/hooks/use-sites";
-import { SearchableSelect } from "@/components/ui/searchable-select";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 import { formatDateTime } from "@/lib/utils";
 
 const log = createLogger("inbound:detail");
 
-/**
- * What GET /api/categories returns: a FLAT list of every row — roots AND children — each with
- * its `children` nested and its `parent` named. It is not a tree; a child appears twice.
- */
-interface RawCategory {
-  id: string;
-  name: string;
-  parent: { id: string; name: string } | null;
-  children?: Array<{ id: string; name: string; isActive?: boolean }>;
-}
-
-/** Flattened for the picker — `hint` carries the parent so two leaves can be told apart. */
-interface CategoryOption {
-  id: string;
-  label: string;
-  hint?: string;
-}
-
 interface LineItem {
   id: string;
   productName: string;
-  product: { name: string; sku: string } | null;
+  product: {
+    name: string;
+    sku: string;
+    brand?: { id: string; name: string } | null;
+    category?: { id: string; name: string } | null;
+  } | null;
   sku: string | null;
   quantity: number;
   rate: number;
@@ -91,8 +77,6 @@ interface Shipment {
   preBookings: { id: string; customerName: string; customerPhone: string | null; status: string; productName: string }[];
   vendorBillId: string | null;
   vendorBill: { vendorId: string } | null;
-  categoryId: string | null;
-  category: { id: string; name: string; parent: { name: string } | null } | null;
 }
 
 function formatINR(n: number) {
@@ -115,6 +99,7 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
   const isAdmin = canView("cost_price");
   const canDeliver = canEditCheck("inbound");
   const canApprove = canApproveCheck("inbound");
+  const { isBinTrackingEnabled: BIN_TRACKING_ENABLED } = useBinTracking();
 
   const [shipment, setShipment] = useState<Shipment | null>(null);
   const [bins, setBins] = useState<Bin[]>([]);
@@ -149,6 +134,10 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
 
   // Per-item bin selections: lineItemId → array of binIds (one per unit)
   const [binSelections, setBinSelections] = useState<Record<string, string[]>>({});
+  // Putaway matched rule metadata per line item: lineItemId → { suggestedBin, matchedRule }
+  const [putawayItems, setPutawayItems] = useState<
+    Record<string, { suggestedBin?: Bin | null; matchedRule?: { type: string; label: string } | null }>
+  >({});
   // Location mode (bins dormant): where this shipment's stock is received
   // Was DEFAULT_STOCK_LOCATION. There is no default warehouse any more — the API rejects a
   // missing one with a 400 rather than guessing, because putting stock in the wrong building
@@ -166,25 +155,13 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
     const godown = warehouses.find((w) => w.kind === "GODOWN") ?? warehouses[0];
     setReceiveLocation(godown.id);
   }, [warehouses, receiveLocation]);
-  // The Cycles/Spares/Accessories choice is a COLUMN on the shipment now, not a value in this
-  // browser's localStorage (R3). It used to be keyed `inbound-shiptype-<id>` on one phone, so
-  // the shipment read as uncategorised to every other device and lost the choice whenever the
-  // browser cleared — and nothing on the server ever knew it.
-  const [categories, setCategories] = useState<CategoryOption[]>([]);
-  const [savingCategory, setSavingCategory] = useState(false);
-  const [changingCategory, setChangingCategory] = useState(false);
-
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [shipRes, binRes, catRes] = await Promise.all([
+      const [shipRes, binRes, putawayRes] = await Promise.all([
         apiTry<Shipment>(`/api/inbound/${id}`),
-        BIN_TRACKING_ENABLED
-          ? apiTry<Bin[]>("/api/bins")
-          : Promise.resolve({ data: [] as Bin[], error: null, isAuth: false, isTimeout: false }),
-        // GET /api/categories is gated on `stock.view`. A receiving role without it gets an
-        // empty picker and cannot receive anything — check the role's grants before release.
-        apiTry<RawCategory[]>("/api/categories"),
+        apiTry<Bin[]>("/api/bins"),
+        apiTry<{ items: Array<{ id: string; suggestedBin?: Bin | null; matchedRule?: { type: string; label: string } | null }> }>(`/api/inbound/${id}/putaway`),
       ]);
       if (cancelled) return;
       if (shipRes.error) {
@@ -194,33 +171,27 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
         setShipment(shipRes.data);
       }
       if (binRes.data) setBins(binRes.data);
-      if (catRes.error) {
-        log.error("could not load categories", { message: catRes.error });
-      } else if (catRes.data) {
-        // Flattened parent + children, with the parent as the hint so "Tyres" is
-        // distinguishable from another "Tyres" under a different parent. Only ROOT rows are
-        // walked: the API lists every row, children included, so walking all of them pushed
-        // each child twice (plan 0909-stock-screens-size-category-and-sidebar, Q10). A child
-        // whose parent is not in the list (parent inactive, child not) is kept on its own.
-        const rootIds = new Set(catRes.data.filter((c) => c.parent === null).map((c) => c.id));
-        const flat: CategoryOption[] = [];
-        for (const c of catRes.data) {
-          if (c.parent === null) {
-            flat.push({ id: c.id, label: c.name });
-            for (const ch of c.children ?? []) {
-              if (ch.isActive === false) continue;
-              flat.push({ id: ch.id, label: ch.name, hint: c.name });
-            }
-          } else if (!rootIds.has(c.parent.id)) {
-            flat.push({ id: c.id, label: c.name, hint: c.parent.name });
+      if (putawayRes.data?.items) {
+        const initialBins: Record<string, string[]> = {};
+        const suggestionsMap: Record<string, { suggestedBin?: Bin | null; matchedRule?: { type: string; label: string } | null }> = {};
+        for (const it of putawayRes.data.items) {
+          suggestionsMap[it.id] = {
+            suggestedBin: it.suggestedBin,
+            matchedRule: it.matchedRule,
+          };
+          if (it.suggestedBin?.id) {
+            const li = shipRes.data?.lineItems.find((l) => l.id === it.id);
+            const count = li?.quantity || 1;
+            initialBins[it.id] = new Array(count).fill(it.suggestedBin.id);
           }
         }
-        setCategories(flat);
+        setPutawayItems(suggestionsMap);
+        setBinSelections((prev) => ({ ...initialBins, ...prev }));
       }
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [id]);
+  }, [id, BIN_TRACKING_ENABLED]);
 
   const refreshShipment = async () => {
     const { data, error } = await apiTry<Shipment>(`/api/inbound/${id}`);
@@ -232,23 +203,7 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
     }
   };
 
-  const handleCategorySelect = async (categoryId: string | null) => {
-    if (!categoryId) return;
-    setSavingCategory(true);
-    setActionError("");
-    const { error } = await apiTry(`/api/inbound/${id}`, {
-      method: "PUT",
-      json: { categoryId },
-    });
-    if (error) {
-      log.error("could not set shipment category", { shipmentId: id, message: error });
-      setActionError(error);
-    } else {
-      setChangingCategory(false);
-      await refreshShipment();
-    }
-    setSavingCategory(false);
-  };
+
 
   // Set bin for a specific unit of a line item
   const setBinForUnit = (lineItemId: string, unitIndex: number, binId: string, totalQty: number) => {
@@ -521,6 +476,14 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
     const borderClass = variant === "amber" ? "border-amber-200" : "border-slate-200";
     const bgClass = variant === "amber" ? "bg-amber-50" : "bg-white";
 
+    if (bins.length === 0) {
+      return (
+        <div className="mt-2 p-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
+          No warehouse bins configured yet. Create a bin in Warehouse Bins to assign items.
+        </div>
+      );
+    }
+
     if (qty === 1) {
       return (
         <select
@@ -608,7 +571,7 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
         <Link href="/inbound" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
         <div className="flex-1 min-w-0">
           <h1 className="text-lg font-bold text-slate-900 tabular-nums truncate">{shipment.shipmentNo}</h1>
-          <p className="text-xs text-slate-500 tabular-nums truncate">{shipment.brand.name} | Bill: {shipment.billNo}</p>
+          <p className="text-xs text-slate-500 tabular-nums truncate">Bill: {shipment.billNo}</p>
         </div>
         <Badge className={`text-xs shrink-0 ${statusBadge.colorClass}`}>{statusBadge.label}</Badge>
       </div>
@@ -706,56 +669,8 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
         </div>
       )}
 
-      {/* CATEGORY — saved on the shipment, and receiving is blocked until it is set.
-          The four hardcoded buttons (Cycles / Spares / Accessories / Mixed) are gone: the
-          value is a real Category row now, so the picker searches the actual tree instead of
-          offering four labels that matched nothing in the database. */}
-      {shipment.status !== "DELIVERED" && (
-        !shipment.category || changingCategory ? (
-          <div className="mb-3 bg-blue-50 border border-blue-200 rounded-xl p-4">
-            <p className="text-sm font-semibold text-blue-900 mb-0.5">Which category is this shipment?</p>
-            <p className="text-xs text-blue-600 mb-3">
-              Choose it before receiving. It cannot be changed once the first item is received.
-            </p>
-            <SearchableSelect
-              options={categories}
-              value={shipment.category?.id ?? null}
-              onChange={handleCategorySelect}
-              placeholder="Search categories…"
-              emptyText="No matching category"
-              disabled={savingCategory}
-            />
-            {changingCategory && (
-              <button
-                onClick={() => setChangingCategory(false)}
-                className="mt-2 text-xs text-slate-500 underline min-h-[44px]"
-              >
-                Cancel
-              </button>
-            )}
-          </div>
-        ) : (
-          <div className="mb-3 flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-xs text-slate-500 shrink-0">Category:</span>
-              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 truncate">
-                {shipment.category.parent ? `${shipment.category.parent.name} › ` : ""}
-                {shipment.category.name}
-              </span>
-            </div>
-            {/* Only until the first receipt — after that the API refuses, so offering the
-                button would be a promise the server does not keep. */}
-            {canDeliver && !shipment.lineItems.some((li) => li.isDelivered) && (
-              <button onClick={() => setChangingCategory(true)} className="text-xs text-slate-400 underline shrink-0 ml-2">
-                Change
-              </button>
-            )}
-          </div>
-        )
-      )}
-
       {/* Location selector (bins dormant) — where this shipment is received */}
-      {!BIN_TRACKING_ENABLED && canDeliver && isApproved && (shipment.status === "IN_TRANSIT" || shipment.status === "PARTIALLY_DELIVERED") && shipment.categoryId && (
+      {!BIN_TRACKING_ENABLED && canDeliver && isApproved && (shipment.status === "IN_TRANSIT" || shipment.status === "PARTIALLY_DELIVERED") && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-3">
           <p className="text-xs font-medium text-blue-800 mb-1.5 flex items-center gap-1.5">
             <MapPin className="h-3.5 w-3.5" /> Receive into
@@ -813,13 +728,12 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
         items={[
           { label: "Items Received", value: `${successMsg?.deliveredCount || 0} items` },
           { label: "Bill", value: shipment?.billNo || "" },
-          { label: "Brand", value: shipment?.brand.name || "" },
         ]}
         details="All items received and stock updated"
       />
 
       {/* Select All — apply one bin to ALL undelivered items */}
-      {BIN_TRACKING_ENABLED && canDeliver && isApproved && (shipment.status === "IN_TRANSIT" || shipment.status === "PARTIALLY_DELIVERED") && bins.length > 0 && shipment.categoryId && (
+      {BIN_TRACKING_ENABLED && canDeliver && isApproved && (shipment.status === "IN_TRANSIT" || shipment.status === "PARTIALLY_DELIVERED") && bins.length > 0 && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-3">
           <p className="text-xs font-medium text-blue-800 mb-1.5">Apply same bin to all items</p>
           <select
@@ -854,6 +768,18 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
                 <div className="flex-1 min-w-0 mr-2">
                   <p className="text-base font-medium text-slate-900">{li.productName}</p>
                   {li.product && <p className="text-xs text-slate-500">{li.product.sku} | {li.product.name}</p>}
+                  <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                    {li.product?.brand?.name && (
+                      <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                        Brand: {li.product.brand.name}
+                      </span>
+                    )}
+                    {li.product?.category?.name && (
+                      <span className="inline-flex items-center rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                        Category: {li.product.category.name}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
                   {li.isDelivered && <CheckCircle2 className="h-4 w-4 text-green-500" />}
@@ -874,13 +800,30 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
                 </div>
               )}
 
-              {/* Bin mode: selectors for undelivered items (during partial delivery) */}
-              {BIN_TRACKING_ENABLED && canDeliver && shipment.status === "PARTIALLY_DELIVERED" && !li.isDelivered && bins.length > 0 && shipment.categoryId && (
+              {/* Home Bin Rule Match Info */}
+              {BIN_TRACKING_ENABLED && putawayItems[li.id] && (
+                putawayItems[li.id].suggestedBin ? (
+                  <div className="flex items-center gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300">
+                    <Sparkles className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                    <span>
+                      Auto-matched Home Bin ({putawayItems[li.id].matchedRule?.label || "Rule"}): <strong>{putawayItems[li.id].suggestedBin?.code}</strong> — {putawayItems[li.id].suggestedBin?.name}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-500 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400">
+                    <Info className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                    <span>No Home Bin Rule matched — select a destination bin below</span>
+                  </div>
+                )
+              )}
+
+              {/* Bin mode: selectors and Mark Delivered for undelivered items (IN_TRANSIT or PARTIALLY_DELIVERED) */}
+              {BIN_TRACKING_ENABLED && canDeliver && isApproved && (shipment.status === "IN_TRANSIT" || shipment.status === "PARTIALLY_DELIVERED") && !li.isDelivered && (
                 <div>
                   {renderBinSelectors(li)}
                   <button
                     onClick={() => handleMarkItemDelivered(li)}
-                    disabled={itemLoading === li.id}
+                    disabled={itemLoading === li.id || bins.length === 0}
                     className="mt-2 w-full py-2.5 h-10 rounded-lg bg-green-50 text-green-700 text-xs font-medium border border-green-200 hover:bg-green-100 disabled:opacity-50"
                   >
                     {itemLoading === li.id ? "Marking..." : `Mark Delivered (Qty: ${li.quantity})`}
@@ -888,13 +831,8 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
                 </div>
               )}
 
-              {/* RECEIVE THIS LINE.
-                  Shown from IN_TRANSIT onwards, not only during PARTIALLY_DELIVERED — the
-                  old button appeared only after somebody had pressed "Partial", so on a fresh
-                  shipment there was no way to receive a single line at all. Four conditions,
-                  all of which the API re-checks: permission, approved, category chosen, and
-                  the shipment not already finished. */}
-              {!BIN_TRACKING_ENABLED && canDeliver && isApproved && shipment.categoryId
+              {/* RECEIVE THIS LINE (when bin tracking is dormant) */}
+              {!BIN_TRACKING_ENABLED && canDeliver && isApproved
                 && shipment.status !== "DELIVERED" && !li.isDelivered && (
                 <button
                   onClick={() => setConfirmReceive(li)}
@@ -905,17 +843,11 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
                 </button>
               )}
 
-              {/* Received. Green and final — undoing a receipt is a stock correction, not a
-                  button, which is why the old Undo went with api/inbound/[id]/status. */}
+              {/* Received (when bin tracking is dormant) */}
               {!BIN_TRACKING_ENABLED && li.isDelivered && (
                 <div className="mt-2 w-full min-h-[44px] flex items-center justify-center rounded-lg bg-green-50 text-green-700 text-sm font-semibold border border-green-200">
                   Received ×{li.deliveredQty ?? li.quantity} ✓
                 </div>
-              )}
-
-              {/* Bin mode: selectors for IN_TRANSIT items (pre-select before Mark All Delivered) */}
-              {BIN_TRACKING_ENABLED && canDeliver && shipment.status === "IN_TRANSIT" && bins.length > 0 && shipment.categoryId && (
-                renderBinSelectors(li)
               )}
 
               {/* Bin mode: post-delivery bin assignment (delivered but no bin) */}

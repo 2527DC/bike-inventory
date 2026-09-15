@@ -13,7 +13,7 @@ import { productSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { PLACEHOLDER_BRAND_NAMES_LOWER } from "@/lib/import-placeholders";
-import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
 import { storeById } from "@/lib/stores";
 import { createLogger } from "@/lib/logger";
 
@@ -86,10 +86,11 @@ export async function GET(req: NextRequest) {
       // while bin tracking is on — with `BIN_TRACKING_ENABLED` false the bin UI is hidden
       // everywhere, so counting every product as "needs a bin" would swamp the filter with
       // rows a person has no screen to fix.
+      const binTrackingEnabled = await isBinTrackingEnabled();
       and.push({
         OR: [
           { brand: { name: { in: PLACEHOLDER_BRAND_NAMES_LOWER, mode: "insensitive" as const } } },
-          ...(BIN_TRACKING_ENABLED ? [{ binId: null }] : []),
+          ...(binTrackingEnabled ? [{ binId: null }] : []),
         ],
       });
     }

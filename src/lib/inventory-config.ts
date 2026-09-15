@@ -1,13 +1,12 @@
-// Bin configuration — dependency-free so both API routes and client components can import it
-// without pulling in server-only modules.
+// Bin configuration — dynamic setting backed by PostgreSQL `AppSetting` and fallback `process.env.BIN_TRACKING_ENABLED`.
 //
-// Bin-level tracking is intentionally DORMANT (not deleted). The Bin model, its API routes,
-// and the per-unit allocation flow all remain in the codebase. While BIN_TRACKING_ENABLED is
-// false:
-//   - bin UI is hidden from the frontend
-//   - inbound/transfers/counts operate on WAREHOUSES, not bins
-// Flip this to true to bring bins back.
-export const BIN_TRACKING_ENABLED = false;
+// For Server / API routes: import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
+// For Client components:  import { useBinTracking } from "@/hooks/use-bin-tracking";
+//
+// Environment fallback:
+export const BIN_TRACKING_ENABLED =
+  process.env.BIN_TRACKING_ENABLED === "true" ||
+  process.env.BIN_TRACKING_ENABLED === "1";
 
 // ─── What used to live here ──────────────────────────────────────────────────
 //

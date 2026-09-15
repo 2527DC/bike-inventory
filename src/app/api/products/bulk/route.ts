@@ -6,8 +6,8 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { validateReorderVendor } from "@/lib/vendors/validate";
+import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
 import { createLogger } from "@/lib/logger";
-import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
 
 // This route rewrites a field on up to 500 products in one statement and left no record that
 // it had run. It is the fix-up tool for imported rows — the one place a person corrects 151
@@ -95,7 +95,8 @@ export async function POST(req: NextRequest) {
     // control, so a binId written now would be invisible in the UI that is supposed to show
     // it. Better a 400 that names the reason than a silent write nobody can see or undo.
     if (binId) {
-      if (!BIN_TRACKING_ENABLED) {
+      const binTrackingEnabled = await isBinTrackingEnabled();
+      if (!binTrackingEnabled) {
         return errorResponse("Bin tracking is disabled — bins cannot be assigned", 400);
       }
       const bin = await prisma.bin.findUnique({ where: { id: binId } });

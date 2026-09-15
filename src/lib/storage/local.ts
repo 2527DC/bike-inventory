@@ -106,10 +106,12 @@ export class LocalProvider implements StorageProvider {
     }
   }
 
-  /** Read a file back for the serving route. Returns null when it is not there. */
-  async read(key: string): Promise<Buffer | null> {
+  /** Read a file back. Returns null when it is not there. Implements StorageProvider.read(). */
+  async read(key: string): Promise<ArrayBuffer | null> {
     try {
-      return await fs.readFile(this.resolveKey(key));
+      const buf = await fs.readFile(this.resolveKey(key));
+      // A Buffer may be a view into a larger pooled ArrayBuffer; copy exactly its bytes.
+      return new Uint8Array(buf).slice().buffer;
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
       if (code === "ENOENT" || code === "EISDIR") return null;

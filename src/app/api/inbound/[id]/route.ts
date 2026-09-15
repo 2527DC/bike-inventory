@@ -9,7 +9,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
 import { resolveWarehouse } from "@/lib/warehouses";
 import { adjustWarehouseQty, deductAnywhere } from "@/lib/stock-location";
 import { inboundReceiveLineSchema, inboundCategorySchema } from "@/lib/validations";
@@ -42,7 +42,17 @@ export async function GET(
         putawayBy: { select: { name: true } },
         lineItems: {
           include: {
-            product: { select: { name: true, sku: true } },
+            product: {
+              select: {
+                id: true,
+                name: true,
+                sku: true,
+                brandId: true,
+                brand: { select: { id: true, name: true } },
+                categoryId: true,
+                category: { select: { id: true, name: true } },
+              },
+            },
             bin: { select: { id: true, code: true, name: true, location: true } },
             preBooking: { select: { id: true, customerName: true, status: true } },
           },
@@ -151,14 +161,11 @@ export async function PUT(
       if (!existing.approvedAt) {
         return errorResponse("This shipment has not been approved yet", 403);
       }
-      if (!existing.categoryId) {
-        return errorResponse("Choose the shipment category before receiving", 400);
-      }
-
       const lineItem = await prisma.inboundLineItem.findUnique({
         where: { id: lineItemId },
         include: {
           shipment: { include: { brand: { select: { name: true } } } },
+          product: { select: { id: true, categoryId: true, tags: true } },
           preBooking: true,
         },
       });
@@ -179,8 +186,9 @@ export async function PUT(
       if ("error" in resolved) return errorResponse(resolved.error, 400);
       const warehouse = resolved.warehouse;
 
+      const binTrackingEnabled = await isBinTrackingEnabled();
       const binAllocations: Array<{ binId: string; qty: number }> = body.binAllocations || (body.binId ? [{ binId: body.binId, qty }] : []);
-      if (BIN_TRACKING_ENABLED && binAllocations.length === 0) {
+      if (binTrackingEnabled && binAllocations.length === 0) {
         return errorResponse("Bin assignment is required when marking items delivered", 400);
       }
       const primaryBinId = binAllocations[0]?.binId ?? null;
@@ -213,7 +221,7 @@ export async function PUT(
           }
 
           let runningStock = matchedProduct.currentStock;
-          if (BIN_TRACKING_ENABLED && binAllocations.length) {
+          if (binTrackingEnabled && binAllocations.length) {
             // Create one inventory transaction per bin allocation
             for (const alloc of binAllocations) {
               const previousStock = runningStock;
@@ -258,9 +266,13 @@ export async function PUT(
           const shipmentCat = existing.categoryId
             ? await tx.category.findUnique({ where: { id: existing.categoryId }, select: { name: true } })
             : null;
+          const productCat = matchedProduct.categoryId
+            ? await tx.category.findUnique({ where: { id: matchedProduct.categoryId }, select: { name: true } })
+            : null;
+          const combinedCatName = (productCat?.name || shipmentCat?.name || "").toLowerCase();
           const isCycle =
-            shipmentCat?.name.toLowerCase().includes("cycle") ||
-            shipmentCat?.name.toLowerCase().includes("bike") ||
+            combinedCatName.includes("cycle") ||
+            combinedCatName.includes("bike") ||
             matchedProduct.tags.some((t) => t.toLowerCase().includes("bicycle") || t.toLowerCase().includes("cycle"));
 
           if (isCycle) {

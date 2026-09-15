@@ -2,7 +2,7 @@
 
 import { use, useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { useBinTracking } from "@/hooks/use-bin-tracking";
 import { isLowStock } from "@/lib/reorder";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
@@ -125,6 +125,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
   const { data: session } = useSession();
   const { canView } = usePermissions();
   const { canEdit: canEditCheck } = usePermissions();
+  const { isBinTrackingEnabled: BIN_TRACKING_ENABLED } = useBinTracking();
   // Gates the Pricing card (Cost / Selling / MRP) and nothing else on this page.
   const isAdmin = canView("cost_price");
   const canEdit = canEditCheck("stock");
@@ -157,7 +158,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
       if (binRes.data) setBins(binRes.data);
       else if (binRes.error) log.error("could not load bins", { productId: id, message: binRes.error });
     });
-  }, [id]);
+  }, [id, BIN_TRACKING_ENABLED]);
 
   // Loaded when the form opens rather than with the product: most visits to this page are
   // to read it, and the vendor list is only needed by the one select in the edit form.

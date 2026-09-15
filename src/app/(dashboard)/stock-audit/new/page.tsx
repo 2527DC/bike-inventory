@@ -7,7 +7,7 @@ import Link from "next/link";
 import { ArrowLeft, MapPin, Package } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
-import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { useBinTracking } from "@/hooks/use-bin-tracking";
 import { useStores } from "@/hooks/use-sites";
 
 interface Bin {
@@ -28,6 +28,7 @@ interface User {
 }
 
 export default function NewStockAuditPage() {
+  const { isBinTrackingEnabled: BIN_TRACKING_ENABLED } = useBinTracking();
   const { stores } = useStores();
   const router = useRouter();
   const { data: session } = useSession();
@@ -52,6 +53,7 @@ export default function NewStockAuditPage() {
     type: "success" | "warning" | "error" | "info";
     title: string;
     referenceId: string;
+    description?: string;
     items?: Array<{ label: string; value: string }>;
     details?: string;
     redirectTo?: string;
@@ -63,7 +65,7 @@ export default function NewStockAuditPage() {
     }
     // Load team members for assignment
     fetch("/api/users").then((r) => r.json()).then((res) => { if (res.success) setUsers(res.data); }).catch(() => {});
-  }, []);
+  }, [BIN_TRACKING_ENABLED]);
 
   // Group bins by location
   const locationGroups = useMemo(() => {

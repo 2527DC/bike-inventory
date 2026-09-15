@@ -9,7 +9,7 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { useBinTracking } from "@/hooks/use-bin-tracking";
 import { useStores } from "@/hooks/use-sites";
 import { createLogger } from "@/lib/logger";
 
@@ -50,6 +50,7 @@ function clearBrandCountDraft() {
 }
 
 export default function BrandCountPage() {
+  const { isBinTrackingEnabled: BIN_TRACKING_ENABLED } = useBinTracking();
   const { stores, loading: storesLoading } = useStores();
   // Store first, then that store's warehouses (Part E). The flat list is only for lookups —
   // the picker itself is grouped, so nobody has to know which building belongs to which shop.
@@ -151,7 +152,7 @@ export default function BrandCountPage() {
         setCategories(flat.sort((a, b) => a.name.localeCompare(b.name)));
       }
     }).catch(() => {});
-  }, []);
+  }, [BIN_TRACKING_ENABLED]);
 
   // Debounced "not in list" search
   useEffect(() => {

@@ -125,6 +125,27 @@ export class S3Provider implements StorageProvider {
     }
   }
 
+  async read(key: string): Promise<ArrayBuffer | null> {
+    log.debug("-> GET object", { key });
+    try {
+      const res = await this.client.fetch(this.objectUrl(key), { method: "GET" });
+      if (res.status === 404) {
+        log.debug("object not found", { key });
+        return null;
+      }
+      if (!res.ok) {
+        log.warn("S3 read failed", { key, status: res.status });
+        return null;
+      }
+      const buf = await res.arrayBuffer();
+      log.debug("<- GET object", { key, bytes: buf.byteLength });
+      return buf;
+    } catch (e) {
+      log.warn("S3 read error", { key, reason: e instanceof Error ? e.message : String(e) });
+      return null;
+    }
+  }
+
   /**
    * The origins the bucket currently allows, or null when that cannot be determined.
    *
