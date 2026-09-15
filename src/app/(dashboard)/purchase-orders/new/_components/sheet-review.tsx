@@ -16,6 +16,10 @@ const PAGE = 100;
 /** `#RRGGBB59` — the sheet's colour at 35 % so black text stays readable on red. */
 export const rowTint = (rgb: string) => `#${rgb}59`;
 
+/** A unit price to the paisa — the number the line will carry, so it must not be rounded. */
+const rate = (n: number) =>
+  new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(n);
+
 /**
  * A human word for a fill colour, for a sheet with no legend block. Hue-based, so the
  * ten shades of red a spreadsheet can hold all read as "Red" in the filter.
@@ -162,6 +166,10 @@ export function SheetReview({ extraction, busy, onClose, onChange, onUseSelected
 
   const selectedCount = items.filter((it) => it.selected).length;
   const rendered = visible.slice(0, shown);
+  // R5 (plan 1509): only a row with a price can be ticked, so "Select all" counts only those.
+  const pricedVisible = visible.filter((it) => it.unitPrice !== null);
+  const unpricedVisible = visible.length - pricedVisible.length;
+  const anyUnpriced = items.some((it) => it.unitPrice === null);
 
   /** Grouped by sheet, in first-seen order, so each group carries its own headers. */
   const groups = useMemo(() => {
@@ -183,6 +191,7 @@ export function SheetReview({ extraction, busy, onClose, onChange, onUseSelected
 
   async function toggle(item: ExtractionItemView, selected: boolean) {
     if (anyBusy || rowBusy.has(item.id)) return;
+    if (selected && item.unitPrice === null) return; // R5 — the server refuses it too
     setError(null);
     setRowBusy((prev) => new Set(prev).add(item.id));
     // Optimistic: flip now, revert on refusal.
@@ -333,11 +342,11 @@ export function SheetReview({ extraction, busy, onClose, onChange, onUseSelected
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => void bulk(visible.filter((it) => !it.selected).map((it) => it.id), true)}
-              disabled={anyBusy || visible.every((it) => it.selected)}
+              onClick={() => void bulk(pricedVisible.filter((it) => !it.selected).map((it) => it.id), true)}
+              disabled={anyBusy || pricedVisible.every((it) => it.selected)}
               className="min-h-[44px] px-3 rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-700 disabled:opacity-40 tabular-nums"
             >
-              Select all {visible.length} shown
+              Select all {pricedVisible.length} {unpricedVisible > 0 ? "with a price" : "shown"}
             </button>
             <button
               type="button"
@@ -359,6 +368,11 @@ export function SheetReview({ extraction, busy, onClose, onChange, onUseSelected
           {withoutColours && (
             <p className="text-[11px] text-slate-500">
               Read by AI, so the rows do not carry the sheet&apos;s colours.
+            </p>
+          )}
+          {anyUnpriced && (
+            <p className="text-[11px] text-slate-500">
+              Rows marked <span className="font-medium">No price</span> have no MRP or price in the sheet and cannot be ordered.
             </p>
           )}
         </div>
@@ -383,6 +397,7 @@ export function SheetReview({ extraction, busy, onClose, onChange, onUseSelected
                     <thead>
                       <tr className="bg-white border-b border-slate-200">
                         <th className="sticky left-0 z-10 bg-white w-11 px-1 py-2" aria-label="Select" />
+                        <th className="px-2 py-2 text-left font-semibold text-slate-600 whitespace-nowrap">Unit price</th>
                         {headers.map((h, i) => (
                           <th key={i} className="px-2 py-2 text-left font-semibold text-slate-600 whitespace-nowrap">
                             {h || `Column ${i + 1}`}
@@ -394,6 +409,7 @@ export function SheetReview({ extraction, busy, onClose, onChange, onUseSelected
                       {rows.map((it) => {
                         const label = legendFor(it);
                         const isBusy = rowBusy.has(it.id);
+                        const noPrice = it.unitPrice === null;
                         return (
                           <tr
                             key={it.id}
@@ -401,6 +417,9 @@ export function SheetReview({ extraction, busy, onClose, onChange, onUseSelected
                             className={`border-b border-slate-100 ${it.selected ? "outline outline-1 -outline-offset-1 outline-blue-400" : ""}`}
                           >
                             <td className="sticky left-0 z-10 px-1 py-0" style={it.rowColor ? { background: rowTint(it.rowColor) } : { background: "#fff" }}>
+                              {/* No price in the sheet → nothing to order it at (plan 1509, R5).
+                                  Still untickable, so a row selected before prices were stored
+                                  can be cleared. */}
                               <label className="flex items-center justify-center min-h-[44px] min-w-[44px]">
                                 {isBusy ? (
                                   <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
@@ -408,13 +427,26 @@ export function SheetReview({ extraction, busy, onClose, onChange, onUseSelected
                                   <input
                                     type="checkbox"
                                     checked={it.selected}
-                                    disabled={anyBusy}
+                                    disabled={anyBusy || (noPrice && !it.selected)}
                                     onChange={(e) => void toggle(it, e.target.checked)}
-                                    aria-label={`Select ${it.name}`}
-                                    className="h-5 w-5"
+                                    aria-label={noPrice ? `${it.name} has no price in the sheet and cannot be selected` : `Select ${it.name}`}
+                                    className="h-5 w-5 disabled:opacity-40"
                                   />
                                 )}
                               </label>
+                            </td>
+                            {/* The price the line will carry, locked — or why the row cannot be ordered. */}
+                            <td className="px-2 py-1.5 whitespace-nowrap align-middle tabular-nums">
+                              {noPrice ? (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 border border-slate-300 text-slate-500">
+                                  No price
+                                </span>
+                              ) : (
+                                <span className="font-semibold text-slate-900">
+                                  {rate(it.unitPrice as number)}{" "}
+                                  <span className="text-[10px] font-normal text-slate-500">{it.priceSource === "price" ? "Price" : "MRP"}</span>
+                                </span>
+                              )}
                             </td>
                             {it.columns.map((c, i) => (
                               <td key={i} className="px-2 py-1.5 text-slate-800 whitespace-nowrap max-w-[16rem] overflow-hidden text-ellipsis align-middle">

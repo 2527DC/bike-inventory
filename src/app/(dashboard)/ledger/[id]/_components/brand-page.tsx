@@ -17,7 +17,7 @@ import { MonthlyTab } from "./monthly-tab";
 import { ShareTab } from "./share-tab";
 import { TableTab } from "./table-tab";
 
-type Tab = "ledger" | "monthly" | "table" | "gaps" | "share";
+type Tab = "ledger" | "monthly" | "table" | "gaps" | "files" | "share";
 
 export function BrandPage({ brand, reload }: { brand: LedgerBrandView; reload: () => Promise<void> | void }) {
   const { canEdit, canCreate } = usePermissions();
@@ -38,6 +38,13 @@ export function BrandPage({ brand, reload }: { brand: LedgerBrandView; reload: (
           ‹ Back
         </Link>
         <h1>{brand.name}</h1>
+        <button
+          className={"iconbtn" + (tab === "files" ? " primary" : "")}
+          onClick={() => setTab("files")}
+          title="Upload statements or exports and run AI extraction"
+        >
+          📁 Upload &amp; AI
+        </button>
         {canEdit("brand_ledger") ? (
           <button
             className={"iconbtn" + (due ? " primary" : "")}
@@ -91,6 +98,9 @@ export function BrandPage({ brand, reload }: { brand: LedgerBrandView; reload: (
         <button className={tab === "gaps" ? "on" : ""} onClick={() => setTab("gaps")}>
           Gaps ({openGaps(brand).length})
         </button>
+        <button className={tab === "files" ? "on" : ""} onClick={() => setTab("files")}>
+          Files &amp; AI
+        </button>
         <button className={tab === "share" ? "on" : ""} onClick={() => setTab("share")}>
           Share
         </button>
@@ -102,14 +112,16 @@ export function BrandPage({ brand, reload }: { brand: LedgerBrandView; reload: (
       {tab === "ledger" && <LedgerTab brand={brand} reload={reload} onOpenGap={openGapInTab} />}
       {tab === "monthly" && <MonthlyTab brand={brand} />}
       {tab === "table" && <TableTab brand={brand} reload={reload} onOpenGap={openGapInTab} />}
+      {tab === "files" && <FilesCard vendorId={brand.id} brand={brand} reload={reload} />}
       {tab === "share" && <ShareTab brand={brand} />}
 
-      {/* Not in the ledger app — the one-time JSON import (plan Part D) and the uploads/AI
-          card (Part E). They sit below the app's own screen, never inside its tabs. */}
+      {/* Not in the ledger app — the one-time JSON import (plan Part D) */}
       {brand.isEmpty && canCreate("brand_ledger") && (
         <ImportJsonCard vendorId={brand.id} brand={brand} reload={reload} />
       )}
-      <FilesCard vendorId={brand.id} brand={brand} reload={reload} />
+      {tab !== "files" && (
+        <FilesCard vendorId={brand.id} brand={brand} reload={reload} />
+      )}
     </div>
   );
 }

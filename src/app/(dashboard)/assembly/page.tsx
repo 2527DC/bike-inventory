@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { usePermissions } from "@/lib/use-permissions";
 import {
   Wrench,
   Clock,
   CheckCircle2,
+  CheckCircle,
   AlertTriangle,
   Play,
   Pause,
@@ -18,6 +19,9 @@ import {
   Camera,
   X,
   Sparkles,
+  Upload,
+  ArrowRight,
+  Layers,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -75,20 +79,61 @@ interface Mechanic {
   email: string;
 }
 
-export default function AssemblySupervisorPage() {
-  const { canApprove, canCreate, canEdit } = usePermissions();
+interface Bin {
+  id: string;
+  code: string;
+  name: string;
+  isAssemblyArea: boolean;
+}
 
-  const [tasks, setTasks] = useState<AssemblyTask[]>([]);
+const HOLD_REASONS = [
+  "Missing Pedals / Accessories",
+  "Scratched Frame / Defect in Carton",
+  "Derailleur / Gear Tuning Issue",
+  "Disc Brake Rub / Rotor Bent",
+  "Called to Customer Counter",
+  "Waiting for Workshop Tools",
+];
+
+export default function AssemblyPage() {
+  const { can } = usePermissions();
+  const isSupervisor = can("assembly", "approve");
+
+  // Tab state (for supervisors: "my_tasks" vs "supervisor")
+  const [activeTab, setActiveTab] = useState<"my_tasks" | "supervisor">("my_tasks");
+
+  // Shared state
+  const [loading, setLoading] = useState(true);
+  const [myTasks, setMyTasks] = useState<AssemblyTask[]>([]);
+  const [allTasks, setAllTasks] = useState<AssemblyTask[]>([]);
   const [pendingUnits, setPendingUnits] = useState<PendingUnit[]>([]);
   const [mechanics, setMechanics] = useState<Mechanic[]>([]);
-  const [loading, setLoading] = useState(true);
 
-  // Filters
+  // Mechanic Queue Execution State
+  const [activeTask, setActiveTask] = useState<AssemblyTask | null>(null);
+  const [elapsedSec, setElapsedSec] = useState<number>(0);
+
+  // Modals for build execution
+  const [showHoldModal, setShowHoldModal] = useState(false);
+  const [holdReason, setHoldReason] = useState("");
+  const [customHoldReason, setCustomHoldReason] = useState("");
+
+  const [showCompleteModal, setShowCompleteModal] = useState(false);
+  const [photoDataUrl, setPhotoDataUrl] = useState<string>("");
+  const [frameNumber, setFrameNumber] = useState<string>("");
+  const [destinationBinId, setDestinationBinId] = useState<string>("");
+  const [availableBins, setAvailableBins] = useState<Bin[]>([]);
+  const [completing, setCompleting] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string>("");
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Supervisor Filters
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [mechanicFilter, setMechanicFilter] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Assignment Modal
+  // Supervisor Assignment Modal
   const [selectedUnitForAssign, setSelectedUnitForAssign] = useState<PendingUnit | null>(null);
   const [assignMechanicId, setAssignMechanicId] = useState("");
   const [assignLevel, setAssignLevel] = useState<"A50" | "A85" | "FULL">("A85");
@@ -98,15 +143,31 @@ export default function AssemblySupervisorPage() {
   async function loadData() {
     setLoading(true);
     try {
-      const res = await fetch("/api/assembly/tasks");
-      const json = await res.json();
-      if (json.success) {
-        setTasks(json.data.tasks || []);
-        setPendingUnits(json.data.pendingUnits || []);
-        setMechanics(json.data.mechanics || []);
+      // 1. Fetch user's own tasks
+      const myRes = await fetch("/api/assembly/tasks?mine=1");
+      const myJson = await myRes.json();
+      if (myJson.success) {
+        const list: AssemblyTask[] = myJson.data.tasks || [];
+        setMyTasks(list);
+
+        const current = list.find(
+          (t) => t.status === "IN_PROGRESS" || t.status === "ON_HOLD"
+        );
+        setActiveTask(current || null);
+      }
+
+      // 2. If supervisor, also fetch all workshop data
+      if (isSupervisor) {
+        const allRes = await fetch("/api/assembly/tasks");
+        const allJson = await allRes.json();
+        if (allJson.success) {
+          setAllTasks(allJson.data.tasks || []);
+          setPendingUnits(allJson.data.pendingUnits || []);
+          setMechanics(allJson.data.mechanics || []);
+        }
       }
     } catch (err) {
-      console.error("Failed to load assembly tasks", err);
+      console.error("Failed to load assembly data", err);
     } finally {
       setLoading(false);
     }
@@ -114,9 +175,172 @@ export default function AssemblySupervisorPage() {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [isSupervisor]);
 
-  async function handleAssign(e: React.FormEvent) {
+  // If user has isSupervisor, default to supervisor tab unless they have an active task
+  useEffect(() => {
+    if (isSupervisor) {
+      if (activeTask) {
+        setActiveTab("my_tasks");
+      } else {
+        setActiveTab("supervisor");
+      }
+    } else {
+      setActiveTab("my_tasks");
+    }
+  }, [isSupervisor, activeTask]);
+
+  // Live timer tick for active task
+  useEffect(() => {
+    if (!activeTask || activeTask.status !== "IN_PROGRESS" || !activeTask.startedAt) {
+      return;
+    }
+
+    function calculateElapsed() {
+      if (!activeTask?.startedAt) return 0;
+      const startMs = new Date(activeTask.startedAt).getTime();
+      const nowMs = Date.now();
+      const grossSec = Math.max(0, Math.round((nowMs - startMs) / 1000));
+      return Math.max(0, grossSec - (activeTask.totalHoldSeconds || 0));
+    }
+
+    setElapsedSec(calculateElapsed());
+    const interval = setInterval(() => {
+      setElapsedSec(calculateElapsed());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [activeTask]);
+
+  // Load available bins when complete modal opens
+  useEffect(() => {
+    if (showCompleteModal && activeTask) {
+      fetch(`/api/bins?warehouseId=${encodeURIComponent(activeTask.warehouse.id)}`)
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.success) setAvailableBins(res.data);
+        })
+        .catch(console.error);
+    }
+  }, [showCompleteModal, activeTask]);
+
+  // ── BUILD EXECUTION HANDLERS ──
+  async function handleStartTask(taskId: string) {
+    try {
+      const res = await fetch(`/api/assembly/tasks/${taskId}/start`, { method: "POST" });
+      const json = await res.json();
+      if (json.success) {
+        loadData();
+      } else {
+        alert(json.error || "Failed to start task");
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Error starting task");
+    }
+  }
+
+  async function handleHoldTask() {
+    if (!activeTask) return;
+    const finalReason = holdReason === "Other" ? customHoldReason : holdReason;
+    if (!finalReason.trim()) {
+      alert("Please select or enter a reason for placing this build on hold");
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/assembly/tasks/${activeTask.id}/hold`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "HOLD", reason: finalReason.trim() }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setShowHoldModal(false);
+        setHoldReason("");
+        setCustomHoldReason("");
+        loadData();
+      } else {
+        alert(json.error || "Hold failed");
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Error putting on hold");
+    }
+  }
+
+  async function handleResumeTask() {
+    if (!activeTask) return;
+    try {
+      const res = await fetch(`/api/assembly/tasks/${activeTask.id}/hold`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "RESUME" }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        loadData();
+      } else {
+        alert(json.error || "Resume failed");
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Error resuming");
+    }
+  }
+
+  function handlePhotoCapture(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPhotoDataUrl(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  async function handleCompleteTask(e: React.FormEvent) {
+    e.preventDefault();
+    if (!activeTask) return;
+
+    setCompleting(true);
+    try {
+      const res = await fetch(`/api/assembly/tasks/${activeTask.id}/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          photoUrl: photoDataUrl || undefined,
+          destinationBinId: destinationBinId || undefined,
+          frameNumber: frameNumber.trim() || undefined,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || "Failed to complete task");
+      }
+
+      setShowCompleteModal(false);
+      setPhotoDataUrl("");
+      setFrameNumber("");
+      setDestinationBinId("");
+      setSuccessMessage(
+        `Great job! ${activeTask.unit.unitCode} marked assembled & credited to your workshop earnings.`
+      );
+      setTimeout(() => setSuccessMessage(""), 7000);
+      loadData();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Error completing task");
+    } finally {
+      setCompleting(false);
+    }
+  }
+
+  const formatTimer = (totalSec: number) => {
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  };
+
+  // ── SUPERVISOR ASSIGNMENT HANDLERS ──
+  async function handleAssignSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedUnitForAssign || !assignMechanicId) return;
 
@@ -133,380 +357,736 @@ export default function AssemblySupervisorPage() {
         }),
       });
       const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json.error || "Assignment failed");
+      if (json.success) {
+        setSelectedUnitForAssign(null);
+        setAssignNotes("");
+        setAssignMechanicId("");
+        loadData();
+      } else {
+        alert(json.error || "Failed to assign unit");
       }
-
-      setSelectedUnitForAssign(null);
-      setAssignMechanicId("");
-      setAssignLevel("A85");
-      setAssignNotes("");
-      loadData();
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Assignment failed");
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Error creating assignment");
     } finally {
       setAssignSaving(false);
     }
   }
 
-  // Filtered Tasks
-  const filteredTasks = useMemo(() => {
-    return tasks.filter((t) => {
-      const matchesStatus = statusFilter === "ALL" || t.status === statusFilter;
-      const matchesMechanic = mechanicFilter === "ALL" || t.assignedTo.id === mechanicFilter;
-      const matchesSearch =
-        t.unit.unitCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        t.unit.product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        t.assignedTo.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (t.holdReason && t.holdReason.toLowerCase().includes(searchQuery.toLowerCase()));
-
-      return matchesStatus && matchesMechanic && matchesSearch;
+  // Filtered supervisor tasks
+  const filteredSupervisorTasks = useMemo(() => {
+    return allTasks.filter((t) => {
+      if (statusFilter !== "ALL" && t.status !== statusFilter) return false;
+      if (mechanicFilter !== "ALL" && t.assignedTo.id !== mechanicFilter) return false;
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const code = t.unit.unitCode.toLowerCase();
+        const name = t.unit.product.name.toLowerCase();
+        const brand = t.unit.product.brand.name.toLowerCase();
+        const mech = t.assignedTo.name.toLowerCase();
+        if (!code.includes(q) && !name.includes(q) && !brand.includes(q) && !mech.includes(q)) {
+          return false;
+        }
+      }
+      return true;
     });
-  }, [tasks, statusFilter, mechanicFilter, searchQuery]);
+  }, [allTasks, statusFilter, mechanicFilter, searchQuery]);
 
-  // Aggregate stats
-  const inProgressCount = tasks.filter((t) => t.status === "IN_PROGRESS").length;
-  const onHoldCount = tasks.filter((t) => t.status === "ON_HOLD").length;
-  const completedTodayCount = tasks.filter(
-    (t) =>
-      t.status === "COMPLETED" &&
-      t.completedAt &&
-      new Date(t.completedAt).toDateString() === new Date().toDateString()
-  ).length;
+  const pendingMyTasks = myTasks.filter((t) => t.status === "PENDING");
+  const completedMyTasks = myTasks.filter((t) => t.status === "COMPLETED");
 
   return (
-    <div className="space-y-6 pb-12">
-      {/* Header */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+    <div className="space-y-4 pb-12">
+      {/* Page Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-            <Wrench className="h-4 w-4" />
-            <span>Workshop Build-Line Management</span>
+          <div className="flex items-center gap-2">
+            <div className="p-2 rounded-lg bg-indigo-600 text-white shadow-xs">
+              <Wrench className="h-5 w-5" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold tracking-tight text-slate-900">
+                Assembly & Build Line
+              </h1>
+              <p className="text-xs text-slate-500">
+                Workshop queue, bicycle assembly execution, and condition tracking
+              </p>
+            </div>
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-            Assembly Supervisor Board
-          </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            Assign boxed bicycles to mechanics, track active build timers, manage hold exceptions, and verify completed builds.
-          </p>
         </div>
+
+        {/* View Switcher for Supervisors */}
+        {isSupervisor && (
+          <div className="flex items-center bg-slate-100 p-1 rounded-xl self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setActiveTab("my_tasks")}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${
+                activeTab === "my_tasks"
+                  ? "bg-white text-indigo-700 shadow-xs"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              <Wrench className="h-3.5 w-3.5" />
+              <span>My Build Queue</span>
+              {(pendingMyTasks.length > 0 || activeTask) && (
+                <Badge variant="default" className="text-[10px] px-1 py-0 bg-indigo-100 text-indigo-700">
+                  {pendingMyTasks.length + (activeTask ? 1 : 0)}
+                </Badge>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("supervisor")}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${
+                activeTab === "supervisor"
+                  ? "bg-white text-indigo-700 shadow-xs"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              <Layers className="h-3.5 w-3.5" />
+              <span>Workshop & Assignments</span>
+              {pendingUnits.length > 0 && (
+                <Badge variant="warning" className="text-[10px] px-1 py-0">
+                  {pendingUnits.length} unassigned
+                </Badge>
+              )}
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* KPI Stats */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <Card className="border-indigo-100 bg-indigo-50/20 backdrop-blur-sm dark:border-indigo-950/60 dark:bg-indigo-950/10">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-indigo-700 dark:text-indigo-400">Awaiting Assembly</span>
-              <Bike className="h-4 w-4 text-indigo-600" />
-            </div>
-            <div className="mt-1 text-2xl font-bold text-indigo-950 dark:text-indigo-200">
-              {pendingUnits.length}
-            </div>
-            <div className="mt-1 text-xs text-indigo-600/70 dark:text-indigo-400/70">Unassigned boxed units</div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-blue-100 bg-blue-50/20 backdrop-blur-sm dark:border-blue-950/60 dark:bg-blue-950/10">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-blue-700 dark:text-blue-400">On The Stand</span>
-              <Play className="h-4 w-4 text-blue-600" />
-            </div>
-            <div className="mt-1 text-2xl font-bold text-blue-950 dark:text-blue-200">{inProgressCount}</div>
-            <div className="mt-1 text-xs text-blue-600/70 dark:text-blue-400/70">Currently being assembled</div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-amber-100 bg-amber-50/20 backdrop-blur-sm dark:border-amber-950/60 dark:bg-amber-950/10">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-amber-700 dark:text-amber-400">Stuck / On Hold</span>
-              <AlertTriangle className="h-4 w-4 text-amber-600" />
-            </div>
-            <div className="mt-1 text-2xl font-bold text-amber-950 dark:text-amber-200">{onHoldCount}</div>
-            <div className="mt-1 text-xs text-amber-600/70 dark:text-amber-400/70">Missing parts or issues</div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-emerald-100 bg-emerald-50/20 backdrop-blur-sm dark:border-emerald-950/60 dark:bg-emerald-950/10">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400">Completed Today</span>
-              <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-            </div>
-            <div className="mt-1 text-2xl font-bold text-emerald-950 dark:text-emerald-200">
-              {completedTodayCount}
-            </div>
-            <div className="mt-1 text-xs text-emerald-600/70 dark:text-emerald-400/70">Verified ready for floor</div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Unassigned Boxed Bicycles Section */}
-      {pendingUnits.length > 0 && (
-        <div className="rounded-2xl border border-indigo-100 bg-gradient-to-r from-indigo-50/50 via-white to-white p-5 shadow-sm dark:border-indigo-950 dark:from-slate-900/60 dark:to-slate-900">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="flex h-2 w-2 rounded-full bg-indigo-600 ring-4 ring-indigo-100" />
-              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                Boxed Units Ready For Assignment ({pendingUnits.length})
-              </h2>
-            </div>
-            <span className="text-xs text-slate-500">
-              Assigning moves bicycle automatically to the warehouse's assembly staging area (ASM)
-            </span>
-          </div>
-
-          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-            {pendingUnits.slice(0, 6).map((u) => (
-              <div
-                key={u.id}
-                className="flex items-center justify-between rounded-xl border border-slate-200/80 bg-white p-3.5 shadow-sm transition-all hover:border-indigo-300 dark:border-slate-800 dark:bg-slate-900"
-              >
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
-                      {u.unitCode}
-                    </span>
-                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-400">
-                      {u.warehouse.name}
-                    </span>
-                  </div>
-                  <div className="mt-1 text-xs font-semibold text-slate-900 dark:text-white">
-                    {u.product.name}
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    {u.product.brand.name} · {u.product.category.name}
-                    {u.bin && ` · Bin ${u.bin.code}`}
-                  </div>
-                </div>
-
-                <Button
-                  size="sm"
-                  onClick={() => setSelectedUnitForAssign(u)}
-                  className="gap-1 bg-indigo-600 text-xs text-white hover:bg-indigo-700"
-                >
-                  <UserCheck className="h-3.5 w-3.5" /> Assign
-                </Button>
-              </div>
-            ))}
-          </div>
+      {/* Success Notification Banner */}
+      {successMessage && (
+        <div className="flex items-center gap-2 rounded-xl bg-emerald-50 p-3.5 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-200">
+          <CheckCircle className="h-4 w-4 shrink-0 text-emerald-600" />
+          <span>{successMessage}</span>
         </div>
       )}
 
-      {/* Filter and State Bar */}
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {["ALL", "PENDING", "IN_PROGRESS", "ON_HOLD", "COMPLETED"].map((st) => (
-            <button
-              key={st}
-              onClick={() => setStatusFilter(st)}
-              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-                statusFilter === st
-                  ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
-                  : "bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400"
-              }`}
-            >
-              {st === "ALL" ? "All Tasks" : st.replace("_", " ")}
-            </button>
-          ))}
-        </div>
+      {/* ───────────────────────────────────────────────────────────── */}
+      {/* ── VIEW 1: MY BUILD QUEUE (Mechanic Task Execution) ───────── */}
+      {/* ───────────────────────────────────────────────────────────── */}
+      {activeTab === "my_tasks" && (
+        <div className="mx-auto max-w-2xl space-y-4">
+          {/* Active Build Hero Card */}
+          {activeTask ? (
+            <Card className="overflow-hidden border-2 border-indigo-600 bg-gradient-to-b from-white to-slate-50 shadow-md">
+              <div className="bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
+                  <span>CURRENT ACTIVE BUILD</span>
+                </div>
+                <span className="font-mono bg-indigo-700/60 px-2 py-0.5 rounded text-[11px]">
+                  Condition: {activeTask.level}
+                </span>
+              </div>
 
-        <div className="flex items-center gap-2">
-          <div className="relative w-full md:w-64">
-            <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
-            <Input
-              placeholder="Search unit, mechanic, bike..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-8 text-xs"
-            />
-          </div>
-
-          <select
-            value={mechanicFilter}
-            onChange={(e) => setMechanicFilter(e.target.value)}
-            className="rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300"
-          >
-            <option value="ALL">All Mechanics</option>
-            {mechanics.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {/* Assembly Tasks Grid */}
-      {loading ? (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {[1, 2, 3, 4, 5, 6].map((i) => (
-            <div key={i} className="h-44 animate-pulse rounded-xl border border-slate-200 bg-slate-100/60 dark:border-slate-800 dark:bg-slate-800/40" />
-          ))}
-        </div>
-      ) : filteredTasks.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 p-12 text-center dark:border-slate-800">
-          <Wrench className="h-10 w-10 text-slate-300 dark:text-slate-600" />
-          <h3 className="mt-3 text-base font-semibold text-slate-800 dark:text-slate-200">No Tasks Match</h3>
-          <p className="mt-1 text-xs text-slate-500">
-            No assembly tasks match the selected filter criteria.
-          </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {filteredTasks.map((task) => {
-            const isHold = task.status === "ON_HOLD";
-            const isInProgress = task.status === "IN_PROGRESS";
-            const isCompleted = task.status === "COMPLETED";
-
-            // Calculate active duration in minutes (excluding holds)
-            let durationMin = null;
-            if (task.startedAt) {
-              const end = task.completedAt ? new Date(task.completedAt).getTime() : Date.now();
-              const grossSec = Math.max(0, Math.round((end - new Date(task.startedAt).getTime()) / 1000));
-              const netSec = Math.max(0, grossSec - task.totalHoldSeconds);
-              durationMin = Math.round(netSec / 60);
-            }
-
-            return (
-              <Card
-                key={task.id}
-                className={`overflow-hidden transition-all hover:shadow-md ${
-                  isHold
-                    ? "border-amber-300 bg-amber-50/10 dark:border-amber-800/60 dark:bg-amber-950/10"
-                    : isInProgress
-                    ? "border-blue-300 bg-blue-50/10 dark:border-blue-800/60 dark:bg-blue-950/10"
-                    : isCompleted
-                    ? "border-emerald-200 bg-emerald-50/5 dark:border-emerald-900/40"
-                    : "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"
-                }`}
-              >
-                <CardContent className="p-5">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-base font-bold text-indigo-600 dark:text-indigo-400">
-                          {task.unit.unitCode}
-                        </span>
-                        <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                          Level: {task.level}
-                        </span>
-                      </div>
-                      <div className="mt-1 font-semibold text-slate-900 dark:text-white">
-                        {task.unit.product.name}
-                      </div>
-                      <div className="text-[11px] text-slate-400">
-                        {task.unit.product.brand.name} · {task.unit.product.category.name}
-                      </div>
-                    </div>
-
-                    <Badge
-                      variant={
-                        isCompleted
-                          ? "success"
-                          : isInProgress
-                          ? "info"
-                          : isHold
-                          ? "warning"
-                          : "default"
-                      }
-                      className="capitalize"
-                    >
-                      {task.status.replace("_", " ")}
-                    </Badge>
-                  </div>
-
-                  {/* Mechanic & Location info */}
-                  <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300">
-                    <div className="flex items-center gap-1.5">
-                      <UserCheck className="h-3.5 w-3.5 text-slate-400" />
-                      <span className="font-semibold">{task.assignedTo.name}</span>
-                    </div>
-
-                    {durationMin !== null && (
-                      <div className="flex items-center gap-1 text-[11px] text-slate-500">
-                        <Clock className="h-3.5 w-3.5" />
-                        <span>{durationMin} mins</span>
-                      </div>
+              <CardContent className="p-4 sm:p-5 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                  <div>
+                    <span className="font-mono text-xl sm:text-2xl font-black text-indigo-600">
+                      {activeTask.unit.unitCode}
+                    </span>
+                    <h2 className="text-base font-bold text-slate-900 mt-0.5">
+                      {activeTask.unit.product.name}
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      {activeTask.unit.product.brand.name} · {activeTask.unit.product.category.name}
+                    </p>
+                    {activeTask.unit.bin && (
+                      <p className="text-[11px] text-slate-600 mt-1 flex items-center gap-1">
+                        <MapPin className="h-3 w-3 text-slate-400" />
+                        Location: <strong className="text-slate-800">{activeTask.unit.bin.name} ({activeTask.unit.bin.code})</strong>
+                      </p>
                     )}
                   </div>
 
-                  {/* Hold Exception banner */}
-                  {isHold && task.holdReason && (
-                    <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 p-2.5 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
-                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
-                      <div>
-                        <span className="font-semibold">On Hold:</span> {task.holdReason}
-                        <div className="text-[10px] text-amber-600/80 dark:text-amber-400/80">
-                          Total hold duration: {Math.round(task.totalHoldSeconds / 60)} mins
-                        </div>
-                      </div>
+                  {/* Digital Live Timer */}
+                  <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 bg-slate-100 sm:bg-transparent p-2 sm:p-0 rounded-xl">
+                    <div
+                      className={`flex items-center gap-1.5 rounded-xl px-3 py-1 font-mono text-xl font-black ${
+                        activeTask.status === "ON_HOLD"
+                          ? "bg-amber-100 text-amber-900"
+                          : "bg-indigo-100 text-indigo-950"
+                      }`}
+                    >
+                      <Clock className="h-4 w-4" />
+                      <span>{formatTimer(elapsedSec)}</span>
                     </div>
-                  )}
-
-                  {/* Completed Photo verification */}
-                  {isCompleted && task.photoUrl && (
-                    <div className="mt-3 flex items-center gap-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-600 dark:bg-slate-800/40 dark:text-slate-300">
-                      <Camera className="h-3.5 w-3.5 text-emerald-600" />
-                      <span>Verification photo attached</span>
-                    </div>
-                  )}
-
-                  {/* Staged location */}
-                  <div className="mt-3 flex items-center gap-1.5 text-[11px] text-slate-400">
-                    <MapPin className="h-3 w-3" />
-                    <span>
-                      {task.warehouse.name} ({task.unit.bin ? task.unit.bin.code : "ASM Area"})
+                    <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                      {activeTask.status === "ON_HOLD" ? "Paused (On Hold)" : "Build Time"}
                     </span>
                   </div>
-                </CardContent>
-              </Card>
-            );
-          })}
+                </div>
+
+                {/* On Hold Alert if paused */}
+                {activeTask.status === "ON_HOLD" && (
+                  <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900">
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <AlertTriangle className="h-4 w-4 text-amber-600" />
+                      <span>Build On Hold</span>
+                    </div>
+                    <p className="mt-1 text-slate-700">{activeTask.holdReason}</p>
+                    <div className="mt-1 text-[10px] text-amber-700">
+                      Total hold time: {Math.round(activeTask.totalHoldSeconds / 60)} mins
+                    </div>
+                  </div>
+                )}
+
+                {/* Large Action Buttons */}
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  {activeTask.status === "ON_HOLD" ? (
+                    <Button
+                      onClick={handleResumeTask}
+                      className="h-12 gap-2 bg-emerald-600 text-sm font-bold text-white hover:bg-emerald-700 shadow-sm"
+                    >
+                      <Play className="h-4 w-4 fill-current" />
+                      Resume Build
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowHoldModal(true)}
+                      className="h-12 gap-2 border-amber-300 text-amber-800 hover:bg-amber-50 font-bold"
+                    >
+                      <Pause className="h-4 w-4" />
+                      Put On Hold
+                    </Button>
+                  )}
+
+                  <Button
+                    onClick={() => setShowCompleteModal(true)}
+                    className="h-12 gap-2 bg-indigo-600 text-sm font-bold text-white hover:bg-indigo-700 shadow-sm"
+                  >
+                    <CheckCircle className="h-4 w-4" />
+                    Finish & Photo
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center shadow-xs">
+              <Bike className="mx-auto h-8 w-8 text-slate-400" />
+              <div className="mt-2 text-sm font-bold text-slate-800">
+                No Active Build Right Now
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {pendingMyTasks.length > 0
+                  ? "Select a bicycle from your queue below to start assembling."
+                  : "No bicycles currently assigned to you."}
+              </p>
+            </div>
+          )}
+
+          {/* Pending Tasks Queue */}
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between text-xs font-bold uppercase text-slate-600">
+              <span>My Assigned Tasks ({pendingMyTasks.length})</span>
+            </div>
+
+            {loading ? (
+              <div className="space-y-2">
+                {[1, 2].map((i) => (
+                  <div key={i} className="h-16 animate-pulse rounded-xl bg-slate-100" />
+                ))}
+              </div>
+            ) : pendingMyTasks.length === 0 ? (
+              <div className="rounded-xl border border-slate-200 bg-white p-5 text-center text-xs text-slate-400">
+                No pending tasks in your queue.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {pendingMyTasks.map((t) => (
+                  <div
+                    key={t.id}
+                    className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs transition-all hover:border-indigo-300 gap-3"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-xs text-indigo-600">
+                          {t.unit.unitCode}
+                        </span>
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
+                          Level: {t.level}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 text-xs font-semibold text-slate-900 truncate">
+                        {t.unit.product.name}
+                      </div>
+                      <div className="text-[11px] text-slate-500">
+                        {t.unit.product.brand.name} · {t.unit.product.category.name}
+                      </div>
+                    </div>
+
+                    <Button
+                      onClick={() => handleStartTask(t.id)}
+                      disabled={activeTask !== null}
+                      size="sm"
+                      className="h-8 gap-1 bg-indigo-600 text-xs font-semibold text-white hover:bg-indigo-700 shrink-0"
+                    >
+                      <Play className="h-3 w-3 fill-current" />
+                      Start
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Completed Builds Today */}
+          {completedMyTasks.length > 0 && (
+            <div className="space-y-2.5 pt-2">
+              <div className="flex items-center justify-between text-xs font-bold uppercase text-slate-600">
+                <span>Completed Today ({completedMyTasks.length})</span>
+              </div>
+              <div className="space-y-2">
+                {completedMyTasks.map((t) => (
+                  <div
+                    key={t.id}
+                    className="flex items-center justify-between rounded-xl border border-emerald-100 bg-emerald-50/40 p-3 text-xs"
+                  >
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                        <span className="font-mono font-bold text-slate-800">{t.unit.unitCode}</span>
+                        <span className="text-slate-400">·</span>
+                        <span className="font-medium text-slate-700">{t.unit.product.name}</span>
+                      </div>
+                      <p className="text-[10px] text-slate-500 mt-0.5">
+                        Assembled: {t.completedAt ? new Date(t.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Done"}
+                        {t.unit.frameNumber && ` · Frame #${t.unit.frameNumber}`}
+                      </p>
+                    </div>
+                    <Badge variant="success" className="text-[10px] px-1.5 py-0">
+                      Assembled
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {/* ── ASSIGN MECHANIC MODAL ── */}
-      {selectedUnitForAssign && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-slate-900">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
-              <div className="flex items-center gap-2">
-                <Wrench className="h-5 w-5 text-indigo-600" />
-                <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                  Assign Build Task
-                </h2>
+      {/* ───────────────────────────────────────────────────────────── */}
+      {/* ── VIEW 2: SUPERVISOR & ASSIGNMENTS ───────────────────────── */}
+      {/* ───────────────────────────────────────────────────────────── */}
+      {activeTab === "supervisor" && isSupervisor && (
+        <div className="space-y-5">
+          {/* Section 1: Unassembled Bicycles Awaiting Assignment */}
+          <Card className="border border-indigo-100 bg-gradient-to-r from-indigo-50/40 via-white to-white shadow-xs">
+            <CardContent className="p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                    <Bike className="h-4 w-4 text-indigo-600" />
+                    <span>Unassembled Inventory Awaiting Assignment</span>
+                  </h2>
+                  <p className="text-[11px] text-slate-500">
+                    Received or put-away bicycles ready to be assigned to workshop mechanics
+                  </p>
+                </div>
+                <Badge variant="default" className="text-xs font-semibold">
+                  {pendingUnits.length} Ready to Build
+                </Badge>
               </div>
+
+              {pendingUnits.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-400">
+                  No unassembled bicycles awaiting assignment. All inventory is either assigned or completed.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-72 overflow-y-auto pr-1">
+                  {pendingUnits.map((unit) => (
+                    <div
+                      key={unit.id}
+                      className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3 shadow-xs hover:border-indigo-200 transition-colors"
+                    >
+                      <div className="min-w-0 pr-2">
+                        <span className="font-mono font-bold text-xs text-indigo-600">
+                          {unit.unitCode}
+                        </span>
+                        <p className="text-xs font-bold text-slate-900 truncate mt-0.5">
+                          {unit.product.name}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          {unit.product.brand.name} · {unit.warehouse.code}
+                        </p>
+                        {unit.bin && (
+                          <span className="text-[10px] text-slate-500 mt-0.5 block">
+                            Bin: {unit.bin.code}
+                          </span>
+                        )}
+                      </div>
+
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setSelectedUnitForAssign(unit);
+                          setAssignLevel("A85");
+                          setAssignNotes("");
+                        }}
+                        className="h-8 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white shrink-0 gap-1"
+                      >
+                        <Plus className="h-3 w-3" />
+                        Assign
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Section 2: All Workshop Assembly Tasks & Filters */}
+          <div className="space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">Workshop Assembly Tasks</h2>
+                <p className="text-[11px] text-slate-500">Live overview across all mechanics and condition levels</p>
+              </div>
+
+              {/* Filters */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400" />
+                  <Input
+                    placeholder="Search unit, model, mechanic..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="h-8 pl-8 text-xs w-48 sm:w-56"
+                  />
+                </div>
+
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-700"
+                >
+                  <option value="ALL">All Statuses</option>
+                  <option value="PENDING">Pending</option>
+                  <option value="IN_PROGRESS">In Progress</option>
+                  <option value="ON_HOLD">On Hold</option>
+                  <option value="COMPLETED">Completed</option>
+                </select>
+
+                <select
+                  value={mechanicFilter}
+                  onChange={(e) => setMechanicFilter(e.target.value)}
+                  className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-700"
+                >
+                  <option value="ALL">All Mechanics</option>
+                  {mechanics.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Task Table */}
+            {filteredSupervisorTasks.length === 0 ? (
+              <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-xs text-slate-400">
+                No assembly tasks found matching the selected filters.
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-xs">
+                <table className="w-full text-left text-xs text-slate-700 min-w-[700px]">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase text-slate-400">
+                      <th className="p-3 font-semibold">Unit Code</th>
+                      <th className="p-3 font-semibold">Bicycle Model</th>
+                      <th className="p-3 font-semibold">Assigned Mechanic</th>
+                      <th className="p-3 font-semibold text-center">Condition</th>
+                      <th className="p-3 font-semibold text-center">Status</th>
+                      <th className="p-3 font-semibold">Assigned On</th>
+                      <th className="p-3 font-semibold text-right">Hold / Duration</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredSupervisorTasks.map((task) => (
+                      <tr key={task.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="p-3 font-mono font-bold text-indigo-600">
+                          {task.unit.unitCode}
+                        </td>
+                        <td className="p-3">
+                          <div className="font-semibold text-slate-900">{task.unit.product.name}</div>
+                          <div className="text-[10px] text-slate-400">{task.unit.product.brand.name}</div>
+                        </td>
+                        <td className="p-3">
+                          <div className="font-medium text-slate-800">{task.assignedTo.name}</div>
+                          <div className="text-[10px] text-slate-400">{task.assignedTo.email}</div>
+                        </td>
+                        <td className="p-3 text-center">
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-mono font-bold text-slate-700">
+                            {task.level}
+                          </span>
+                        </td>
+                        <td className="p-3 text-center">
+                          <Badge
+                            variant={
+                              task.status === "COMPLETED"
+                                ? "success"
+                                : task.status === "IN_PROGRESS"
+                                ? "info"
+                                : task.status === "ON_HOLD"
+                                ? "warning"
+                                : "default"
+                            }
+                            className="text-[10px] px-1.5 py-0"
+                          >
+                            {task.status}
+                          </Badge>
+                        </td>
+                        <td className="p-3 text-slate-500 whitespace-nowrap text-[11px]">
+                          {new Date(task.assignedAt).toLocaleDateString([], { month: "short", day: "numeric" })}
+                        </td>
+                        <td className="p-3 text-right text-slate-500 text-[11px]">
+                          {task.totalHoldSeconds > 0 ? (
+                            <span className="text-amber-700">
+                              {Math.round(task.totalHoldSeconds / 60)}m hold
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ───────────────────────────────────────────────────────────── */}
+      {/* ── MODALS ─────────────────────────────────────────────────── */}
+      {/* ───────────────────────────────────────────────────────────── */}
+
+      {/* 1. Hold Task Modal */}
+      {showHoldModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                <Pause className="h-4 w-4 text-amber-600" />
+                Place Build On Hold
+              </h3>
               <button
-                onClick={() => setSelectedUnitForAssign(null)}
-                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                type="button"
+                onClick={() => setShowHoldModal(false)}
+                className="text-slate-400 hover:text-slate-600"
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              Select the reason for pausing assembly. The timer will freeze until resumed.
+            </p>
+
+            <div className="mt-4 space-y-1.5">
+              {HOLD_REASONS.map((r) => (
+                <button
+                  type="button"
+                  key={r}
+                  onClick={() => {
+                    setHoldReason(r);
+                    setCustomHoldReason("");
+                  }}
+                  className={`w-full rounded-lg border p-2 text-left text-xs font-medium transition-all ${
+                    holdReason === r
+                      ? "border-amber-500 bg-amber-50 text-amber-900"
+                      : "border-slate-200 text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  {r}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setHoldReason("Other")}
+                className={`w-full rounded-lg border p-2 text-left text-xs font-medium transition-all ${
+                  holdReason === "Other"
+                    ? "border-amber-500 bg-amber-50 text-amber-900"
+                    : "border-slate-200 text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                Other Reason...
+              </button>
+
+              {holdReason === "Other" && (
+                <Input
+                  placeholder="Specify reason..."
+                  value={customHoldReason}
+                  onChange={(e) => setCustomHoldReason(e.target.value)}
+                  className="mt-2 text-xs"
+                />
+              )}
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <Button size="sm" variant="outline" onClick={() => setShowHoldModal(false)}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={handleHoldTask} className="bg-amber-600 text-white hover:bg-amber-700">
+                Confirm Hold
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 2. Complete Task Modal */}
+      {showCompleteModal && activeTask && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                <CheckCircle className="h-4 w-4 text-emerald-600" />
+                Finish Assembly & Verification
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowCompleteModal(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              Verify bike build for <strong>{activeTask.unit.unitCode}</strong>.
+            </p>
+
+            <form onSubmit={handleCompleteTask} className="mt-4 space-y-3.5 text-xs">
+              {/* Photo Verification */}
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  1. Bicycle Build Photo (Required)
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  ref={fileInputRef}
+                  onChange={handlePhotoCapture}
+                  className="hidden"
+                />
+
+                {photoDataUrl ? (
+                  <div className="relative overflow-hidden rounded-xl border border-slate-200">
+                    <img src={photoDataUrl} alt="Build preview" className="h-44 w-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => setPhotoDataUrl("")}
+                      className="absolute right-2 top-2 rounded-full bg-black/60 p-1 text-white hover:bg-black"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex h-32 w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors"
+                  >
+                    <Camera className="h-6 w-6 text-slate-400" />
+                    <span className="font-medium text-slate-600">Take Photo or Upload</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Frame Number */}
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  2. Frame Number (Engraved on BB / Headtube)
+                </label>
+                <Input
+                  placeholder="e.g. SN-892019-2026"
+                  value={frameNumber}
+                  onChange={(e) => setFrameNumber(e.target.value)}
+                  className="text-xs uppercase font-mono"
+                />
+              </div>
+
+              {/* Destination Bin */}
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  3. Move To Destination Bin
+                </label>
+                <select
+                  value={destinationBinId}
+                  onChange={(e) => setDestinationBinId(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 bg-white p-2.5 text-xs text-slate-800"
+                >
+                  <option value="">Keep in current assembly area...</option>
+                  {availableBins.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.code} ({b.name}) {b.isAssemblyArea ? "— Assembly Area" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <Button size="sm" type="button" variant="outline" onClick={() => setShowCompleteModal(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  type="submit"
+                  disabled={completing || !photoDataUrl}
+                  className="bg-emerald-600 text-white hover:bg-emerald-700 font-bold"
+                >
+                  {completing ? "Completing..." : "Complete Build"}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Supervisor Assignment Modal */}
+      {selectedUnitForAssign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                <Wrench className="h-4 w-4 text-indigo-600" />
+                Assign Bicycle to Mechanic
+              </h3>
+              <button
+                type="button"
+                onClick={() => setSelectedUnitForAssign(null)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="h-4 w-4" />
               </button>
             </div>
 
-            <form onSubmit={handleAssign} className="mt-4 space-y-4 text-xs">
-              <div className="rounded-xl bg-indigo-50/60 p-3 text-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-200">
-                <div className="font-mono text-sm font-bold text-indigo-600 dark:text-indigo-400">
-                  {selectedUnitForAssign.unitCode}
-                </div>
-                <div className="mt-0.5 font-semibold">{selectedUnitForAssign.product.name}</div>
-                <div className="text-[11px] text-indigo-700 dark:text-indigo-300">
-                  {selectedUnitForAssign.product.brand.name} · {selectedUnitForAssign.product.category.name}
-                </div>
+            <div className="mt-2 rounded-xl bg-slate-50 p-3 text-xs">
+              <span className="font-mono font-bold text-indigo-600">
+                {selectedUnitForAssign.unitCode}
+              </span>
+              <div className="font-semibold text-slate-900">
+                {selectedUnitForAssign.product.name}
               </div>
+              <div className="text-[11px] text-slate-500">
+                {selectedUnitForAssign.product.brand.name} · Warehouse: {selectedUnitForAssign.warehouse.code}
+              </div>
+            </div>
 
+            <form onSubmit={handleAssignSubmit} className="mt-4 space-y-3 text-xs">
               <div>
-                <label className="font-semibold text-slate-700 dark:text-slate-300">
+                <label className="font-semibold text-slate-700 block mb-1">
                   Assign To Mechanic *
                 </label>
                 <select
                   required
                   value={assignMechanicId}
                   onChange={(e) => setAssignMechanicId(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2.5 text-xs text-slate-900 dark:border-slate-800 dark:bg-slate-800 dark:text-white"
+                  className="w-full rounded-lg border border-slate-200 bg-white p-2.5 text-xs text-slate-800"
                 >
                   <option value="">Select mechanic...</option>
                   {mechanics.map((m) => (
@@ -518,10 +1098,10 @@ export default function AssemblySupervisorPage() {
               </div>
 
               <div>
-                <label className="font-semibold text-slate-700 dark:text-slate-300">
+                <label className="font-semibold text-slate-700 block mb-1">
                   Assembly Condition Level *
                 </label>
-                <div className="mt-1.5 grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   {[
                     { id: "A50", label: "50%", desc: "Box build" },
                     { id: "A85", label: "85%", desc: "Semi-built" },
@@ -533,8 +1113,8 @@ export default function AssemblySupervisorPage() {
                       onClick={() => setAssignLevel(lvl.id as "A50" | "A85" | "FULL")}
                       className={`rounded-lg border p-2 text-center transition-all ${
                         assignLevel === lvl.id
-                          ? "border-indigo-600 bg-indigo-50 text-indigo-900 dark:border-indigo-500 dark:bg-indigo-950/60 dark:text-white"
-                          : "border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-800 dark:text-slate-400"
+                          ? "border-indigo-600 bg-indigo-50 text-indigo-900"
+                          : "border-slate-200 text-slate-600 hover:bg-slate-50"
                       }`}
                     >
                       <div className="font-bold">{lvl.label}</div>
@@ -545,22 +1125,22 @@ export default function AssemblySupervisorPage() {
               </div>
 
               <div>
-                <label className="font-semibold text-slate-700 dark:text-slate-300">
+                <label className="font-semibold text-slate-700 block mb-1">
                   Supervisor Notes (Optional)
                 </label>
                 <Input
                   placeholder="e.g. Priority build for weekend delivery, check disc brake alignment"
                   value={assignNotes}
                   onChange={(e) => setAssignNotes(e.target.value)}
-                  className="mt-1 text-xs"
+                  className="text-xs"
                 />
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
-                <Button type="button" variant="outline" onClick={() => setSelectedUnitForAssign(null)}>
+                <Button size="sm" type="button" variant="outline" onClick={() => setSelectedUnitForAssign(null)}>
                   Cancel
                 </Button>
-                <Button type="submit" disabled={assignSaving} className="bg-indigo-600 text-white hover:bg-indigo-700">
+                <Button size="sm" type="submit" disabled={assignSaving} className="bg-indigo-600 text-white hover:bg-indigo-700 font-bold">
                   {assignSaving ? "Assigning..." : "Confirm & Move to ASM"}
                 </Button>
               </div>

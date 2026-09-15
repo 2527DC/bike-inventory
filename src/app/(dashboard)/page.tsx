@@ -17,6 +17,7 @@ import { formatINR, formatTime } from "@/lib/utils";
 import { getStatusLabel } from "@/lib/status-colors";
 import { usePermissions } from "@/lib/use-permissions";
 import { MyStockAudits } from "./_components/my-stock-audits";
+import { MyAssemblyTasks } from "./_components/my-assembly-tasks";
 // "Today" on this screen is the STORE's today, not the browser's UTC one. toISOString() names
 // yesterday for every one of these six calls between midnight and 05:30 IST, which is when the
 // morning shift is already working.
@@ -970,10 +971,9 @@ export default function DashboardPage() {
         <p className="text-xs font-medium text-slate-400 mt-0.5">{role?.name || "Team Member"}</p>
       </div>
 
-      {/* Above the role dashboard, deliberately: an audit assigned to you is work someone is
-          waiting on, and it used to be announced nowhere at all. Renders nothing when you
-          have none, so it costs no space on the days it has nothing to say. */}
+      {/* Above the role dashboard: audits and assembly builds assigned to you */}
       {!loading && can("stock_audit", "view") && <MyStockAudits />}
+      {!loading && can("assembly", "view") && <MyAssemblyTasks />}
 
       {!loading && pickDashboard()}
     </div>

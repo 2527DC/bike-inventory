@@ -55,6 +55,8 @@ export interface AiRequest {
 export interface AiUsage {
   input: number;
   output: number;
+  /** Thinking tokens, where the provider counts them apart from `output` (Gemini). */
+  thoughts?: number;
 }
 
 /** What an adapter returns. Normalised across providers. */

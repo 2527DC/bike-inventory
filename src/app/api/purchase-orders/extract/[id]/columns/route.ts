@@ -100,6 +100,9 @@ export async function POST(req: NextRequest, { params }: Ctx) {
           extractionId: id,
           rawName: r.name,
           qty: r.quantity,
+          // The unit price's source (plan 1509): MRP, else Price — see unitPriceOf.
+          price: r.price,
+          mrp: r.mrp,
           sheetName: r.sheetName,
           rowIndex: r.rowIndex,
           rowColor: r.rowColor,

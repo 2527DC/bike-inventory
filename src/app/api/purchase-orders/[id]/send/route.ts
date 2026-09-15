@@ -106,9 +106,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         },
         items: {
           select: {
-            // `name` is the line's own description (plan 0909, D2); the product is optional.
+            // `name` is the line's own description (plan 0909, D2). Nothing is read from the
+            // product — the PDF prints no SKU or HSN since plan 1509 (R6).
             name: true, quantity: true, unitPrice: true, gstRate: true, amount: true,
-            product: { select: { sku: true, hsnCode: true } },
           },
           orderBy: { createdAt: "asc" },
         },
@@ -150,9 +150,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     const company = await loadCompanyIdentity();
     const items: PoPdfLine[] = po.items.map((it) => ({
-      sku: it.product?.sku ?? null,
       name: it.name,
-      hsnCode: it.product?.hsnCode ?? null,
       quantity: it.quantity,
       unitPrice: it.unitPrice,
       gstRate: it.gstRate,

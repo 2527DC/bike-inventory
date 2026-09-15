@@ -19,10 +19,13 @@ import {
   type AiResult,
 } from "./types";
 
+import { calculateAiCost } from "./pricing";
+
 const log = createLogger("ai");
 
 export * from "./types";
 export * from "./models";
+export * from "./pricing";
 export { parseJsonReply } from "./json";
 export { runAiSelfTest, type AiSelfTestResult } from "./self-test";
 export { toAiErrorResponse, aiErrorKind } from "./http";
@@ -160,6 +163,44 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function recordAiCall(data: {
+  purpose: string;
+  providerKey: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  latencyMs: number;
+  stopReason?: string | null;
+  ok: boolean;
+  errorKind?: string | null;
+}): Promise<void> {
+  try {
+    const { costUsd, costInr } = calculateAiCost(data.model, data.inputTokens, data.outputTokens);
+    await prisma.aiCallLog.create({
+      data: {
+        purpose: data.purpose,
+        providerKey: data.providerKey,
+        model: data.model,
+        inputTokens: data.inputTokens,
+        outputTokens: data.outputTokens,
+        totalTokens: data.inputTokens + data.outputTokens,
+        costUsd,
+        costInr,
+        latencyMs: data.latencyMs,
+        stopReason: data.stopReason ?? null,
+        ok: data.ok,
+        errorKind: data.errorKind ?? null,
+      },
+    });
+  } catch (err) {
+    // Non-fatal: Spend logging must never break or crash the primary user flow
+    log.error("failed to record ai call log", {
+      purpose: data.purpose,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 /**
  * Run one request against the active provider.
  *
@@ -219,9 +260,16 @@ export async function runAi(req: AiRequest): Promise<AiResult> {
     }
 
     if (completion.stopReason === "max_tokens") {
+      // Name the thinking spend: "cut off at 63 tokens" alone reads as an output problem when
+      // the budget actually went to thoughts.
+      const thoughts = completion.usage.thoughts ?? 0;
+      const advice =
+        thoughts > 0
+          ? ` (${thoughts} more spent thinking). Raise maxTokens or lower effort.`
+          : ". Raise maxTokens or send a smaller input.";
       throw new AiError(
         "max_tokens",
-        `The ${req.purpose} reply was cut off at ${completion.usage.output} output tokens. Raise maxTokens or send a smaller input.`,
+        `The ${req.purpose} reply was cut off at ${completion.usage.output} output tokens${advice}`,
         { provider },
       );
     }
@@ -242,16 +290,47 @@ export async function runAi(req: AiRequest): Promise<AiResult> {
       attempts,
     });
 
+    // Record usage asynchronously so it never slows down the user's request
+    recordAiCall({
+      purpose: req.purpose,
+      providerKey: provider,
+      model,
+      inputTokens: completion.usage.input,
+      outputTokens: completion.usage.output,
+      latencyMs,
+      stopReason: completion.rawStopReason ?? completion.stopReason,
+      ok: true,
+    }).catch(() => {});
+
     return { ...completion, json, provider, model, latencyMs };
   } catch (error) {
+    const latencyMs = Date.now() - started;
+    const kind = error instanceof AiError ? error.kind : error instanceof Error ? error.name : "unknown";
+
     log.error("ai call failed", {
       ...ctx,
-      kind: error instanceof AiError ? error.kind : error instanceof Error ? error.name : "unknown",
+      kind,
       status: error instanceof AiError ? error.status : undefined,
       attempts,
-      latencyMs: Date.now() - started,
+      latencyMs,
       error: error instanceof Error ? error.message : String(error),
     });
+
+    // Record failure in call log
+    if (settings) {
+      recordAiCall({
+        purpose: req.purpose,
+        providerKey: settings.provider,
+        model: settings.model,
+        inputTokens: 0,
+        outputTokens: 0,
+        latencyMs,
+        stopReason: null,
+        ok: false,
+        errorKind: kind,
+      }).catch(() => {});
+    }
+
     throw error;
   }
 }
