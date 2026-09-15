@@ -204,8 +204,8 @@ export function validateColumnsReply(raw: unknown, sheet: { width: number; rowCo
       if (hasQty) role = "other";
       hasQty = true;
     } else if (role === "price") {
-      // One Price and one MRP per sheet (plan 1509, Q5): the line's unit price is read from
-      // exactly one column, so a second one is shown, never priced from.
+      // One Price and one MRP per sheet (plan 1509, Q5); a second one becomes "other". Neither
+      // reaches the PO — it carries no money (plan 1509-po-product-and-quantity-only).
       if (hasPrice) role = "other";
       hasPrice = true;
     } else if (role === "mrp") {
@@ -309,7 +309,10 @@ export interface RowsReplyRow {
   columns: Array<{ header: string; value: string }>;
 }
 
-/** A price from the reply: a finite number > 0, to the paisa, else null ("no price", plan 1509 R5). */
+/**
+ * A price from the reply: a finite number > 0, to the paisa, else null. Stored, never read — a
+ * row with no price is kept and selectable like any other (plan 1509-po-product-and-quantity-only).
+ */
 function money(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.round(v * 100) / 100 : null;
 }

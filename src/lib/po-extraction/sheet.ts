@@ -58,7 +58,10 @@ export interface ExtractedRow {
   quantity: number | null;
   /** The confirmed Price column, parsed; null when there is none or the cell is not a price. */
   price: number | null;
-  /** The confirmed MRP column, parsed — the line's unit price when present (plan 1509, D1). */
+  /**
+   * The confirmed MRP column, parsed. Stored, never read: a PO carries no money (plan
+   * 1509-po-product-and-quantity-only), and a row without one is extracted like any other.
+   */
   mrp: number | null;
   /** The item-name cell's solid fill, six upper-case hex digits, or null (none, or white). */
   rowColor: string | null;

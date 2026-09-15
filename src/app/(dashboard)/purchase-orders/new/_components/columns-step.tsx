@@ -85,8 +85,9 @@ export function ColumnsStep({ sheets, legend, busy, rescuing, error, onExtract, 
       prev.map((d, i) => {
         if (i !== sheetIdx) return d;
         const roles = { ...d.roles, [colIndex]: role };
-        // One item-name, one Price and one MRP column per sheet (Price/MRP: plan 1509, Q5 — the
-        // line's unit price is read from exactly one column). Choosing the role on column C
+        // One item-name, one Price and one MRP column per sheet (Price/MRP: plan 1509, Q5). The
+        // Price and MRP never reach the PO — it carries no money (plan 1509-po-product-and-
+        // quantity-only) — the roles only label the sheet. Choosing the role on column C
         // takes it off column A, which is what a person changing their mind means. The old
         // column becomes "Other".
         if (role === "itemName" || role === "price" || role === "mrp") {
@@ -108,8 +109,7 @@ export function ColumnsStep({ sheets, legend, busy, rescuing, error, onExtract, 
         <p className="text-sm font-semibold text-slate-900">Which columns hold the items?</p>
         <p className="text-[11px] text-slate-500 mt-0.5">
           This is what was read from the sheet&apos;s headers. Change anything that is wrong, then press Extract.
-          The item name, the quantity and the MRP (the Price column when there is no MRP) reach the purchase order;
-          the other columns are shown for choosing.
+          Only the item name and the quantity reach the purchase order.
         </p>
       </div>
 
