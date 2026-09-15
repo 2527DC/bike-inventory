@@ -24,7 +24,8 @@ const PO_COLUMNS: ExportColumn[] = [
   { header: "Order Date", key: "orderDate", format: (v) => new Date(String(v)).toLocaleDateString("en-IN") },
   { header: "Expected Date", key: "expectedDate", format: (v) => v ? new Date(String(v)).toLocaleDateString("en-IN") : "" },
   { header: "Items", key: "items", format: (v) => String((v as Array<{ quantity: number }>)?.reduce((s: number, i) => s + i.quantity, 0) || 0) },
-  { header: "Grand Total", key: "grandTotal", format: (v) => `₹${Number(v || 0).toLocaleString("en-IN")}` },
+  // No Grand Total column: a purchase order carries no price (plan
+  // 1509-po-product-and-quantity-only, Q6).
   { header: "Created By", key: "createdBy.name" },
 ];
 
@@ -32,7 +33,6 @@ interface POItem {
   id: string;
   poNumber: string;
   status: string;
-  grandTotal: number;
   orderDate: string;
   expectedDate?: string;
   vendor: { name: string; code: string };
@@ -44,10 +44,6 @@ interface POItem {
 // ALL. P9 makes cancelling a first-class action from every non-terminal state, which would
 // have made that gap much more visible.
 const STATUS_FILTERS = ["ALL", "DRAFT", "PENDING_APPROVAL", "APPROVED", "SENT_TO_VENDOR", "PARTIALLY_RECEIVED", "RECEIVED", "CANCELLED"];
-
-function formatCurrency(amount: number) {
-  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
-}
 
 function statusVariant(status: string) {
   switch (status) {
@@ -160,7 +156,6 @@ export default function PurchaseOrdersPage() {
             { header: "Vendor", cell: (po) => po.vendor.name },
             { header: "Date", cell: (po) => new Date(po.orderDate).toLocaleDateString("en-IN"), className: "whitespace-nowrap text-slate-500" },
             { header: "Items", cell: (po) => po.items.reduce((s, i) => s + i.quantity, 0), className: "text-right tabular-nums w-16" },
-            { header: "Total", cell: (po) => <span className="font-semibold text-slate-900 tabular-nums">{formatCurrency(po.grandTotal)}</span>, className: "text-right whitespace-nowrap" },
             { header: "Status", cell: (po) => {
               const needsTracking = ["SENT_TO_VENDOR", "PARTIALLY_RECEIVED"].includes(po.status);
               const aging = needsTracking ? getAging(po.orderDate) : null;
@@ -204,9 +199,10 @@ export default function PurchaseOrdersPage() {
                       {po.items.reduce((s, i) => s + i.quantity, 0)} items · By {po.createdBy.name}
                     </p>
                   </div>
+                  {/* The status chip sits at the top of the right-hand column now that the total
+                      above it is gone (plan 1509-po-product-and-quantity-only, Q6). */}
                   <div className="text-right shrink-0">
-                    <p className="text-sm font-bold text-slate-900 tabular-nums">{formatCurrency(po.grandTotal)}</p>
-                    <Badge variant={statusVariant(po.status)} className="mt-1">
+                    <Badge variant={statusVariant(po.status)}>
                       {statusLabel(po.status)}
                     </Badge>
                     {aging && aging.level !== "ok" && (
