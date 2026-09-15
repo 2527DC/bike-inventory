@@ -118,6 +118,9 @@ export async function GET(req: NextRequest) {
       // opens pre-filled from the row it was tapped on. Without them the sheet would show
       // 0 and no vendor for a product that has both, and saving would erase them.
       reorderQty: true, reorderVendorId: true,
+      // The row's assembly-level chip and the sheet it opens pre-filled (plan 1509-assembly-
+      // queue…, E1). Without it the sheet would open on "Not set" for a product that has one.
+      assemblyLevel: true,
       category: { select: { id: true, name: true } },
       brand: { select: { id: true, name: true } },
       bin: { select: { id: true, code: true, location: true } },

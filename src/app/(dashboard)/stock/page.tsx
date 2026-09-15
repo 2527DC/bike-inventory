@@ -4,7 +4,7 @@ import { useDebounce } from "@/hooks/use-debounce";
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, Square, X, Package, EyeOff, RotateCcw, Store } from "lucide-react";
+import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, Square, X, Package, EyeOff, RotateCcw, Store, Wrench } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -22,6 +22,8 @@ import { useBinTracking } from "@/hooks/use-bin-tracking";
 import { isPlaceholderBrand, isPlaceholderCategory } from "@/lib/import-placeholders";
 import { isLowStock } from "@/lib/reorder";
 import { ReorderSheet, type ReorderTarget, type ReorderSaved } from "@/components/reorder-sheet";
+import { AssemblyLevelSheet, type AssemblyLevelTarget, type AssemblyLevelSaved } from "@/components/assembly-level-sheet";
+import { ASSEMBLY_LEVELS, assemblyLevelLabel, type AssemblyLevelValue } from "@/lib/assembly-level";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useStores } from "@/hooks/use-sites";
 
@@ -53,6 +55,8 @@ interface ProductItem {
   bin: { code: string; location: string } | null;
   reorderQty: number;
   reorderVendorId: string | null;
+  /** The product's one assembly condition level; null = the next Assign asks (plan 1509, D3). */
+  assemblyLevel: AssemblyLevelValue | null;
 }
 
 interface BrandItem { id: string; name: string; _count: { products: number }; }
@@ -102,7 +106,7 @@ function getStockAccent(p: ProductItem) {
 
 export default function StockPage() {
   const { data: session } = useSession();
-  const { canEdit, canView } = usePermissions();
+  const { canEdit, canView, canApprove } = usePermissions();
   // Bulk edit writes product fields, so it is stock.edit.
   const canBulkEdit = canEdit("stock");
 
@@ -125,8 +129,15 @@ export default function StockPage() {
   // Consequence to grant: a role with stock.edit and no reorder.edit does not see Reorder.
   const mayReorder = canEdit("reorder");
 
+  // assembly.approve, NOT stock.edit (owner, 15 Sep — plan 1509-assembly-queue…, Q5/D4). The
+  // level decides how a bicycle is built, and the Assign modal that also writes it is behind
+  // assembly.approve; PUT /api/products/[id]/assembly-level demands the same, so the button and
+  // the route can never disagree.
+  const mayAssemblyLevel = canApprove("assembly");
+
   const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [reorderTarget, setReorderTarget] = useState<ReorderTarget | null>(null);
+  const [levelTarget, setLevelTarget] = useState<AssemblyLevelTarget | null>(null);
   const [rowOutcome, setRowOutcome] = useState<{ ok: boolean; name: string; message: string } | null>(null);
 
   const [dataError, setDataError] = useState<string | null>(null);
@@ -157,7 +168,9 @@ export default function StockPage() {
   // Bulk select mode
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [bulkAction, setBulkAction] = useState<"" | "brand" | "status" | "category" | "bin" | "vendor">("");
+  const [bulkAction, setBulkAction] = useState<"" | "brand" | "status" | "category" | "bin" | "vendor" | "assembly">("");
+  // "" = nothing chosen yet; "NONE" = clear the level on the selected rows.
+  const [bulkAssemblyLevel, setBulkAssemblyLevel] = useState<"" | "NONE" | AssemblyLevelValue>("");
   const [bulkVendorId, setBulkVendorId] = useState("");
   const [bulkVendors, setBulkVendors] = useState<Array<{ id: string; name: string; code: string }>>([]);
   const [bulkBrandId, setBulkBrandId] = useState("");
@@ -209,6 +222,10 @@ export default function StockPage() {
       // "" is a real choice here — "clear the reorder vendor on these rows" — so it is sent as
       // null rather than skipped the way the truthy-guarded fields above are.
       if (bulkAction === "vendor") body.reorderVendorId = bulkVendorId || null;
+      // "NONE" is sent as null — "these rows go back to asking at the next Assign".
+      if (bulkAction === "assembly" && bulkAssemblyLevel) {
+        body.assemblyLevel = bulkAssemblyLevel === "NONE" ? null : bulkAssemblyLevel;
+      }
 
       // apiFetch, not `.then(r => r.json())`. A bulk assign is the one action here that
       // silently rewrites 500 rows, and on an expired session the raw form turned a 307 to
@@ -378,6 +395,14 @@ export default function StockPage() {
             }
           : p
       )
+    );
+  }
+
+  /** Same in-place patch as the reorder sheet, for the same reason: the chip on the row just
+   *  tapped should change without losing the page, the scroll or the search. */
+  function applyAssemblyLevelSaved(updated: AssemblyLevelSaved) {
+    setProducts((prev) =>
+      prev.map((p) => (p.id === updated.id ? { ...p, assemblyLevel: updated.assemblyLevel } : p))
     );
   }
 
@@ -752,6 +777,14 @@ export default function StockPage() {
                           {p.reorderQty > 0 ? ` · order ${p.reorderQty}` : ""}
                         </p>
                       )}
+                      {/* Only when set, like the reorder line above: "Not set" on every row
+                          of a fresh catalogue would be noise, and the wrench button already
+                          says where to set it. */}
+                      {p.assemblyLevel && (
+                        <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
+                          <Wrench className="h-3 w-3" /> Assembly {assemblyLevelLabel(p.assemblyLevel)}
+                        </p>
+                      )}
                     </div>
                     <div className="text-right shrink-0">
                       <p className={`text-xl font-bold tabular-nums ${getStockColor(p)}`}>{p.currentStock}</p>
@@ -759,7 +792,7 @@ export default function StockPage() {
 
                       {/* Hidden in select mode: the whole row is a checkbox target there, and
                           a button inside it would fight the row's click handler. */}
-                      {!selectMode && (mayDeactivate || mayReorder) && (
+                      {!selectMode && (mayDeactivate || mayReorder || mayAssemblyLevel) && (
                         <div className="flex gap-1 justify-end mt-1.5">
                           {mayReorder && (
                             <RowBtn
@@ -769,6 +802,20 @@ export default function StockPage() {
                               onClick={(e) => { e.preventDefault(); e.stopPropagation(); setReorderTarget(p); }}
                             >
                               <RefreshCw className="h-3.5 w-3.5" />
+                            </RowBtn>
+                          )}
+                          {mayAssemblyLevel && (
+                            <RowBtn
+                              label={`Assembly level for ${p.name}`}
+                              tone={p.assemblyLevel ? "text-slate-700" : "text-amber-600"}
+                              disabled={rowBusy === p.id}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setLevelTarget({ id: p.id, name: p.name, sku: p.sku, assemblyLevel: p.assemblyLevel ?? null });
+                              }}
+                            >
+                              <Wrench className="h-3.5 w-3.5" />
                             </RowBtn>
                           )}
                           {mayDeactivate && p.status === "ACTIVE" && (
@@ -824,6 +871,13 @@ export default function StockPage() {
         product={reorderTarget}
         onClose={() => setReorderTarget(null)}
         onSaved={applyReorderSaved}
+      />
+
+      <AssemblyLevelSheet
+        open={levelTarget !== null}
+        product={levelTarget}
+        onClose={() => setLevelTarget(null)}
+        onSaved={applyAssemblyLevelSaved}
       />
 
       {rowOutcome && (
@@ -904,7 +958,42 @@ export default function StockPage() {
                   Vendor
                 </button>
               )}
+              {/* Plan 1509-assembly-queue…, E2: set the level for a whole brand in one action.
+                  Gated on assembly.approve — the server demands it for this field. */}
+              {mayAssemblyLevel && (
+                <button
+                  onClick={() => setBulkAction("assembly")}
+                  className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${
+                    bulkAction === "assembly" ? "bg-blue-600 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                  }`}
+                >
+                  Assembly
+                </button>
+              )}
             </div>
+
+            {bulkAction === "assembly" && (
+              <div className="flex gap-2">
+                <select
+                  value={bulkAssemblyLevel}
+                  onChange={(e) => setBulkAssemblyLevel(e.target.value as "" | "NONE" | AssemblyLevelValue)}
+                  className="flex-1 h-9 rounded-lg bg-slate-700 border-0 px-2 text-xs text-white focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">Select assembly level...</option>
+                  {ASSEMBLY_LEVELS.map((l) => (
+                    <option key={l.value} value={l.value}>{l.percent} · {l.description}</option>
+                  ))}
+                  <option value="NONE">Not set (ask at assign)</option>
+                </select>
+                <button
+                  onClick={handleBulkApply}
+                  disabled={!bulkAssemblyLevel || bulkLoading}
+                  className="px-4 py-2 bg-blue-600 rounded-lg text-xs font-medium disabled:opacity-50"
+                >
+                  {bulkLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Apply"}
+                </button>
+              </div>
+            )}
 
             {bulkAction === "category" && (
               <div className="flex gap-2">
