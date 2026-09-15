@@ -564,6 +564,12 @@ model Product {
   imageUrls String[] // Array of image URLs
   tags      String[] // Condition tags, custom tags
 
+  // The ONE assembly condition level for this product (plan 1509-assembly-queue…, D3). Null =
+  // not decided yet: the first Assign on /assembly asks and saves the answer here, and every
+  // later bicycle of this product is assigned at this level without asking. Edited from
+  // /stock and the product details, guarded by assembly.approve (D4).
+  assemblyLevel AssemblyLevel?
+
   binId String?
   bin   Bin?    @relation(fields: [binId], references: [id])
 

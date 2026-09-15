@@ -1303,3 +1303,34 @@ export const complaintAttributeSchema = z.object({
   notes: z.string().optional(),
 });
 
+// ─── Assembly condition level (plan 1509-assembly-queue-single-bin-and-product-assembly-level) ──
+//
+// `enum AssemblyLevel { A50, A85, FULL }`. The labels live in src/lib/assembly-level.ts. The
+// literal list is repeated here rather than imported so this file keeps no dependency on it.
+const assemblyLevelEnum = z.enum(["A50", "A85", "FULL"], {
+  error: "Choose the assembly condition level",
+});
+
+/**
+ * PUT /api/products/[id]/assembly-level — the /stock row action and the product details (D4).
+ * `null` clears it: the product is "not set" again and the next Assign on /assembly asks.
+ */
+export const productAssemblyLevelSchema = z.object({
+  level: assemblyLevelEnum.nullable(),
+});
+
+/**
+ * POST /api/assembly/tasks — the Assign Bicycle to Mechanic modal.
+ *
+ * `level` is optional HERE because a product that already has `Product.assemblyLevel` is
+ * assigned at that level and a sent one is ignored (D4, no per-bicycle override). The route
+ * requires it when the product has none, and then saves it to the product (D3). Before this
+ * schema the body was destructured raw with a silent `level = "A85"` default.
+ */
+export const assemblyTaskCreateSchema = z.object({
+  unitId: z.string({ error: "Choose a bicycle" }).min(1, "Choose a bicycle"),
+  assignedToId: z.string({ error: "Choose a mechanic" }).min(1, "Choose a mechanic"),
+  level: assemblyLevelEnum.optional(),
+  notes: z.string().max(1000).optional(),
+});
+
