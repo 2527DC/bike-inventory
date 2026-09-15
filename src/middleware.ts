@@ -41,10 +41,9 @@ export const config = {
     //
     // `api/cron` and `api/services/cron` used to be listed here too. Both directories were
     // deleted when scheduled jobs were removed from this application — there are no crons,
-    // and `CRON_SECRET` no longer exists. What replaced them (`api/alerts/scorecard`, and
-    // the existing Zoho pull and import routes) are ordinary authenticated routes behind
-    // `requireFeature`, so they must NOT be excluded here. Do not re-add a cron prefix: it
-    // would make every route beneath it public to the internet.
+    // and `CRON_SECRET` no longer exists. Ordinary authenticated routes behind
+    // `requireFeature` (like Zoho pull and import routes) must NOT be excluded here.
+    // Do not re-add a cron prefix: it would make every route beneath it public to the internet.
     // ── Customer-facing flows ────────────────────────────────────────────────
     // `review` and `api/services/reviews` serve a customer who has no account: JobCard
     // builds `${origin}/review/${tokenNumber}` and sends it over WhatsApp. Without these

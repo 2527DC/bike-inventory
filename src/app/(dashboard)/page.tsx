@@ -16,7 +16,6 @@ import { SkeletonDashboard } from "@/components/ui/skeleton";
 import { formatINR, formatTime } from "@/lib/utils";
 import { getStatusLabel } from "@/lib/status-colors";
 import { usePermissions } from "@/lib/use-permissions";
-import { SendScorecardButton } from "./_components/send-scorecard-button";
 import { MyStockAudits } from "./_components/my-stock-audits";
 // "Today" on this screen is the STORE's today, not the browser's UTC one. toISOString() names
 // yesterday for every one of these six calls between midnight and 05:30 IST, which is when the
@@ -42,7 +41,6 @@ interface CEOData {
   inboundInTransit: number;
   inboundArrivingThisWeek: number;
   // Health
-  people: Array<{ name: string; role: string; pending: number; overdue24h: number; overdue48h: number; overdue72h: number }>;
   todaySummary: { inwardsVerified: number; inwardsPending: number; deliveriesClosed: number; deliveriesPending: number; expensesRecorded: number; posWithoutTracking: number };
   criticalAlerts: Array<{ type: string; message: string; owner: string; count: number }>;
 }
@@ -270,7 +268,6 @@ function AdminDashboard() {
           inboundInTransit: inboundRes.success ? (inboundRes.data?.inTransit?.items || 0) : 0,
           inboundArrivingThisWeek: inboundRes.success ? (inboundRes.data?.arrivingThisWeek?.items || 0) : 0,
           overdueBillsList: acct?.overdueBillsList || [],
-          people: healthRes.success ? (healthRes.data?.people || []) : [],
           todaySummary: healthRes.success ? (healthRes.data?.today || {}) : {},
           criticalAlerts: healthRes.success ? (healthRes.data?.criticalAlerts || []) : [],
         });
@@ -409,50 +406,7 @@ function AdminDashboard() {
 
       {/* Critical Alerts moved to top of dashboard */}
 
-      {/* Team Health — Per-person accountability */}
-      {data.people.length > 0 && (
-        <Card className="mt-4">
-          <CardHeader>
-            <div className="flex items-center justify-between gap-2">
-              <CardTitle className="flex items-center gap-1.5">
-                <Users className="h-4 w-4 text-slate-600" />
-                Team Health
-              </CardTitle>
-              {/* Replaces the 08:00 cron that used to push this scorecard automatically. */}
-              <SendScorecardButton />
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {data.people.map((person) => (
-              <div key={person.name} className="flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0">
-                <div>
-                  <p className="text-sm font-medium text-slate-900">{person.name}</p>
-                  <p className="text-[11px] text-slate-500">{person.role}</p>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  {person.overdue72h > 0 && (
-                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-red-200 text-red-900 tabular-nums animate-pulse">
-                      {person.overdue72h} 72h+
-                    </span>
-                  )}
-                  {person.overdue48h > person.overdue72h && (
-                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-red-100 text-red-800 tabular-nums">
-                      {person.overdue48h - person.overdue72h} 48h+
-                    </span>
-                  )}
-                  {person.overdue24h > person.overdue48h && (
-                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-yellow-100 text-yellow-800 tabular-nums">
-                      {person.overdue24h - person.overdue48h} 24h+
-                    </span>
-                  )}
-                  <span className="text-sm font-bold text-slate-700 tabular-nums">{person.pending}</span>
-                  <span className="text-[11px] text-slate-400">pending</span>
-                </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
+
 
       {/* Today's Summary */}
       {data.todaySummary && (

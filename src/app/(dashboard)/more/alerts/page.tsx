@@ -74,7 +74,7 @@ export default function AlertsConfigPage() {
       <Card className="mb-4 bg-amber-50 border-amber-200">
         <CardContent className="p-3">
           <p className="text-xs text-amber-800">
-            When Ranjitha flags a delivery, a WhatsApp message will be pre-filled and sent to these numbers.
+            When a delivery is flagged, a WhatsApp message will be pre-filled and sent to these numbers.
             Use country code format (e.g. 919876543210).
           </p>
         </CardContent>
