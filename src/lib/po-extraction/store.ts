@@ -9,7 +9,6 @@ import type {
   ExtractionStage,
   ExtractionView,
   LegendEntry,
-  PriceSource,
   SheetColumns,
 } from "./types";
 import { COLUMN_ROLES } from "./types";
@@ -21,8 +20,9 @@ const log = createLogger("po-extraction:store");
  * catalogue-free-lines, §3.3. Rewritten 9 Sep 2026 from the quotation-import version: there is
  * no product match any more (D2), so nothing here touches the products table. A row is what
  * the sheet said — its item name, its quantity when the sheet has one, its price and MRP, its
- * fill colour and every column the person chose to keep — and the name, the quantity and the
- * unit price (the MRP, else the Price — plan 1509-po-sheet-mrp-price) travel to the PO line.
+ * fill colour and every column the person chose to keep — and only the name and the quantity
+ * travel to the PO line. The stored price and MRP are read by nothing since 15 Sep 2026: a PO
+ * carries no money (plan 1509-po-product-and-quantity-only, R4).
  *
  * An extraction is review-time scratch (owner, 9 Sep 2026, Q6): it is deleted the moment a PO
  * is created from it, when the person presses Discard, or when they upload another file.
@@ -55,9 +55,6 @@ export interface ExtractionItemRow {
   id: string;
   rawName: string;
   qty: number | null;
-  /** Prisma `Decimal | null`. Read through `unitPriceOf`, never directly. */
-  price: unknown;
-  mrp: unknown;
   sheetName: string | null;
   rowIndex: number | null;
   rowColor: string | null;
@@ -135,31 +132,6 @@ export function readSheetColumns(raw: unknown): SheetColumns[] {
   return out;
 }
 
-/** A stored Decimal (or number) → a positive number, else null. */
-function positive(v: unknown): number | null {
-  if (v === null || v === undefined) return null;
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-/**
- * THE rule for a sheet line's unit price (plan 1509-po-sheet-mrp-price, D1 + Q1): the row's
- * MRP, else its dealer Price, else nothing — and nothing means the row cannot be ordered (R5).
- * One function, used by the review (`serializeItem`), the one-row select route and the create
- * route that re-reads the price, so the three cannot disagree. `PRICED_ROW` is the same rule
- * as a where clause, for the bulk select.
- */
-export function unitPriceOf(row: { mrp: unknown; price: unknown }): { unitPrice: number | null; priceSource: PriceSource | null } {
-  const mrp = positive(row.mrp);
-  if (mrp !== null) return { unitPrice: mrp, priceSource: "mrp" };
-  const price = positive(row.price);
-  if (price !== null) return { unitPrice: price, priceSource: "price" };
-  return { unitPrice: null, priceSource: null };
-}
-
-/** "This row has a price" as a Prisma filter — `unitPriceOf` in the database. */
-export const PRICED_ROW: Prisma.PoExtractionItemWhereInput = { OR: [{ mrp: { gt: 0 } }, { price: { gt: 0 } }] };
-
 /** One row as the review sees it. `legendLabel` is the legend entry whose rgb is the row's. */
 export function serializeItem(item: ExtractionItemRow, legend: LegendEntry[]): ExtractionItemView {
   const color = item.rowColor ? item.rowColor.replace(/^#/, "").toUpperCase() : null;
@@ -170,7 +142,6 @@ export function serializeItem(item: ExtractionItemRow, legend: LegendEntry[]): E
     rowIndex: item.rowIndex,
     name: item.rawName,
     quantity: item.qty,
-    ...unitPriceOf(item),
     rowColor: color,
     legendLabel,
     columns: readColumns(item.columns),
@@ -348,80 +319,3 @@ export async function discardExtractions(where: Prisma.PoExtractionWhereInput): 
   return ids;
 }
 
-export type SheetPriceResult<T> =
-  | { ok: true; items: T[]; priced: number }
-  | { ok: false; message: string; names: string[] };
-
-function listNames(names: string[]): string {
-  const shown = names.slice(0, 3).map((n) => `"${n}"`).join(", ");
-  return names.length > 3 ? `${shown} and ${names.length - 3} more` : shown;
-}
-
-/**
- * The server half of the price lock (plan 1509-po-sheet-mrp-price, Q2 a). A line that carries
- * `extractionItemId` came from the review, and its unit price is whatever that stored row says
- * — the number the browser sent is discarded. The screen shows the price as text, but a screen
- * is not a gate: the PDF goes to the vendor, so the lock has to hold against a hand-made
- * request too.
- *
- * Rows are looked up only inside the caller's own extraction for THIS vendor, so an id from
- * somebody else's review, or from a sheet uploaded against another vendor, is "not found".
- * Refuses — never guesses — when a row is gone (its sheet was replaced or discarded) or has no
- * price. Lines without an `extractionItemId` (the /reorder handoff) pass through untouched.
- */
-export async function applySheetPrices<T extends { name: string; unitPrice: number; extractionItemId?: string }>(
-  items: T[],
-  ctx: { extractionId: string | undefined; vendorId: string; userId: string },
-): Promise<SheetPriceResult<T>> {
-  const ids = [...new Set(items.map((i) => i.extractionItemId).filter((id): id is string => !!id))];
-  if (ids.length === 0) return { ok: true, items, priced: 0 };
-
-  const rows = ctx.extractionId
-    ? await prisma.poExtractionItem.findMany({
-        where: {
-          id: { in: ids },
-          extractionId: ctx.extractionId,
-          extraction: { createdById: ctx.userId, vendorId: ctx.vendorId },
-        },
-        select: { id: true, mrp: true, price: true },
-      })
-    : [];
-  const priceById = new Map(rows.map((r) => [r.id, unitPriceOf(r).unitPrice]));
-  log.debug("sheet prices read", { extractionId: ctx.extractionId ?? null, requested: ids.length, found: rows.length });
-
-  const stale = items.filter((i) => i.extractionItemId && !priceById.has(i.extractionItemId));
-  if (stale.length > 0) {
-    log.warn("sheet lines refused", {
-      extractionId: ctx.extractionId ?? null,
-      reason: "row not found",
-      itemIds: stale.map((i) => i.extractionItemId),
-    });
-    const names = stale.map((i) => i.name.trim());
-    return {
-      ok: false,
-      names,
-      message: `${listNames(names)} came from a sheet that is no longer open. Remove ${stale.length === 1 ? "it" : "them"} and select the rows again.`,
-    };
-  }
-
-  const unpriced = items.filter((i) => i.extractionItemId && priceById.get(i.extractionItemId) == null);
-  if (unpriced.length > 0) {
-    log.warn("sheet lines refused", {
-      extractionId: ctx.extractionId ?? null,
-      reason: "no price",
-      itemIds: unpriced.map((i) => i.extractionItemId),
-    });
-    const names = unpriced.map((i) => i.name.trim());
-    return {
-      ok: false,
-      names,
-      message: `${listNames(names)} ${unpriced.length === 1 ? "has" : "have"} no price in the sheet. Remove ${unpriced.length === 1 ? "it" : "them"} to continue.`,
-    };
-  }
-
-  const out = items.map((i) => {
-    const price = i.extractionItemId ? priceById.get(i.extractionItemId) : null;
-    return price != null ? { ...i, unitPrice: price } : i;
-  });
-  return { ok: true, items: out, priced: ids.length };
-}

@@ -8,28 +8,21 @@ import { Button } from "@/components/ui/button";
 
 /**
  * One line of a purchase order in the making (plan 0909-po-sheet-ai-extraction, §3.4, D2,
- * amended by plan 1509-po-sheet-mrp-price).
+ * amended by plan 1509-po-product-and-quantity-only).
  *
- * A sheet line is the item NAME, the sheet's quantity (editable), the sheet's MRP — else its
- * Price — as the unit price (LOCKED; the server re-reads it from `extractionItemId`), and
- * GST % (default 0, editable). It does not come from the products table (R3): the sheet flow
- * never sets `productId`. The one path that still carries a product is the handoff from
- * /reorder, whose lines are catalogue products by definition; it fills `productId` so that
- * order stays linked to what was low, and its rate stays typed.
+ * A line is the item NAME and a quantity (editable) — nothing else. No price, no GST: a
+ * purchase order carries no money (owner, 15 Sep 2026, R3–R4). A sheet line does not come
+ * from the products table (R3): the sheet flow never sets `productId`. The one path that still
+ * carries a product is the handoff from /reorder, whose lines are catalogue products by
+ * definition; it fills `productId` so that order stays linked to what was low.
  */
 export interface POLineItem {
   /** Stable React key and dedupe key — the extraction item id, or the product id from /reorder. */
   key: string;
   name: string;
   quantity: number;
-  unitPrice: number;
-  gstRate: number;
   /** Only from the /reorder handoff. Never set by the sheet flow. */
   productId?: string;
-  /** Only on sheet lines: the review row the price is read from. Its presence locks the rate. */
-  extractionItemId?: string;
-  /** Which sheet column the locked rate came from. */
-  priceSource?: "mrp" | "price" | null;
 }
 
 /**
@@ -84,17 +77,8 @@ interface Props {
   children?: React.ReactNode;
 }
 
-export function formatCurrency(amount: number) {
-  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
-}
-
-/** A rate to the paisa — a locked MRP of ₹1,249.50 must not read as ₹1,250 (plan 1509). */
-export function formatRate(amount: number) {
-  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(amount);
-}
-
 /**
- * One purchase order in the making: one vendor, its lines, its totals, its own outcome.
+ * One purchase order in the making: one vendor, its lines, its own outcome.
  *
  * ─── WHY THE SCREEN IS BUILT THIS WAY ────────────────────────────────────────────────────
  *
@@ -126,21 +110,14 @@ export function VendorSection({
   children,
 }: Props) {
   const { items } = section;
-  const subtotal = items.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0);
-  const gstTotal = items.reduce((sum, i) => sum + i.quantity * i.unitPrice * (i.gstRate / 100), 0);
-  const unpriced = items.filter((i) => !(i.unitPrice > 0));
 
   const isManual = section.vendorName === null;
   const done = section.status === "created";
   const running = section.status === "running";
-  const blocked = !section.vendorId || items.length === 0 || unpriced.length > 0;
+  const blocked = !section.vendorId || items.length === 0;
 
-  // A sheet line's rate is the sheet's (plan 1509, R2): the field is text, and this refuses the
-  // change too, so nothing on the screen can drift from what the server re-reads.
-  const update = (index: number, field: "quantity" | "unitPrice" | "gstRate", value: number) =>
-    onItemsChange(
-      items.map((it, i) => (i === index && !(field === "unitPrice" && it.extractionItemId) ? { ...it, [field]: value } : it))
-    );
+  const setQuantity = (index: number, quantity: number) =>
+    onItemsChange(items.map((it, i) => (i === index ? { ...it, quantity } : it)));
 
   const remove = (index: number) => onItemsChange(items.filter((_, i) => i !== index));
 
@@ -194,8 +171,7 @@ export function VendorSection({
             would suggest an edit here still changes something. */}
         {done ? (
           <p className="text-xs text-slate-500">
-            Created. {formatCurrency(subtotal + gstTotal)} across {items.length} line
-            {items.length === 1 ? "" : "s"}.
+            Created with {items.length} line{items.length === 1 ? "" : "s"}.
           </p>
         ) : (
           <>
@@ -222,87 +198,23 @@ export function VendorSection({
                         <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
-                    <div className="grid grid-cols-3 gap-2">
-                      <div>
-                        <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Qty</label>
-                        <Input
-                          type="number"
-                          inputMode="numeric"
-                          value={item.quantity}
-                          onChange={(e) => update(index, "quantity", parseInt(e.target.value) || 0)}
-                          min="1"
-                          disabled={running || busy}
-                          className="text-sm min-h-[44px] tabular-nums"
-                        />
-                      </div>
-                      {item.extractionItemId ? (
-                        // The sheet's MRP (else its Price), not editable (plan 1509, R1–R2). Text,
-                        // not a disabled input: a greyed box reads as "unavailable for now", this
-                        // reads as "decided by the sheet".
-                        <div>
-                          <p className="block text-[11px] font-medium text-slate-600 mb-0.5">Unit Price</p>
-                          <div className="min-h-[44px] rounded-lg border border-slate-200 bg-slate-50 px-3 flex flex-col justify-center">
-                            <span className="text-sm font-semibold text-slate-900 tabular-nums">{formatRate(item.unitPrice)}</span>
-                            <span className="text-[10px] text-slate-500 leading-tight">
-                              {item.priceSource === "price" ? "Price" : "MRP"} from sheet
-                            </span>
-                          </div>
-                        </div>
-                      ) : (
-                      <div>
-                        <label className="block text-[11px] font-medium text-slate-600 mb-0.5">
-                          Unit Price <span className="text-red-500">*</span>
-                        </label>
-                        {/* EMPTY, not a literal 0, when the rate is unknown: the API withholds
-                            costPrice without cost_price.view, and a 0 nobody typed would
-                            become the rate on an order emailed to the vendor. */}
-                        <Input
-                          type="number"
-                          inputMode="decimal"
-                          required
-                          min="0.01"
-                          step="0.01"
-                          value={item.unitPrice > 0 ? item.unitPrice : ""}
-                          placeholder="Rate"
-                          onChange={(e) => update(index, "unitPrice", parseFloat(e.target.value) || 0)}
-                          aria-invalid={!(item.unitPrice > 0)}
-                          disabled={running || busy}
-                          className={`text-sm min-h-[44px] tabular-nums ${item.unitPrice > 0 ? "" : "border-amber-400 bg-amber-50"}`}
-                        />
-                      </div>
-                      )}
-                      <div>
-                        <label className="block text-[11px] font-medium text-slate-600 mb-0.5">GST %</label>
-                        <Input
-                          type="number"
-                          inputMode="decimal"
-                          value={item.gstRate}
-                          onChange={(e) => update(index, "gstRate", parseFloat(e.target.value) || 0)}
-                          disabled={running || busy}
-                          className="text-sm min-h-[44px] tabular-nums"
-                        />
-                      </div>
+                    {/* The quantity is the only thing to set on a line — no rate, no GST
+                        (plan 1509-po-product-and-quantity-only, R3). */}
+                    <div className="w-28">
+                      <label className="block text-[11px] font-medium text-slate-600 mb-0.5" htmlFor={`qty-${item.key}`}>Qty</label>
+                      <Input
+                        id={`qty-${item.key}`}
+                        type="number"
+                        inputMode="numeric"
+                        value={item.quantity}
+                        onChange={(e) => setQuantity(index, parseInt(e.target.value) || 0)}
+                        min="1"
+                        disabled={running || busy}
+                        className="text-sm min-h-[44px] tabular-nums"
+                      />
                     </div>
-                    <p className="text-xs text-right text-slate-500 mt-1 tabular-nums">
-                      Line: {formatCurrency(item.quantity * item.unitPrice * (1 + item.gstRate / 100))}
-                    </p>
                   </div>
                 ))}
-
-                <div className="rounded-lg bg-slate-50 p-2.5 space-y-1">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-500">Subtotal</span>
-                    <span className="text-slate-700 tabular-nums">{formatCurrency(subtotal)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-500">GST</span>
-                    <span className="text-slate-700 tabular-nums">{formatCurrency(gstTotal)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm font-bold border-t pt-1">
-                    <span className="text-slate-900">Grand Total</span>
-                    <span className="text-slate-900 tabular-nums">{formatCurrency(subtotal + gstTotal)}</span>
-                  </div>
-                </div>
               </div>
             )}
 
@@ -348,13 +260,6 @@ export function VendorSection({
               </p>
             )}
 
-            {unpriced.length > 0 && (
-              <p className="text-xs text-amber-600">
-                {unpriced.length === 1 ? "One line has" : `${unpriced.length} lines have`} no rate.
-                A purchase order cannot go to a vendor with a ₹0 line.
-              </p>
-            )}
-
             <div className="flex flex-col sm:flex-row gap-2">
               <Button
                 type="button"
@@ -377,11 +282,7 @@ export function VendorSection({
 
             {blocked && !running && (
               <p className="text-[11px] text-slate-500 text-center">
-                {!section.vendorId
-                  ? "Select a vendor to continue"
-                  : items.length === 0
-                    ? "Add at least one item from a sheet to continue"
-                    : "Every line needs a rate"}
+                {!section.vendorId ? "Select a vendor to continue" : "Add at least one item from a sheet to continue"}
               </p>
             )}
           </>

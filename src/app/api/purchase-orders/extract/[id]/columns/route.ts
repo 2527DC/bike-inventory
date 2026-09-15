@@ -100,7 +100,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
           extractionId: id,
           rawName: r.name,
           qty: r.quantity,
-          // The unit price's source (plan 1509): MRP, else Price — see unitPriceOf.
+          // Stored, read by nothing: a PO carries no money (plan 1509-po-product-and-quantity-only).
           price: r.price,
           mrp: r.mrp,
           sheetName: r.sheetName,

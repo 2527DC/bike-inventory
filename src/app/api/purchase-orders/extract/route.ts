@@ -192,7 +192,8 @@ async function readDocument({ userId, vendorId, fileName, fileType, bytes }: Upl
 
   const money = (v: number | null) => (v === null || v === undefined ? "" : String(v));
   // The stored price and MRP (plan 1509): only a real, positive number — a NaN out of the AI
-  // reply's parseFloat, or a 0, is "no price" and leaves the row unselectable (R5).
+  // reply's parseFloat, or a 0, is stored as null. Nothing reads them since 15 Sep 2026: a PO
+  // carries no money (plan 1509-po-product-and-quantity-only).
   const positive = (v: number | null) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null);
 
   const extraction = await prisma.$transaction(async (tx) => {
@@ -220,7 +221,7 @@ async function readDocument({ userId, vendorId, fileName, fileType, bytes }: Upl
         rowIndex: null,
         rowColor: null,
         // A fixed column set so the dynamic review renders a PDF the same way it renders a
-        // sheet. The name, the qty and the MRP (else Price) reach the PO line (plan 1509).
+        // sheet. Only the name and the qty reach the PO line (plan 1509-po-product-and-quantity-only).
         columns: [
           { header: "Item", value: it.rawName },
           { header: "Code", value: it.rawSku ?? "" },

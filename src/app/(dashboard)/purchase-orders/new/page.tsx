@@ -28,8 +28,6 @@ interface PreparedItem {
   sku: string;
   name: string;
   quantity: number;
-  gstRate: number;
-  costPrice?: number;
 }
 
 interface PreparedGroup {
@@ -44,7 +42,6 @@ interface PrepareResponse {
   groups: PreparedGroup[];
   unresolved: Array<PreparedItem & { reason: string }>;
   missing: string[];
-  canSeeCost: boolean;
 }
 
 const MANUAL_KEY = "manual";
@@ -52,17 +49,14 @@ const MANUAL_KEY = "manual";
 /**
  * A /reorder handoff item → a line. This is the ONE path that still carries a productId: the
  * things ticked on /reorder are catalogue products by definition, and the order should stay
- * linked to them. The sheet flow never sets it (R3, D2).
+ * linked to them. The sheet flow never sets it (R3, D2). Like every line, it is the product
+ * and the quantity — no price (plan 1509-po-product-and-quantity-only, R4).
  */
 const toLine = (it: PreparedItem): POLineItem => ({
   key: it.productId,
   productId: it.productId,
   name: it.name,
   quantity: it.quantity,
-  // ?? 0 leaves the rate box empty and required rather than inventing a price for somebody
-  // who is not permitted to see cost.
-  unitPrice: it.costPrice ?? 0,
-  gstRate: it.gstRate,
 });
 
 const emptyManualSection = (): Section => ({
@@ -97,10 +91,10 @@ const normName = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
  * ─── WHERE THE LINES COME FROM (plan 0909-po-sheet-ai-extraction, R3) ────────────────────
  *
  * The manual section takes its lines from the vendor's uploaded sheet and nowhere else. There
- * is no product search on this screen: a line is the item name the sheet said and its MRP as
- * the unit price — locked, and re-read by the server (plan 1509-po-sheet-mrp-price) — with Qty
- * and GST % editable here. The only lines that carry a catalogue product are the ones handed
- * over from /reorder, which are products by definition.
+ * is no product search on this screen: a line is the item name the sheet said and a quantity,
+ * editable here — no price and no GST (plan 1509-po-product-and-quantity-only). The only lines
+ * that carry a catalogue product are the ones handed over from /reorder, which are products by
+ * definition.
  */
 export default function NewPurchaseOrderPage() {
   const router = useRouter();
@@ -237,7 +231,7 @@ export default function NewPurchaseOrderPage() {
 
   /**
    * The ticked review rows become the manual section's lines (R8). Merged, not replaced: a
-   * line already on the section keeps the qty and GST somebody typed, so a second "Use
+   * line already on the section keeps the qty somebody typed, so a second "Use
    * selected" adds the newly ticked rows without undoing edits to the first batch. Deduped
    * on `key` — the extraction item id — so a row used twice is one line.
    */
@@ -250,15 +244,7 @@ export default function NewPurchaseOrderPage() {
     for (const l of lines) {
       if (have.has(l.key) || seen.has(l.key)) continue;
       seen.add(l.key);
-      fresh.push({
-        key: l.key,
-        name: l.name,
-        quantity: l.quantity,
-        unitPrice: l.unitPrice,
-        gstRate: l.gstRate,
-        extractionItemId: l.extractionItemId,
-        priceSource: l.priceSource,
-      });
+      fresh.push({ key: l.key, name: l.name, quantity: l.quantity });
     }
     log.debug("selected rows used", { offered: lines.length, added: fresh.length, alreadyPresent: lines.length - fresh.length });
     patch(MANUAL_KEY, { items: [...manual.items, ...fresh] });
@@ -269,7 +255,7 @@ export default function NewPurchaseOrderPage() {
     async (key: string, submitForApproval: boolean): Promise<boolean> => {
       const s = sections.find((x) => x.key === key);
       if (!s || s.status === "created") return false;
-      if (!s.vendorId || s.items.length === 0 || s.items.some((i) => !(i.unitPrice > 0))) return false;
+      if (!s.vendorId || s.items.length === 0) return false;
 
       patch(key, { status: "running", error: null, conflicts: null });
 
@@ -285,16 +271,12 @@ export default function NewPurchaseOrderPage() {
             // The open extraction, if this order came out of one: the server deletes it (and
             // the uploaded file) once the PO exists — nothing from the upload outlives it (R9).
             ...(key === MANUAL_KEY && extraction && extraction.vendorId === s.vendorId ? { extractionId: extraction.id } : {}),
-            // A sheet line's rate is re-read on the server from extractionItemId (plan 1509,
-            // Q2) — the unitPrice sent here is not trusted for it. productId travels only on
-            // /reorder lines.
-            items: s.items.map(({ name, quantity, unitPrice, gstRate, productId, extractionItemId }) => ({
+            // The product and the quantity — nothing else (plan 1509-po-product-and-quantity-only,
+            // R4). productId travels only on /reorder lines.
+            items: s.items.map(({ name, quantity, productId }) => ({
               name,
               quantity,
-              unitPrice,
-              gstRate,
               ...(productId ? { productId } : {}),
-              ...(extractionItemId ? { extractionItemId } : {}),
             })),
           },
         }
@@ -355,7 +337,6 @@ export default function NewPurchaseOrderPage() {
 
   const creatable = sections.filter((s) => s.status !== "created" && s.vendorId && s.items.length > 0);
   const created = sections.filter((s) => s.status === "created");
-  const anyBlocked = creatable.some((s) => s.items.some((i) => !(i.unitPrice > 0)));
   const allDone = sections.length > 0 && created.length === sections.filter((s) => s.items.length > 0).length;
 
   return (
@@ -481,16 +462,11 @@ export default function NewPurchaseOrderPage() {
         {creatable.length > 1 && (
           <div className="sticky bottom-2">
             <div className="rounded-xl border border-slate-200 bg-white shadow-lg p-3 space-y-2">
-              {anyBlocked && (
-                <p className="text-xs text-amber-600 text-center">
-                  Some lines have no rate. Fill them in, or create the ready vendors one at a time.
-                </p>
-              )}
               <div className="flex flex-col sm:flex-row gap-2">
                 <Button
                   type="button"
                   onClick={() => void createAll(true)}
-                  disabled={runningAll || anyBlocked}
+                  disabled={runningAll}
                   className="flex-1 min-h-[48px] bg-green-600 hover:bg-green-700 text-white"
                 >
                   {runningAll ? <Loader2 className="h-4 w-4 animate-spin" /> : `Create all (${creatable.length})`}
@@ -499,7 +475,7 @@ export default function NewPurchaseOrderPage() {
                   type="button"
                   variant="outline"
                   onClick={() => void createAll(false)}
-                  disabled={runningAll || anyBlocked}
+                  disabled={runningAll}
                   className="flex-1 min-h-[48px]"
                 >
                   Save all as drafts

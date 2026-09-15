@@ -21,21 +21,15 @@ const AI_READ_TYPES = new Set(["pdf", "png", "jpg", "jpeg", "webp"]);
 const needsAiRead = (file: File) => AI_READ_TYPES.has((file.name.split(".").pop() ?? "").toLowerCase());
 
 /**
- * A selected review row → a PO line (plan 1509-po-sheet-mrp-price, amending 0909 D2): the item
- * name; Qty from the sheet's quantity column when there is one else 1 (editable); Unit Price the
- * row's MRP, else its Price — LOCKED on the line and re-read by the server from
- * `extractionItemId`; GST 0 (editable). Nothing else from the sheet reaches the line. A row
- * with no price never gets here — it cannot be selected (R5).
+ * A selected review row → a PO line: the item name, and Qty from the sheet's quantity column
+ * when there is one, else 1 (editable). Nothing else from the sheet reaches the line — no price,
+ * no GST (plan 1509-po-product-and-quantity-only, R3–R4).
  */
 export function sheetLine(item: ExtractionView["items"][number]): SheetLine {
   return {
     key: item.id,
-    extractionItemId: item.id,
     name: item.name,
     quantity: item.quantity && item.quantity > 0 ? item.quantity : 1,
-    unitPrice: item.unitPrice ?? 0,
-    priceSource: item.priceSource,
-    gstRate: 0,
   };
 }
 
@@ -187,13 +181,7 @@ export function SheetImport({ vendorId, vendorName, extraction, onExtractionChan
 
   function useSelected() {
     if (!extraction) return;
-    const picked = extraction.items.filter((it) => it.selected);
-    // A row ticked before prices were stored can be selected with no price. It cannot become a
-    // line (R5) — it would be a locked ₹0 — so it is left out and counted, not guessed at.
-    const lines = picked.filter((it) => it.unitPrice !== null).map(sheetLine);
-    if (lines.length < picked.length) {
-      log.warn("selected rows without a price left out", { extractionId: extraction.id, left: picked.length - lines.length });
-    }
+    const lines = extraction.items.filter((it) => it.selected).map(sheetLine);
     log.debug("using selected rows", { extractionId: extraction.id, lines: lines.length });
     onUseSelected(lines);
     setReviewOpen(false);
