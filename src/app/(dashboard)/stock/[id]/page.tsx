@@ -7,7 +7,9 @@ import { isLowStock } from "@/lib/reorder";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 import Link from "next/link";
-import { ArrowLeft, QrCode, MapPin, Tag, IndianRupee, Pencil, Save, X, Power } from "lucide-react";
+import { ArrowLeft, QrCode, MapPin, Tag, IndianRupee, Pencil, Save, X, Power, Wrench } from "lucide-react";
+import { AssemblyLevelSheet } from "@/components/assembly-level-sheet";
+import { assemblyLevelLabel, type AssemblyLevelValue } from "@/lib/assembly-level";
 import { LabelPrintButton } from "@/components/label-print";
 import { Badge } from "@/components/ui/badge";
 import { SkeletonList } from "@/components/ui/skeleton";
@@ -91,6 +93,8 @@ interface ProductDetail {
   gstRate: number;
   hsnCode: string | null;
   tags: string[];
+  /** The product's one assembly condition level; null = the next Assign asks (plan 1509, D3). */
+  assemblyLevel: AssemblyLevelValue | null;
   categoryId: string | null;
   category: { id: string; name: string } | null;
   brandId: string | null;
@@ -123,8 +127,12 @@ function parseTransactionLabel(notes: string | null, type: string): string {
 export default function ProductDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { data: session } = useSession();
-  const { canView } = usePermissions();
+  const { canView, canApprove } = usePermissions();
   const { canEdit: canEditCheck } = usePermissions();
+  // assembly.approve, matching PUT /api/products/[id]/assembly-level and the Assign modal that
+  // also writes this column (plan 1509-assembly-queue…, D4). Not stock.edit.
+  const mayAssemblyLevel = canApprove("assembly");
+  const [levelOpen, setLevelOpen] = useState(false);
   const { isBinTrackingEnabled: BIN_TRACKING_ENABLED } = useBinTracking();
   // Gates the Pricing card (Cost / Selling / MRP) and nothing else on this page.
   const isAdmin = canView("cost_price");
@@ -429,6 +437,42 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
           {product.condition !== "NEW" && <Badge variant="warning">{product.condition.replace("_", " ")}</Badge>}
         </div>
       )}
+
+      {/* Assembly level (plan 1509-assembly-queue…, E3 / R8). Always shown, "Not set" included:
+          on the details page the absence is itself the fact — it means the next Assign on
+          /assembly will ask. The edit opens the same sheet as the /stock row button. */}
+      <Card className="mb-3">
+        <CardContent className="p-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <Wrench className={`h-4 w-4 shrink-0 ${product.assemblyLevel ? "text-slate-500" : "text-amber-500"}`} />
+            <div className="min-w-0">
+              <p className="text-[11px] text-slate-500">Assembly level</p>
+              <p className={`text-sm font-medium ${product.assemblyLevel ? "text-slate-900" : "text-amber-700"}`}>
+                {assemblyLevelLabel(product.assemblyLevel)}
+              </p>
+            </div>
+          </div>
+          {mayAssemblyLevel && (
+            <button
+              type="button"
+              onClick={() => setLevelOpen(true)}
+              className="min-h-[44px] px-3 inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 focus-ring shrink-0"
+            >
+              <Pencil className="h-3.5 w-3.5" /> {product.assemblyLevel ? "Change" : "Set"}
+            </button>
+          )}
+        </CardContent>
+      </Card>
+
+      <AssemblyLevelSheet
+        open={levelOpen}
+        product={{ id: product.id, name: product.name, sku: product.sku, assemblyLevel: product.assemblyLevel ?? null }}
+        onClose={() => setLevelOpen(false)}
+        onSaved={(updated) => {
+          log.info("assembly level changed from details", { productId: updated.id, level: updated.assemblyLevel });
+          setProduct((prev) => (prev ? { ...prev, assemblyLevel: updated.assemblyLevel } : prev));
+        }}
+      />
 
       {/* Stock + Location combined card (most important info first) */}
       <Card className="mb-3">

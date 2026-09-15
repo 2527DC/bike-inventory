@@ -7,6 +7,7 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { validateReorderVendor } from "@/lib/vendors/validate";
 import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
+import { isAssemblyLevel } from "@/lib/assembly-level";
 import { createLogger } from "@/lib/logger";
 
 // This route rewrites a field on up to 500 products in one statement and left no record that
@@ -27,17 +28,23 @@ const log = createLogger("products:bulk");
 // two other routes behind exactly that permission (api/products/[id]/reorder,
 // api/reorder/update-levels). Requiring it only when the field is PRESENT means the four
 // original bulk actions keep working on the grants roles already hold.
+//
+// `assemblyLevel` (plan 1509-assembly-queue…, E2) follows the same rule for the same reason:
+// the column is written by `api/products/[id]/assembly-level` and by the Assign modal
+// (`api/assembly/tasks`), both behind `assembly.approve`, so it is demanded here whenever the
+// field is present. null is a real request — "clear the level on these rows".
 export async function POST(req: NextRequest) {
   try {
     const user = await requireFeature("stock", "edit");
     const body = await req.json();
-    const { productIds, brandId, status, categoryId, binId, reorderVendorId } = body as {
+    const { productIds, brandId, status, categoryId, binId, reorderVendorId, assemblyLevel } = body as {
       productIds: string[];
       brandId?: string;
       status?: "ACTIVE" | "INACTIVE";
       categoryId?: string;
       binId?: string;
       reorderVendorId?: string | null;
+      assemblyLevel?: string | null;
     };
 
     if (!productIds || productIds.length === 0) {
@@ -49,11 +56,23 @@ export async function POST(req: NextRequest) {
     // `reorderVendorId` is checked with `undefined`, not truthiness: null is a real request
     // here — "clear the reorder vendor on these 40 products" — and a truthy test would answer
     // it with "Nothing to update".
-    if (!brandId && !status && !categoryId && !binId && reorderVendorId === undefined) {
+    if (
+      !brandId && !status && !categoryId && !binId &&
+      reorderVendorId === undefined && assemblyLevel === undefined
+    ) {
       return errorResponse(
-        "Nothing to update — provide brandId, categoryId, binId, status, or reorderVendorId",
+        "Nothing to update — provide brandId, categoryId, binId, status, reorderVendorId, or assemblyLevel",
         400
       );
+    }
+
+    if (assemblyLevel !== undefined) {
+      if (!(await userCan(user.id, "assembly", "approve"))) {
+        return errorResponse("You do not have permission to set the assembly level", 403);
+      }
+      if (assemblyLevel !== null && !isAssemblyLevel(assemblyLevel)) {
+        return errorResponse("Choose 50%, 85% or 100% as the assembly level", 400);
+      }
     }
 
     if (reorderVendorId !== undefined) {
@@ -110,6 +129,8 @@ export async function POST(req: NextRequest) {
     if (binId) updateData.binId = binId;
     // Assigned when PRESENT rather than when truthy, so null clears it.
     if (reorderVendorId !== undefined) updateData.reorderVendorId = reorderVendorId || null;
+    // Present-not-truthy again: null clears the level, so the next Assign asks.
+    if (assemblyLevel !== undefined) updateData.assemblyLevel = assemblyLevel;
 
     const result = await prisma.product.updateMany({
       where: { id: { in: productIds } },
@@ -128,6 +149,7 @@ export async function POST(req: NextRequest) {
       binId,
       status,
       reorderVendorId,
+      assemblyLevel,
     });
 
     return successResponse({ updated: result.count });
