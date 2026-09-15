@@ -5,6 +5,11 @@ Branch: **`feat/remove-static-team-health`**, the existing branch (owner, Q0).
 
 Every `file:line` below was read from disk on 15 Sep 2026. Check rather than trust.
 
+> **Superseded in part, 15 Sep 2026 (same day).** R1–R5 (the locked MRP, GST 0, "no price → cannot
+> be selected") are **reversed** by `1509-po-product-and-quantity-only-plan.md`. A purchase order now
+> carries no price at all: the owner wants *"only product and quantity"*. R6 (no SKU/HSN on the PDF)
+> stands, and was taken further: that PDF prints `# · Product · Qty`.
+
 This plan **partly reverses decision D2** of
 `docs/implementation/completed/0909-po-sheet-ai-extraction-and-catalogue-free-lines-plan.md`
 (§1.1, line 79): *"No code, no HSN, no price from the sheet."* The price now travels from the

@@ -19,9 +19,8 @@ interface PODetail {
   id: string;
   poNumber: string;
   status: string;
-  subtotal: number;
-  gstTotal: number;
-  grandTotal: number;
+  // No subtotal / gstTotal / grandTotal: a purchase order shows no price, on every PO, older
+  // ones included (plan 1509-po-product-and-quantity-only, R8 / Q8). The API still returns them.
   orderDate: string;
   expectedDate?: string;
   notes?: string;
@@ -45,9 +44,6 @@ interface PODetail {
     id: string;
     quantity: number;
     receivedQty: number;
-    unitPrice: number;
-    gstRate: number;
-    amount: number;
     /** The description as ordered — the sheet's item name, or the product's name for older lines. */
     name: string;
     /** Null for a line raised from the vendor's sheet (plan 0909, D2). */
@@ -56,10 +52,6 @@ interface PODetail {
   createdBy: { name: string };
   approvedBy?: { name: string };
   approvedAt?: string;
-}
-
-function formatCurrency(amount: number) {
-  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
 }
 
 export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -155,12 +147,14 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
     if (!po?.vendor.whatsappNumber) return null;
     const phone = `91${po.vendor.whatsappNumber.replace(/\D/g, "").slice(-10)}`;
     const itemsList = po.items
-      .map((i) => `- ${i.name || i.product?.name || "Item"}${i.product ? ` (${i.product.sku})` : ""}: ${i.quantity} pcs @ ${formatCurrency(i.unitPrice)}`)
+      .map((i) => `- ${i.name || i.product?.name || "Item"}${i.product ? ` (${i.product.sku})` : ""}: ${i.quantity} pcs`)
       .join("\n");
     // Plain text on purpose — no WhatsApp markup (the `*bold*` asterisks it used to carry).
     // Owner, 9 Sep 2026: "the WhatsApp export should be in normal text format".
+    // Product and quantity only — no per-line price and no total (plan
+    // 1509-po-product-and-quantity-only, R7).
     const msg = encodeURIComponent(
-      `Purchase Order: ${po.poNumber}\n\nDear ${po.vendor.name},\n\nPlease find our order below:\n\n${itemsList}\n\nTotal: ${formatCurrency(po.grandTotal)}\n${po.expectedDate ? `Expected by: ${new Date(po.expectedDate).toLocaleDateString("en-IN")}` : ""}\n\nPlease confirm.`
+      `Purchase Order: ${po.poNumber}\n\nDear ${po.vendor.name},\n\nPlease find our order below:\n\n${itemsList}\n\n${po.expectedDate ? `Expected by: ${new Date(po.expectedDate).toLocaleDateString("en-IN")}\n\n` : ""}Please confirm.`
     );
     return `https://wa.me/${phone}?text=${msg}`;
   }
@@ -443,45 +437,24 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
         {po.items.map((item) => (
           <Card key={item.id}>
             <CardContent className="p-3">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-slate-900 break-words">{item.name || item.product?.name}</p>
-                  {/* SKU and stock exist only when the line is a catalogue product; a sheet-built
-                      line has neither (D2) and shows nothing rather than a dash nobody asked for. */}
-                  {item.product && (
-                    <p className="text-xs text-slate-500 tabular-nums">{item.product.sku} | Stock: {item.product.currentStock}</p>
-                  )}
-                </div>
-                <p className="text-sm font-bold text-slate-900 tabular-nums shrink-0">{formatCurrency(item.amount * (1 + item.gstRate / 100))}</p>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-slate-900 break-words">{item.name || item.product?.name}</p>
+                {/* SKU and stock exist only when the line is a catalogue product; a sheet-built
+                    line has neither (D2) and shows nothing rather than a dash nobody asked for. */}
+                {item.product && (
+                  <p className="text-xs text-slate-500 tabular-nums">{item.product.sku} | Stock: {item.product.currentStock}</p>
+                )}
               </div>
+              {/* Product and quantity only: no amount, rate or GST, and no totals card below
+                  (plan 1509-po-product-and-quantity-only, R8 / Q8 — every PO, older ones too). */}
               <div className="flex gap-4 mt-1 text-xs text-slate-500 tabular-nums">
                 <span>Qty: {item.quantity}</span>
                 <span>Rcvd: {item.receivedQty}</span>
-                <span>@ {formatCurrency(item.unitPrice)}</span>
-                <span>GST: {item.gstRate}%</span>
               </div>
             </CardContent>
           </Card>
         ))}
       </div>
-
-      {/* Totals */}
-      <Card className="bg-slate-50">
-        <CardContent className="p-3 space-y-1">
-          <div className="flex justify-between text-sm">
-            <span className="text-slate-500">Subtotal</span>
-            <span className="tabular-nums">{formatCurrency(po.subtotal)}</span>
-          </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-slate-500">GST</span>
-            <span className="tabular-nums">{formatCurrency(po.gstTotal)}</span>
-          </div>
-          <div className="flex justify-between text-sm font-bold border-t pt-1">
-            <span>Grand Total</span>
-            <span className="tabular-nums">{formatCurrency(po.grandTotal)}</span>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }
