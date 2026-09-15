@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, FileUp, Loader2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -64,6 +64,49 @@ export function SheetImport({ vendorId, vendorName, extraction, onExtractionChan
   // After Extract the review is open by default; "Reopen columns" brings the step back.
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
+
+  /**
+   * Auto-confirm: when the server is confident (every sheet has an unambiguous itemName
+   * column), fire the extract call immediately so the person never sees the columns step.
+   * Guard with a ref so this fires exactly once per extraction id, not on every re-render.
+   */
+  const autoConfirmedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      !extraction ||
+      extraction.stage !== "columns" ||
+      !extraction.autoConfident ||
+      confirming !== false ||
+      disabled ||
+      autoConfirmedFor.current === extraction.id
+    ) return;
+
+    autoConfirmedFor.current = extraction.id;
+    log.debug("auto-confirming columns", { extractionId: extraction.id, sheets: extraction.sheets.length });
+
+    // Build the confirm payload from the AI's proposal — same shape as manual confirm.
+    const sheets = extraction.sheets.map((s) => ({
+      sheet: s.sheet,
+      headerRow: s.headerRow,
+      columns: s.columns.map((c) => ({ index: c.index, role: c.role })),
+    }));
+    void confirmColumns(sheets, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extraction?.id, extraction?.stage, extraction?.autoConfident, confirming, disabled]);
+
+  /**
+   * Auto-open review: whenever the extraction transitions into stage "review" (whether by
+   * auto-confirm or manual confirm), open the dialog immediately so the person sees the rows
+   * without an extra click.
+   */
+  const reviewOpenedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!extraction || extraction.stage !== "review") return;
+    if (reviewOpenedFor.current === extraction.id) return;
+    reviewOpenedFor.current = extraction.id;
+    setColumnsOpen(false);
+    setReviewOpen(true);
+  }, [extraction?.id, extraction?.stage]);
 
   const busy = disabled || uploading || confirming !== false || discarding;
 
@@ -225,7 +268,34 @@ export function SheetImport({ vendorId, vendorName, extraction, onExtractionChan
   }
 
   // ─── the column step ──────────────────────────────────────────────────────────────────
+  // When the AI is confident it auto-fires; show a spinner instead of the full step UI.
   if (extraction.stage === "columns" || columnsOpen) {
+    if (extraction.autoConfident && !columnsOpen) {
+      return (
+        <div className="rounded-lg border border-slate-200 p-4 space-y-2">
+          <p className="text-sm font-semibold text-slate-900 truncate">{extraction.fileName}</p>
+          <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-sm text-blue-900 flex items-start gap-2">
+            <Loader2 className="h-4 w-4 animate-spin shrink-0 mt-0.5" />
+            <span>Extracting rows… Keep this screen open.</span>
+          </div>
+          {error && (
+            <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2 flex items-start gap-1.5">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span className="break-words">{error}</span>
+            </p>
+          )}
+          {error && (
+            <button
+              type="button"
+              onClick={() => setColumnsOpen(true)}
+              className="text-xs font-medium text-blue-700 underline min-h-[44px]"
+            >
+              Review columns manually
+            </button>
+          )}
+        </div>
+      );
+    }
     return (
       <ColumnsStep
         // Keyed on the extraction so a fresh upload starts from its own proposal.

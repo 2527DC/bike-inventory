@@ -3,15 +3,16 @@ export const revalidate = 60; // cache 1 minute
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
 import { listWarehouses } from "@/lib/warehouses";
 
 export async function GET() {
   try {
     await requireFeature("stock", "view");
 
-    // ── Location mode (bins dormant): per-location summary across the 4 locations ──
-    if (!BIN_TRACKING_ENABLED) {
+    // ── Location mode (bins dormant): per-location summary across locations ──
+    const binTrackingEnabled = await isBinTrackingEnabled();
+    if (!binTrackingEnabled) {
       const rows = await prisma.$queryRaw<Array<{ warehouse_id: string; total_stock: number; total_value: number; product_count: number }>>`
         SELECT
           sl."warehouseId" as warehouse_id,

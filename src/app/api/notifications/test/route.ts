@@ -32,6 +32,9 @@ const SINGLETON = "singleton";
 
 const BodySchema = z.object({
   channel: z.enum(["EMAIL", "PUSH"], { error: "channel must be EMAIL or PUSH" }),
+  toEmail: z.string().trim().email("Please enter a valid email address").optional().or(z.literal("")),
+  testSubject: z.string().trim().max(200).optional(),
+  testMessage: z.string().trim().max(2000).optional(),
 });
 
 /** The failed half of SendResult, so a caller holding one can read `.error` without narrowing. */
@@ -78,20 +81,30 @@ async function recordPushTest(result: SendResult) {
   });
 }
 
-async function testEmail(user: CurrentUser): Promise<TestSendResult> {
+async function testEmail(
+  user: CurrentUser,
+  toEmail?: string,
+  testSubject?: string,
+  testMessage?: string
+): Promise<TestSendResult> {
   const started = Date.now();
+  const recipientEmail = toEmail?.trim() || user.email;
+  const recipientName = toEmail?.trim() ? "Test Recipient" : user.name;
   let result: SendResult;
   try {
-    result = await sendTestEmail({ email: user.email, name: user.name });
+    result = await sendTestEmail(
+      { email: recipientEmail, name: recipientName },
+      { subject: testSubject, text: testMessage }
+    );
   } catch (e) {
     result = failureFromThrow(e, "email sender");
   }
-  log.debug("test email attempted", { userId: user.id, ok: result.ok, ms: Date.now() - started });
+  log.debug("test email attempted", { userId: user.id, toEmail: recipientEmail, ok: result.ok, ms: Date.now() - started });
 
   await recordEmailTest(result);
 
   return result.ok
-    ? { channel: "EMAIL", ok: true, detail: `sent to ${maskEmail(user.email)}` }
+    ? { channel: "EMAIL", ok: true, detail: `sent to ${maskEmail(recipientEmail)}` }
     : { channel: "EMAIL", ok: false, detail: result.error };
 }
 
@@ -186,11 +199,14 @@ export async function POST(req: NextRequest) {
     if (!parsed.success) {
       return errorResponse(parsed.error.issues[0]?.message || "Invalid request", 400);
     }
-    const { channel } = parsed.data;
+    const { channel, toEmail, testSubject, testMessage } = parsed.data;
 
-    log.info("test send requested", { userId: user.id, channel });
+    log.info("test send requested", { userId: user.id, channel, toEmail });
 
-    const result = channel === "EMAIL" ? await testEmail(user) : await testPush(user);
+    const result =
+      channel === "EMAIL"
+        ? await testEmail(user, toEmail, testSubject, testMessage)
+        : await testPush(user);
 
     if (result.ok) {
       log.info("test send succeeded", { userId: user.id, channel, detail: result.detail });

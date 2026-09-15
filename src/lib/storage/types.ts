@@ -46,6 +46,12 @@ export interface StorageProvider {
   /** Deleting something already absent is not an error — a retried delete must not fail. */
   delete(key: string): Promise<void>;
 
+  /**
+   * Server-side download. Returns the object's bytes, or null when the object is absent or
+   * the read fails. Used when the public URL is not world-readable (e.g. a private R2 path).
+   */
+  read(key: string): Promise<ArrayBuffer | null>;
+
   /** The stable, public URL for a key. */
   publicUrl(key: string): string;
 

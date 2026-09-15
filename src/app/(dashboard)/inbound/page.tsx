@@ -28,7 +28,7 @@ interface InboundShipment {
   totalItems: number;
   deliveredAt: string | null;
   createdAt: string;
-  brand: { name: string };
+
   createdBy: { name: string };
   lineItems: { productName: string; quantity: number; isDelivered: boolean }[];
   _count: { lineItems: number; preBookings: number };
@@ -587,7 +587,7 @@ export default function InboundPage() {
       {showSearch && (
         <div className="relative mb-2">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-          <Input placeholder="Search bill no, brand..." value={search}
+          <Input placeholder="Search bill no, shipment..." value={search}
             onChange={(e) => setSearch(e.target.value)} className="pl-9 pr-9" autoFocus />
           <button onClick={() => { setShowSearch(false); setSearch(""); }}
             className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600">
@@ -682,8 +682,8 @@ export default function InboundPage() {
                 <div className="p-3">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-slate-900 truncate">{s.brand.name}</p>
-                      <p className="text-xs text-slate-500 tabular-nums truncate">Bill {s.billNo} · {s.shipmentNo}</p>
+                      <p className="text-sm font-semibold text-slate-900 truncate">{s.shipmentNo}</p>
+                      <p className="text-xs text-slate-500 tabular-nums truncate">Bill {s.billNo}</p>
                     </div>
                     <Badge variant={badge.variant} className="shrink-0">{badge.label}</Badge>
                   </div>

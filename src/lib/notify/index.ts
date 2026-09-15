@@ -91,7 +91,8 @@ export async function notify(eventKey: EventKey, input: NotifyInput): Promise<No
     const setting = await prisma.notificationEventSetting.findUnique({ where: { eventKey } });
     const defaults = NOTIFICATION_EVENTS[eventKey].defaults;
     const pushOn = pushMaster && (setting ? setting.pushEnabled : defaults.push);
-    const emailOn = emailMaster && (setting ? setting.emailEnabled : defaults.email);
+    // Email is reserved exclusively for Purchase Orders to vendors; internal events use Push only.
+    const emailOn = false;
 
     if (!pushOn) {
       record({
@@ -102,7 +103,7 @@ export async function notify(eventKey: EventKey, input: NotifyInput): Promise<No
     if (!emailOn) {
       record({
         channel: "EMAIL", status: "SKIPPED", userId: null, target: null,
-        error: emailMaster ? "event disabled for email" : "email is switched off in Settings → Notifications",
+        error: "email is reserved exclusively for Purchase Orders to vendors",
       });
     }
 

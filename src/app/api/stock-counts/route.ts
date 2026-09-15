@@ -6,7 +6,6 @@ import { successResponse, errorResponse, paginatedResponse, parseSearchParams } 
 import { stockCountSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
-import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
 import { getWarehouseQtyMap, getStoreQtyMap } from "@/lib/stock-location";
 import { nextSequence } from "@/lib/sequence";
 import { logActivity } from "@/lib/activity-log";

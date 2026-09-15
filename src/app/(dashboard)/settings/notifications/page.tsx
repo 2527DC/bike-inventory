@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  ArrowLeft, Mail, Smartphone, Loader2, Check, X, AlertTriangle, RefreshCw, Trash2,
+  ArrowLeft, Mail, Smartphone, Loader2, Check, X, AlertTriangle, RefreshCw, Trash2, Info,
 } from "lucide-react";
+import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -195,11 +196,22 @@ interface TabProps {
 }
 
 function EmailTab({ config, canEdit, onConfigChange, refreshConfig }: TabProps) {
+  const { data: session } = useSession();
   const [form, setForm] = useState<EmailForm>(() => emailFormFrom(config));
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [test, setTest] = useState<TestSendResult | null>(null);
+  const [testToEmail, setTestToEmail] = useState("");
+  const [testSubject, setTestSubject] = useState("");
+  const [testMessage, setTestMessage] = useState("");
+
+  // Default test email to current session user's email if empty
+  useEffect(() => {
+    if (!testToEmail && session?.user?.email) {
+      setTestToEmail(session.user.email);
+    }
+  }, [session?.user?.email, testToEmail]);
 
   const set = <K extends keyof EmailForm>(key: K, value: EmailForm[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
@@ -240,7 +252,7 @@ function EmailTab({ config, canEdit, onConfigChange, refreshConfig }: TabProps) 
     } else {
       onConfigChange(data);
       setForm(emailFormFrom(data));
-      setNotice({ ok: true, text: "Saved. Send a test email to confirm the connection." });
+      setNotice({ ok: true, text: "Saved. Send a test email below to confirm the connection." });
     }
     setSaving(false);
   }
@@ -251,7 +263,12 @@ function EmailTab({ config, canEdit, onConfigChange, refreshConfig }: TabProps) 
     setTest(null);
     const { data, error } = await apiTry<TestSendResult>("/api/notifications/test", {
       method: "POST",
-      json: { channel: "EMAIL" } satisfies TestSendInput,
+      json: {
+        channel: "EMAIL",
+        toEmail: testToEmail.trim() || undefined,
+        testSubject: testSubject.trim() || undefined,
+        testMessage: testMessage.trim() || undefined,
+      } satisfies TestSendInput,
     });
     if (error || !data) {
       log.error("test email could not run", { error });
@@ -271,6 +288,17 @@ function EmailTab({ config, canEdit, onConfigChange, refreshConfig }: TabProps) 
     <Card>
       <CardContent className="p-4 space-y-3">
         <StatusLine connected={e.connected} enabled={e.enabled} lastTestedAt={e.lastTestedAt} lastTestError={e.lastTestError} />
+
+        {/* Email Policy Notice */}
+        <div className="flex items-start gap-2.5 rounded-xl bg-blue-50 border border-blue-200 p-3 text-xs text-blue-900">
+          <Info className="h-4 w-4 text-blue-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold text-blue-900">Email Notification Policy</p>
+            <p className="text-blue-700 text-[11px] mt-0.5 leading-relaxed">
+              Email delivery is reserved exclusively for <strong>Purchase Orders (sending PO PDFs to vendors)</strong>. All internal system notifications (stock alerts, inbound shipments, job statuses) are delivered via <strong>Push notifications</strong>.
+            </p>
+          </div>
+        </div>
 
         <div>
           <label htmlFor="email-provider" className="text-[11px] text-slate-500">Provider</label>
@@ -317,7 +345,7 @@ function EmailTab({ config, canEdit, onConfigChange, refreshConfig }: TabProps) 
 
         <Toggle
           label="Email enabled"
-          description="The master switch. Off, and no event mails anyone regardless of the table below."
+          description="The master switch. Off, and no email (including PO sends) will be dispatched."
           checked={form.enabled}
           onChange={(v) => set("enabled", v)}
           disabled={!canEdit || busy}
@@ -326,9 +354,57 @@ function EmailTab({ config, canEdit, onConfigChange, refreshConfig }: TabProps) 
         <p className="text-[10px] text-slate-400 leading-relaxed">
           Gmail: turn on 2-Step Verification, then Google Account → Security → App Passwords.
           Host <code>smtp.gmail.com</code>, port <code>587</code>, TLS off, username = the full
-          address, password = the 16-character App Password. A free account sends about 500
-          messages a day, so email is off for most events by default.
+          address, password = the 16-character App Password.
         </p>
+
+        {/* Test SMTP Section */}
+        <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3.5 space-y-3">
+          <div>
+            <p className="text-xs font-semibold text-indigo-950 flex items-center gap-1.5">
+              <Mail className="h-3.5 w-3.5 text-indigo-600" /> Test SMTP Connection & Delivery
+            </p>
+            <p className="text-[11px] text-indigo-700 mt-0.5">
+              Type any recipient email address and test sending directly through your configured SMTP credentials.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <div>
+              <label className="text-[11px] font-medium text-slate-700">Send Test To (Destination Email)</label>
+              <Input
+                type="email"
+                value={testToEmail}
+                onChange={(ev) => setTestToEmail(ev.target.value)}
+                placeholder="recipient@example.com"
+                disabled={!canEdit || busy}
+                className="mt-1 h-10 bg-white text-sm"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-medium text-slate-700">Custom Test Message (Optional)</label>
+              <Input
+                type="text"
+                value={testMessage}
+                onChange={(ev) => setTestMessage(ev.target.value)}
+                placeholder="BCH Ops — SMTP verification test message"
+                disabled={!canEdit || busy}
+                className="mt-1 h-10 bg-white text-sm"
+              />
+            </div>
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            className="min-h-[40px] text-xs font-semibold border-indigo-300 text-indigo-700 bg-white hover:bg-indigo-50 shadow-sm"
+            onClick={() => void runTest()}
+            disabled={busy || !testToEmail.trim()}
+          >
+            {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <Mail className="h-3.5 w-3.5 mr-1.5" />}
+            {testing ? "Sending test email..." : "Send test email"}
+          </Button>
+        </div>
 
         <NoticeBox notice={notice} />
         <TestOutcome result={test} />
@@ -337,11 +413,7 @@ function EmailTab({ config, canEdit, onConfigChange, refreshConfig }: TabProps) 
           <div className="flex flex-wrap gap-2 pt-1">
             <Button className="min-h-[44px]" onClick={() => void save()} disabled={busy}>
               {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
-              {saving ? "Saving..." : "Save"}
-            </Button>
-            <Button variant="outline" className="min-h-[44px]" onClick={() => void runTest()} disabled={busy}>
-              {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <Mail className="h-3.5 w-3.5 mr-1.5" />}
-              {testing ? "Sending..." : "Send test email"}
+              {saving ? "Saving..." : "Save SMTP Settings"}
             </Button>
           </div>
         )}
@@ -647,9 +719,9 @@ function EventsTable({
   const changed: EventSettingUpdate[] = draft
     .filter((r) => {
       const orig = events.find((e) => e.eventKey === r.eventKey);
-      return !orig || orig.push !== r.push || orig.email !== r.email;
+      return !orig || orig.push !== r.push || orig.email !== false;
     })
-    .map((r) => ({ eventKey: r.eventKey, push: r.push, email: r.email }));
+    .map((r) => ({ eventKey: r.eventKey, push: r.push, email: false }));
 
   async function save() {
     if (changed.length === 0) {
@@ -678,12 +750,11 @@ function EventsTable({
         <div>
           <p className="text-sm font-semibold text-slate-900">Events</p>
           <p className="text-[11px] text-slate-500">
-            Which events go out, and on which channel. A master switch that is off wins over
-            a tick here.
+            Which events trigger Push notifications to staff. Email notifications are reserved exclusively for external Purchase Orders to vendors.
           </p>
         </div>
 
-        <div className="grid grid-cols-[1fr_3rem_3rem] items-center gap-x-2">
+        <div className="grid grid-cols-[1fr_3.5rem_4.5rem] items-center gap-x-2">
           <span />
           <span className="text-[10px] font-medium text-slate-500 text-center">Push</span>
           <span className="text-[10px] font-medium text-slate-500 text-center">Email</span>
@@ -703,12 +774,11 @@ function EventsTable({
                 disabled={!canEdit || saving}
                 label={`${row.label} by push`}
               />
-              <EventCheckbox
-                checked={row.email}
-                onChange={() => toggle(row.eventKey, "email")}
-                disabled={!canEdit || saving}
-                label={`${row.label} by email`}
-              />
+              <div className="flex items-center justify-center min-h-[44px] border-t border-slate-100">
+                <span className="text-[10px] text-slate-400 font-medium px-1.5 py-0.5 rounded bg-slate-100" title="Email is reserved exclusively for Purchase Orders">
+                  PO Only
+                </span>
+              </div>
             </div>
           ))}
         </div>

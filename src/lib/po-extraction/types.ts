@@ -109,6 +109,12 @@ export interface ExtractionView {
   source: string;
   aiModel: string | null;
   stage: ExtractionStage;
+  /**
+   * True when the AI proposed an unambiguous itemName column on every sheet, so the client
+   * can skip the column-confirmation step and fire the extract call automatically.
+   * Only meaningful when stage === "columns".
+   */
+  autoConfident?: boolean;
   /** Present from the column step on; the confirmed roles once the person has pressed Extract. */
   sheets: SheetColumns[];
   legend: LegendEntry[];

@@ -158,17 +158,23 @@ export async function sendEmail(to: EmailRecipient, msg: EmailMessage): Promise<
  * same result shape — so a green tick here means a real notification would have arrived too.
  * The route that calls this owns writing emailConnected / emailLastTestedAt / emailLastTestError.
  */
-export async function sendTestEmail(to: EmailRecipient): Promise<SendResult> {
+export async function sendTestEmail(
+  to: EmailRecipient,
+  custom?: { subject?: string; text?: string }
+): Promise<SendResult> {
   const at = new Date().toISOString();
+  const subject = custom?.subject?.trim() || "BCH Ops — test email";
+  const text = custom?.text?.trim() || [
+    "This is a test email from BCH Ops.",
+    "",
+    `It was sent from Settings → Notifications at ${at}.`,
+    "",
+    "If you are reading it, the SMTP details are correct and BCH Ops can reach your inbox. There is nothing else to do.",
+  ].join("\n");
+
   return sendEmail(to, {
-    subject: "BCH Ops — test email",
-    text: [
-      "This is a test email from BCH Ops.",
-      "",
-      `It was sent from Settings → Notifications at ${at}.`,
-      "",
-      "If you are reading it, the SMTP details are correct and BCH Ops can reach your inbox. There is nothing else to do.",
-    ].join("\n"),
+    subject,
+    text,
   });
 }
 

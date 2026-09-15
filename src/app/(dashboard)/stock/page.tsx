@@ -18,7 +18,7 @@ import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { apiFetch, apiTry } from "@/lib/api-client";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
-import { BIN_TRACKING_ENABLED } from "@/lib/inventory-config";
+import { useBinTracking } from "@/hooks/use-bin-tracking";
 import { isPlaceholderBrand, isPlaceholderCategory } from "@/lib/import-placeholders";
 import { isLowStock } from "@/lib/reorder";
 import { ReorderSheet, type ReorderTarget, type ReorderSaved } from "@/components/reorder-sheet";
@@ -131,6 +131,7 @@ export default function StockPage() {
 
   const [dataError, setDataError] = useState<string | null>(null);
   const [products, setProducts] = useState<ProductItem[]>([]);
+  const { isBinTrackingEnabled: BIN_TRACKING_ENABLED } = useBinTracking();
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [search, setSearch] = useState("");

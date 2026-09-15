@@ -26,6 +26,9 @@ storing in db depends on the importance how do u need  the application and featu
    Check Working
    - action : on pull action from the zoho what happens what data we get and to  which all table is the data gets feeded  after  re
 
-# Ask at what date will the salary will be paid for the working of 11 days wherei ill be working   till august 31 
- - ask him to make a bank to bank transaction  of company linked bank name 
- - ask to send the email regarding the joinning 
+# 15-9-26
+1. while inbounding do u have  complete cycle or dou also inbound items like loose parts  
+
+-> need to make this v/services/mechanic/queue as the assamble/assigned ques where in the same screen the  where the user must list there assigned   assemble task and the related action can be performed  need to add the sidebar or navigation button for it 
+
+-> in the notification settion the email only used to send the po and it not used for any other things 

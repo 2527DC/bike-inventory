@@ -108,12 +108,12 @@ function ActionConfirmation({
   const ts = timestamp ?? new Date();
 
   return (
-    <div className="fixed inset-0 z-[60]">
+    <div className={cn("fixed inset-0 z-[60]", !shown && "pointer-events-none")}>
       {/* Backdrop */}
       <div
         className={cn(
           "absolute inset-0 bg-black/40 transition-opacity duration-200",
-          shown ? "opacity-100" : "opacity-0"
+          shown ? "opacity-100" : "opacity-0 pointer-events-none"
         )}
       />
 

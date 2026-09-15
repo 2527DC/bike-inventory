@@ -261,6 +261,9 @@ export interface PreferenceUpdate {
 /** POST /api/notifications/test body and response. */
 export interface TestSendInput {
   channel: Channel;
+  toEmail?: string;
+  testSubject?: string;
+  testMessage?: string;
 }
 
 export interface TestSendResult {
