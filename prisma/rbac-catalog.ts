@@ -392,10 +392,18 @@ export const MODULE_CATALOG: ModuleSeed[] = [
   },
   {
     key: "reorder",
-    label: "Reorder & AI Insights",
-    description: "Reorder levels, demand forecast and suggestions",
+    // Plan 1509-reorder-inside-purchase-orders (R7, Q9 a): the screen is now the Reorder tab of
+    // /purchase-orders, so this module has no page of its own. `route: null` keeps it out of the
+    // sidebar, More and the header menu (each skips a routeless module), while its view / edit
+    // grants still gate the tab, GET /api/reorder and the reorder-settings writes. "& AI
+    // Insights" is gone with the /ai page it once shared. /reorder itself redirects to the tab.
+    // ⚠ RUN npm run db:seed:rbac AFTER DEPLOY — before it, count users with "/reorder" pinned in
+    // their bottom nav (SELECT count(*) FROM "User" WHERE '/reorder' = ANY("navTabs")): that
+    // tab stops resolving once the route is null.
+    label: "Reorder",
+    description: "Reorder levels and quantities, and the Reorder tab on Purchase Orders",
     icon: "RefreshCw",
-    route: "/reorder",
+    route: null,
     group: "Purchase",
     sortOrder: 240,
     actions: ["view", "edit"],

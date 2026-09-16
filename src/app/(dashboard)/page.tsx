@@ -354,7 +354,7 @@ function AdminDashboard() {
           the /ai page. grid-cols-3 rather than the old 2/4 split, which now left a hole at
           both breakpoints. Matches the other three-tile grids in this file. */}
       <div className="grid grid-cols-3 gap-2 mt-3">
-        <Link href="/reorder" className="focus-ring rounded-xl">
+        <Link href="/purchase-orders?tab=reorder" className="focus-ring rounded-xl">
           <Card className={`min-h-[44px] ${data.lowStockCount > 0 ? "border-red-200" : ""}`}>
             <CardContent className="p-2.5 text-center">
               <AlertTriangle className="h-4 w-4 text-red-500 mx-auto mb-0.5" />
@@ -888,7 +888,7 @@ function PurchaseManagerDashboard() {
     <>
     {/* What needs me now — Low Stock first */}
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-      <Link href="/reorder" className="focus-ring rounded-xl"><DashboardCard label="Low Stock" value={stats.lowStock} icon={AlertTriangle} color="bg-red-100 text-red-600" /></Link>
+      <Link href="/purchase-orders?tab=reorder" className="focus-ring rounded-xl"><DashboardCard label="Low Stock" value={stats.lowStock} icon={AlertTriangle} color="bg-red-100 text-red-600" /></Link>
       <DashboardCard label="Total Products" value={stats.totalProducts} icon={Package} color="bg-blue-100 text-blue-700" />
       <DashboardCard label="Inwards Today" value={stats.todayInwards} icon={ArrowDownCircle} color="bg-blue-100 text-blue-600" />
       <Link href="/purchase-orders" className="focus-ring rounded-xl"><DashboardCard label="Pending POs" value="—" icon={Package} color="bg-orange-100 text-orange-600" /></Link>

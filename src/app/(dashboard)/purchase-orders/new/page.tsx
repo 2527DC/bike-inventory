@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, AlertTriangle, CheckCircle2, Download, Loader2 } from "lucide-react";
+import { ArrowLeft, AlertTriangle, CheckCircle2, Download, Loader2, ListPlus } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,7 @@ import {
   type VendorOption,
 } from "./_components/vendor-section";
 import { SheetImport } from "./_components/sheet-import";
+import { ReorderItemsModal, type PickedReorderLine } from "./_components/reorder-items-modal";
 
 const log = createLogger("purchase-orders:new");
 
@@ -74,6 +75,14 @@ const emptyManualSection = (): Section => ({
 const normName = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
 
 /**
+ * A line under 1 is refused by PO save (`validations.ts`, quantity min 1). Reorder items can
+ * arrive at 0 — a product whose reorder qty was never set comes in at 0 and the person types
+ * the number here (plan 1509-reorder-inside-purchase-orders, Q5) — so the screen refuses first
+ * rather than letting a button be pressed that the API will answer with a 400.
+ */
+const hasUnsetQty = (s: Section) => s.items.some((i) => !(i.quantity >= 1));
+
+/**
  * Raise purchase orders.
  *
  * ─── ONE SCREEN, N ORDERS ────────────────────────────────────────────────────────────────
@@ -92,9 +101,10 @@ const normName = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
  *
  * The manual section takes its lines from the vendor's uploaded sheet and nowhere else. There
  * is no product search on this screen: a line is the item name the sheet said and a quantity,
- * editable here — no price and no GST (plan 1509-po-product-and-quantity-only). The only lines
- * that carry a catalogue product are the ones handed over from /reorder, which are products by
- * definition.
+ * editable here — no price and no GST (plan 1509-po-product-and-quantity-only). Lines that carry
+ * a catalogue product come from two places, both products by definition: the handoff from the
+ * Reorder tab, and "Add reorder items" — the chosen vendor's products at or below their reorder
+ * level, at their reorder quantity (plan 1509-reorder-inside-purchase-orders, R2–R6).
  */
 export default function NewPurchaseOrderPage() {
   const router = useRouter();
@@ -106,6 +116,10 @@ export default function NewPurchaseOrderPage() {
   const [prepared, setPrepared] = useState<PrepareResponse | null>(null);
   const [runningAll, setRunningAll] = useState(false);
   const [pageError, setPageError] = useState("");
+
+  // ─── "Add reorder items" (plan 1509-reorder-inside-purchase-orders, Q6) ───────────────
+  const [reorderOpen, setReorderOpen] = useState(false);
+  const [reorderNote, setReorderNote] = useState<string | null>(null);
 
   // ─── the sheet import ─────────────────────────────────────────────────────────────────
   // The rows live on the server; the page holds the loaded view and its id goes into
@@ -233,21 +247,97 @@ export default function NewPurchaseOrderPage() {
    * The ticked review rows become the manual section's lines (R8). Merged, not replaced: a
    * line already on the section keeps the qty somebody typed, so a second "Use
    * selected" adds the newly ticked rows without undoing edits to the first batch. Deduped
-   * on `key` — the extraction item id — so a row used twice is one line.
+   * on `key` — the extraction item id — so a row used twice is one line, AND on the
+   * normalised name, so a sheet row naming something already on the order (a reorder item
+   * added first, plan 1509-reorder-inside-purchase-orders) is not ordered twice on one PO.
    */
   function useSelectedLines(lines: SheetLine[]) {
     const manual = sections.find((s) => s.key === MANUAL_KEY);
     if (!manual) return;
     const have = new Set(manual.items.map((i) => i.key));
+    const haveNames = new Set(manual.items.map((i) => normName(i.name)));
     const seen = new Set<string>();
     const fresh: POLineItem[] = [];
+    let nameSkipped = 0;
     for (const l of lines) {
       if (have.has(l.key) || seen.has(l.key)) continue;
       seen.add(l.key);
+      const nameKey = normName(l.name);
+      if (haveNames.has(nameKey)) {
+        nameSkipped++;
+        continue;
+      }
+      haveNames.add(nameKey);
       fresh.push({ key: l.key, name: l.name, quantity: l.quantity });
     }
-    log.debug("selected rows used", { offered: lines.length, added: fresh.length, alreadyPresent: lines.length - fresh.length });
+    log.debug("selected rows used", {
+      offered: lines.length,
+      added: fresh.length,
+      alreadyPresent: lines.length - fresh.length - nameSkipped,
+      nameSkipped,
+    });
     patch(MANUAL_KEY, { items: [...manual.items, ...fresh] });
+  }
+
+  /**
+   * Reorder items ticked in the modal become manual-section lines (R5), each carrying its
+   * `productId` so the order stays linked to the product that was low. Merged, never replaced:
+   * sheet lines already on the section stay. A product already on the order, or a line whose
+   * name matches one already there, is skipped and counted — the same thing twice on one order
+   * is a mistake the duplicate rule does not catch (it only checks OTHER open orders).
+   */
+  function addReorderLines(picked: PickedReorderLine[]) {
+    const manual = sections.find((s) => s.key === MANUAL_KEY);
+    if (!manual) return;
+    const haveIds = new Set(manual.items.map((i) => i.productId).filter((id): id is string => !!id));
+    const haveNames = new Set(manual.items.map((i) => normName(i.name)));
+    const fresh: POLineItem[] = [];
+    let skipped = 0;
+    for (const p of picked) {
+      const nameKey = normName(p.name);
+      if (haveIds.has(p.productId) || haveNames.has(nameKey)) {
+        skipped++;
+        continue;
+      }
+      haveIds.add(p.productId);
+      haveNames.add(nameKey);
+      fresh.push({ key: p.productId, productId: p.productId, name: p.name, quantity: p.quantity });
+    }
+    const zero = fresh.filter((l) => l.quantity < 1).length;
+    patch(MANUAL_KEY, { items: [...manual.items, ...fresh], error: null, conflicts: null });
+    setReorderNote(
+      [
+        `Added ${fresh.length} reorder item${fresh.length === 1 ? "" : "s"}.`,
+        zero > 0 ? `${zero} need${zero === 1 ? "s" : ""} a quantity.` : "",
+        skipped > 0 ? `${skipped} skipped — already on this order.` : "",
+      ]
+        .filter(Boolean)
+        .join(" ")
+    );
+    log.info("reorder items added", { vendorId: manual.vendorId, added: fresh.length, skipped, zeroQty: zero });
+  }
+
+  /**
+   * The manual section's vendor picker. Reorder lines belong to the vendor they were listed
+   * for — PO save refuses a product whose reorder vendor is someone else (create.ts) — so
+   * switching vendor removes them, after asking. Sheet lines are left alone, as before.
+   */
+  function changeManualVendor(vendorId: string) {
+    const manual = sections.find((s) => s.key === MANUAL_KEY);
+    if (!manual) return;
+    const reorderLines = manual.items.filter((i) => i.productId);
+    if (reorderLines.length > 0 && vendorId !== manual.vendorId) {
+      const ok = window.confirm(
+        `Changing the vendor removes the ${reorderLines.length} reorder item${reorderLines.length === 1 ? "" : "s"} ` +
+          `added for the current vendor. Continue?`
+      );
+      if (!ok) return;
+      log.info("reorder lines removed on vendor change", { from: manual.vendorId, to: vendorId, removed: reorderLines.length });
+      patch(MANUAL_KEY, { vendorId, items: manual.items.filter((i) => !i.productId), error: null, conflicts: null });
+    } else {
+      patch(MANUAL_KEY, { vendorId, error: null, conflicts: null });
+    }
+    setReorderNote(null);
   }
 
   /** Create ONE vendor's order. Returns true when a purchase order now exists. */
@@ -256,6 +346,10 @@ export default function NewPurchaseOrderPage() {
       const s = sections.find((x) => x.key === key);
       if (!s || s.status === "created") return false;
       if (!s.vendorId || s.items.length === 0) return false;
+      if (hasUnsetQty(s)) {
+        patch(key, { error: "Set a quantity on every line first — a purchase order line needs at least 1.", conflicts: null });
+        return false;
+      }
 
       patch(key, { status: "running", error: null, conflicts: null });
 
@@ -315,7 +409,7 @@ export default function NewPurchaseOrderPage() {
   async function createAll(submitForApproval: boolean) {
     setRunningAll(true);
     setPageError("");
-    const pending = sections.filter((s) => s.status !== "created" && s.vendorId && s.items.length > 0);
+    const pending = sections.filter((s) => s.status !== "created" && s.vendorId && s.items.length > 0 && !hasUnsetQty(s));
     for (const s of pending) {
       await submitSection(s.key, submitForApproval);
     }
@@ -335,7 +429,9 @@ export default function NewPurchaseOrderPage() {
     });
   }
 
-  const creatable = sections.filter((s) => s.status !== "created" && s.vendorId && s.items.length > 0);
+  // A section with a 0-qty line is left out of "Create all"; its own card says why.
+  const creatable = sections.filter((s) => s.status !== "created" && s.vendorId && s.items.length > 0 && !hasUnsetQty(s));
+  const manualSection = sections.find((s) => s.key === MANUAL_KEY);
   const created = sections.filter((s) => s.status === "created");
   const allDone = sections.length > 0 && created.length === sections.filter((s) => s.items.length > 0).length;
 
@@ -421,7 +517,9 @@ export default function NewPurchaseOrderPage() {
             key={s.key}
             section={s}
             vendors={s.key === MANUAL_KEY ? vendors : undefined}
-            onVendorChange={(vendorId) => patch(s.key, { vendorId, error: null, conflicts: null })}
+            onVendorChange={(vendorId) =>
+              s.key === MANUAL_KEY ? changeManualVendor(vendorId) : patch(s.key, { vendorId, error: null, conflicts: null })
+            }
             onItemsChange={(items) => patch(s.key, { items })}
             onSubmit={(forApproval) => void submitSection(s.key, forApproval)}
             onDismissConflicts={() => patch(s.key, { conflicts: null, status: "idle" })}
@@ -437,16 +535,38 @@ export default function NewPurchaseOrderPage() {
                   Items <span className="text-red-500">*</span>
                 </label>
                 {s.vendorId ? (
-                  <SheetImport
-                    vendorId={s.vendorId}
-                    vendorName={vendors.find((v) => v.id === s.vendorId)?.name ?? null}
-                    extraction={extraction}
-                    onExtractionChange={setExtraction}
-                    onUseSelected={useSelectedLines}
-                    disabled={runningAll || s.status === "running"}
-                  />
+                  <>
+                    {/* Two ways to fill the order (owner, 15 Sep 2026, Q6): the vendor's
+                        below-level products from the reorder settings, and the AI sheet upload
+                        below — both land in the same list of lines. */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setReorderOpen(true)}
+                        disabled={runningAll || s.status === "running"}
+                        className="min-h-[44px]"
+                      >
+                        <ListPlus className="h-4 w-4 mr-1.5" /> Add reorder items
+                      </Button>
+                      <span className="text-[11px] text-slate-500 min-w-0 flex-1">
+                        This vendor&apos;s products at or below their reorder level.
+                      </span>
+                    </div>
+                    {reorderNote && <p className="text-[11px] text-slate-600">{reorderNote}</p>}
+                    <SheetImport
+                      vendorId={s.vendorId}
+                      vendorName={vendors.find((v) => v.id === s.vendorId)?.name ?? null}
+                      extraction={extraction}
+                      onExtractionChange={setExtraction}
+                      onUseSelected={useSelectedLines}
+                      disabled={runningAll || s.status === "running"}
+                    />
+                  </>
                 ) : (
-                  <p className="text-[11px] text-slate-500">Choose the vendor first, then upload their sheet.</p>
+                  <p className="text-[11px] text-slate-500">
+                    Choose the vendor first, then add reorder items or upload their sheet.
+                  </p>
                 )}
               </div>
             )}
@@ -532,6 +652,19 @@ export default function NewPurchaseOrderPage() {
           </div>
         )}
       </div>
+
+      {reorderOpen && manualSection && manualSection.vendorId && (
+        <ReorderItemsModal
+          vendorId={manualSection.vendorId}
+          vendorName={vendors.find((v) => v.id === manualSection.vendorId)?.name ?? "this vendor"}
+          onOrder={new Set(manualSection.items.map((i) => i.productId).filter((id): id is string => !!id))}
+          onClose={() => setReorderOpen(false)}
+          onAdd={(lines) => {
+            addReorderLines(lines);
+            setReorderOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

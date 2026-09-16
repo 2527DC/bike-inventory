@@ -12,16 +12,17 @@ import { Button } from "@/components/ui/button";
  *
  * A line is the item NAME and a quantity (editable) — nothing else. No price, no GST: a
  * purchase order carries no money (owner, 15 Sep 2026, R3–R4). A sheet line does not come
- * from the products table (R3): the sheet flow never sets `productId`. The one path that still
- * carries a product is the handoff from /reorder, whose lines are catalogue products by
- * definition; it fills `productId` so that order stays linked to what was low.
+ * from the products table (R3): the sheet flow never sets `productId`. Two paths carry a
+ * product: the handoff from the Reorder tab, and "Add reorder items" on the new-PO screen (plan
+ * 1509-reorder-inside-purchase-orders). Both are catalogue products by definition and fill
+ * `productId` so the order stays linked to what was low.
  */
 export interface POLineItem {
   /** Stable React key and dedupe key — the extraction item id, or the product id from /reorder. */
   key: string;
   name: string;
   quantity: number;
-  /** Only from the /reorder handoff. Never set by the sheet flow. */
+  /** Set by the Reorder-tab handoff and by "Add reorder items". Never set by the sheet flow. */
   productId?: string;
 }
 
@@ -114,7 +115,11 @@ export function VendorSection({
   const isManual = section.vendorName === null;
   const done = section.status === "created";
   const running = section.status === "running";
-  const blocked = !section.vendorId || items.length === 0;
+  // A line under 1 is refused by PO save (validations.ts, min 1). Reorder items arrive at 0 when
+  // no reorder qty was set (plan 1509-reorder-inside-purchase-orders, Q5), so the buttons stay
+  // off until every line has a quantity, and each such line says so.
+  const zeroLines = items.filter((i) => !(i.quantity >= 1)).length;
+  const blocked = !section.vendorId || items.length === 0 || zeroLines > 0;
 
   const setQuantity = (index: number, quantity: number) =>
     onItemsChange(items.map((it, i) => (i === index ? { ...it, quantity } : it)));
@@ -180,7 +185,10 @@ export function VendorSection({
             {items.length > 0 && (
               <div className="space-y-2">
                 {items.map((item, index) => (
-                  <div key={item.key} className="rounded-lg border border-slate-200 p-2.5">
+                  <div
+                    key={item.key}
+                    className={`rounded-lg border p-2.5 ${item.quantity >= 1 ? "border-slate-200" : "border-amber-300 bg-amber-50"}`}
+                  >
                     <div className="flex items-start justify-between gap-2 mb-2">
                       <div className="min-w-0">
                         {/* The name only — a sheet-built line has no SKU (D2). break-words, not
@@ -213,6 +221,9 @@ export function VendorSection({
                         className="text-sm min-h-[44px] tabular-nums"
                       />
                     </div>
+                    {!(item.quantity >= 1) && (
+                      <p className="mt-1 text-[11px] font-medium text-amber-700">Set a quantity — at least 1</p>
+                    )}
                   </div>
                 ))}
               </div>
@@ -282,7 +293,11 @@ export function VendorSection({
 
             {blocked && !running && (
               <p className="text-[11px] text-slate-500 text-center">
-                {!section.vendorId ? "Select a vendor to continue" : "Add at least one item from a sheet to continue"}
+                {!section.vendorId
+                  ? "Select a vendor to continue"
+                  : items.length === 0
+                  ? "Add reorder items or items from a sheet to continue"
+                  : `Set a quantity on ${zeroLines} line${zeroLines === 1 ? "" : "s"} to continue`}
               </p>
             )}
           </>

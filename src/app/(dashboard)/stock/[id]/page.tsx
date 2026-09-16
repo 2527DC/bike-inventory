@@ -4,11 +4,12 @@ import { use, useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useBinTracking } from "@/hooks/use-bin-tracking";
 import { isLowStock } from "@/lib/reorder";
-import { apiTry } from "@/lib/api-client";
+import { apiFetch, apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 import Link from "next/link";
-import { ArrowLeft, QrCode, MapPin, Tag, IndianRupee, Pencil, Save, X, Power, Wrench } from "lucide-react";
+import { ArrowLeft, QrCode, MapPin, Tag, IndianRupee, Pencil, Save, X, Power, Wrench, RefreshCw } from "lucide-react";
 import { AssemblyLevelSheet } from "@/components/assembly-level-sheet";
+import { ReorderSheet, type ReorderTarget } from "@/components/reorder-sheet";
 import { assemblyLevelLabel, type AssemblyLevelValue } from "@/lib/assembly-level";
 import { LabelPrintButton } from "@/components/label-print";
 import { Badge } from "@/components/ui/badge";
@@ -86,6 +87,7 @@ interface ProductDetail {
   reorderLevel: number;
   reorderQty: number;
   reorderVendorId: string | null;
+  reorderVendor: { id: string; name: string } | null;
   maxStock: number;
   costPrice: number;
   sellingPrice: number;
@@ -133,6 +135,10 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
   // also writes this column (plan 1509-assembly-queue…, D4). Not stock.edit.
   const mayAssemblyLevel = canApprove("assembly");
   const [levelOpen, setLevelOpen] = useState(false);
+  // reorder.edit, matching PUT /api/products/[id]/reorder and the /stock row button — not
+  // stock.edit (plan 1509-reorder-inside-purchase-orders, Q13 a).
+  const mayReorder = canEditCheck("reorder");
+  const [reorderTarget, setReorderTarget] = useState<ReorderTarget | null>(null);
   const { isBinTrackingEnabled: BIN_TRACKING_ENABLED } = useBinTracking();
   // Gates the Pricing card (Cost / Selling / MRP) and nothing else on this page.
   const isAdmin = canView("cost_price");
@@ -178,11 +184,13 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
   }, [editing, vendors.length]);
 
   useEffect(() => {
-    fetch(`/api/products/${id}`)
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setProduct(res.data); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    // apiTry, not raw .json(): an expired session answers with the login page's HTML, and the
+    // old bare catch turned that into "Product not found" with nothing in the log.
+    apiTry<ProductDetail>(`/api/products/${id}`).then(({ data, error }) => {
+      if (data) setProduct(data);
+      else log.error("could not load product", { productId: id, message: error });
+      setLoading(false);
+    });
   }, [id]);
 
   if (loading) {
@@ -253,21 +261,19 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
       // wrong here: it would make clearing a vendor silently do nothing. Sent as null, which
       // is what the schema and the column both take.
       if (editData.reorderVendorId === "") payload.reorderVendorId = null;
-      const res = await fetch(`/api/products/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (data.success) {
-        // Always re-fetch full product so serialItems/transactions/tags are intact
-        const full = await fetch(`/api/products/${id}`).then((r) => r.json());
-        if (full.success) setProduct(full.data);
-        setEditing(false);
-      } else {
-        setActionError(data.error || "Save failed");
-      }
-    } catch (e) { setActionError(e instanceof Error ? e.message : "Save failed"); }
+      // apiFetch throws with the API's own sentence on a refusal, which is what the old
+      // `data.error` branch showed.
+      await apiFetch(`/api/products/${id}`, { method: "PUT", json: payload });
+      // Always re-fetch full product so serialItems/transactions/tags are intact
+      const full = await apiTry<ProductDetail>(`/api/products/${id}`);
+      if (full.data) setProduct(full.data);
+      else log.warn("product saved but the reload failed", { productId: id, message: full.error });
+      setEditing(false);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Save failed";
+      log.error("product save failed", { productId: id, message });
+      setActionError(message);
+    }
     finally { setSaving(false); }
   }
 
@@ -291,12 +297,13 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
             onClick={async () => {
               const newStatus = product.status === "ACTIVE" ? "INACTIVE" : "ACTIVE";
               if (!confirm(`Mark this item as ${newStatus}?`)) return;
-              const res = await fetch(`/api/products/${id}`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ status: newStatus }),
-              }).then(r => r.json());
-              if (res.success) setProduct({ ...product, status: newStatus });
+              const { error } = await apiTry(`/api/products/${id}`, { method: "PUT", json: { status: newStatus } });
+              if (error === null) {
+                setProduct({ ...product, status: newStatus });
+              } else {
+                log.error("status change failed", { productId: id, message: error });
+                setActionError(error);
+              }
             }}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium shrink-0 transition-colors ${
               product.status === "ACTIVE"
@@ -515,6 +522,89 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
           ))}
         </CardContent>
       </Card>
+
+      {/* Reorder (plan 1509-reorder-inside-purchase-orders, R1 / Q13 a). When the stock is at or
+          below this level, the product is offered by "Add reorder items" on a New Purchase
+          Order for its reorder vendor, at this quantity. Set here or from the /stock row —
+          both open the same sheet. The Edit form above keeps its three fields as well. */}
+      <Card className="mb-3">
+        <CardContent className="p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <RefreshCw className={`h-4 w-4 shrink-0 ${product.reorderLevel > 0 ? "text-slate-500" : "text-amber-500"}`} />
+              <p className="text-sm font-medium text-slate-900">Reorder</p>
+              {product.reorderLevel > 0 && (
+                <Badge variant={isLowStock(product) ? "warning" : "success"} className="text-[10px]">
+                  {isLowStock(product) ? "At or below level" : "OK"}
+                </Badge>
+              )}
+            </div>
+            {mayReorder && (
+              <button
+                type="button"
+                onClick={() =>
+                  setReorderTarget({
+                    id: product.id,
+                    name: product.name,
+                    sku: product.sku,
+                    currentStock: product.currentStock,
+                    reorderLevel: product.reorderLevel,
+                    reorderQty: product.reorderQty,
+                    reorderVendorId: product.reorderVendorId,
+                  })
+                }
+                className="min-h-[44px] px-3 inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 focus-ring shrink-0"
+              >
+                <Pencil className="h-3.5 w-3.5" /> {product.reorderLevel > 0 ? "Change" : "Set"}
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-3 gap-2 mt-2 text-center">
+            <div>
+              <p className="text-[11px] text-slate-500">Level</p>
+              <p className={`text-sm font-semibold tabular-nums ${product.reorderLevel > 0 ? "text-slate-900" : "text-slate-400"}`}>
+                {product.reorderLevel > 0 ? product.reorderLevel : "Not set"}
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] text-slate-500">Reorder qty</p>
+              <p className={`text-sm font-semibold tabular-nums ${product.reorderQty > 0 ? "text-slate-900" : "text-slate-400"}`}>
+                {product.reorderQty > 0 ? product.reorderQty : "Not set"}
+              </p>
+            </div>
+            <div className="min-w-0">
+              <p className="text-[11px] text-slate-500">Vendor</p>
+              <p className={`text-sm font-semibold truncate ${product.reorderVendor ? "text-slate-900" : "text-slate-400"}`}>
+                {product.reorderVendor?.name ?? "Not set"}
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <ReorderSheet
+        open={reorderTarget !== null}
+        product={reorderTarget}
+        onClose={() => setReorderTarget(null)}
+        onSaved={(updated) => {
+          log.info("reorder settings changed from details", {
+            productId: updated.id,
+            level: updated.reorderLevel,
+            qty: updated.reorderQty,
+          });
+          setProduct((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  reorderLevel: updated.reorderLevel,
+                  reorderQty: updated.reorderQty,
+                  reorderVendorId: updated.reorderVendorId,
+                  reorderVendor: updated.reorderVendor ?? null,
+                }
+              : prev
+          );
+        }}
+      />
 
       {isAdmin && (
         <Card className="mb-3">
