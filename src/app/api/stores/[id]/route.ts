@@ -27,22 +27,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       }
     }
 
-    // invoicePrefix is unique in the database, so a clash would surface as a raw P2002.
-    // Name the other store instead — the same courtesy `code` gets above.
-    if (data.invoicePrefix) {
-      const prefix = data.invoicePrefix.trim();
-      const clash = await prisma.store.findFirst({
-        where: { invoicePrefix: prefix, id: { not: id } },
-        select: { name: true },
-      });
-      if (clash) {
-        return errorResponse(
-          `Invoice prefix "${prefix}" is already used by ${clash.name}. Each store needs its own.`,
-          409
-        );
-      }
-    }
-
+    // No invoice prefix on a store since plan 1609 (R30): it is set on the FLOOR warehouse via
+    // PUT /api/warehouses/[id]. Store.invoicePrefix is neither read nor written here any more.
     const store = await prisma.store.update({
       where: { id },
       data: {
@@ -52,16 +38,13 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         ...(data.phone !== undefined ? { phone: data.phone?.trim() || null } : {}),
         ...(data.sortOrder !== undefined ? { sortOrder: data.sortOrder } : {}),
         ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
-        // Empty string -> null. A stored "" would prefix-match EVERY invoice number and
-        // silently claim every sale for this store.
-        ...(data.invoicePrefix !== undefined
-          ? { invoicePrefix: data.invoicePrefix.trim() || null }
-          : {}),
         // Upper-cased on the way in as well as in the form: a GSTIN typed in lower case would
         // pass the browser but fail the schema's uppercase-only regex on the next edit.
         ...(data.gstin !== undefined ? { gstin: data.gstin.trim().toUpperCase() || null } : {}),
         ...(data.stateCode !== undefined ? { stateCode: data.stateCode.trim() || null } : {}),
       },
+      // The retired Store.invoicePrefix column is not echoed back (plan 1609, T1).
+      omit: { invoicePrefix: true },
     });
 
     log.info("store updated", { storeId: id, fields: Object.keys(data) });

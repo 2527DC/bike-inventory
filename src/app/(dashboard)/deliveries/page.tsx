@@ -3,25 +3,28 @@ import { useDebounce } from "@/hooks/use-debounce";
 
 import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
-import Link from "next/link";
-import { Loader2, Truck, Trash2 } from "lucide-react";
-import { getAging, AGING_BADGE } from "@/lib/utils";
+import { Truck } from "lucide-react";
 import { usePermissions } from "@/lib/use-permissions";
-import { Badge } from "@/components/ui/badge";
+import { apiFetch, apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
 import { SkeletonList } from "@/components/ui/skeleton";
-import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
-import { DesktopTable } from "@/components/desktop-table";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { DeliveryStats, type Stats } from "./_components/delivery-stats";
 import { DeliverySearch } from "./_components/delivery-search";
 import { DeliveryFilters } from "./_components/delivery-filters";
 import { DeliveryCard, type DeliveryItem } from "./_components/delivery-card";
+import { DeliveryTable } from "./_components/delivery-table";
+import { MatchWarehousesButton } from "./_components/match-warehouses-button";
 import { ZohoImportFlow } from "./_components/zoho-import-flow";
 import { BottomSheetModal } from "./_components/bottom-sheet-modal";
 
+const log = createLogger("deliveries:list");
+
 export default function DeliveriesPage() {
-  const { canFetch, canApprove, canDelete } = usePermissions();
+  const { canFetch, canApprove, canDelete, canEdit } = usePermissions();
+  // "Match warehouses" writes Delivery.warehouseId — deliveries.edit (plan 1609 A43b).
+  const canMatchWarehouses = canEdit("deliveries");
   const canFetchInvoices = canFetch("zoho");
   // The IMPORT gate. The component has never had one — only the Fetch button was gated —
   // so anyone who could open the panel could also write Delivery rows. The route now
@@ -72,14 +75,15 @@ export default function DeliveriesPage() {
     params.set("limit", "100");
 
     Promise.all([
-      fetch(`/api/deliveries?${params}`).then((r) => r.json()),
-      fetch("/api/deliveries/stats").then((r) => r.json()),
+      apiFetch<DeliveryItem[]>(`/api/deliveries?${params}`),
+      apiFetch<Stats>("/api/deliveries/stats"),
     ])
-      .then(([listRes, statsRes]) => {
-        if (listRes.success) setDeliveries(listRes.data);
-        if (statsRes.success) setStats(statsRes.data);
+      .then(([list, statsData]) => {
+        setDeliveries(list);
+        setStats(statsData);
       })
       .catch((e) => {
+        log.warn("deliveries load failed", { filter, error: e instanceof Error ? e.message : String(e) });
         if (typeof navigator !== "undefined" && !navigator.onLine) {
           setDataError("You're offline. Check your connection and retry.");
         } else {
@@ -95,35 +99,27 @@ export default function DeliveriesPage() {
 
   // ─── Handlers ───
   const handleMarkReady = async (id: string) => {
-    try {
-      const res = await fetch(`/api/deliveries/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "VERIFIED" }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        setActionError(data.error || "Mark ready failed");
-        return;
-      }
-      fetchData();
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Network error");
+    const res = await apiTry(`/api/deliveries/${id}`, { method: "PUT", json: { status: "VERIFIED" } });
+    if (res.error) {
+      log.warn("mark ready failed", { deliveryId: id, status: res.status });
+      setActionError(res.error);
+      return;
     }
+    fetchData();
   };
 
   const handleDelete = async (id: string) => {
     setDeleting(id);
-    try {
-      const res = await fetch(`/api/deliveries/${id}`, { method: "DELETE" }).then((r) => r.json());
-      if (!res.success) throw new Error(res.error || "Delete failed");
-      setDeleteConfirm(null);
-      fetchData();
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Delete failed");
-    } finally {
-      setDeleting(null);
+    const res = await apiTry(`/api/deliveries/${id}`, { method: "DELETE" });
+    setDeleting(null);
+    if (res.error) {
+      log.warn("delete failed", { deliveryId: id, status: res.status });
+      setActionError(res.error);
+      return;
     }
+    log.info("delivery deleted", { deliveryId: id });
+    setDeleteConfirm(null);
+    fetchData();
   };
 
   const handleConvertToPrebook = async (d: DeliveryItem) => {
@@ -131,43 +127,40 @@ export default function DeliveriesPage() {
     setPrebookConfirm(null);
     try {
       const itemName = d.lineItems?.[0]?.name || "Unknown product";
-      const pbRes = await fetch("/api/prebookings", {
+      const pbRes = await apiTry("/api/prebookings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        json: {
           customerName: d.customerName,
           customerPhone: d.customerPhone || undefined,
           zohoInvoiceNo: d.invoiceNo,
           productName: itemName,
           salesPerson: d.salesPerson || undefined,
-        }),
-      }).then((r) => r.json());
+        },
+      });
 
-      if (!pbRes.success) {
+      if (pbRes.error) {
+        log.warn("pre-booking create failed", { deliveryId: d.id, status: pbRes.status });
         setConfirmation({
           type: "error",
           title: "Pre-booking Failed",
           referenceId: d.invoiceNo,
-          details: pbRes.error || "Failed to create pre-booking",
+          details: pbRes.error,
         });
         return;
       }
 
-      const statusRes = await fetch(`/api/deliveries/${d.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "PREBOOKED" }),
-      });
-      const statusJson = await statusRes.json();
-      if (!statusRes.ok || !statusJson.success) {
+      const statusRes = await apiTry(`/api/deliveries/${d.id}`, { method: "PUT", json: { status: "PREBOOKED" } });
+      if (statusRes.error) {
+        log.warn("pre-booking status failed", { deliveryId: d.id, status: statusRes.status });
         setConfirmation({
           type: "error",
           title: "Pre-booking Status Failed",
           referenceId: d.invoiceNo,
-          details: statusJson.error || "Failed to update delivery status to PREBOOKED",
+          details: statusRes.error,
         });
         return;
       }
+      log.info("converted to pre-booking", { deliveryId: d.id });
 
       setConfirmation({
         type: "success",
@@ -179,12 +172,14 @@ export default function DeliveriesPage() {
         ],
       });
       fetchData();
-    } catch {
+    } catch (e) {
+      // apiTry never throws; kept so an unexpected fault still reaches the screen.
+      log.error("pre-booking failed", { deliveryId: d.id, error: e instanceof Error ? e.message : String(e) });
       setConfirmation({
         type: "error",
-        title: "Network Error",
+        title: "Pre-booking Failed",
         referenceId: d.invoiceNo,
-        details: "Could not connect to server. Please try again.",
+        details: e instanceof Error ? e.message : "Please try again.",
       });
     } finally {
       setPrebooking(null);
@@ -210,6 +205,8 @@ export default function DeliveriesPage() {
         <h1 className="text-lg font-bold text-slate-900">Deliveries</h1>
         <ZohoImportFlow canFetch={canFetchInvoices} canImport={canImportInvoices} onImported={fetchData} />
       </div>
+
+      {canMatchWarehouses && <MatchWarehousesButton onMatched={fetchData} />}
 
       {/* Stats */}
       {stats && <DeliveryStats stats={stats} onFilterChange={setFilter} />}
@@ -261,58 +258,14 @@ export default function DeliveriesPage() {
         </div>
       ) : (
         <>
-        <DesktopTable
-          className="hidden lg:block"
-          rows={deliveries}
-          rowKey={(d) => d.id}
-          rowHref={(d) => `/deliveries/${d.id}`}
-          emptyText="No deliveries found"
-          columns={[
-            { header: "Invoice", cell: (d) => (
-              <div className="flex items-center gap-1.5">
-                <span className="font-medium text-slate-900">{d.invoiceNo}</span>
-                {d.isOutstation && <Badge variant="warning" className="text-[9px]">Outstation</Badge>}
-                {d.reversePickup && <Badge variant="info" className="text-[9px]">Reverse</Badge>}
-              </div>
-            ) },
-            { header: "Customer", cell: (d) => (
-              <div>
-                <p className="text-slate-800">{d.customerName}</p>
-                {d.customerArea && <p className="text-[11px] text-slate-400">{d.customerArea}</p>}
-              </div>
-            ) },
-            { header: "Items", cell: (d) => {
-              const items = d.lineItems || [];
-              const text = items.map((i) => `${i.name}${i.quantity > 1 ? ` x${i.quantity}` : ""}`).join(", ");
-              return <span className="text-slate-500 line-clamp-1 max-w-[20rem] inline-block align-middle">{text || "—"}</span>;
-            } },
-            { header: "Amount", cell: (d) => <span className="tabular-nums">{new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(d.invoiceAmount)}</span>, className: "text-right whitespace-nowrap" },
-            { header: "Date", cell: (d) => new Date(d.invoiceDate).toLocaleDateString("en-IN"), className: "whitespace-nowrap text-slate-500" },
-            { header: "Status", cell: (d) => {
-              const isPending = ["PENDING", "VERIFIED", "SCHEDULED"].includes(d.status);
-              const aging = isPending ? getAging(d.invoiceDate) : null;
-              return (
-                <div className="flex items-center gap-1.5">
-                  <Badge className={`text-[10px] ${getStatusColor(d.status)}`}>{getStatusLabel(d.status)}</Badge>
-                  {aging && aging.level !== "ok" && <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full ${AGING_BADGE[aging.level]}`}>{aging.text}</span>}
-                </div>
-              );
-            } },
-            { header: "", className: "text-right", cell: (d) => (
-              <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
-                {d.status === "PENDING" && (
-                  <>
-                    <Link href={`/deliveries/${d.id}`}><button className="px-2 py-1 rounded-md bg-blue-600 text-white text-xs font-medium">Schedule</button></Link>
-                    <Link href={`/deliveries/${d.id}?action=walkout`}><button className="px-2 py-1 rounded-md bg-green-600 text-white text-xs font-medium">Walk-out</button></Link>
-                    <button onClick={() => setPrebookConfirm(d)} disabled={prebooking === d.id} className="px-2 py-1 rounded-md bg-purple-600 text-white text-xs font-medium disabled:opacity-50">{prebooking === d.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Pre-book"}</button>
-                  </>
-                )}
-                {d.status === "SCHEDULED" && <Link href="/deliveries/dispatch"><button className="px-2 py-1 rounded-md bg-orange-600 text-white text-xs font-medium">Dispatch</button></Link>}
-                {d.status === "PREBOOKED" && <button onClick={() => handleMarkReady(d.id)} className="px-2 py-1 rounded-md bg-blue-600 text-white text-xs font-medium">Mark Ready</button>}
-                {isAdmin && <button onClick={() => setDeleteConfirm(d.id)} disabled={deleting === d.id} className="p-1.5 rounded-md bg-slate-100 text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50">{deleting === d.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}</button>}
-              </div>
-            ) },
-          ]}
+        <DeliveryTable
+          deliveries={deliveries}
+          isAdmin={isAdmin}
+          deleting={deleting}
+          prebooking={prebooking}
+          onDelete={(id) => setDeleteConfirm(id)}
+          onPrebook={(delivery) => setPrebookConfirm(delivery)}
+          onMarkReady={handleMarkReady}
         />
         <div className="space-y-2.5 lg:hidden">
           {deliveries.map((d) => (

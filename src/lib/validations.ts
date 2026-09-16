@@ -1201,18 +1201,9 @@ export const storeSchema = z.object({
   address: z.string().max(300).optional(),
   phone: z.string().max(30).optional(),
   sortOrder: z.number().int().min(0).optional(),
-  /**
-   * The prefix this store's sales invoices carry — "BCH/", "BCC/" (R12).
-   *
-   * `storeIdForInvoice()` matches an invoice number against these to decide which store's
-   * stock a sale comes out of. **Until it is set, every sale deducts from the primary store**,
-   * so a BCC sale would take BCH stock. Unique at the database level.
-   *
-   * Empty string is accepted and normalised to null by the route: clearing the field in the
-   * form has to mean "no prefix", not "a prefix that is the empty string", which would match
-   * every invoice.
-   */
-  invoicePrefix: z.string().max(20).optional(),
+  // No `invoicePrefix` here since 16 Sep 2026 (plan 1609-deliveries, R30): the prefix belongs to
+  // the store's FLOOR warehouse — see `warehouseSchema`. `Store.invoicePrefix` is still a column
+  // but is no longer read or written; zod strips the key if an old client sends it.
   /**
    * The store's own GSTIN. Every store has one (owner) — BCH and BCC are separate registrations.
    *
@@ -1253,6 +1244,15 @@ export const warehouseSchema = z.object({
   /** FLOOR = the shop, GODOWN = storage. Optional: the column defaults to GODOWN (D2). */
   kind: z.enum(["FLOOR", "GODOWN"]).optional(),
   sortOrder: z.number().int().min(0).optional(),
+  /**
+   * The prefix this FLOOR warehouse's sales invoices carry — "INV/", "BCC/" (R30). An invoice
+   * whose number starts with it reduces this floor's stock. Optional here because a GODOWN has
+   * none; the route refuses a FLOOR without one (R32) and clears it on a GODOWN. "" means "no
+   * prefix" and is normalised to null — a stored "" would match every invoice.
+   */
+  invoicePrefix: z.string().trim().max(20).optional(),
+  /** The store's primary FLOOR when it has two or more (R33). Ignored on a GODOWN. */
+  isPrimary: z.boolean().optional(),
 });
 
 export const warehouseUpdateSchema = warehouseSchema.partial().extend({

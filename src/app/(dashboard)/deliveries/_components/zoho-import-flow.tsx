@@ -86,7 +86,7 @@ export function ZohoImportFlow({ canFetch, canImport, onImported }: ZohoImportFl
   const [fetchCustomFrom, setFetchCustomFrom] = useState("");
   const [fetchCustomTo, setFetchCustomTo] = useState("");
   // Persistent summary of the last fetch — "12 found in Zoho (2 – 4 Sep) · 9 already
-  // imported · 1 void · 2 BCC". Survives the result card so the counts stay readable after
+  // imported · 1 void · 2 BCC Floor (BCC/) · 1 Dummy — no floor prefix matched". Survives the result card so the counts stay readable after
   // an import, which is when people actually ask "where did the rest go?".
   const [fetchSummary, setFetchSummary] = useState("");
   const [fetchNotice, setFetchNotice] = useState("");
@@ -218,7 +218,17 @@ export function ZohoImportFlow({ canFetch, canImport, onImported }: ZohoImportFl
         errors: string[];
         window: { from: string; to: string; clampedToFy: boolean } | null;
         fetched: number;
-        skipped: { counts: { alreadyImported: number; void?: number; byStore?: Record<string, number> } };
+        skipped: {
+          counts: {
+            alreadyImported: number;
+            void?: number;
+            // Was `byStore` keyed by store code with an `unmatchedPrefix` key. The prefix moved
+            // to the FLOOR warehouse (plan 1609-deliveries, T1), and an unmatched invoice is a
+            // Dummy with no warehouse and no store (A41b).
+            byWarehouse?: Array<{ warehouseId: string; name: string; prefix: string | null; count: number }>;
+            dummy?: number;
+          };
+        };
       }>("/api/zoho/trigger-pull", {
         method: "POST",
         json: { step: "invoices", pullId, ...windowBody },
@@ -234,11 +244,11 @@ export function ZohoImportFlow({ canFetch, canImport, onImported }: ZohoImportFl
       const parts = [`${invData.fetched ?? 0} found in Zoho (${rangeLabel})`];
       if (counts.alreadyImported) parts.push(`${counts.alreadyImported} already imported`);
       if (counts.void) parts.push(`${counts.void} void`);
-      for (const [code, n] of Object.entries(counts.byStore ?? {})) {
-        if (code !== "unmatchedPrefix") parts.push(`${n} ${code}`);
+      for (const bucket of counts.byWarehouse ?? []) {
+        parts.push(`${bucket.count} ${bucket.name}${bucket.prefix ? ` (${bucket.prefix})` : ""}`);
       }
-      if (counts.byStore?.unmatchedPrefix) {
-        parts.push(`${counts.byStore.unmatchedPrefix} with no store prefix`);
+      if (counts.dummy) {
+        parts.push(`${counts.dummy} Dummy — no floor prefix matched`);
       }
       setFetchSummary(parts.join(" · "));
       if (w?.clampedToFy) {
@@ -284,6 +294,7 @@ export function ZohoImportFlow({ canFetch, canImport, onImported }: ZohoImportFl
         );
       }
     } catch (e) {
+      log.error("bulk fetch failed", { message: e instanceof Error ? e.message : String(e) });
       setFetchError(e instanceof Error ? e.message : "Fetch failed");
       setFetchStep("idle");
     } finally {

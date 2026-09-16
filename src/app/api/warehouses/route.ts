@@ -6,9 +6,13 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireAuth, requireFeature, AuthError } from "@/lib/auth-helpers";
 import { clearWarehouseCache } from "@/lib/warehouses";
 import { warehouseSchema } from "@/lib/validations";
+import {
+  FLOOR_NEEDS_PREFIX, WarehouseRuleError, assertPrefixFree, assertStoreHasPrimary,
+  clearOtherPrimaries, normalisePrefix, uniqueViolationMessage,
+} from "@/lib/warehouses-rules";
 import { createLogger } from "@/lib/logger";
 
-const log = createLogger("api:warehouses");
+const log = createLogger("warehouses:api");
 
 /**
  * List warehouses, flat, each carrying its store. Optional `?storeId=` filter.
@@ -36,6 +40,9 @@ export async function GET(req: NextRequest) {
         kind: true,
         sortOrder: true,
         storeId: true,
+        // FLOOR-only (plan 1609, R30/R33). Printed on the invoice itself; not sensitive.
+        invoicePrefix: true,
+        isPrimary: true,
         // gstin/stateCode ride along for P14's transfer-document derivation. Printed on the
         // document itself, so not sensitive — which is why this route stays requireAuth.
         store: { select: { id: true, code: true, name: true, gstin: true, stateCode: true } },
@@ -59,41 +66,71 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     await requireFeature("warehouses", "create");
-    const data = warehouseSchema.parse(await req.json());
-
-    const store = await prisma.store.findUnique({
-      where: { id: data.storeId },
-      select: { id: true, name: true, isActive: true },
-    });
-    if (!store) return errorResponse("Store not found", 400);
-    if (!store.isActive) return errorResponse(`${store.name} is deactivated`, 400);
-
-    const code = data.code.trim().toUpperCase();
-    const clash = await prisma.warehouse.findUnique({
-      where: { code },
-      select: { name: true, store: { select: { name: true } } },
-    });
-    if (clash) {
-      return errorResponse(`Code "${code}" is already used by ${clash.name} at ${clash.store.name}`, 409);
+    const parsed = warehouseSchema.safeParse(await req.json());
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      log.warn("warehouse create body invalid", { path: first?.path.join("."), issues: parsed.error.issues.length });
+      return errorResponse(first?.message ?? "Invalid warehouse", 400);
     }
+    const data = parsed.data;
 
-    const warehouse = await prisma.warehouse.create({
-      data: {
-        storeId: store.id,
-        code,
-        name: data.name.trim(),
-        // GODOWN when the client says nothing — the column default, spelled out so a caller
-        // that predates `kind` still creates storage, never a shop floor by accident.
-        kind: data.kind ?? "GODOWN",
-        sortOrder: data.sortOrder ?? 0,
-      },
-      select: {
-        id: true, code: true, name: true, kind: true, sortOrder: true, isActive: true,
-        store: { select: { id: true, code: true, name: true } },
-      },
+    // GODOWN when the client says nothing — the column default, spelled out so a caller
+    // that predates `kind` still creates storage, never a shop floor by accident.
+    const kind = data.kind ?? "GODOWN";
+    const isFloor = kind === "FLOOR";
+    // A GODOWN never carries a prefix or the primary flag, whatever the body says (R30).
+    const invoicePrefix = isFloor ? normalisePrefix(data.invoicePrefix) : null;
+    const isPrimary = isFloor ? data.isPrimary === true : false;
+    if (isFloor && !invoicePrefix) return errorResponse(FLOOR_NEEDS_PREFIX, 400);
+
+    // One transaction: the prefix check, moving the primary flag, the insert and the
+    // "store still has one primary" check succeed or fail together (plan 1609 §1.7).
+    const warehouse = await prisma.$transaction(async (tx) => {
+      const store = await tx.store.findUnique({
+        where: { id: data.storeId },
+        select: { id: true, name: true, isActive: true },
+      });
+      if (!store) throw new WarehouseRuleError("Store not found", 400);
+      if (!store.isActive) throw new WarehouseRuleError(`${store.name} is deactivated`, 400);
+
+      const code = data.code.trim().toUpperCase();
+      const clash = await tx.warehouse.findUnique({
+        where: { code },
+        select: { name: true, store: { select: { name: true } } },
+      });
+      if (clash) {
+        throw new WarehouseRuleError(`Code "${code}" is already used by ${clash.name} at ${clash.store.name}`, 409);
+      }
+
+      if (invoicePrefix) await assertPrefixFree(tx, invoicePrefix);
+      // Before the insert: the partial unique index refuses a second primary per store.
+      if (isPrimary) await clearOtherPrimaries(tx, store.id);
+
+      const created = await tx.warehouse.create({
+        data: {
+          storeId: store.id,
+          code,
+          name: data.name.trim(),
+          kind,
+          sortOrder: data.sortOrder ?? 0,
+          invoicePrefix,
+          isPrimary,
+        },
+        select: {
+          id: true, code: true, name: true, kind: true, sortOrder: true, isActive: true,
+          invoicePrefix: true, isPrimary: true,
+          store: { select: { id: true, code: true, name: true } },
+        },
+      });
+
+      if (isFloor) await assertStoreHasPrimary(tx, store.id);
+      return created;
     });
 
-    log.info("warehouse created", { warehouseId: warehouse.id, code: warehouse.code, kind: warehouse.kind, storeId: store.id });
+    log.info("warehouse created", {
+      warehouseId: warehouse.id, code: warehouse.code, kind: warehouse.kind,
+      storeId: warehouse.store.id, isPrimary: warehouse.isPrimary,
+    });
     // A new warehouse is not in the cached set.
     // The cached array would otherwise outlive the change for the life of the process —
     // which is how a warehouse the picker offers gets refused by the server that offered it.
@@ -101,6 +138,15 @@ export async function POST(req: NextRequest) {
     return successResponse(warehouse, 201);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof WarehouseRuleError) {
+      log.warn("warehouse create refused", { status: error.status, message: error.message });
+      return errorResponse(error.message, error.status);
+    }
+    const unique = uniqueViolationMessage(error);
+    if (unique) {
+      log.warn("warehouse create hit a unique constraint", { message: unique });
+      return errorResponse(unique, 409);
+    }
     const message = error instanceof Error ? error.message : "Failed to create the warehouse";
     log.error("warehouse create failed", { message });
     return errorResponse(message, 400);

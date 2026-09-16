@@ -260,6 +260,8 @@ model Store {
   // and picks the longest matching prefix in JavaScript. Null until the owner fills it in on
   // /stores; until then every sale falls back to the primary store with a log.warn.
   invoicePrefix String? @unique
+  // ⚠ NOT READ OR WRITTEN since 16 Sep 2026 (plan 1609-deliveries, T1): the prefix lives on the
+  // FLOOR warehouse now (Warehouse.invoicePrefix). Kept one release for rule 7, then dropped.
 
   // ⚠ These three columns are ADDITIVE-ONLY in this migration, on purpose (CLAUDE.md rule 7).
   // Nothing writes them yet and no zod schema accepts them: `invoicePrefix` gets its input on
@@ -317,9 +319,24 @@ model Warehouse {
   kind      WarehouseKind @default(GODOWN)
   isActive  Boolean       @default(true)
   sortOrder Int           @default(0)
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
 
+  // The prefix this FLOOR warehouse's sales invoices carry: "INV/", "BCC/". Moved here from
+  // Store.invoicePrefix on 16 Sep 2026 (plan 1609-deliveries, R30): a store holds no stock, its
+  // floor does, so the floor is what an outward names and reduces. FLOOR-only — the API refuses
+  // to save a FLOOR without one and clears it on a GODOWN — but nullable here on purpose (R32),
+  // so an existing warehouse stays valid until someone opens it on /stores.
+  invoicePrefix String? @unique
+
+  // The store's primary FLOOR when it has more than one (R33). "At most one per store" is a
+  // hand-written partial unique index in migration `…_delivery_floor_warehouse_and_holds`,
+  // because Prisma cannot express `WHERE "isPrimary" AND "kind" = 'FLOOR'`. Its only reader
+  // today is a pre-booked arrival picking its store's floor (B1).
+  isPrimary Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveries    Delivery[]
   users         User[]
   stockLevels   StockLevel[]
   transfersFrom TransferOrderItem[] @relation("TransferFromWarehouse")
@@ -1840,9 +1857,18 @@ model Delivery {
   // from but the primary store, which would take BCH stock for a BCC sale.
   //
   // Nullable because every existing row predates it, and Restrict because a store with sales
-  // history is not deletable. Populated by P1b from `Store.invoicePrefix` against `invoiceNo`.
+  // history is not deletable. Since 16 Sep 2026 (plan 1609-deliveries, T3) it is DERIVED from
+  // warehouse.storeId at the same write, never resolved on its own.
   storeId String?
   store   Store?  @relation("DeliveryStore", fields: [storeId], references: [id], onDelete: Restrict)
+
+  // The FLOOR warehouse that sold this and whose stock it holds and reduces (R31, A40, A46),
+  // matched from Warehouse.invoicePrefix at import, by the "Match warehouses" button, or — for a
+  // pre-booked arrival — the receiving store's primary floor (B1). An outward NEVER reduces a
+  // godown. Null on an open delivery = a "Dummy": no prefix matched, and no action is allowed
+  // on it except delete (A41b, A41c, T2). Restrict for the same reason as storeId above.
+  warehouseId String?
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
 
   status       DeliveryStatus @default(PENDING)
   verifiedAt   DateTime?
@@ -1903,6 +1929,8 @@ model Delivery {
   // sequential scan of every delivery ever recorded. Postgres does not index a referencing
   // column for you. P1b's store-scoped reads then use the same index.
   @@index([storeId])
+  // Same reasoning for the Restrict FK to Warehouse, and the Dummy list is `warehouseId IS NULL`.
+  @@index([warehouseId])
 }
 
 model AlertConfig {

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, Globe, RotateCcw } from "lucide-react";
+import { ArrowLeft, Globe, RotateCcw, Warehouse } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
 import { DeliveryData, formatINR, BANGALORE_STEPS, OUTSTATION_STEPS, COURIER_STEPS } from "./types";
@@ -29,7 +29,16 @@ export function DetailHeader({ data }: DetailHeaderProps) {
             {data.customerName} | {formatINR(data.invoiceAmount)}
           </p>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center justify-end gap-1.5 max-w-[55%]">
+          {/* Floor warehouse the invoice matched, or Dummy when none did (plan 1609 A41c, T2) */}
+          {data.isDummy ? (
+            <Badge variant="danger">Dummy</Badge>
+          ) : data.warehouse ? (
+            <Badge className="max-w-[9rem]" title={data.warehouse.name}>
+              <Warehouse className="h-3 w-3 mr-1 shrink-0" />
+              <span className="truncate">{data.warehouse.name}</span>
+            </Badge>
+          ) : null}
           {data.reversePickup && (
             <Badge variant="info">
               <RotateCcw className="h-3 w-3 mr-1" />Reverse

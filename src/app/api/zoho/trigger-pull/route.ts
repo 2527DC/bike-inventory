@@ -27,7 +27,7 @@ import { zohoPullSchema } from "@/lib/validations";
 import { resolveBillWindow, type ResolvedWindow } from "@/lib/zoho/date-window";
 import { getTodayIST } from "@/lib/services/timezone";
 import { logActivity } from "@/lib/activity-log";
-import { storeIdForInvoice } from "@/lib/deliveries/zoho-invoice";
+import { floorWarehouseForInvoice, listFloorWarehousesWithPrefix } from "@/lib/deliveries/zoho-invoice";
 
 const log = createLogger("zoho:trigger-pull");
 
@@ -398,7 +398,11 @@ export async function POST(req: NextRequest) {
       const skippedItems: SkipItem[] = [];
       let alreadyImported = 0;
       let voidCount = 0;
-      const byStore: Record<string, number> = {};
+      // Per-bucket counts for the fetch summary, keyed by the FLOOR warehouse that matched
+      // (plan 1609-deliveries, R31). `dummyCount` is the invoices whose number matched no
+      // floor prefix — imported with no warehouse and no store (A41b); the UI labels it Dummy.
+      const byWarehouseCount = new Map<string, number>();
+      let dummyCount = 0;
       let source = "none";
       let fetched = 0;
 
@@ -437,10 +441,9 @@ export async function POST(req: NextRequest) {
       fetched = invoices.length;
       apiCalls += Math.ceil(invoices.length / 200) || 1;
 
-      // Every store, for prefix attribution. Two rows; loaded once.
-      const stores = await prisma.store.findMany({
-        select: { id: true, code: true, invoicePrefix: true, isActive: true, sortOrder: true },
-      });
+      // Every active FLOOR warehouse carrying a prefix, for attribution. A handful of rows;
+      // loaded once, not per invoice. The prefix moved here from Store on 16 Sep (T1).
+      const floors = await listFloorWarehousesWithPrefix(prisma);
 
       const liveInvoices = invoices.filter((inv) => inv.status !== "void");
       for (const inv of invoices) {
@@ -475,17 +478,23 @@ export async function POST(req: NextRequest) {
       // It was `!inv.invoice_number.startsWith("BCC/")` — a store NAME hardcoded in three
       // routes, hiding a real store with its own GSTIN and its own stock. Bharath Cycle
       // Centre's invoices were silently never imported, so its deliveries never existed and
-      // its stock never moved. They are imported now and TAGGED with their store instead,
-      // resolved from Store.invoicePrefix. An invoice matching no prefix still imports; it
-      // simply carries storeId: null and is counted so the summary can say so.
+      // its stock never moved. They are imported now and TAGGED with the FLOOR warehouse that
+      // sold them, resolved from Warehouse.invoicePrefix (plan 1609-deliveries, T1). An invoice
+      // matching no floor prefix still imports as a Dummy — warehouseId AND storeId null, no
+      // fallback to any store (A41b) — and is counted so the summary can say so.
+      //
+      // The ids written below are for the review screen only. Approve RE-RESOLVES the prefix,
+      // because it may have been typed or changed on /stores between fetch and import.
       if (newInvoices.length > 0) {
         await prisma.$transaction(
           newInvoices.map((invoice) => {
             const invoiceNo = invoice.invoice_number;
-            const storeId = storeIdForInvoice(invoiceNo, stores);
-            const store = stores.find((s) => s.id === storeId);
-            const key = store?.code ?? "unmatchedPrefix";
-            byStore[key] = (byStore[key] ?? 0) + 1;
+            const match = floorWarehouseForInvoice(invoiceNo, floors);
+            if (match) {
+              byWarehouseCount.set(match.warehouseId, (byWarehouseCount.get(match.warehouseId) ?? 0) + 1);
+            } else {
+              dummyCount++;
+            }
             return prisma.zohoPullPreview.create({
               data: {
                 pullId: existingPullId,
@@ -506,7 +515,8 @@ export async function POST(req: NextRequest) {
                   // destructures a body field called `source` meaning "accounting-only
                   // import", and reusing the name would mislead every reader of that file.
                   provider: source,
-                  storeId: storeId ?? null,
+                  warehouseId: match?.warehouseId ?? null,
+                  storeId: match?.storeId ?? null,
                 },
               },
             });
@@ -515,9 +525,26 @@ export async function POST(req: NextRequest) {
         invoicesNew = newInvoices.length;
       }
 
+      // Names for the matched buckets, so the summary reads "12 BCH Floor", not an id. One
+      // query, and only when something matched.
+      const byWarehouse: Array<{ warehouseId: string; name: string; prefix: string | null; count: number }> = [];
+      if (byWarehouseCount.size > 0) {
+        const named = await prisma.warehouse.findMany({
+          where: { id: { in: Array.from(byWarehouseCount.keys()) } },
+          select: { id: true, name: true, invoicePrefix: true },
+        });
+        const byId = new Map(named.map((w) => [w.id, w]));
+        for (const [warehouseId, count] of byWarehouseCount) {
+          const w = byId.get(warehouseId);
+          byWarehouse.push({ warehouseId, name: w?.name ?? warehouseId, prefix: w?.invoicePrefix ?? null, count });
+        }
+      }
+
       log.info("invoices step finished", {
         pullId: existingPullId, source, fetched, invoicesNew,
-        alreadyImported, voidCount, byStore, apiCalls, errors: errors.length,
+        alreadyImported, voidCount, floors: floors.length,
+        byWarehouse: byWarehouse.map((b) => ({ warehouseId: b.warehouseId, count: b.count })),
+        dummy: dummyCount, apiCalls, errors: errors.length,
       });
 
       await logActivity(prisma, {
@@ -531,7 +558,10 @@ export async function POST(req: NextRequest) {
       return successResponse({
         step: "invoices", source, window,
         fetched, invoicesNew,
-        skipped: { counts: { alreadyImported, void: voidCount, byStore }, items: skippedItems },
+        skipped: {
+          counts: { alreadyImported, void: voidCount, byWarehouse, dummy: dummyCount },
+          items: skippedItems,
+        },
         apiCalls, errors,
       });
     }

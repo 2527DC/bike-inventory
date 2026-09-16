@@ -30,6 +30,22 @@ export async function recomputeCurrentStock(tx: Tx, productId: string): Promise<
   return total;
 }
 
+// Recompute and persist Product.reservedStock = sum of its StockLevel reservedQuantity.
+//
+// The twin of recomputeCurrentStock (plan 1609-deliveries, T4). Since 16 Sep 2026 a delivery's
+// hold lives on ONE floor warehouse (`StockLevel.reservedQuantity`), and `Product.reservedStock`
+// is only its cache — kept because the dashboard, reorder and manual outwards still read it.
+// Every writer of reservedQuantity calls this in the same transaction. Returns the new total.
+export async function recomputeReservedStock(tx: Tx, productId: string): Promise<number> {
+  const agg = await tx.stockLevel.aggregate({
+    where: { productId },
+    _sum: { reservedQuantity: true },
+  });
+  const total = agg._sum.reservedQuantity ?? 0;
+  await tx.product.update({ where: { id: productId }, data: { reservedStock: total } });
+  return total;
+}
+
 // Change a warehouse's quantity by delta (may be negative). Clamps at 0, upserts the row,
 // then recomputes currentStock. Returns the new total.
 export async function adjustWarehouseQty(tx: Tx, productId: string, warehouseId: string, delta: number): Promise<number> {
