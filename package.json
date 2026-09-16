@@ -19,6 +19,7 @@
     "db:restore:integrations": "node scripts/db/restore-integrations.mjs",
     "db:push:integrations": "node scripts/db/push-integrations.mjs",
     "db:snapshot": "node scripts/db/snapshot.mjs",
+    "db:wipe:deliveries": "node scripts/db/wipe-deliveries.mjs",
     "db:migrate:status": "prisma migrate status"
   },
   "prisma": {
