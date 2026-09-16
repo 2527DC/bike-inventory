@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Loader2, Trash2, Package, AlertTriangle, Warehouse } from "lucide-react";
+import { Loader2, Trash2, PackagePlus, CalendarClock, Footprints, AlertTriangle, Warehouse } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { getAging, AGING_BADGE } from "@/lib/utils";
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
@@ -185,29 +185,37 @@ export function DeliveryCard({
 
         {/* Action buttons. A Dummy gets none except delete (plan 1609 A41c, T2). */}
         <div className="flex gap-2 mt-1" onClick={(e) => e.stopPropagation()}>
+          {/* Icon-only actions; the name is the tooltip and the accessible label. */}
           {!isDummy && d.status === "PENDING" && (
             <>
-              <Link href={`/deliveries/${d.id}`} className="flex-1">
-                <button className="w-full bg-blue-600 text-white py-2 rounded-md text-xs font-medium">
-                  Schedule
-                </button>
+              <Link
+                href={`/deliveries/${d.id}`}
+                title="Schedule"
+                aria-label="Schedule"
+                className="flex items-center justify-center h-10 w-11 rounded-md bg-blue-600 text-white"
+              >
+                <CalendarClock className="h-4 w-4" />
               </Link>
-              <Link href={`/deliveries/${d.id}/walkout`} className="flex-1">
-                <button className="w-full bg-green-600 text-white py-2 rounded-md text-xs font-medium">
-                  Walk-out
-                </button>
+              <Link
+                href={`/deliveries/${d.id}/walkout`}
+                title="Walk-out"
+                aria-label="Walk-out"
+                className="flex items-center justify-center h-10 w-11 rounded-md bg-green-600 text-white"
+              >
+                <Footprints className="h-4 w-4" />
               </Link>
               <button
                 onClick={() => onPrebook(d)}
                 disabled={prebooking === d.id}
-                className="flex-1 flex items-center justify-center gap-1 bg-purple-600 text-white py-2 rounded-md text-xs font-medium disabled:opacity-50"
+                title="Pre-book"
+                aria-label="Pre-book"
+                className="flex items-center justify-center h-10 w-11 rounded-md bg-purple-600 text-white disabled:opacity-50"
               >
                 {prebooking === d.id ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
-                  <Package className="h-3 w-3" />
-                )}{" "}
-                Pre-book
+                  <PackagePlus className="h-4 w-4" />
+                )}
               </button>
             </>
           )}
@@ -230,7 +238,9 @@ export function DeliveryCard({
             <button
               onClick={() => onDelete(d.id)}
               disabled={deleting === d.id}
-              className="bg-slate-100 text-slate-500 px-2 py-2 rounded-md text-xs hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+              title="Delete"
+              aria-label="Delete"
+              className="ml-auto bg-slate-100 text-slate-500 px-2 py-2 rounded-md text-xs hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
             >
               {deleting === d.id ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
