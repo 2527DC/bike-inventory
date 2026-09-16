@@ -572,6 +572,17 @@ Every move to `SCHEDULED` tries to reserve stock and never fails on a shortage (
 - The batch dispatch route (`api/deliveries/batch/route.ts:80-118`) follows the same rule as the
   single delivery route.
 
+**Build questions (asked before the plan, 16 Sep 2026)**
+
+| # | Question | Owner's answer |
+|---|---|---|
+| B1 | Pre-booked cycle arrives: inbound auto-creates a delivery named `PB-<id>` (`api/inbound/[id]/route.ts:347-366`), which matches no prefix and would be Dummy with no actions | **It takes the primary FLOOR warehouse of the store that received the cycle** — never Dummy. (This is the primary floor warehouse's first use; A41d.) |
+| B2 | Delivery with no phone (1 of 100) cannot be saved, linked or walked out; the phone is editable today only once `SCHEDULED` (`delivery-details-card.tsx:21`) | **Staff can type or correct the phone in the Customer card** while `PENDING`/`VERIFIED` and not yet saved, written as `+91-XXXXXXXXXX`, then Save Contact. |
+| B3 | Existing 265 delivery phones in mixed formats | **Convert only when touched** — Save Contact or a staff edit. No bulk rewrite. |
+| B3b | Phones on new imports | **Formatted as `+91-XXXXXXXXXX` at import** (both import paths). |
+| B4 | Existing product-wide holds on `SCHEDULED`/`PACKED` deliveries when holds move to the floor warehouse | **Release all old holds once**; each delivery re-holds on its floor only when staff press "Reserve stock now" (A38). |
+| B5 | How to plan and build | **One plan, three phases, each on its own branch stacked on the previous, one commit per phase:** (1) floor-warehouse prefix, Dummy, match button, floor-only reduction, per-floor holds, focused walk-out; (2) Save Contact → Customer, link, fill form, customer submit → `SCHEDULED`, staff scheduling; (3) one-screen detail, `blr`/`outstation` routes, Bangalore/Outstation/Not chosen, tags, payment status and balance. Claude asks which branch to base each phase on before creating it. |
+
 **Still open:** nothing. Everything needed for a plan is answered.
 
 ### 4.1 The original questions
