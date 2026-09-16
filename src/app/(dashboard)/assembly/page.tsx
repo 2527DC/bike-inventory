@@ -247,11 +247,6 @@ export default function AssemblyPage() {
     })();
   }, [loadData, isSupervisor, permsLoading]);
 
-  // Debounce the awaiting-assignment search (~300ms)
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedPendingQuery(pendingQuery.trim()), 300);
-    return () => clearTimeout(timer);
-  }, [pendingQuery]);
 
   const loadPending = useCallback(
     async (q: string, page: number, append: boolean) => {
@@ -270,11 +265,18 @@ export default function AssemblyPage() {
     [applyPending]
   );
 
+  // Debounce the awaiting-assignment search (~300ms), and fetch from the timer itself. It used to
+  // be two effects — one debouncing into state, one watching that state and calling loadPending
+  // — and the second set loading state synchronously in an effect body
+  // (react-hooks/set-state-in-effect). Declared after loadPending, which it depends on.
   useEffect(() => {
-    if (!isSupervisor) return;
-    if (debouncedPendingQuery === loadedPendingQueryRef.current) return;
-    loadPending(debouncedPendingQuery, 1, false);
-  }, [debouncedPendingQuery, isSupervisor, loadPending]);
+    const timer = setTimeout(() => {
+      const q = pendingQuery.trim();
+      setDebouncedPendingQuery(q);
+      if (isSupervisor && q !== loadedPendingQueryRef.current) loadPending(q, 1, false);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [pendingQuery, isSupervisor, loadPending]);
 
   // Live timer tick for active task
   useEffect(() => {
@@ -290,12 +292,16 @@ export default function AssemblyPage() {
       return Math.max(0, grossSec - (activeTask.totalHoldSeconds || 0));
     }
 
-    setElapsedSec(calculateElapsed());
-    const interval = setInterval(() => {
-      setElapsedSec(calculateElapsed());
-    }, 1000);
+    // The first tick is scheduled, not called in the effect body: a synchronous setState here
+    // renders twice (react-hooks/set-state-in-effect). One frame later is invisible on a clock.
+    const tick = () => setElapsedSec(calculateElapsed());
+    const first = setTimeout(tick, 0);
+    const interval = setInterval(tick, 1000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(first);
+      clearInterval(interval);
+    };
   }, [activeTask]);
 
   // Load available bins when complete modal opens

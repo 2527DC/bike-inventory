@@ -48,16 +48,25 @@ export function AssemblyLevelSheet({ open, product, onClose, onSaved }: Props) {
   const firstRef = useRef<HTMLButtonElement>(null);
   const triggerRef = useRef<Element | null>(null);
 
-  // Keyed on the id and the saved level, not the `product` object: the details page builds that
-  // object inline on every render, and an object dependency would reset the person's pick
+  // Reset the pick whenever the sheet opens for a product, or that product's saved level
+  // changes. Keyed on the id and the saved level, not the `product` object: the details page
+  // builds that object inline on every render, and an object key would reset the person's pick
   // whenever the parent re-rendered while the sheet was open.
+  //
+  // Done DURING RENDER (React's "adjusting state when a prop changes"), not in an effect: an
+  // effect that sets state paints the stale pick first and then renders again
+  // (react-hooks/set-state-in-effect).
   const productId = product?.id;
   const savedLevel = product?.assemblyLevel ?? null;
-  useEffect(() => {
-    if (!open || !productId) return;
-    setChoice(savedLevel);
-    setError(null);
-  }, [open, productId, savedLevel]);
+  const resetKey = open && productId ? `${productId}:${savedLevel ?? ""}` : null;
+  const [lastResetKey, setLastResetKey] = useState<string | null>(null);
+  if (resetKey !== lastResetKey) {
+    setLastResetKey(resetKey);
+    if (resetKey) {
+      setChoice(savedLevel);
+      setError(null);
+    }
+  }
 
   useEffect(() => {
     if (!open) return;
