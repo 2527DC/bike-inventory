@@ -59,6 +59,10 @@ export interface DeliveryData {
   isDummy: boolean;
   /** Set when every line is held on the floor (T5); null = not held. */
   stockReservedAt: string | null;
+  /** Set by Save Customer (plan 1609 A2). "Customer saved" means exactly this, on every device. */
+  customerId: string | null;
+  /** The linked `Customer` row; its name can differ from `customerName` when it already existed. */
+  customer: { id: string; name: string; phone: string } | null;
 }
 
 /** One line the floor warehouse cannot hold or hand over (plan 1609 §1.3). */

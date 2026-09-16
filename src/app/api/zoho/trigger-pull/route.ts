@@ -28,6 +28,7 @@ import { resolveBillWindow, type ResolvedWindow } from "@/lib/zoho/date-window";
 import { getTodayIST } from "@/lib/services/timezone";
 import { logActivity } from "@/lib/activity-log";
 import { floorWarehouseForInvoice, listFloorWarehousesWithPrefix } from "@/lib/deliveries/zoho-invoice";
+import { toPlus91 } from "@/lib/phone";
 
 const log = createLogger("zoho:trigger-pull");
 
@@ -503,7 +504,8 @@ export async function POST(req: NextRequest) {
                 data: {
                   invoiceNumber: invoiceNo,
                   customerName: invoice.customer_name,
-                  phone: invoice.phone || "",
+                  // +91-XXXXXXXXXX, as every phone in the deliveries flow is written (B3b).
+                  phone: toPlus91(invoice.phone) ?? "",
                   date: invoice.date,
                   total: invoice.total,
                   balance: invoice.balance,

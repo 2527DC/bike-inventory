@@ -1,7 +1,8 @@
 "use client";
 
 // Shared by the delivery detail screen and the focused walk-out screen (plan 1609 §1.8), so
-// both load the delivery the same way and read the same "contact saved" flag.
+// both load the delivery the same way. "Customer saved" is `data.customerId` (plan 1609 A2);
+// the localStorage flag that stood in for it until Phase 2 is gone.
 
 import { useCallback, useEffect, useState } from "react";
 import { apiTry } from "@/lib/api-client";
@@ -38,32 +39,4 @@ export function useDelivery(id: string) {
   }, [refetch]);
 
   return { data, loading, error, refetch };
-}
-
-/**
- * The "contact saved" flag lives in localStorage under `contact-saved-<id>` so it survives a
- * refresh. Phase 2 replaces it with a database save (R35); until then both screens share it.
- */
-export function useContactSaved(id: string) {
-  const contactKey = `contact-saved-${id}`;
-  const [contactSaved, setContactSaved] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return localStorage.getItem(contactKey) === "1";
-    } catch (e) {
-      log.warn("contact-saved flag unreadable", { deliveryId: id, error: e instanceof Error ? e.message : String(e) });
-      return false;
-    }
-  });
-
-  const markContactSaved = () => {
-    setContactSaved(true);
-    try {
-      localStorage.setItem(contactKey, "1");
-    } catch (e) {
-      log.warn("contact-saved flag not stored", { deliveryId: id, error: e instanceof Error ? e.message : String(e) });
-    }
-  };
-
-  return { contactSaved, markContactSaved };
 }

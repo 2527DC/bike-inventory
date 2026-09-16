@@ -17,6 +17,7 @@ import {
   type DeliveryFieldsFromInvoice,
 } from "@/lib/deliveries/zoho-invoice";
 import { logActivity } from "@/lib/activity-log";
+import { toPlus91 } from "@/lib/phone";
 import { nextSequence } from "@/lib/sequence";
 import { ibSeedSql } from "@/lib/inbound/sequence";
 
@@ -637,7 +638,8 @@ export async function POST(req: NextRequest) {
               invoiceDate: new Date(String(d.date)),
               invoiceAmount: Number(d.total || 0),
               customerName: String(d.customerName),
-              customerPhone: fields?.customerPhone ?? (String(d.phone || "") || null),
+              // +91-XXXXXXXXXX, as every phone in the deliveries flow is written (B3b).
+              customerPhone: toPlus91(fields?.customerPhone ?? String(d.phone || "")),
               salesPerson: fields?.salesPerson || String(d.salesPerson || "") || null,
               warehouseId: match?.warehouseId ?? null,
               storeId: match?.storeId ?? null,

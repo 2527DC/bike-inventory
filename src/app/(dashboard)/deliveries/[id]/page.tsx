@@ -9,7 +9,7 @@ import { SkeletonList } from "@/components/ui/skeleton";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 import { StockShortLine } from "./_components/types";
-import { useContactSaved, useDelivery } from "./_components/use-delivery";
+import { useDelivery } from "./_components/use-delivery";
 import { DetailHeader } from "./_components/detail-header";
 import { CustomerInfoCard } from "./_components/customer-info-card";
 import { LineItemsCard } from "./_components/line-items-card";
@@ -42,7 +42,6 @@ function statusLabel(status: string) {
 export default function DeliveryDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { data, loading, error: loadError, refetch } = useDelivery(id);
-  const { contactSaved, markContactSaved } = useContactSaved(id);
 
   const [actionError, setActionError] = useState("");
   // Floor lines the last SCHEDULED/PACKED change could not hold (plan 1609 T5).
@@ -130,11 +129,11 @@ export default function DeliveryDetailPage({ params }: { params: Promise<{ id: s
   }
 
   // A Dummy is read-only: the read-only cards stay, every write surface is withheld (A41c).
-  // `contactSaved` is forced true on a Dummy only to hide the "Save Contact" prompt.
+  // The customer card hides Save Customer on a Dummy itself.
+  // "Customer saved" is the database link, the same on every device (plan 1609 A2).
   const isDummy = data.isDummy;
-  const customerCard = (
-    <CustomerInfoCard data={data} onContactSaved={markContactSaved} contactSaved={contactSaved || isDummy} />
-  );
+  const customerSaved = !!data.customerId;
+  const customerCard = <CustomerInfoCard data={data} onSaved={handleRefetch} />;
 
   return (
     <div>
@@ -199,6 +198,7 @@ export default function DeliveryDetailPage({ params }: { params: Promise<{ id: s
                 <SelfFillLinkButton
                   deliveryId={id}
                   customerPhone={data.customerPhone}
+                  customerSaved={customerSaved}
                   selfFillCompletedAt={data.selfFillCompletedAt}
                 />
               )}
@@ -216,7 +216,7 @@ export default function DeliveryDetailPage({ params }: { params: Promise<{ id: s
               <DetailActions
                 data={data}
                 deliveryId={id}
-                contactSaved={contactSaved}
+                customerSaved={customerSaved}
                 templates={templates}
                 onStatusChange={handleStatusChange}
                 onRefetch={handleRefetch}

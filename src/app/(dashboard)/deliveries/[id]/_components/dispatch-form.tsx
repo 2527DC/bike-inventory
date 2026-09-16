@@ -3,7 +3,12 @@
 import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+import { whatsappDigits } from "@/lib/phone";
 import { DeliveryData } from "./types";
+
+const log = createLogger("deliveries:dispatch");
 
 interface DispatchFormProps {
   data: DeliveryData;
@@ -41,16 +46,19 @@ export function DispatchForm({ data, deliveryId, onDispatched, onCancel, onError
         const trackingLink = courierTrackingNo.trim();
 
         const msg = `Hello ${data.customerName},\n\nYour ${productName} is on the way!${trackingLink ? `\nTrack: ${trackingLink}` : ""}\n\nItems:\n${lineItemsText}\n\nFree Accessories:\n${accessories}\n\nThank you for choosing Bharath Cycle Hub!`;
-        const cleanPhone = data.customerPhone.replace(/\D/g, "").slice(-10);
-        window.open(`https://api.whatsapp.com/send?phone=91${cleanPhone}&text=${encodeURIComponent(msg)}`, "_blank");
+        const digits = whatsappDigits(data.customerPhone);
+        if (digits) {
+          window.open(`https://api.whatsapp.com/send?phone=${digits}&text=${encodeURIComponent(msg)}`, "_blank");
 
-        try {
-          await fetch(`/api/deliveries/${deliveryId}`, {
+          // Best effort: the delivery is already dispatched; a missed flag only affects the badge.
+          const sent = await apiTry(`/api/deliveries/${deliveryId}`, {
             method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ whatsAppDispatchedSent: true }),
+            json: { whatsAppDispatchedSent: true },
           });
-        } catch { /* silent */ }
+          if (sent.error) log.warn("whatsAppDispatchedSent flag not saved", { deliveryId, httpStatus: sent.status });
+        } else {
+          log.warn("dispatched WhatsApp not opened: the phone has no digits", { deliveryId });
+        }
       }
 
       onDispatched();

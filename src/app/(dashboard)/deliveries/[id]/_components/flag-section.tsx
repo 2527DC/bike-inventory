@@ -3,7 +3,12 @@
 import { useState } from "react";
 import { AlertTriangle, Flag } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+import { whatsappDigits } from "@/lib/phone";
 import { DeliveryData } from "./types";
+
+const log = createLogger("deliveries:flag");
 
 interface FlagSectionProps {
   data: DeliveryData;
@@ -21,20 +26,19 @@ export function FlagSection({ data, deliveryId, onFlagged, onResolved: _onResolv
   const handleFlag = async (reason: string) => {
     setFlagError("");
     try {
-      const res = await fetch(`/api/deliveries/${deliveryId}/flag`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason }),
-      });
-      const result = await res.json();
-      if (!res.ok || !result.success) {
-        setFlagError(result.error || "Flag failed");
+      const res = await apiTry<{ alertPhones?: string[]; whatsappMessage?: string }>(
+        `/api/deliveries/${deliveryId}/flag`,
+        { method: "POST", json: { reason } }
+      );
+      if (res.error) {
+        log.warn("flag refused", { deliveryId, httpStatus: res.status });
+        setFlagError(res.error);
         return;
       }
-      if (result.data.alertPhones?.length > 0) {
-        const phone = result.data.alertPhones[0].replace(/\D/g, "");
+      const phone = whatsappDigits(res.data?.alertPhones?.[0]);
+      if (phone) {
         window.open(
-          `https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(result.data.whatsappMessage)}`,
+          `https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(res.data?.whatsappMessage ?? "")}`,
           "_blank"
         );
       }
@@ -42,7 +46,10 @@ export function FlagSection({ data, deliveryId, onFlagged, onResolved: _onResolv
       setFlagReasonInput("");
       onFlagged();
     } catch (e) {
-      setFlagError(e instanceof Error ? e.message : "Flag failed");
+      // apiTry never throws; this guards the WhatsApp window and the parent callback.
+      const msg = e instanceof Error ? e.message : "Flag failed";
+      log.error("flag failed", { deliveryId, error: msg });
+      setFlagError(msg);
     }
   };
 
