@@ -3,7 +3,11 @@
 import { useState } from "react";
 import { AlertTriangle, CheckCircle2, Loader2, Package, Check } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
 import { DeliveryData, formatINR } from "./types";
+
+const log = createLogger("deliveries:handover");
 
 interface HandoverChecklistProps {
   data: DeliveryData;
@@ -11,7 +15,6 @@ interface HandoverChecklistProps {
   deliveryId: string;
   onConfirmed: () => void;
   onCancel: () => void;
-  onError: (msg: string) => void;
   onConfirmation: (conf: {
     type: "success";
     title: string;
@@ -27,13 +30,15 @@ export function HandoverChecklist({
   deliveryId,
   onConfirmed,
   onCancel,
-  onError,
   onConfirmation,
 }: HandoverChecklistProps) {
   const [checkedItems, setCheckedItems] = useState<Set<string>>(new Set());
   const [accessoriesConfirmed, setAccessoriesConfirmed] = useState(false);
   const [salesPersonConfirmed, setSalesPersonConfirmed] = useState(false);
   const [loading, setLoading] = useState(false);
+  // The server refusal, shown inside the card. A floor-short WALK_OUT/DELIVERED comes back as
+  // "Not enough stock of <item> … Transfer from godown first." (plan 1609 §1.8).
+  const [error, setError] = useState("");
 
   const itemCount = data.lineItems?.length || 0;
   const allItemsChecked = itemCount === 0 || checkedItems.size >= itemCount;
@@ -41,17 +46,16 @@ export function HandoverChecklist({
 
   const handleConfirm = async () => {
     setLoading(true);
+    setError("");
     try {
       const status = type === "WALK_OUT" ? "WALK_OUT" : "DELIVERED";
-      const res = await fetch(`/api/deliveries/${deliveryId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json.error || "Action failed");
+      const res = await apiTry(`/api/deliveries/${deliveryId}`, { method: "PUT", json: { status } });
+      if (res.error) {
+        log.warn("handover refused", { deliveryId, status, httpStatus: res.status });
+        setError(res.error);
+        return;
       }
+      log.info("handover confirmed", { deliveryId, status });
 
       if (type === "WALK_OUT") {
         onConfirmation({
@@ -75,13 +79,12 @@ export function HandoverChecklist({
           const cleanPhone = data.customerPhone.replace(/\D/g, "").slice(-10);
           window.open(`https://api.whatsapp.com/send?phone=91${cleanPhone}&text=${encodeURIComponent(msg)}`, "_blank");
 
-          try {
-            await fetch(`/api/deliveries/${deliveryId}`, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ whatsAppDeliveredSent: true }),
-            });
-          } catch { /* silent */ }
+          // Best effort: the delivery is already DELIVERED; a missed flag only affects the badge.
+          const sent = await apiTry(`/api/deliveries/${deliveryId}`, {
+            method: "PUT",
+            json: { whatsAppDeliveredSent: true },
+          });
+          if (sent.error) log.warn("whatsAppDeliveredSent flag not saved", { deliveryId, httpStatus: sent.status });
         }
 
         onConfirmation({
@@ -98,7 +101,10 @@ export function HandoverChecklist({
 
       onConfirmed();
     } catch (e) {
-      onError(e instanceof Error ? e.message : "Action failed");
+      // apiTry never throws; this guards the WhatsApp window and the confirmation callbacks.
+      const msg = e instanceof Error ? e.message : "Action failed";
+      log.error("handover failed", { deliveryId, error: msg });
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -139,7 +145,8 @@ export function HandoverChecklist({
                   checked={checkedItems.has(key)}
                   onChange={(e) => {
                     const next = new Set(checkedItems);
-                    e.target.checked ? next.add(key) : next.delete(key);
+                    if (e.target.checked) next.add(key);
+                    else next.delete(key);
                     setCheckedItems(next);
                   }}
                   className="rounded border-green-400 text-green-600 focus:ring-green-500"
@@ -190,6 +197,13 @@ export function HandoverChecklist({
           </div>
           <Check className={`h-4 w-4 shrink-0 ${salesPersonConfirmed ? "text-purple-600" : "text-slate-200"}`} />
         </label>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg p-2" role="alert">
+            <AlertTriangle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
+            <p className="text-xs text-red-700 font-medium">{error}</p>
+          </div>
+        )}
 
         {/* Confirm / Cancel */}
         <div className="flex gap-2">

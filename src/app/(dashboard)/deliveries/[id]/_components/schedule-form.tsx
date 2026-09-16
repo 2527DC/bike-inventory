@@ -3,13 +3,18 @@
 import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { DeliveryData } from "./types";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+import { DeliveryData, StockShortLine } from "./types";
+
+const log = createLogger("deliveries:schedule");
 
 interface ScheduleFormProps {
   data: DeliveryData;
   deliveryId: string;
   templates: Record<string, string>;
-  onScheduled: () => void;
+  /** Receives the floor lines that could not be held (empty when the stock is held). */
+  onScheduled: (stockShort: StockShortLine[]) => void;
   onCancel: () => void;
   onConfirmation: (conf: {
     type: "success";
@@ -78,16 +83,17 @@ export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCance
               reversePickup,
             }),
       };
-      const res = await fetch(`/api/deliveries/${deliveryId}`, {
+      const res = await apiTry<{ stockShort?: StockShortLine[] }>(`/api/deliveries/${deliveryId}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        json: payload,
       });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        setError(json.error || "Schedule failed");
+      if (res.error) {
+        log.warn("schedule refused", { deliveryId, httpStatus: res.status });
+        setError(res.error);
         return;
       }
+      const stockShort = res.data?.stockShort ?? [];
+      log.info("delivery scheduled", { deliveryId, shortLines: stockShort.length });
 
       onConfirmation({
         type: "success",
@@ -110,18 +116,19 @@ export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCance
         openWhatsApp(data.customerPhone, msg);
 
         // Mark WhatsApp as sent
-        try {
-          await fetch(`/api/deliveries/${deliveryId}`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ whatsAppScheduledSent: true }),
-          });
-        } catch { /* silent */ }
+        const sent = await apiTry(`/api/deliveries/${deliveryId}`, {
+          method: "PUT",
+          json: { whatsAppScheduledSent: true },
+        });
+        if (sent.error) log.warn("whatsAppScheduledSent flag not saved", { deliveryId, httpStatus: sent.status });
       }
 
-      onScheduled();
+      onScheduled(stockShort);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Schedule failed");
+      // apiTry never throws; this guards the WhatsApp window and the confirmation callback.
+      const msg = e instanceof Error ? e.message : "Schedule failed";
+      log.error("schedule failed", { deliveryId, error: msg });
+      setError(msg);
     } finally {
       setLoading(false);
     }

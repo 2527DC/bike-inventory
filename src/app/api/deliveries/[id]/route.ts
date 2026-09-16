@@ -11,17 +11,42 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { deliveryUpdateSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { maybeNotifyBelowReorder, type ReorderCrossing } from "@/lib/notify/stock";
-import { deductFromStore } from "@/lib/stock-location";
-import { resolveStoreIdOrPrimary } from "@/lib/deliveries/zoho-invoice";
+import {
+  holdDeliveryStock,
+  releaseDeliveryStock,
+  deductDeliveryFromFloor,
+  isDummy,
+  type ShortLine,
+} from "@/lib/deliveries/floor-stock";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("deliveries:api");
+
+const DUMMY_MESSAGE = "Dummy delivery: no warehouse matched this invoice number. No actions are allowed.";
+
+/** A refusal thrown inside the transaction that carries its own HTTP status (404, 409). */
+class DeliveryActionError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "DeliveryActionError";
+    this.status = status;
+  }
+}
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let deliveryId: string | undefined;
   try {
     await requireFeature("deliveries", "view");
     const { id } = await params;
+    deliveryId = id;
 
     const delivery = await prisma.delivery.findUnique({
       where: { id },
-      include: { verifiedBy: { select: { name: true } } },
+      include: {
+        verifiedBy: { select: { name: true } },
+        warehouse: { select: { id: true, name: true, kind: true } },
+      },
     });
 
     if (!delivery) return errorResponse("Delivery not found", 404);
@@ -42,34 +67,63 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
           totalAmount: invoice.amount,
         };
       }
-    } catch { /* CustomerInvoice table might not exist yet */ }
+    } catch (err) {
+      // Payment status is a nice-to-have on the detail screen; the delivery still loads.
+      log.warn("payment status lookup failed", {
+        deliveryId: id,
+        invoiceNo: delivery.invoiceNo,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
-    return successResponse({ ...delivery, paymentStatus });
+    return successResponse({ ...delivery, isDummy: isDummy(delivery), paymentStatus });
   } catch (error) {
-    if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof AuthError) {
+      log.warn("delivery fetch refused", { deliveryId, status: error.status });
+      return errorResponse(error.message, error.status);
+    }
+    log.error("delivery fetch failed", {
+      deliveryId,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse(error instanceof Error ? error.message : "Failed to fetch delivery", 500);
   }
 }
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let deliveryId: string | undefined;
   try {
     const user = await requireFeature("deliveries", "edit");
     const { id } = await params;
+    deliveryId = id;
     const body = await req.json();
     const data = deliveryUpdateSchema.parse(body);
 
-    const preCheck = await prisma.delivery.findUnique({ where: { id } });
+    const preCheck = await prisma.delivery.findUnique({ where: { id }, select: { id: true } });
     if (!preCheck) return errorResponse("Delivery not found", 404);
 
     // §F.0: filled INSIDE the transaction (only the DELIVERED / WALK_OUT deduction below moves
-    // currentStock down), sent AFTER it commits. Reservation and release touch reservedStock
+    // currentStock down), sent AFTER it commits. Hold and release touch reservedQuantity
     // only and cannot cross the reorder line.
     const crossings: ReorderCrossing[] = [];
 
+    // Lines a SCHEDULED / PACKED move could not hold (A26, A37). The move is still accepted.
+    let stockShort: ShortLine[] = [];
+
     const result = await prisma.$transaction(async (tx) => {
       // Re-read inside transaction to prevent race conditions
-      const existing = await tx.delivery.findUnique({ where: { id } });
-      if (!existing) throw new Error("Delivery not found");
+      const existing = await tx.delivery.findUnique({
+        where: { id },
+        include: { warehouse: { select: { name: true } } },
+      });
+      if (!existing) throw new DeliveryActionError("Delivery not found", 404);
+
+      // A Dummy (no floor warehouse matched the invoice prefix) takes no action at all (A41b,
+      // A41c, T2). DELETE is the only exception and lives in its own handler.
+      const changesSomething = Object.values(data).some((v) => v !== undefined);
+      if (isDummy(existing) && changesSomething) {
+        throw new DeliveryActionError(DUMMY_MESSAGE, 409);
+      }
 
       // Status transition guards (inside transaction for atomicity)
       if (data.status) {
@@ -91,7 +145,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           throw new Error(`Cannot change from ${existing.status} to ${data.status}`);
         }
 
-        // Walk-out requires customer phone to be saved
+        // Walk-out requires customer phone to be saved (Phase 2 replaces this with customerId)
         if (data.status === "WALK_OUT" && !existing.customerPhone) {
           throw new Error("Cannot walk-out without saving customer contact first");
         }
@@ -153,131 +207,65 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           updateData.flagResolvedBy = user.id;
         }
 
-        // Mark delivered timestamp + clear reservation
-        if (data.status === "DELIVERED") {
-          updateData.deliveredAt = new Date();
-          updateData.stockReservedAt = null;
-        }
-        if (data.status === "WALK_OUT") {
-          updateData.stockReservedAt = null;
-        }
-
-        // RESERVE stock on SCHEDULED or PACKED (don't deduct yet)
+        // HOLD stock on SCHEDULED or PACKED, on the matched floor (A46). Never fails on a
+        // shortage (A26, A37): all-or-nothing (T5), the move is accepted and the short lines go
+        // back to the screen. holdDeliveryStock writes `stockReservedAt` itself when it holds,
+        // so updateData must NOT carry that key here or it would overwrite the fresh value.
         if (data.status === "SCHEDULED" || data.status === "PACKED") {
-          if (!existing.stockReservedAt) {
-            const items = (existing.lineItems as Array<{ name: string; sku: string; quantity: number; rate: number }>) || [];
-            for (const item of items) {
-              if (!item.sku) continue;
-              const product = await tx.product.findFirst({
-                where: { sku: item.sku, bin: { location: { startsWith: "Bharath Cycle Hub" } } },
-                select: { id: true, currentStock: true, reservedStock: true },
-              }) || await tx.product.findFirst({
-                where: { sku: item.sku },
-                select: { id: true, currentStock: true, reservedStock: true },
-              });
-              if (!product) continue;
-
-              const available = product.currentStock - product.reservedStock;
-              if (available < item.quantity) {
-                throw new Error(`Insufficient available stock for ${item.name} (SKU: ${item.sku}). Available: ${available}, Needed: ${item.quantity}`);
-              }
-              await tx.product.update({
-                where: { id: product.id },
-                data: { reservedStock: product.reservedStock + item.quantity },
-              });
-            }
-            updateData.stockReservedAt = new Date();
+          const hold = await holdDeliveryStock(tx, existing);
+          if (!hold.held) {
+            stockShort = hold.short;
+            log.warn("hold short — status accepted without a hold", {
+              deliveryId: existing.id,
+              invoiceNo: existing.invoiceNo,
+              warehouseId: existing.warehouseId,
+              lines: hold.short.length,
+            });
           }
         }
 
-        // DEDUCT stock on DELIVERED or WALK_OUT (final handover)
+        // DEDUCT stock on DELIVERED or WALK_OUT (final handover), from the floor only (A40).
         if (data.status === "DELIVERED" || data.status === "WALK_OUT") {
-          if (data.status === "WALK_OUT") updateData.deliveredAt = new Date();
+          updateData.deliveredAt = new Date();
+          updateData.stockReservedAt = null;
 
           // Idempotency: skip if already deducted
           const alreadyDeducted = await tx.inventoryTransaction.findFirst({
             where: { referenceNo: existing.invoiceNo, type: "OUTWARD" },
+            select: { id: true },
           });
 
-          if (!alreadyDeducted) {
-            // WHICH STORE sold this (R12). Deduction is store-scoped: a delivery names a
-            // store and never a warehouse. `Delivery.storeId` is set by the import when it
-            // can be; otherwise the invoice prefix resolves it, and failing that the primary
-            // store is used and the fallback is logged rather than being invisible.
-            const storeId =
-              existing.storeId ??
-              resolveStoreIdOrPrimary(
-                existing.invoiceNo,
-                await tx.store.findMany({
-                  select: { id: true, invoicePrefix: true, isActive: true, sortOrder: true },
-                })
-              );
-            if (!storeId) {
-              throw new Error(
-                `Cannot deduct stock for invoice ${existing.invoiceNo}: no active store is configured.`
-              );
-            }
-
-            const items = (existing.lineItems as Array<{ name: string; sku: string; quantity: number; rate: number }>) || [];
-            for (const item of items) {
-              if (!item.sku) continue;
-              const product = await tx.product.findFirst({
-                where: { sku: item.sku, bin: { location: { startsWith: "Bharath Cycle Hub" } } },
-                select: { id: true, currentStock: true, reservedStock: true },
-              }) || await tx.product.findFirst({
-                where: { sku: item.sku },
-                select: { id: true, currentStock: true, reservedStock: true },
-              });
-              if (!product) continue;
-
-              // The reservation check stays a PRODUCT-level question, because reservedStock
-              // is a product-level number that recomputeCurrentStock never touches. Only the
-              // stock movement itself moved to the ledger.
-              const wasReserved = !!existing.stockReservedAt;
-              if (!wasReserved) {
-                // Direct walk-out: honour the reservation held for other, pending deliveries.
-                // deductFromStore knows the store's total but not what is spoken for.
-                const available = product.currentStock - product.reservedStock;
-                if (available < item.quantity) {
-                  throw new Error(`Insufficient available stock for ${item.name} (SKU: ${item.sku}). Available: ${available}, Needed: ${item.quantity}`);
-                }
-              }
-
-              // THE FIX. Was `tx.product.update({ data: { currentStock: … } })`, which wrote
-              // the cache and left StockLevel untouched, so the next receipt/audit/transfer
-              // recomputed the total from a ledger that never heard about this sale and
-              // handed the units back. This writes the ledger; the cache follows from it.
-              await deductFromStore(
-                tx,
-                product.id,
-                storeId,
-                item.quantity,
-                `${item.name} (SKU: ${item.sku})`
-              );
-
-              if (wasReserved) {
-                await tx.product.update({
-                  where: { id: product.id },
-                  data: { reservedStock: Math.max(0, product.reservedStock - item.quantity) },
-                });
-              }
-
-              // Both branches above moved currentStock DOWN by item.quantity — reserved or direct
-              // walk-out alike — so both can cross the reorder line. Collect only (§F.0).
+          if (alreadyDeducted) {
+            // The stock already left; a hold still counted on the floor would never be given
+            // back once stockReservedAt is cleared below.
+            await releaseDeliveryStock(tx, existing);
+            log.warn("handover: OUTWARD already recorded, deduction skipped", {
+              deliveryId: existing.id,
+              invoiceNo: existing.invoiceNo,
+            });
+          } else {
+            // Refuses (plain Error → 400) when the floor is short (A40b); the transaction rolls back.
+            const moved = await deductDeliveryFromFloor(
+              tx,
+              existing,
+              existing.warehouse?.name ?? "the floor warehouse"
+            );
+            for (const line of moved) {
+              // Collect only (§F.0); sent after commit.
               crossings.push({
-                productId: product.id,
-                previousStock: product.currentStock,
-                newStock: product.currentStock - item.quantity,
+                productId: line.productId,
+                previousStock: line.previousStock,
+                newStock: line.newStock,
               });
               await tx.inventoryTransaction.create({
                 data: {
                   type: "OUTWARD",
-                  productId: product.id,
-                  quantity: item.quantity,
-                  previousStock: product.currentStock,
-                  newStock: product.currentStock - item.quantity,
+                  productId: line.productId,
+                  quantity: line.quantity,
+                  previousStock: line.previousStock,
+                  newStock: line.newStock,
                   referenceNo: existing.invoiceNo,
-                  notes: `[ZOHO][VERIFIED] Customer: ${existing.customerName} | Invoice: ${existing.invoiceNo} | ${item.name} x${item.quantity}`,
+                  notes: `[ZOHO][VERIFIED] Customer: ${existing.customerName} | Invoice: ${existing.invoiceNo} | ${line.name} x${line.quantity}`,
                   userId: user.id,
                 },
               });
@@ -285,24 +273,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           }
         }
 
-        // RELEASE reservation on rollback (SCHEDULED/PACKED → VERIFIED)
+        // RELEASE the hold on rollback (SCHEDULED/PACKED → VERIFIED)
         if (data.status === "VERIFIED" && existing.stockReservedAt) {
-          const items = (existing.lineItems as Array<{ name: string; sku: string; quantity: number; rate: number }>) || [];
-          for (const item of items) {
-            if (!item.sku) continue;
-            const product = await tx.product.findFirst({
-              where: { sku: item.sku, bin: { location: { startsWith: "Bharath Cycle Hub" } } },
-              select: { id: true, reservedStock: true },
-            }) || await tx.product.findFirst({
-              where: { sku: item.sku },
-              select: { id: true, reservedStock: true },
-            });
-            if (!product) continue;
-            await tx.product.update({
-              where: { id: product.id },
-              data: { reservedStock: Math.max(0, product.reservedStock - item.quantity) },
-            });
-          }
+          await releaseDeliveryStock(tx, existing);
           updateData.stockReservedAt = null;
         }
       }
@@ -310,7 +283,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       return tx.delivery.update({
         where: { id },
         data: updateData,
-        include: { verifiedBy: { select: { name: true } } },
+        include: {
+          verifiedBy: { select: { name: true } },
+          warehouse: { select: { id: true, name: true, kind: true } },
+        },
       });
     });
 
@@ -318,19 +294,40 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     // stock, and nothing is sent if the transaction threw.
     after(() => maybeNotifyBelowReorder(crossings));
 
-    return successResponse(result);
+    log.info("delivery updated", {
+      deliveryId: result.id,
+      invoiceNo: result.invoiceNo,
+      status: data.status ?? null,
+      stockShortLines: stockShort.length,
+      outwardLines: crossings.length,
+    });
+
+    return successResponse({ ...result, isDummy: isDummy(result), stockShort });
   } catch (error) {
-    if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof AuthError) {
+      log.warn("delivery update refused", { deliveryId, status: error.status });
+      return errorResponse(error.message, error.status);
+    }
+    if (error instanceof DeliveryActionError) {
+      log.warn("delivery update refused", { deliveryId, status: error.status, reason: error.message });
+      return errorResponse(error.message, error.status);
+    }
+    log.warn("delivery update failed", {
+      deliveryId,
+      reason: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse(error instanceof Error ? error.message : "Failed to update delivery", 400);
   }
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let deliveryId: string | undefined;
   try {
     await requireFeature("deliveries", "delete");
     const { id } = await params;
+    deliveryId = id;
 
-    const delivery = await prisma.delivery.findUnique({ where: { id } });
+    const delivery = await prisma.delivery.findUnique({ where: { id }, select: { status: true } });
     if (!delivery) return errorResponse("Delivery not found", 404);
 
     const blockedStatuses = ["SHIPPED", "IN_TRANSIT", "OUT_FOR_DELIVERY", "DELIVERED", "WALK_OUT"];
@@ -338,33 +335,35 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
       return errorResponse(`Cannot delete a delivery in ${delivery.status} status`, 400);
     }
 
-    await prisma.$transaction(async (tx) => {
-      // Release reserved stock if delivery had a reservation
-      if (delivery.stockReservedAt) {
-        const items = (delivery.lineItems as Array<{ name: string; sku: string; quantity: number; rate: number }>) || [];
-        for (const item of items) {
-          if (!item.sku) continue;
-          const product = await tx.product.findFirst({
-            where: { sku: item.sku, bin: { location: { startsWith: "Bharath Cycle Hub" } } },
-            select: { id: true, reservedStock: true },
-          }) || await tx.product.findFirst({
-            where: { sku: item.sku },
-            select: { id: true, reservedStock: true },
-          });
-          if (!product) continue;
-          await tx.product.update({
-            where: { id: product.id },
-            data: { reservedStock: Math.max(0, product.reservedStock - item.quantity) },
-          });
-        }
+    // Allowed on a Dummy (T2) so duplicates such as INVOICE-003951 can be cleared.
+    const deleted = await prisma.$transaction(async (tx) => {
+      const existing = await tx.delivery.findUnique({ where: { id } });
+      if (!existing) throw new DeliveryActionError("Delivery not found", 404);
+      if (blockedStatuses.includes(existing.status)) {
+        throw new DeliveryActionError(`Cannot delete a delivery in ${existing.status} status`, 400);
       }
 
+      // Give back the floor hold, if any. No-op when nothing is held or on a Dummy.
+      await releaseDeliveryStock(tx, existing);
       await tx.delivery.delete({ where: { id } });
+      return { invoiceNo: existing.invoiceNo };
     });
 
+    log.info("delivery deleted", { deliveryId: id, invoiceNo: deleted.invoiceNo });
     return successResponse({ deleted: true });
   } catch (error) {
-    if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof AuthError) {
+      log.warn("delivery delete refused", { deliveryId, status: error.status });
+      return errorResponse(error.message, error.status);
+    }
+    if (error instanceof DeliveryActionError) {
+      log.warn("delivery delete refused", { deliveryId, status: error.status, reason: error.message });
+      return errorResponse(error.message, error.status);
+    }
+    log.error("delivery delete failed", {
+      deliveryId,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse(error instanceof Error ? error.message : "Failed to delete delivery", 400);
   }
 }

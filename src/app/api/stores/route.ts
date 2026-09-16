@@ -41,7 +41,6 @@ export async function GET() {
         name: true,
         address: true,
         phone: true,
-        invoicePrefix: true,
         // Printed on every invoice and on P14's transfer documents — not sensitive, which is
         // why this route stays requireAuth (see the comment above).
         gstin: true,
@@ -49,7 +48,12 @@ export async function GET() {
         sortOrder: true,
         warehouses: {
           where: { isActive: true },
-          select: { id: true, code: true, name: true, kind: true, sortOrder: true },
+          // invoicePrefix + isPrimary live on the FLOOR warehouse since plan 1609 (R30, R33);
+          // /stores shows them on the warehouse rows.
+          select: {
+            id: true, code: true, name: true, kind: true, sortOrder: true,
+            invoicePrefix: true, isPrimary: true,
+          },
           orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
         },
       },
@@ -77,21 +81,7 @@ export async function POST(req: NextRequest) {
     const clash = await prisma.store.findUnique({ where: { code }, select: { name: true } });
     if (clash) return errorResponse(`Code "${code}" is already used by ${clash.name}`, 409);
 
-    // Unique in the database — name the other store rather than returning a raw P2002.
-    const prefix = data.invoicePrefix?.trim() || null;
-    if (prefix) {
-      const prefixClash = await prisma.store.findFirst({
-        where: { invoicePrefix: prefix },
-        select: { name: true },
-      });
-      if (prefixClash) {
-        return errorResponse(
-          `Invoice prefix "${prefix}" is already used by ${prefixClash.name}. Each store needs its own.`,
-          409
-        );
-      }
-    }
-
+    // No invoice prefix on a store since plan 1609 (R30) — it is set on the FLOOR warehouse.
     const store = await prisma.store.create({
       data: {
         code,
@@ -99,12 +89,13 @@ export async function POST(req: NextRequest) {
         address: data.address?.trim() || null,
         phone: data.phone?.trim() || null,
         sortOrder: data.sortOrder ?? 0,
-        invoicePrefix: prefix,
         // "" normalises to null: a store whose GSTIN has not been entered is a real state, and
         // an empty string would satisfy a "has a GSTIN" check while carrying no number.
         gstin: data.gstin?.trim().toUpperCase() || null,
         stateCode: data.stateCode?.trim() || null,
       },
+      // The retired Store.invoicePrefix column is not echoed back (plan 1609, T1).
+      omit: { invoicePrefix: true },
     });
 
     // The module-level cache in src/lib/stores.ts holds a list that no longer matches the

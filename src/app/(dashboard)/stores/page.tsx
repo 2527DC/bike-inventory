@@ -27,6 +27,10 @@ interface WarehouseRow {
   name: string;
   kind: WarehouseKind;
   sortOrder: number;
+  /** FLOOR-only: invoices whose number starts with this reduce this floor (plan 1609, R30). */
+  invoicePrefix: string | null;
+  /** FLOOR-only: the store's primary floor when it has two or more (R33). */
+  isPrimary: boolean;
 }
 
 interface StoreRow {
@@ -35,7 +39,6 @@ interface StoreRow {
   name: string;
   address: string | null;
   phone: string | null;
-  invoicePrefix: string | null;
   sortOrder: number;
   warehouses: WarehouseRow[];
 }
@@ -51,8 +54,25 @@ interface DeleteOutcome {
 // of the same name on Warehouse. The column is carried as `warehouseKind` in this state so
 // the two never collide; the API field is still `kind`.
 type Draft =
-  | { kind: "store"; id: string | null; code: string; name: string; address: string; phone: string; invoicePrefix: string }
-  | { kind: "warehouse"; id: string | null; storeId: string; code: string; name: string; warehouseKind: WarehouseKind };
+  | { kind: "store"; id: string | null; code: string; name: string; address: string; phone: string }
+  | {
+      kind: "warehouse"; id: string | null; storeId: string; code: string; name: string; warehouseKind: WarehouseKind;
+      // FLOOR-only. Kept in the draft while the kind is toggled so flipping Godown → Floor does
+      // not lose what was typed; never sent for a godown.
+      invoicePrefix: string; isPrimary: boolean;
+    };
+
+/**
+ * Why Save is disabled, or null. The server enforces the same rule (R32); saying it here means
+ * the button explains itself instead of failing on click.
+ */
+function blockedReason(draft: Draft): string | null {
+  if (!draft.code || !draft.name) return "Code and name are required.";
+  if (draft.kind === "warehouse" && draft.warehouseKind === "FLOOR" && !draft.invoicePrefix.trim()) {
+    return "A floor warehouse needs an invoice prefix.";
+  }
+  return null;
+}
 
 export default function StoresPage() {
   const { canCreate, canEdit, canDelete } = usePermissions();
@@ -63,6 +83,9 @@ export default function StoresPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
+  // A save failure belongs beside the form it came from, not in the page banner whose Retry
+  // reloads the list.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<DeleteOutcome | null>(null);
 
   const load = useCallback(async () => {
@@ -98,20 +121,22 @@ export default function StoresPage() {
   async function save() {
     if (!draft) return;
     setBusy(true);
-    setError(null);
+    setSaveError(null);
     try {
       if (draft.kind === "store") {
         const body = {
           code: draft.code, name: draft.name,
           address: draft.address || undefined, phone: draft.phone || undefined,
-          // Always sent, even when blank: the route turns "" into null, which is how a
-          // prefix is CLEARED. Sending undefined would silently keep the old one.
-          invoicePrefix: draft.invoicePrefix,
         };
         if (draft.id) await apiFetch(`/api/stores/${draft.id}`, { method: "PUT", json: body });
         else await apiFetch("/api/stores", { method: "POST", json: body });
       } else {
-        const body = { storeId: draft.storeId, code: draft.code, name: draft.name, kind: draft.warehouseKind };
+        const isFloor = draft.warehouseKind === "FLOOR";
+        const body = {
+          storeId: draft.storeId, code: draft.code, name: draft.name, kind: draft.warehouseKind,
+          // Only a floor carries these; the server clears both on a godown regardless.
+          ...(isFloor ? { invoicePrefix: draft.invoicePrefix.trim(), isPrimary: draft.isPrimary } : {}),
+        };
         if (draft.id) await apiFetch(`/api/warehouses/${draft.id}`, { method: "PUT", json: body });
         else await apiFetch("/api/warehouses", { method: "POST", json: body });
       }
@@ -120,8 +145,8 @@ export default function StoresPage() {
       await load();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Could not save";
-      log.error("site save failed", { kind: draft.kind, message: msg });
-      setError(msg);
+      log.error("site save failed", { kind: draft.kind, id: draft.id, message: msg });
+      setSaveError(msg);
     } finally {
       setBusy(false);
     }
@@ -163,7 +188,7 @@ export default function StoresPage() {
           <Button
             size="sm"
             className="bg-blue-600 hover:bg-blue-700"
-            onClick={() => setDraft({ kind: "store", id: null, code: "", name: "", address: "", phone: "", invoicePrefix: "" })}
+            onClick={() => { setSaveError(null); setDraft({ kind: "store", id: null, code: "", name: "", address: "", phone: "" }); }}
           >
             <Plus className="h-3.5 w-3.5 mr-1" />New store
           </Button>
@@ -198,9 +223,9 @@ export default function StoresPage() {
                 className={inputCls}
               />
               {draft.kind === "warehouse" && (
-                // Floor = the shop, where a customer sees the bike; Godown = storage. Outbound
-                // drains floors first and inbound lands in a godown by default, so the choice
-                // is behavioural, not a label (plan 0909-stock-store-and-warehouse-scoping).
+                // Floor = the shop, where a customer sees the bike; Godown = storage. A delivery
+                // reduces only the floor its invoice prefix matches (plan 1609, A40) and inbound
+                // lands in a godown by default, so the choice is behavioural, not a label.
                 <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Kind of location">
                   {(["FLOOR", "GODOWN"] as WarehouseKind[]).map((k) => (
                     <button
@@ -234,34 +259,61 @@ export default function StoresPage() {
                     onChange={(e) => setDraft({ ...draft, phone: e.target.value })}
                     className={inputCls}
                   />
-                  <Input
-                    placeholder="Invoice prefix (e.g. BCH/)"
-                    value={draft.invoicePrefix}
-                    onChange={(e) => setDraft({ ...draft, invoicePrefix: e.target.value })}
-                    className={`${inputCls} font-mono`}
-                  />
                 </>
               )}
             </div>
+            {draft.kind === "warehouse" && draft.warehouseKind === "FLOOR" && (
+              // Shown only for a floor: a godown sells nothing, so it has no prefix and cannot be
+              // the store's primary floor (plan 1609, R30–R33).
+              <div className="space-y-2">
+                <div>
+                  <label htmlFor="wh-invoice-prefix" className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    Invoice prefix <span className="text-red-600">*</span>
+                  </label>
+                  <Input
+                    id="wh-invoice-prefix"
+                    placeholder="e.g. INV/"
+                    value={draft.invoicePrefix}
+                    onChange={(e) => setDraft({ ...draft, invoicePrefix: e.target.value })}
+                    className={`${inputCls} font-mono`}
+                    maxLength={20}
+                    aria-describedby="wh-invoice-prefix-help"
+                  />
+                  <p id="wh-invoice-prefix-help" className="text-[11px] text-slate-500 mt-1">
+                    Invoices whose number starts with this reduce this floor&rsquo;s stock
+                  </p>
+                </div>
+                <label className="flex items-center gap-2 min-h-[40px] text-sm text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={draft.isPrimary}
+                    onChange={(e) => setDraft({ ...draft, isPrimary: e.target.checked })}
+                    className="h-4 w-4 rounded border-slate-300 accent-blue-600 focus-ring"
+                  />
+                  Primary floor for this store
+                </label>
+              </div>
+            )}
             <p className="text-[11px] text-slate-500">
               The code is a stable handle used in URLs like{" "}
               <code className="font-mono">/stock/by-location/{draft.code || "CODE"}</code>. The name
               can be changed freely.
             </p>
-            {draft.kind === "store" && (
-              <p className="text-[11px] text-slate-500">
-                The <strong>invoice prefix</strong> decides which store a sale takes stock from.
-                An invoice numbered <code className="font-mono">BCH/0042</code> deducts from the
-                store whose prefix is <code className="font-mono">BCH/</code>.{" "}
-                <strong>Leave it blank and this store&rsquo;s sales deduct from the first store
-                instead.</strong>
+            {saveError && (
+              <p role="alert" className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-2 py-1.5">
+                {saveError}
               </p>
             )}
+            {/* The empty-form case says nothing, as before; the reason is shown once there is
+                something to explain — a typed code or name, or a floor with no prefix. */}
+            {blockedReason(draft) && (draft.code || draft.name || (draft.kind === "warehouse" && draft.warehouseKind === "FLOOR")) && (
+              <p className="text-[11px] text-amber-700">{blockedReason(draft)}</p>
+            )}
             <div className="flex gap-2">
-              <Button size="sm" onClick={() => void save()} disabled={busy || !draft.code || !draft.name}>
+              <Button size="sm" onClick={() => void save()} disabled={busy || blockedReason(draft) !== null}>
                 <Check className="h-3.5 w-3.5 mr-1" />{busy ? "Saving…" : "Save"}
               </Button>
-              <Button size="sm" variant="outline" onClick={() => setDraft(null)} disabled={busy}>
+              <Button size="sm" variant="outline" onClick={() => { setDraft(null); setSaveError(null); }} disabled={busy}>
                 <X className="h-3.5 w-3.5 mr-1" />Cancel
               </Button>
             </div>
@@ -300,14 +352,6 @@ export default function StoresPage() {
                         <Badge variant="info" className="text-[10px] tabular-nums">
                           {s.warehouses.length} warehouse{s.warehouses.length === 1 ? "" : "s"}
                         </Badge>
-                        {/* A missing prefix is not cosmetic — this store's sales silently
-                            deduct from the first store until it is set (R12). Say so on the
-                            row, not only inside the edit form nobody has opened. */}
-                        {s.invoicePrefix ? (
-                          <Badge variant="default" className="font-mono text-[10px]">{s.invoicePrefix}</Badge>
-                        ) : (
-                          <Badge variant="warning" className="text-[10px]">No invoice prefix</Badge>
-                        )}
                       </div>
                       {(s.address || s.phone) && (
                         <p className="text-[11px] text-slate-500 mt-0.5">
@@ -319,10 +363,13 @@ export default function StoresPage() {
                       {canEdit("stores") && (
                         <IconBtn
                           label={`Edit ${s.name}`}
-                          onClick={() => setDraft({
-                            kind: "store", id: s.id, code: s.code, name: s.name,
-                            address: s.address ?? "", phone: s.phone ?? "", invoicePrefix: s.invoicePrefix ?? "",
-                          })}
+                          onClick={() => {
+                            setSaveError(null);
+                            setDraft({
+                              kind: "store", id: s.id, code: s.code, name: s.name,
+                              address: s.address ?? "", phone: s.phone ?? "",
+                            });
+                          }}
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </IconBtn>
@@ -343,18 +390,40 @@ export default function StoresPage() {
                         </p>
                       )}
                       {s.warehouses.map((w) => (
-                        <div key={w.id} className="flex items-center gap-2">
-                          <Warehouse className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-                          <span className="text-sm text-slate-800">{w.name}</span>
-                          <Badge variant={w.kind === "FLOOR" ? "info" : "default"} className="text-[10px]">
-                            {KIND_LABEL[w.kind]}
-                          </Badge>
-                          <Badge variant="default" className="font-mono text-[10px]">{w.code}</Badge>
-                          <div className="flex gap-1 ml-auto">
+                        <div key={w.id} className="flex items-start gap-2">
+                          <Warehouse className="h-3.5 w-3.5 text-slate-400 shrink-0 mt-1" />
+                          {/* Wraps on a 375px screen: a name and up to four badges do not fit one line. */}
+                          <div className="flex items-center gap-1.5 flex-wrap flex-1 min-w-0">
+                            <span className="text-sm text-slate-800">{w.name}</span>
+                            <Badge variant={w.kind === "FLOOR" ? "info" : "default"} className="text-[10px]">
+                              {KIND_LABEL[w.kind]}
+                            </Badge>
+                            <Badge variant="default" className="font-mono text-[10px]">{w.code}</Badge>
+                            {/* A floor without a prefix matches no invoice, so its sales import as
+                                Dummy deliveries (plan 1609, A41b). Say so on the row, not only in
+                                the edit form nobody has opened. */}
+                            {w.kind === "FLOOR" && (w.invoicePrefix ? (
+                              <Badge variant="default" className="font-mono text-[10px]" title="Invoice prefix">
+                                {w.invoicePrefix}
+                              </Badge>
+                            ) : (
+                              <Badge variant="warning" className="text-[10px]">No invoice prefix</Badge>
+                            ))}
+                            {w.kind === "FLOOR" && w.isPrimary && (
+                              <Badge variant="success" className="text-[10px]">Primary</Badge>
+                            )}
+                          </div>
+                          <div className="flex gap-1 shrink-0">
                             {canEdit("warehouses") && (
                               <IconBtn
                                 label={`Edit ${w.name}`}
-                                onClick={() => setDraft({ kind: "warehouse", id: w.id, storeId: s.id, code: w.code, name: w.name, warehouseKind: w.kind })}
+                                onClick={() => {
+                                  setSaveError(null);
+                                  setDraft({
+                                    kind: "warehouse", id: w.id, storeId: s.id, code: w.code, name: w.name,
+                                    warehouseKind: w.kind, invoicePrefix: w.invoicePrefix ?? "", isPrimary: w.isPrimary,
+                                  });
+                                }}
                               >
                                 <Pencil className="h-3 w-3" />
                               </IconBtn>
@@ -370,7 +439,13 @@ export default function StoresPage() {
                       {canCreate("warehouses") && (
                         <button
                           type="button"
-                          onClick={() => setDraft({ kind: "warehouse", id: null, storeId: s.id, code: "", name: "", warehouseKind: "GODOWN" })}
+                          onClick={() => {
+                            setSaveError(null);
+                            setDraft({
+                              kind: "warehouse", id: null, storeId: s.id, code: "", name: "",
+                              warehouseKind: "GODOWN", invoicePrefix: "", isPrimary: false,
+                            });
+                          }}
                           className="inline-flex items-center gap-1 text-[11px] text-blue-600 hover:text-blue-700 focus-ring rounded px-1 py-1"
                         >
                           <Plus className="h-3 w-3" />Add warehouse

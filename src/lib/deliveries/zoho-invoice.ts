@@ -1,92 +1,60 @@
+import type { Prisma } from "@prisma/client";
 import { createLogger } from "@/lib/logger";
 
-const log = createLogger("deliveries:zoho-invoice");
+const log = createLogger("deliveries:floor-warehouse");
 
 /**
- * Which store sold this invoice?
+ * Which FLOOR warehouse sold this invoice? (plan 1609-deliveries, R30–R31, T1)
  *
- * ─── WHY THIS IS HERE AND NOT IN P4 ───────────────────────────────────────────────────────
+ * ─── WHAT CHANGED, 16 Sep 2026 ────────────────────────────────────────────────────────────
  *
- * P1b (the stock ledger fix) needs a store to deduct from, and it runs BEFORE P4. Without
- * this resolver every sale would fall back to the primary store for the whole window between
- * the two phases — and a BCC sale would deduct BCH stock. The owner chose to move it here
- * (option B, 4 Sep) rather than accept that.
+ * The prefix used to live on the Store (`storeIdForInvoice` / `resolveStoreIdOrPrimary`, both
+ * removed), and an unmatched invoice fell back to the primary store — so every import landed
+ * on one store by guesswork. The owner moved the prefix to the FLOOR warehouse, because a
+ * store holds no stock, and ruled that an unmatched invoice is a "Dummy" with NO fallback
+ * (A41b). Returning null is therefore the answer, not a gap for the caller to paper over.
  *
  * ─── HOW IT RESOLVES ──────────────────────────────────────────────────────────────────────
  *
- * Each store carries an `invoicePrefix` ("BCH/", "BCC/"). The invoice number carries it too,
- * so the match is a plain string prefix — no database query, no AI, no heuristics.
- *
- * LONGEST match wins. With prefixes "BCH/" and "BCH/SVC/", the invoice "BCH/SVC/0012" must
- * resolve to the service store and not to whichever of the two the array happened to list
- * first. Sorting by length is what makes the result independent of store order.
- *
- * Comparison is case-insensitive and ignores surrounding whitespace: these values are typed
- * into a settings form by a person, and "bch/" is not a different store from "BCH/".
- *
- * Returns null when nothing matches. The CALLER decides what to do about that — every caller
- * in this codebase falls back to the primary store and logs a warning, because refusing to
- * record a sale is worse than recording it against the wrong store. Null is deliberately not
- * "the primary store" here, so that the fallback is visible at the call site rather than
- * hidden in a helper.
+ * A plain string prefix, LONGEST match first ("BCH/SVC/" beats "BCH/"), case-insensitive and
+ * trimmed — the prefixes are typed into /stores by a person. Only active FLOOR warehouses with
+ * a prefix take part.
  */
 
-export interface StoreWithPrefix {
+export interface FloorWithPrefix {
   id: string;
+  storeId: string;
   invoicePrefix: string | null;
 }
 
-export function storeIdForInvoice(
+export function floorWarehouseForInvoice(
   invoiceNo: string | null | undefined,
-  stores: StoreWithPrefix[]
-): string | null {
-  if (!invoiceNo) return null;
-
-  const needle = invoiceNo.trim().toUpperCase();
+  floors: FloorWithPrefix[]
+): { warehouseId: string; storeId: string } | null {
+  const needle = (invoiceNo ?? "").trim().toUpperCase();
   if (!needle) return null;
 
-  const candidates = stores
-    .filter((s) => s.invoicePrefix && s.invoicePrefix.trim().length > 0)
-    .map((s) => ({ id: s.id, prefix: s.invoicePrefix!.trim().toUpperCase() }))
-    // Longest first, so the most specific prefix wins regardless of input order.
-    .sort((a, b) => b.prefix.length - a.prefix.length);
+  const hit = floors
+    .filter((w) => w.invoicePrefix && w.invoicePrefix.trim().length > 0)
+    .map((w) => ({ w, prefix: w.invoicePrefix!.trim().toUpperCase() }))
+    .sort((a, b) => b.prefix.length - a.prefix.length)
+    .find((c) => needle.startsWith(c.prefix));
 
-  const hit = candidates.find((c) => needle.startsWith(c.prefix));
-  return hit ? hit.id : null;
-}
-
-/**
- * Resolve the store for an invoice, falling back to the primary store.
- *
- * The primary store is the active one with the lowest `sortOrder` — the same ordering every
- * picker in the app uses, so "primary" means the same thing here as it does on screen.
- *
- * Warns on every fallback, with the invoice number, because a fallback means a sale was
- * attributed by guesswork: either a store is missing its `invoicePrefix` on /stores, or the
- * invoice came from somewhere nobody has configured yet. Both are worth seeing in the log.
- */
-export function resolveStoreIdOrPrimary(
-  invoiceNo: string | null | undefined,
-  stores: Array<StoreWithPrefix & { isActive: boolean; sortOrder: number }>
-): string | null {
-  const matched = storeIdForInvoice(invoiceNo, stores);
-  if (matched) return matched;
-
-  const primary = stores
-    .filter((s) => s.isActive)
-    .sort((a, b) => a.sortOrder - b.sortOrder)[0];
-
-  if (!primary) {
-    log.error("no active store to attribute this invoice to", { invoiceNo: invoiceNo ?? null });
+  if (!hit) {
+    log.debug("no floor prefix matched — Dummy", { invoiceNo: invoiceNo ?? null, floors: floors.length });
     return null;
   }
+  return { warehouseId: hit.w.id, storeId: hit.w.storeId };
+}
 
-  log.warn("invoice did not match any store invoicePrefix — using the primary store", {
-    invoiceNo: invoiceNo ?? null,
-    storeId: primary.id,
-    prefixesConfigured: stores.filter((s) => s.invoicePrefix).length,
+/** The candidates for `floorWarehouseForInvoice`: active FLOOR warehouses carrying a prefix. Uncached on purpose. */
+export async function listFloorWarehousesWithPrefix(
+  client: { warehouse: Prisma.TransactionClient["warehouse"] }
+): Promise<FloorWithPrefix[]> {
+  return client.warehouse.findMany({
+    where: { kind: "FLOOR", isActive: true, invoicePrefix: { not: null } },
+    select: { id: true, storeId: true, invoicePrefix: true },
   });
-  return primary.id;
 }
 
 /**

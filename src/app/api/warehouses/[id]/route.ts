@@ -6,60 +6,108 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { clearWarehouseCache } from "@/lib/warehouses";
 import { warehouseUpdateSchema } from "@/lib/validations";
+import {
+  FLOOR_NEEDS_PREFIX, WarehouseRuleError, assertPrefixFree, assertStoreHasPrimary,
+  clearOtherPrimaries, normalisePrefix, uniqueViolationMessage,
+} from "@/lib/warehouses-rules";
 import { createLogger } from "@/lib/logger";
 
-const log = createLogger("api:warehouses:id");
+const log = createLogger("warehouses:api");
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     await requireFeature("warehouses", "edit");
     const { id } = await params;
-    const data = warehouseUpdateSchema.parse(await req.json());
-
-    const existing = await prisma.warehouse.findUnique({
-      where: { id },
-      select: { id: true, storeId: true },
-    });
-    if (!existing) return errorResponse("Warehouse not found", 404);
-
-    if (data.code) {
-      const code = data.code.trim().toUpperCase();
-      const clash = await prisma.warehouse.findUnique({ where: { code }, select: { id: true, name: true } });
-      if (clash && clash.id !== id) {
-        return errorResponse(`Code "${code}" is already used by ${clash.name}`, 409);
-      }
+    const parsed = warehouseUpdateSchema.safeParse(await req.json());
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      log.warn("warehouse update body invalid", { warehouseId: id, path: first?.path.join("."), issues: parsed.error.issues.length });
+      return errorResponse(first?.message ?? "Invalid warehouse", 400);
     }
+    const data = parsed.data;
 
-    // Moving a warehouse to another store is allowed, but the target must exist and be
-    // usable. The stock inside moves with it — which is a real business event, not a rename,
-    // so it is logged at info.
-    if (data.storeId && data.storeId !== existing.storeId) {
-      const store = await prisma.store.findUnique({
-        where: { id: data.storeId },
-        select: { id: true, name: true, isActive: true },
+    // One transaction for the checks, the primary move and the write, so a refusal found only
+    // after the write (a store left without a primary floor) rolls the write back (plan 1609 §1.7).
+    const warehouse = await prisma.$transaction(async (tx) => {
+      const existing = await tx.warehouse.findUnique({
+        where: { id },
+        select: { id: true, storeId: true, kind: true, isActive: true, invoicePrefix: true, isPrimary: true },
       });
-      if (!store) return errorResponse("Store not found", 400);
-      if (!store.isActive) return errorResponse(`${store.name} is deactivated`, 400);
-      log.info("warehouse reparented", { warehouseId: id, from: existing.storeId, to: store.id });
-    }
+      if (!existing) throw new WarehouseRuleError("Warehouse not found", 404);
 
-    const warehouse = await prisma.warehouse.update({
-      where: { id },
-      data: {
-        ...(data.storeId !== undefined ? { storeId: data.storeId } : {}),
-        ...(data.code !== undefined ? { code: data.code.trim().toUpperCase() } : {}),
-        ...(data.name !== undefined ? { name: data.name.trim() } : {}),
-        ...(data.kind !== undefined ? { kind: data.kind } : {}),
-        ...(data.sortOrder !== undefined ? { sortOrder: data.sortOrder } : {}),
-        ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
-      },
-      select: {
-        id: true, code: true, name: true, kind: true, sortOrder: true, isActive: true,
-        store: { select: { id: true, code: true, name: true } },
-      },
+      if (data.code) {
+        const code = data.code.trim().toUpperCase();
+        const clash = await tx.warehouse.findUnique({ where: { code }, select: { id: true, name: true } });
+        if (clash && clash.id !== id) {
+          throw new WarehouseRuleError(`Code "${code}" is already used by ${clash.name}`, 409);
+        }
+      }
+
+      // Moving a warehouse to another store is allowed, but the target must exist and be
+      // usable. The stock inside moves with it — which is a real business event, not a rename,
+      // so it is logged at info.
+      const storeId = data.storeId ?? existing.storeId;
+      const moved = storeId !== existing.storeId;
+      if (moved) {
+        const store = await tx.store.findUnique({
+          where: { id: storeId },
+          select: { id: true, name: true, isActive: true },
+        });
+        if (!store) throw new WarehouseRuleError("Store not found", 400);
+        if (!store.isActive) throw new WarehouseRuleError(`${store.name} is deactivated`, 400);
+        log.info("warehouse reparented", { warehouseId: id, from: existing.storeId, to: store.id });
+      }
+
+      // The state after this write, so every rule judges the result, not the request.
+      const kind = data.kind ?? existing.kind;
+      const isFloor = kind === "FLOOR";
+      const isActive = data.isActive ?? existing.isActive;
+      const invoicePrefix = !isFloor
+        ? null // a GODOWN never keeps a prefix (R30)
+        : data.invoicePrefix !== undefined
+          ? normalisePrefix(data.invoicePrefix)
+          : existing.invoicePrefix;
+      // A primary flag does not travel to another store unless the request sets it there.
+      const isPrimary = !isFloor ? false : data.isPrimary ?? (moved ? false : existing.isPrimary);
+
+      // R32: editing a floor requires a prefix. Deactivating a floor does not — an inactive
+      // floor sells nothing and is ignored by the invoice resolver.
+      if (isFloor && isActive && !invoicePrefix) throw new WarehouseRuleError(FLOOR_NEEDS_PREFIX, 400);
+      if (invoicePrefix) await assertPrefixFree(tx, invoicePrefix, id);
+      // Before the update: the partial unique index refuses a second primary per store.
+      if (isPrimary) await clearOtherPrimaries(tx, storeId, id);
+
+      const updated = await tx.warehouse.update({
+        where: { id },
+        data: {
+          ...(moved ? { storeId } : {}),
+          ...(data.code !== undefined ? { code: data.code.trim().toUpperCase() } : {}),
+          ...(data.name !== undefined ? { name: data.name.trim() } : {}),
+          ...(data.kind !== undefined ? { kind: data.kind } : {}),
+          ...(data.sortOrder !== undefined ? { sortOrder: data.sortOrder } : {}),
+          ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+          invoicePrefix,
+          isPrimary,
+        },
+        select: {
+          id: true, code: true, name: true, kind: true, sortOrder: true, isActive: true,
+          invoicePrefix: true, isPrimary: true,
+          store: { select: { id: true, code: true, name: true } },
+        },
+      });
+
+      // R33, after the write: judged only when a FLOOR is involved, before or after, so renaming
+      // a godown is never refused over the store's floors. Both stores when it moved.
+      if (isFloor || existing.kind === "FLOOR") {
+        await assertStoreHasPrimary(tx, storeId);
+        if (moved) await assertStoreHasPrimary(tx, existing.storeId);
+      }
+      return updated;
     });
 
-    log.info("warehouse updated", { warehouseId: id, fields: Object.keys(data) });
+    log.info("warehouse updated", {
+      warehouseId: id, fields: Object.keys(data), kind: warehouse.kind, isPrimary: warehouse.isPrimary,
+    });
     // A rename or a deactivation changes what the cached set says.
     // The cached array would otherwise outlive the change for the life of the process —
     // which is how a warehouse the picker offers gets refused by the server that offered it.
@@ -67,6 +115,15 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     return successResponse(warehouse);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof WarehouseRuleError) {
+      log.warn("warehouse update refused", { status: error.status, message: error.message });
+      return errorResponse(error.message, error.status);
+    }
+    const unique = uniqueViolationMessage(error);
+    if (unique) {
+      log.warn("warehouse update hit a unique constraint", { message: unique });
+      return errorResponse(unique, 409);
+    }
     const message = error instanceof Error ? error.message : "Failed to update the warehouse";
     log.error("warehouse update failed", { message });
     return errorResponse(message, 400);

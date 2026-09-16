@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { CheckCircle2, Truck, Package } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { DeliveryData } from "./types";
+import { DeliveryData, StockShortLine } from "./types";
 import { ScheduleForm } from "./schedule-form";
 import { DispatchForm } from "./dispatch-form";
 import { HandoverChecklist } from "./handover-checklist";
@@ -15,9 +16,10 @@ interface DetailActionsProps {
   deliveryId: string;
   contactSaved: boolean;
   templates: Record<string, string>;
-  initialAction: "WALK_OUT" | null;
   onStatusChange: (status: string, extra?: Record<string, unknown>) => Promise<void>;
   onRefetch: () => void;
+  /** Floor lines a SCHEDULED change could not hold; the page shows them on the stock-hold card. */
+  onStockShort: (lines: StockShortLine[]) => void;
   onError: (msg: string) => void;
   onConfirmation: (conf: {
     type: "success";
@@ -33,17 +35,17 @@ export function DetailActions({
   deliveryId,
   contactSaved,
   templates,
-  initialAction,
   onStatusChange,
   onRefetch,
+  onStockShort,
   onError,
   onConfirmation,
 }: DetailActionsProps) {
   const [showSchedule, setShowSchedule] = useState(false);
   const [showDispatch, setShowDispatch] = useState(false);
-  const [showHandover, setShowHandover] = useState<"WALK_OUT" | "DELIVERED" | null>(
-    data.status === "WALK_OUT" || data.status === "DELIVERED" ? null : initialAction
-  );
+  const router = useRouter();
+  // Walk-out has its own focused screen (plan 1609 A44, A45); inline handover is Delivered only.
+  const [showHandover, setShowHandover] = useState<"DELIVERED" | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
   const isOuts = data.isOutstation;
@@ -95,8 +97,9 @@ export function DetailActions({
           data={data}
           deliveryId={deliveryId}
           templates={templates}
-          onScheduled={() => {
+          onScheduled={(stockShort) => {
             setShowSchedule(false);
+            onStockShort(stockShort);
             onRefetch();
           }}
           onCancel={() => setShowSchedule(false)}
@@ -115,7 +118,6 @@ export function DetailActions({
             onRefetch();
           }}
           onCancel={() => setShowHandover(null)}
-          onError={onError}
           onConfirmation={onConfirmation}
         />
       )}
@@ -153,7 +155,7 @@ export function DetailActions({
               <button
                 onClick={() => {
                   if (!contactSaved && data.customerPhone) return;
-                  setShowHandover("WALK_OUT");
+                  router.push(`/deliveries/${deliveryId}/walkout`);
                 }}
                 className="flex-1 bg-green-600 text-white py-2.5 min-h-[48px] rounded-lg text-sm font-medium flex items-center justify-center gap-1.5"
               >

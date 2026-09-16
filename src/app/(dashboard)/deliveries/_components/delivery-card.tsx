@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Loader2, Trash2, Package, AlertTriangle } from "lucide-react";
+import { Loader2, Trash2, Package, AlertTriangle, Warehouse } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { getAging, AGING_BADGE } from "@/lib/utils";
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
@@ -25,6 +25,16 @@ interface DeliveryItem {
   isOutstation: boolean;
   reversePickup: boolean;
   invoiceType: string | null;
+  /** The matched FLOOR warehouse (plan 1609 §1.4); null on a Dummy and on old closed rows. */
+  warehouse: { id: string; name: string } | null;
+}
+
+/**
+ * Dummy = an open delivery whose invoice number matched no floor warehouse (plan 1609 T2).
+ * The list API does not send the flag, so it is derived here the same way the server does.
+ */
+function isDummyDelivery(d: Pick<DeliveryItem, "warehouse" | "status">) {
+  return !d.warehouse && !["DELIVERED", "WALK_OUT"].includes(d.status);
 }
 
 interface DeliveryCardProps {
@@ -55,6 +65,7 @@ export function DeliveryCard({
   prebooking,
 }: DeliveryCardProps) {
   const router = useRouter();
+  const isDummy = isDummyDelivery(d);
   const items = d.lineItems || [];
   const isPending = ["PENDING", "VERIFIED", "SCHEDULED"].includes(d.status);
   const aging = isPending ? getAging(d.invoiceDate) : null;
@@ -97,8 +108,18 @@ export function DeliveryCard({
               {formatINR(d.invoiceAmount)} |{" "}
               {new Date(d.invoiceDate).toLocaleDateString("en-IN")}
             </p>
+            {!isDummy && d.warehouse && (
+              <p className="text-[11px] text-slate-400 truncate flex items-center gap-1">
+                <Warehouse className="h-3 w-3 shrink-0" /> {d.warehouse.name}
+              </p>
+            )}
           </div>
           <div className="text-right space-y-1">
+            {isDummy && (
+              <Badge variant="danger" className="text-xs mr-1" title="No floor warehouse matched this invoice number">
+                Dummy
+              </Badge>
+            )}
             <Badge className={`text-xs ${getStatusColor(d.status)}`}>
               {getStatusLabel(d.status)}
             </Badge>
@@ -140,16 +161,16 @@ export function DeliveryCard({
           </div>
         )}
 
-        {/* Action buttons */}
+        {/* Action buttons. A Dummy gets none except delete (plan 1609 A41c, T2). */}
         <div className="flex gap-2 mt-1" onClick={(e) => e.stopPropagation()}>
-          {d.status === "PENDING" && (
+          {!isDummy && d.status === "PENDING" && (
             <>
               <Link href={`/deliveries/${d.id}`} className="flex-1">
                 <button className="w-full bg-blue-600 text-white py-2 rounded-md text-xs font-medium">
                   Schedule
                 </button>
               </Link>
-              <Link href={`/deliveries/${d.id}?action=walkout`} className="flex-1">
+              <Link href={`/deliveries/${d.id}/walkout`} className="flex-1">
                 <button className="w-full bg-green-600 text-white py-2 rounded-md text-xs font-medium">
                   Walk-out
                 </button>
@@ -168,14 +189,14 @@ export function DeliveryCard({
               </button>
             </>
           )}
-          {d.status === "SCHEDULED" && (
+          {!isDummy && d.status === "SCHEDULED" && (
             <Link href="/deliveries/dispatch" className="flex-1">
               <button className="w-full bg-orange-600 text-white py-2 rounded-md text-xs font-medium">
                 Go to Dispatch
               </button>
             </Link>
           )}
-          {d.status === "PREBOOKED" && (
+          {!isDummy && d.status === "PREBOOKED" && (
             <button
               onClick={() => onMarkReady(d.id)}
               className="flex-1 bg-blue-600 text-white py-2 rounded-md text-xs font-medium"
@@ -203,3 +224,4 @@ export function DeliveryCard({
 }
 
 export type { DeliveryItem };
+export { isDummyDelivery };

@@ -10,7 +10,7 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
-import { resolveWarehouse } from "@/lib/warehouses";
+import { resolveWarehouse, primaryFloorWarehouse } from "@/lib/warehouses";
 import { adjustWarehouseQty, deductAnywhere } from "@/lib/stock-location";
 import { inboundReceiveLineSchema, inboundCategorySchema } from "@/lib/validations";
 import { nextUnitCode } from "@/lib/sequence";
@@ -350,6 +350,23 @@ export async function PUT(
               where: { invoiceNo: lineItem.preBookedInvoiceNo || `PB-${lineItem.id}` },
             });
             if (!existingDelivery) {
+              // B1 (plan 1609-deliveries): the delivery sells from the PRIMARY FLOOR warehouse
+              // of the store that received the cycle — not the receiving warehouse itself, which
+              // is usually a godown. `warehouse` here carries no storeId (the bin branch above
+              // narrows it to id + name), so read it. No floor → leave both null, a Dummy.
+              const receiving = await tx.warehouse.findUnique({
+                where: { id: warehouse.id },
+                select: { storeId: true },
+              });
+              const floor = receiving ? await primaryFloorWarehouse(tx, receiving.storeId) : null;
+              if (!floor) {
+                log.warn("pre-booked delivery has no primary floor — created as Dummy", {
+                  shipmentId: id,
+                  lineItemId: lineItem.id,
+                  receivingWarehouseId: warehouse.id,
+                  storeId: receiving?.storeId ?? null,
+                });
+              }
               await tx.delivery.create({
                 data: {
                   invoiceNo: lineItem.preBookedInvoiceNo || `PB-${lineItem.id}`,
@@ -357,6 +374,8 @@ export async function PUT(
                   invoiceAmount: 0,
                   customerName: lineItem.preBookedCustomerName,
                   customerPhone: lineItem.preBookedCustomerPhone || null,
+                  warehouseId: floor?.id ?? null,
+                  storeId: floor?.storeId ?? null,
                   status: "PENDING",
                   prebookNotes: `Pre-booked item arrived: ${lineItem.productName} x${qty} | ${lineItem.shipment.brand.name} | ${lineItem.shipment.shipmentNo}`,
                   lineItems: [{ name: lineItem.productName, quantity: qty }],

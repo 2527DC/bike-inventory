@@ -108,6 +108,29 @@ export async function resolveWarehouse(
 }
 
 /**
+ * The FLOOR warehouse a store sells from when nothing more specific is known (B1: a pre-booked
+ * cycle's delivery). The store's primary FLOOR, else its only active FLOOR, else null — never a
+ * guess between two unmarked floors, and never a godown. Read uncached: the primary flag is
+ * edited on /stores and must apply on the next request.
+ */
+export async function primaryFloorWarehouse(
+  client: Pick<typeof prisma, "warehouse">,
+  storeId: string
+): Promise<{ id: string; storeId: string; name: string } | null> {
+  const floors = await client.warehouse.findMany({
+    where: { storeId, kind: "FLOOR", isActive: true },
+    select: { id: true, storeId: true, name: true, isPrimary: true },
+    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+  });
+  const pick = floors.find((f) => f.isPrimary) ?? (floors.length === 1 ? floors[0] : null);
+  if (!pick) {
+    log.warn("no primary floor for store", { storeId, floors: floors.length });
+    return null;
+  }
+  return { id: pick.id, storeId: pick.storeId, name: pick.name };
+}
+
+/**
  * Drop the cached set.
  *
  * Called by every route that changes the warehouse list — create, edit, deactivate. The old

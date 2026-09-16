@@ -47,9 +47,12 @@ export async function POST(req: NextRequest) {
       // across every warehouse, and one statement is the difference between a reset that
       // completes and one that blows the transaction budget. Both writes are absolute, so
       // there is no per-row arithmetic to preserve.
+      // Holds too (plan 1609-deliveries, T4): `Product.reservedStock` is now only a cache of
+      // SUM(StockLevel.reservedQuantity), so zeroing the cache below without the ledger would
+      // bring every hold back at the next recomputeReservedStock.
       const levelsReset = await tx.stockLevel.updateMany({
-        where: { productId: { in: ids }, quantity: { not: 0 } },
-        data: { quantity: 0 },
+        where: { productId: { in: ids }, OR: [{ quantity: { not: 0 } }, { reservedQuantity: { not: 0 } }] },
+        data: { quantity: 0, reservedQuantity: 0 },
       });
 
       await tx.product.updateMany({

@@ -6,9 +6,13 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { getBooks, getZakya, type IntegrationClient } from "@/lib/integrations";
 import {
-  storeIdForInvoice,
+  floorWarehouseForInvoice,
+  listFloorWarehousesWithPrefix,
   deliveryFieldsFromInvoiceDetail,
 } from "@/lib/deliveries/zoho-invoice";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("deliveries:import-zoho");
 
 /*
  * Direct invoice import — fetches invoice details from Zoho and creates Delivery.
@@ -40,8 +44,10 @@ export async function POST(req: NextRequest) {
     // getInvoice lives on the base class, so both providers satisfy it.
     const client: IntegrationClient = (zoho ?? zakya)!;
 
-    // Loaded once for prefix attribution (O8), not per invoice.
-    const stores = await prisma.store.findMany({ select: { id: true, invoicePrefix: true } });
+    // Active FLOOR warehouses carrying a prefix, loaded once for attribution, not per invoice
+    // (plan 1609-deliveries, T1 — the prefix moved from Store to the floor warehouse).
+    const floors = await listFloorWarehousesWithPrefix(prisma);
+    log.debug("direct import started", { invoices: invoiceIds.length, floors: floors.length });
 
     let imported = 0;
     const errors: string[] = [];
@@ -71,8 +77,9 @@ export async function POST(req: NextRequest) {
         //
         // This was the third of three routes hardcoding a store NAME to decide what not to
         // import. Bharath Cycle Centre has its own GSTIN and its own stock; hiding its
-        // invoices meant its deliveries never existed and its stock never moved. The store is
-        // now resolved from Store.invoicePrefix and recorded on the row instead.
+        // invoices meant its deliveries never existed and its stock never moved. The FLOOR
+        // warehouse that sold it is now resolved from Warehouse.invoicePrefix and recorded on
+        // the row, with its store (T3). No match is a Dummy: both null, no fallback (A41b).
 
         // Check duplicate
         const exists = await prisma.delivery.findFirst({
@@ -87,25 +94,37 @@ export async function POST(req: NextRequest) {
         // paths cannot drift. They HAD drifted — only this one read the address, area,
         // pincode and salesperson.
         const fields = deliveryFieldsFromInvoiceDetail(inv);
+        const match = floorWarehouseForInvoice(invoiceNo, floors);
 
-        await prisma.delivery.create({
+        const created = await prisma.delivery.create({
           data: {
             ...fields,
             invoiceNo,
-            storeId: storeIdForInvoice(invoiceNo, stores),
+            warehouseId: match?.warehouseId ?? null,
+            storeId: match?.storeId ?? null,
             status: "PENDING",
             lineItems: fields.lineItems.length > 0 ? fields.lineItems : undefined,
           },
+          select: { id: true },
         });
         imported++;
+        log.info("invoice imported", {
+          deliveryId: created.id, invoiceNo, warehouseId: match?.warehouseId ?? null, dummy: !match,
+        });
       } catch (e) {
+        log.error("invoice import failed", { invoiceId, message: e instanceof Error ? e.message : String(e) });
         errors.push(`${invoiceId}: ${e instanceof Error ? e.message : "Failed"}`);
       }
     }
 
+    log.info("direct import finished", { requested: invoiceIds.length, imported, errors: errors.length });
     return successResponse({ imported, errors, total: invoiceIds.length });
   } catch (error) {
-    if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof AuthError) {
+      log.warn("direct import refused", { status: error.status });
+      return errorResponse(error.message, error.status);
+    }
+    log.error("direct import failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Import failed", 500);
   }
 }

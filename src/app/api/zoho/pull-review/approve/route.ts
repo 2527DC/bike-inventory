@@ -11,7 +11,8 @@ import { PLACEHOLDER_CATEGORY } from "@/lib/import-placeholders";
 // handler, so importing the type here adds nothing to the module graph at runtime.
 import type { BooksClient } from "@/lib/integrations";
 import {
-  storeIdForInvoice,
+  floorWarehouseForInvoice,
+  listFloorWarehousesWithPrefix,
   deliveryFieldsFromInvoiceDetail,
   type DeliveryFieldsFromInvoice,
 } from "@/lib/deliveries/zoho-invoice";
@@ -149,10 +150,12 @@ export async function POST(req: NextRequest) {
     // `errors` keeps its meaning exactly: the record did not import.
     const results = { contacts: 0, items: 0, bills: 0, invoices: 0, skipped: 0, errors: [] as string[], notices: [] as string[] };
 
-    // Every store, for invoice-prefix attribution (O8). Two rows; loaded once, not per record.
-    const stores = await prisma.store.findMany({
-      select: { id: true, invoicePrefix: true },
-    });
+    // Every active FLOOR warehouse carrying a prefix, for invoice attribution (plan
+    // 1609-deliveries, T1). Loaded once, not per record — and only when this batch holds an
+    // invoice, because the bill branch never reads it.
+    const floors = previews.some((p) => p.entityType === "invoice")
+      ? await listFloorWarehousesWithPrefix(prisma)
+      : [];
 
     // Imported records are attributed to a system-role account when one exists, so the audit
     // trail doesn't credit whoever happened to click Approve.
@@ -602,15 +605,24 @@ export async function POST(req: NextRequest) {
                 results.errors.push(`Invoice ${invoiceNo}: no Zoho client to fetch details`);
               }
             } catch (e) {
+              log.warn("invoice detail fetch failed", {
+                pullId, previewId: preview.id, invoiceNo,
+                message: e instanceof Error ? e.message : String(e),
+              });
               results.errors.push(`Invoice ${invoiceNo}: failed to fetch details — ${e instanceof Error ? e.message : "Unknown"}`);
             }
           }
 
-          // WHICH STORE sold it (O8). Resolved at pull time and stored on the preview; the
-          // prefix rule is re-applied here as a fallback so a preview written before the
-          // stores had prefixes still lands on the right store when they are filled in.
-          const storeId =
-            (d.storeId ? String(d.storeId) : null) ?? storeIdForInvoice(invoiceNo, stores);
+          // WHICH FLOOR WAREHOUSE sold it (plan 1609-deliveries, R31, T1, T3). RE-RESOLVED here,
+          // never read from the preview: the preview's `warehouseId`/`storeId` were computed at
+          // fetch time, and a prefix typed or changed on /stores since then must decide. No
+          // match is a Dummy — both null, and deliberately no fallback to any store (A41b).
+          const match = floorWarehouseForInvoice(invoiceNo, floors);
+          if (!match) {
+            log.info("invoice imported as Dummy — no floor prefix matched", {
+              pullId, previewId: preview.id, invoiceNo, floors: floors.length,
+            });
+          }
 
           const previewLineItems =
             (d.lineItems as Array<{ name: string; sku: string; quantity: number; rate: number; itemTotal: number }>) || [];
@@ -627,7 +639,8 @@ export async function POST(req: NextRequest) {
               customerName: String(d.customerName),
               customerPhone: fields?.customerPhone ?? (String(d.phone || "") || null),
               salesPerson: fields?.salesPerson || String(d.salesPerson || "") || null,
-              storeId,
+              warehouseId: match?.warehouseId ?? null,
+              storeId: match?.storeId ?? null,
               status: "PENDING",
               lineItems:
                 fields && fields.lineItems.length > 0
@@ -645,6 +658,10 @@ export async function POST(req: NextRequest) {
           data: { status: "APPROVED", reviewedAt: new Date(), reviewedById: user.id },
         });
       } catch (e) {
+        log.error("preview import failed", {
+          pullId, previewId: preview.id, entityType: preview.entityType, zohoId: preview.zohoId,
+          message: e instanceof Error ? e.message : String(e),
+        });
         results.errors.push(`${preview.entityType} ${preview.zohoId}: ${e instanceof Error ? e.message : "Unknown"}`);
       }
     }

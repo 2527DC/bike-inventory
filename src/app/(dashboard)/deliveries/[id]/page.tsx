@@ -1,12 +1,15 @@
 "use client";
 
 import { useState, useEffect, use } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { Phone } from "lucide-react";
+import { AlertTriangle, Phone } from "lucide-react";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
-import { DeliveryData } from "./_components/types";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+import { StockShortLine } from "./_components/types";
+import { useContactSaved, useDelivery } from "./_components/use-delivery";
 import { DetailHeader } from "./_components/detail-header";
 import { CustomerInfoCard } from "./_components/customer-info-card";
 import { LineItemsCard } from "./_components/line-items-card";
@@ -18,142 +21,91 @@ import { PaymentWarning } from "./_components/payment-warning";
 import { WhatsAppActions } from "./_components/whatsapp-actions";
 import { SelfFillLinkButton } from "./_components/self-fill-link-button";
 import { DetailActions } from "./_components/detail-actions";
+import { StockHoldCard } from "./_components/stock-hold-card";
+
+const log = createLogger("deliveries:detail");
+
+type Confirmation = {
+  type: "success" | "warning" | "error" | "info";
+  title: string;
+  referenceId: string;
+  items?: Array<{ label: string; value: string }>;
+  details?: string;
+};
+
+function statusLabel(status: string) {
+  if (status === "WALK_OUT") return "Walk-out";
+  if (status === "IN_TRANSIT") return "In Transit";
+  return status.charAt(0) + status.slice(1).toLowerCase().replace(/_/g, " ");
+}
 
 export default function DeliveryDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const searchParams = useSearchParams();
-  const router = useRouter();
+  const { data, loading, error: loadError, refetch } = useDelivery(id);
+  const { contactSaved, markContactSaved } = useContactSaved(id);
 
-  // Core data state
-  const [data, setData] = useState<DeliveryData | null>(null);
-  const [loading, setLoading] = useState(true);
   const [actionError, setActionError] = useState("");
-
-  // Persist contact-saved state in localStorage so it survives refresh
-  const contactKey = `contact-saved-${id}`;
-  const [contactSaved, setContactSaved] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem(contactKey) === "1";
-  });
-
-  const markContactSaved = () => {
-    setContactSaved(true);
-    localStorage.setItem(contactKey, "1");
-  };
-
-  // WhatsApp templates
+  // Floor lines the last SCHEDULED/PACKED change could not hold (plan 1609 T5).
+  const [stockShort, setStockShort] = useState<StockShortLine[]>([]);
   const [templates, setTemplates] = useState<Record<string, string>>({});
-
-  // Tab: actions (default) vs details
   const [activeTab, setActiveTab] = useState<"actions" | "details">("actions");
-
-  // Confirmation modal
-  const [confirmation, setConfirmation] = useState<{
-    type: "success" | "warning" | "error" | "info";
-    title: string;
-    referenceId: string;
-    items?: Array<{ label: string; value: string }>;
-    details?: string;
-  } | null>(null);
-
-  // Initial action from URL (e.g. ?action=walkout) — consume once, then strip param
-  const actionParam = searchParams.get("action");
-  const initialAction = actionParam === "walkout" ? "WALK_OUT" as const : null;
+  const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
 
   useEffect(() => {
-    if (actionParam) {
-      router.replace(`/deliveries/${id}`, { scroll: false });
-    }
-  }, [actionParam, id, router]);
-
-  const fetchData = () => {
-    fetch(`/api/deliveries/${id}`)
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success) {
-          setData(res.data);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => { fetchData(); }, [id]); // eslint-disable-line
-
-  useEffect(() => {
-    fetch("/api/whatsapp-templates")
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setTemplates(res.data); })
-      .catch(() => {});
+    void apiTry<Record<string, string>>("/api/whatsapp-templates").then((res) => {
+      if (res.data) setTemplates(res.data);
+      // Not fatal: the WhatsApp buttons fall back to their built-in wording.
+      else log.warn("whatsapp templates not loaded", { status: res.status });
+    });
   }, []);
 
   const handleStatusChange = async (status: string, extra?: Record<string, unknown>) => {
-    try {
-      const res = await fetch(`/api/deliveries/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status, ...extra }),
+    const res = await apiTry<{ stockShort?: StockShortLine[] }>(`/api/deliveries/${id}`, {
+      method: "PUT",
+      json: { status, ...extra },
+    });
+    if (res.error) {
+      log.warn("status change refused", { deliveryId: id, status, httpStatus: res.status });
+      setActionError(res.error);
+      return;
+    }
+    const short = status === "SCHEDULED" || status === "PACKED" ? res.data?.stockShort ?? [] : [];
+    setStockShort(short);
+    log.info("status changed", { deliveryId: id, status, shortLines: short.length });
+    void refetch();
+    if (!data) return;
+
+    const shortNote = short.length > 0
+      ? `Stock not reserved — ${data.warehouse?.name || "the floor"} is short on ${short.length} item(s).`
+      : undefined;
+    if (status === "OUT_FOR_DELIVERY") {
+      setConfirmation({
+        type: "success",
+        title: "Dispatched!",
+        referenceId: data.invoiceNo,
+        items: [
+          { label: "Customer", value: data.customerName },
+          { label: "Area", value: data.customerArea || "N/A" },
+          { label: "Courier", value: (extra?.courierName as string) || data.courierName || "Direct" },
+        ],
+        details: "Send WhatsApp to customer for tracking",
       });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        setActionError(json.error || "Status update failed");
-        return;
-      }
-      fetchData();
-      if (data) {
-        if (status === "OUT_FOR_DELIVERY") {
-          setConfirmation({
-            type: "success",
-            title: "Dispatched!",
-            referenceId: data.invoiceNo,
-            items: [
-              { label: "Customer", value: data.customerName },
-              { label: "Area", value: data.customerArea || "N/A" },
-              { label: "Courier", value: (extra?.courierName as string) || data.courierName || "Direct" },
-            ],
-            details: "Send WhatsApp to customer for tracking",
-          });
-        } else {
-          const statusLabel =
-            status === "WALK_OUT"
-              ? "Walk-out"
-              : status === "IN_TRANSIT"
-                ? "In Transit"
-                : status.charAt(0) + status.slice(1).toLowerCase().replace(/_/g, " ");
-          setConfirmation({
-            type: "success",
-            title: "Status Updated",
-            referenceId: data.invoiceNo,
-            items: [
-              { label: "Customer", value: data.customerName },
-              { label: "New Status", value: statusLabel },
-              { label: "Items", value: `${data.lineItems?.length || 0} items` },
-            ],
-          });
-        }
-      }
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Action failed");
+    } else {
+      setConfirmation({
+        type: short.length > 0 ? "warning" : "success",
+        title: "Status Updated",
+        referenceId: data.invoiceNo,
+        items: [
+          { label: "Customer", value: data.customerName },
+          { label: "New Status", value: statusLabel(status) },
+          { label: "Items", value: `${data.lineItems?.length || 0} items` },
+        ],
+        details: shortNote,
+      });
     }
   };
 
-  const handleRefetch = () => {
-    fetchData();
-  };
-
-  const handleError = (msg: string) => {
-    setActionError(msg);
-  };
-
-  const handleConfirmation = (conf: {
-    type: "success";
-    title: string;
-    referenceId: string;
-    items: Array<{ label: string; value: string }>;
-    details?: string;
-  }) => {
-    setConfirmation(conf);
-  };
+  const handleRefetch = () => { void refetch(); };
 
   if (loading) {
     return (
@@ -165,49 +117,67 @@ export default function DeliveryDetailPage({ params }: { params: Promise<{ id: s
 
   if (!data) {
     return (
-      <div className="text-center py-12">
-        <p className="text-slate-400">Not found</p>
-        <Link href="/deliveries" className="text-blue-600 text-sm">Back</Link>
+      <div className="text-center py-12 px-4">
+        <p className="text-sm text-slate-500 mb-2">{loadError || "Not found"}</p>
+        <div className="flex items-center justify-center gap-4">
+          {loadError && (
+            <button onClick={handleRefetch} className="text-blue-600 text-sm underline">Retry</button>
+          )}
+          <Link href="/deliveries" className="text-blue-600 text-sm">Back</Link>
+        </div>
       </div>
     );
   }
 
+  // A Dummy is read-only: the read-only cards stay, every write surface is withheld (A41c).
+  // `contactSaved` is forced true on a Dummy only to hide the "Save Contact" prompt.
+  const isDummy = data.isDummy;
+  const customerCard = (
+    <CustomerInfoCard data={data} onContactSaved={markContactSaved} contactSaved={contactSaved || isDummy} />
+  );
+
   return (
     <div>
       {actionError && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-2.5 mb-3 text-xs text-red-700">
+        <div className="bg-red-50 border border-red-200 rounded-lg p-2.5 mb-3 text-xs text-red-700" role="alert">
           {actionError}
           <button onClick={() => setActionError("")} className="ml-2 underline">dismiss</button>
         </div>
       )}
 
-      {/* Header with badges and progress */}
+      {loadError && (
+        <ErrorBanner message={loadError} onRetry={handleRefetch} />
+      )}
+
       <DetailHeader data={data} />
+
+      {isDummy && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-300 rounded-lg p-3 mb-3" role="alert">
+          <AlertTriangle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
+          <p className="text-sm text-red-800 font-medium">
+            Dummy delivery — no floor warehouse matched this invoice number. No actions are available.
+          </p>
+        </div>
+      )}
 
       {/* Tab Switcher */}
       <div className="flex gap-1 bg-slate-100 rounded-lg p-1 mb-3">
-        <button
-          onClick={() => setActiveTab("actions")}
-          className={`flex-1 py-2 rounded-md text-sm font-semibold transition-colors ${
-            activeTab === "actions" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
-          }`}
-        >
-          Actions
-        </button>
-        <button
-          onClick={() => setActiveTab("details")}
-          className={`flex-1 py-2 rounded-md text-sm font-semibold transition-colors ${
-            activeTab === "details" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
-          }`}
-        >
-          Details
-        </button>
+        {(["actions", "details"] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`flex-1 py-2 rounded-md text-sm font-semibold transition-colors ${
+              activeTab === tab ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
+            }`}
+          >
+            {tab === "actions" ? "Actions" : "Details"}
+          </button>
+        ))}
       </div>
 
       {/* ACTIONS TAB */}
       {activeTab === "actions" && (
         <>
-          {/* Quick call button */}
           {data.customerPhone && (
             <div className="flex gap-2 mb-3">
               <a
@@ -219,88 +189,70 @@ export default function DeliveryDetailPage({ params }: { params: Promise<{ id: s
             </div>
           )}
 
-          {/* Save Contact (for PENDING) */}
-          <CustomerInfoCard
-            data={data}
-            onContactSaved={markContactSaved}
-            contactSaved={contactSaved}
-          />
+          {customerCard}
 
-          {/* Customer self-fill link (for address collection) */}
-          {(data.status === "PENDING" || data.status === "VERIFIED") && (
-            <SelfFillLinkButton
-              deliveryId={id}
-              customerPhone={data.customerPhone}
-              selfFillCompletedAt={data.selfFillCompletedAt}
-            />
+          {isDummy ? (
+            <LineItemsCard lineItems={data.lineItems} />
+          ) : (
+            <>
+              {(data.status === "PENDING" || data.status === "VERIFIED") && (
+                <SelfFillLinkButton
+                  deliveryId={id}
+                  customerPhone={data.customerPhone}
+                  selfFillCompletedAt={data.selfFillCompletedAt}
+                />
+              )}
+
+              <StockHoldCard
+                data={data}
+                deliveryId={id}
+                knownShort={stockShort}
+                onReserved={() => {
+                  setStockShort([]);
+                  handleRefetch();
+                }}
+              />
+
+              <DetailActions
+                data={data}
+                deliveryId={id}
+                contactSaved={contactSaved}
+                templates={templates}
+                onStatusChange={handleStatusChange}
+                onRefetch={handleRefetch}
+                onStockShort={setStockShort}
+                onError={setActionError}
+                onConfirmation={setConfirmation}
+              />
+            </>
           )}
-
-          {/* All action buttons and forms */}
-          <DetailActions
-            data={data}
-            deliveryId={id}
-            contactSaved={contactSaved}
-            templates={templates}
-            initialAction={initialAction}
-            onStatusChange={handleStatusChange}
-            onRefetch={handleRefetch}
-            onError={handleError}
-            onConfirmation={handleConfirmation}
-          />
         </>
       )}
 
       {/* DETAILS TAB */}
       {activeTab === "details" && (
         <>
-          <CustomerInfoCard
-            data={data}
-            onContactSaved={markContactSaved}
-            contactSaved={contactSaved}
-          />
-
-          <DeliveryDetailsCard
-            data={data}
-            deliveryId={id}
-            onSaved={handleRefetch}
-            onError={handleError}
-          />
-
+          {customerCard}
+          {!isDummy && (
+            <DeliveryDetailsCard data={data} deliveryId={id} onSaved={handleRefetch} onError={setActionError} />
+          )}
           <PaymentWarning data={data} />
-
-          <DeliveryDateEditor
-            data={data}
-            deliveryId={id}
-            onSaved={handleRefetch}
-            onError={handleError}
-          />
-
-          <CourierInfoCard
-            data={data}
-            deliveryId={id}
-            onSaved={handleRefetch}
-            onError={handleError}
-          />
-
+          {!isDummy && (
+            <>
+              <DeliveryDateEditor data={data} deliveryId={id} onSaved={handleRefetch} onError={setActionError} />
+              <CourierInfoCard data={data} deliveryId={id} onSaved={handleRefetch} onError={setActionError} />
+            </>
+          )}
           <LineItemsCard lineItems={data.lineItems} />
-
-          <FreeAccessoriesEditor
-            data={data}
-            deliveryId={id}
-            onSaved={handleRefetch}
-            onError={handleError}
-          />
-
-          <WhatsAppActions
-            data={data}
-            deliveryId={id}
-            templates={templates}
-            onSent={handleRefetch}
-          />
+          {!isDummy && (
+            <>
+              <FreeAccessoriesEditor data={data} deliveryId={id} onSaved={handleRefetch} onError={setActionError} />
+              <WhatsAppActions data={data} deliveryId={id} templates={templates} onSent={handleRefetch} />
+            </>
+          )}
         </>
       )}
 
-      {/* Action Confirmation Modal */}
       <ActionConfirmation
         open={!!confirmation}
         onClose={() => setConfirmation(null)}

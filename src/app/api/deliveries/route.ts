@@ -86,7 +86,10 @@ export async function GET(req: NextRequest) {
     const [deliveries, total] = await Promise.all([
       prisma.delivery.findMany({
         where,
-        include: { verifiedBy: { select: { name: true } } },
+        include: {
+          verifiedBy: { select: { name: true } },
+          warehouse: { select: { id: true, name: true } },
+        },
         orderBy: sortBy === "scheduledDate" ? { scheduledDate: "asc" } : { createdAt: "desc" },
         skip,
         take: limit,

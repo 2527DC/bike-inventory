@@ -84,7 +84,8 @@ export async function POST(req: NextRequest) {
     // (O8, owner 4 Sep) — the last of three routes hardcoding a store NAME to decide what to
     // hide. Searching for a Bharath Cycle Centre invoice returned "not found", which is how a
     // whole store with its own GSTIN stayed invisible. Its invoices are searchable and
-    // importable now, tagged with their store from Store.invoicePrefix.
+    // importable now; import tags each with the FLOOR warehouse whose Warehouse.invoicePrefix
+    // it matches, or leaves it a Dummy when none does (plan 1609-deliveries, T1, A41b).
     invoices = invoices.filter((inv: { status: string }) => inv.status !== "void");
 
     // Check which are already imported
