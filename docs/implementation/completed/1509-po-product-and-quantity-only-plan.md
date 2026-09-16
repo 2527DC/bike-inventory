@@ -1,6 +1,6 @@
 # A purchase order is the product and the quantity — no price, no GST, anywhere
 
-Status: in-progress — built 15 Sep 2026 (§6), uncommitted; the owner owes `npm run build` and the browser walk (§4).
+Status: completed — 16 Sep 2026, a purchase order is the product and the quantity only: no rate, GST or totals are stored or shown on `/purchase-orders/new`, the review, the PDF (`# · Product · Qty`, both GSTINs kept), the vendor email, the WhatsApp text, the detail page or the list, older POs included. The PO item schema no longer accepts `unitPrice`, `gstRate` or `extractionItemId` (`validations.ts:470`). No migration — the money columns are written as 0. Committed and pushed as `2ee15ec`, `f91ac5f`, `f7f8ab7`. Still owed by the owner: `npm run build` and the §4 browser walk.
 Branch: **`feat/remove-static-team-health`** — the existing branch (owner, 15 Sep 2026). Its unrelated uncommitted stock-count work is left alone.
 
 Every `file:line` below was read from disk on 15 Sep 2026. Check rather than trust.

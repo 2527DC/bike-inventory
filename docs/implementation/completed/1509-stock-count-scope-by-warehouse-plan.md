@@ -1,6 +1,6 @@
 # A stock count is scoped by warehouse (Godown or Floor), in every mode, so creating one never fails for a missing store
 
-Status: in-progress — 15 Sep 2026, Q0–Q5 answered (see Clarifications); building Parts C, A, B.
+Status: completed — 16 Sep 2026, a stock count is one store and ONE of its Floor/Godown warehouses, with the bin optional and no "whole store" mode. `storeId` and `warehouseId` are both required by `stockCountSchema` (`validations.ts:197-200`) and re-checked by the create route, the whole-store branches are gone, the store is never derived from the bin, and a bad request answers with a sentence instead of zod's default. Committed and pushed as `283a6fd` and `4e5eab2`. Still owed by the owner: `npm run build` and the browser walk.
 Branch: `feat/remove-static-team-health` (Q0).
 
 Every `file:line` below was read from disk on 15 Sep 2026. Check rather than trust.

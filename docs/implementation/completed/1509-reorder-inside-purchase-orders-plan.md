@@ -1,6 +1,6 @@
 # Reorder moves inside Purchase Orders; a new PO pulls the vendor's below-level items at their reorder quantity
 
-Status: pending — **BUILT 15 Sep 2026 on `feat/remove-static-team-health`, uncommitted** (§6); tsc + eslint clean, query verified on `bch_local`; awaiting the owner's `npm run build`, the §4 browser walk and `db:seed:rbac`. Every §1 question answered (§1.1).
+Status: completed — 16 Sep 2026, `/reorder` is now the Reorder tab of `/purchase-orders` (the old route 307s, catalog `route: null`), New PO gained "Add reorder items" offering the vendor's at-or-below-level products at their reorder quantity, and `/stock/[id]` gained a Reorder card. Committed `efb1e0c` on `feat/remove-static-team-health`; tsc + eslint clean, query verified on `bch_local`. Still owed by the owner: `npm run build`, the §4 browser walk and `npm run db:seed:rbac`.
 Branch: **`feat/remove-static-team-health`** (Q0).
 
 Every `file:line` below was read from disk on 15 Sep 2026. The data counts in §2.1 were
