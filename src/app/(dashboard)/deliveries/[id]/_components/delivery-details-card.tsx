@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { DeliveryData } from "./types";
+import { DeliveryData, isOutstationDelivery } from "./types";
 
 interface DeliveryDetailsCardProps {
   data: DeliveryData;
@@ -20,7 +20,7 @@ export function DeliveryDetailsCard({ data, deliveryId, onSaved, onError }: Deli
 
   if (data.status !== "SCHEDULED") return null;
 
-  const isOuts = data.isOutstation;
+  const isOuts = isOutstationDelivery(data);
 
   const handleSave = async () => {
     setLoading(true);

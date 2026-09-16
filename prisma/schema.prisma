@@ -1827,6 +1827,12 @@ enum IssueSource {
   CLIENT
 }
 
+/// Where a delivery goes (plan 1609-deliveries, A22). Null on Delivery.deliveryZone = not chosen yet.
+enum DeliveryZone {
+  BANGALORE
+  OUTSTATION
+}
+
 enum DeliveryStatus {
   PENDING
   VERIFIED
@@ -1873,6 +1879,14 @@ model Delivery {
   warehouseId String?
   warehouse   Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
 
+  // Zoho's own payment state for the invoice, SNAPSHOT at import (plan 1609-deliveries, A31, T7):
+  // `status` ("paid", "partially_paid", "overdue"…) and `balance`. Nothing refreshes them; a
+  // CustomerInvoice row for the same invoice, when one exists, overrides them on screen. Null on
+  // every delivery imported before 16 Sep 2026 — shown as "Payment: not available" (A32).
+  // Named `zoho…` so they do not collide with the computed `paymentStatus` the detail API returns.
+  zohoPaymentStatus String?
+  zohoBalance       Decimal? @db.Decimal(12, 2)
+
   // The Customer row Save Contact found or created by phone (plan 1609-deliveries, A1, A2).
   // "The customer is saved" means exactly this is set: Schedule, Walk-out and Generate Link all
   // require it on the server (A5, A6). Restrict: a customer with delivery history is not
@@ -1913,7 +1927,14 @@ model Delivery {
   reversePickup Boolean @default(false)
 
   // Outstation delivery
+  //
+  // ⚠ `isOutstation` is superseded by `deliveryZone` (plan 1609-deliveries, T6) and is kept in
+  // step with it for one release — every writer sets both — then dropped (CLAUDE.md rule 7).
   isOutstation        Boolean @default(false)
+  // Bangalore, Outstation, or null = "Not chosen" (A22). A boolean cannot say "nobody has chosen
+  // yet", which put every fresh import in the Bangalore list. Set by the customer's form or by
+  // staff scheduling; backfilled in `…_delivery_zone_and_payment` per A34.
+  deliveryZone        DeliveryZone?
   courierName         String?
   courierTrackingNo   String?
   courierTrackingLink String?

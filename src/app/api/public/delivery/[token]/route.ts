@@ -8,6 +8,7 @@ import { createLogger } from "@/lib/logger";
 import { toPlus91, isValidMobile, samePhone } from "@/lib/phone";
 import { slotRefusal, SLOT_REFUSAL_MESSAGE, istDayBounds, isDateString } from "@/lib/deliveries/slots";
 import { holdDeliveryStock, isDummy } from "@/lib/deliveries/floor-stock";
+import { zoneColumns, zoneFromOutstation } from "@/lib/deliveries/zone";
 
 /**
  * The customer's delivery form, reached from a WhatsApp link. PUBLIC BY DESIGN — no session and
@@ -99,6 +100,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ tok
         customerPincode: true,
         lineItems: true,
         isOutstation: true,
+        deliveryZone: true,
         scheduledDate: true,
         selfFillTokenExpiry: true,
         selfFillCompletedAt: true,
@@ -128,6 +130,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ tok
       customerPincode: delivery.customerPincode,
       lineItems: delivery.lineItems,
       isOutstation: delivery.isOutstation,
+      // BANGALORE | OUTSTATION | null (not chosen yet) — A22.
+      deliveryZone: delivery.deliveryZone,
       scheduledDate: delivery.scheduledDate,
       selfFillCompletedAt: delivery.selfFillCompletedAt,
       locked: !!delivery.selfFillCompletedAt,
@@ -209,7 +213,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ toke
           ...(input.mapsLink !== undefined ? { mapsLink: input.mapsLink || null } : {}),
           ...(input.deliveryNotes !== undefined ? { deliveryNotes: input.deliveryNotes || null } : {}),
           alternatePhone: toPlus91(input.alternatePhone),
-          isOutstation: input.isOutstation,
+          // deliveryZone and isOutstation together (plan 1609-deliveries, T6).
+          ...zoneColumns(zoneFromOutstation(input.isOutstation)),
           // Outstation: no date (A27) — whatever the row had is left as it was.
           ...(scheduledDate ? { scheduledDate } : {}),
           selfFillCompletedAt: new Date(),

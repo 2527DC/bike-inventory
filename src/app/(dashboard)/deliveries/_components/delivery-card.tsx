@@ -6,6 +6,7 @@ import { Loader2, Trash2, Package, AlertTriangle, Warehouse } from "lucide-react
 import { Badge } from "@/components/ui/badge";
 import { getAging, AGING_BADGE } from "@/lib/utils";
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
+import { zoneLabel, type DeliveryZoneValue } from "@/lib/deliveries/zone";
 
 interface DeliveryItem {
   id: string;
@@ -23,6 +24,8 @@ interface DeliveryItem {
   verifiedBy: { name: string } | null;
   salesPerson: string | null;
   isOutstation: boolean;
+  /** Bangalore / Outstation / null = not chosen (plan 1609 A22). The tag reads this, not isOutstation. */
+  deliveryZone: DeliveryZoneValue | null;
   reversePickup: boolean;
   invoiceType: string | null;
   /** The matched FLOOR warehouse (plan 1609 §1.4); null on a Dummy and on old closed rows. */
@@ -35,6 +38,29 @@ interface DeliveryItem {
  */
 function isDummyDelivery(d: Pick<DeliveryItem, "warehouse" | "status">) {
   return !d.warehouse && !["DELIVERED", "WALK_OUT"].includes(d.status);
+}
+
+const ZONE_BADGE_VARIANT = {
+  Bangalore: "info", // blue
+  Outstation: "warning", // amber, as the old Outstation badge
+  "Not set": "default", // slate
+} as const satisfies Record<ReturnType<typeof zoneLabel>, string>;
+
+/**
+ * Bangalore / Outstation / Not set tag — on /deliveries only, mobile cards and desktop table
+ * (plan 1609 A23). Callers skip it on a Dummy: the Dummy badge already says enough.
+ */
+function ZoneBadge({ zone, className = "" }: { zone: DeliveryZoneValue | null; className?: string }) {
+  const label = zoneLabel(zone);
+  return (
+    <Badge
+      variant={ZONE_BADGE_VARIANT[label]}
+      className={className}
+      title={label === "Not set" ? "The customer has not chosen Bangalore or outside Bangalore yet" : undefined}
+    >
+      {label}
+    </Badge>
+  );
 }
 
 interface DeliveryCardProps {
@@ -123,11 +149,7 @@ export function DeliveryCard({
             <Badge className={`text-xs ${getStatusColor(d.status)}`}>
               {getStatusLabel(d.status)}
             </Badge>
-            {d.isOutstation && (
-              <Badge variant={"warning"} className="text-xs">
-                Outstation
-              </Badge>
-            )}
+            {!isDummy && <ZoneBadge zone={d.deliveryZone} className="text-xs" />}
             {d.reversePickup && (
               <Badge variant={"info"} className="text-xs">
                 Reverse
@@ -224,4 +246,4 @@ export function DeliveryCard({
 }
 
 export type { DeliveryItem };
-export { isDummyDelivery };
+export { isDummyDelivery, ZoneBadge };

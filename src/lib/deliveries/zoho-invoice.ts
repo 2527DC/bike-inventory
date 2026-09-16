@@ -81,6 +81,20 @@ export interface DeliveryFieldsFromInvoice {
   customerPincode: string | null;
   salesPerson: string;
   lineItems: Array<{ name: string; sku: string; quantity: number; rate: number; itemTotal: number }>;
+  /**
+   * Zoho's own payment word ("paid", "partially_paid", "overdue", "sent"…) and the balance
+   * still owed, as they stood at import (plan 1609-deliveries, A31, T7). A snapshot — never
+   * refreshed (A32); a `CustomerInvoice` row overrides both on the detail screen.
+   */
+  zohoPaymentStatus: string | null;
+  zohoBalance: number | null;
+}
+
+/** A Zoho number that may arrive as a number, a numeric string, or not at all. */
+function finiteOrNull(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 export function deliveryFieldsFromInvoiceDetail(inv: {
@@ -89,6 +103,8 @@ export function deliveryFieldsFromInvoiceDetail(inv: {
   customer_name?: string;
   date?: string;
   total?: number;
+  balance?: number;
+  status?: string;
   salesperson_name?: string;
   line_items?: Array<{ name: string; sku?: string; quantity: number; rate: number; item_total: number }>;
   contact_persons?: Array<{ phone?: string; mobile?: string }>;
@@ -134,5 +150,7 @@ export function deliveryFieldsFromInvoiceDetail(inv: {
     customerPincode: inv.shipping_address?.zip || null,
     salesPerson: inv.salesperson_name || "",
     lineItems,
+    zohoPaymentStatus: typeof inv.status === "string" && inv.status.trim() ? inv.status.trim() : null,
+    zohoBalance: finiteOrNull(inv.balance),
   };
 }

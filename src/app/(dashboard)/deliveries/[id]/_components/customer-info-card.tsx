@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 import { isValidMobile } from "@/lib/phone";
-import { DeliveryData, WALKOUT_STATUSES } from "./types";
+import { DeliveryData, WALKOUT_STATUSES, isOutstationDelivery } from "./types";
 
 const log = createLogger("deliveries:customer");
 
@@ -36,7 +36,7 @@ function sameName(a: string | null | undefined, b: string | null | undefined) {
 }
 
 export function CustomerInfoCard({ data, onSaved }: CustomerInfoCardProps) {
-  const isOuts = data.isOutstation;
+  const isOuts = isOutstationDelivery(data);
   const [phone, setPhone] = useState(data.customerPhone ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");

@@ -1,17 +1,27 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, Globe, RotateCcw, Warehouse } from "lucide-react";
+import { ArrowLeft, Globe, MapPin, RotateCcw, Warehouse } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
-import { DeliveryData, formatINR, BANGALORE_STEPS, OUTSTATION_STEPS, COURIER_STEPS } from "./types";
+import { zoneLabel } from "@/lib/deliveries/zone";
+import {
+  DeliveryData,
+  formatINR,
+  isOutstationDelivery,
+  BANGALORE_STEPS,
+  OUTSTATION_STEPS,
+  COURIER_STEPS,
+} from "./types";
 
 interface DetailHeaderProps {
   data: DeliveryData;
+  /** The list this detail was opened from: /deliveries, /deliveries/blr or /deliveries/outstation (A29). */
+  backHref: string;
 }
 
-export function DetailHeader({ data }: DetailHeaderProps) {
-  const isOuts = data.isOutstation;
+export function DetailHeader({ data, backHref }: DetailHeaderProps) {
+  const isOuts = isOutstationDelivery(data);
   const isCourierFlow = isOuts && ["VERIFIED", "PACKED", "SHIPPED", "IN_TRANSIT"].includes(data.status);
   const activeSteps = isCourierFlow ? COURIER_STEPS : isOuts ? OUTSTATION_STEPS : BANGALORE_STEPS;
   const stepIdx = activeSteps.indexOf(data.status);
@@ -20,7 +30,7 @@ export function DetailHeader({ data }: DetailHeaderProps) {
     <>
       {/* Header row */}
       <div className="flex items-center gap-3 mb-3">
-        <Link href="/deliveries" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
+        <Link href={backHref} className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
         <div className="flex-1 min-w-0">
@@ -44,9 +54,16 @@ export function DetailHeader({ data }: DetailHeaderProps) {
               <RotateCcw className="h-3 w-3 mr-1" />Reverse
             </Badge>
           )}
-          {isOuts && (
+          {/* Bangalore / Outstation / Not set (plan 1609 A22) */}
+          {data.deliveryZone === "OUTSTATION" ? (
             <Badge variant="warning">
-              <Globe className="h-3 w-3 mr-1" />Outstation
+              <Globe className="h-3 w-3 mr-1" />
+              {zoneLabel(data.deliveryZone)}
+            </Badge>
+          ) : (
+            <Badge variant={data.deliveryZone === "BANGALORE" ? "info" : "default"}>
+              <MapPin className="h-3 w-3 mr-1" />
+              {zoneLabel(data.deliveryZone)}
             </Badge>
           )}
           <Badge className={`text-xs ${getStatusColor(data.status)}`}>

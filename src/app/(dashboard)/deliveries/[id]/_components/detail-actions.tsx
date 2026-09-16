@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, Truck, Package } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { DeliveryData, StockShortLine } from "./types";
+import { DeliveryData, StockShortLine, isOutstationDelivery } from "./types";
 import { ScheduleForm } from "./schedule-form";
 import { DispatchForm } from "./dispatch-form";
 import { HandoverChecklist } from "./handover-checklist";
@@ -49,7 +49,7 @@ export function DetailActions({
   const [showHandover, setShowHandover] = useState<"DELIVERED" | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
-  const isOuts = data.isOutstation;
+  const isOuts = isOutstationDelivery(data);
 
   const handleStatusUpdate = async (status: string, extra?: Record<string, unknown>) => {
     setActionLoading(true);
@@ -206,7 +206,7 @@ export function DetailActions({
         <div className="space-y-2">
           <button
             onClick={() => {
-              if (data.isOutstation) {
+              if (isOuts) {
                 const trackingNo = prompt("Enter courier tracking number:");
                 if (!trackingNo?.trim()) return;
                 handleStatusUpdate("SHIPPED", { courierTrackingNo: trackingNo.trim() });

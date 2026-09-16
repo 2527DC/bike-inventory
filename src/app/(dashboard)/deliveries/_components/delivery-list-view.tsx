@@ -1,15 +1,23 @@
 "use client";
 import { useDebounce } from "@/hooks/use-debounce";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Loader2, Truck, Phone, MapPin, Package, Search } from "lucide-react";
+import { ArrowLeft, Loader2, Truck, Phone, MapPin, Package, Search, AlertTriangle } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { getAging, AGING_COLORS, formatINR } from "@/lib/utils";
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+import type { DeliveryZoneValue } from "@/lib/deliveries/zone";
 
+const log = createLogger("deliveries:list-view");
+
+// Shared by /deliveries/blr, /deliveries/outstation and /deliveries/walkout. Callers pass
+// `fetchParams`, `clientFilter` and `detailHref` as stable references (module scope), because
+// they are dependencies of the fetch callback — a fresh object per render would refetch forever.
 interface DeliveryListViewProps {
   title: string;
   backHref: string;
@@ -17,6 +25,8 @@ interface DeliveryListViewProps {
   fetchParams?: Record<string, string>;
   statusFilters: string[];
   clientFilter?: (d: DeliveryItem) => boolean;
+  /** Where a row opens. BLR and Outstation lists open their own detail route (plan 1609 R20, A29). */
+  detailHref: (id: string) => string;
   showCourier?: boolean;
   showAging?: boolean;
   emptyMessage?: string;
@@ -37,6 +47,8 @@ interface DeliveryItem {
   courierName?: string | null;
   trackingNo?: string | null;
   deliveredAt?: string | null;
+  /** Bangalore / Outstation / null = not chosen (plan 1609 A22). Not tagged on these lists (A23). */
+  deliveryZone: DeliveryZoneValue | null;
 }
 
 function formatFilterLabel(f: string): string {
@@ -51,38 +63,57 @@ export function DeliveryListView({
   fetchParams,
   statusFilters,
   clientFilter,
+  detailHref,
   showCourier = false,
   showAging = true,
   emptyMessage = "No deliveries",
 }: DeliveryListViewProps) {
   const router = useRouter();
-  const [deliveries, setDeliveries] = useState<DeliveryItem[]>([]);
-  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
   const [statusFilter, setStatusFilter] = useState("ALL");
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({ limit: "100", ...fetchParams });
-      if (statusFilter !== "ALL") params.set("status", statusFilter);
-      if (debouncedSearch) params.set("search", debouncedSearch);
-      const res = await fetch(`${fetchUrl}?${params}`).then((r) => r.json());
-      if (res.success) {
-        const data: DeliveryItem[] = res.data;
-        setDeliveries(clientFilter ? data.filter(clientFilter) : data);
+  const query = useMemo(() => {
+    const params = new URLSearchParams({ limit: "100", ...fetchParams });
+    if (statusFilter !== "ALL") params.set("status", statusFilter);
+    if (debouncedSearch) params.set("search", debouncedSearch);
+    return `${fetchUrl}?${params}`;
+  }, [fetchUrl, fetchParams, statusFilter, debouncedSearch]);
+
+  // The last answer, stamped with the query it answers. "Loading" is derived — the answer on
+  // hand is not for the current query — so the effect never sets state synchronously
+  // (react-hooks/set-state-in-effect), and a stale spinner cannot outlive its request.
+  const [result, setResult] = useState<{ query: string; rows: DeliveryItem[]; error: string | null } | null>(null);
+  // Search and chip changes can overlap; only the newest request may write the list.
+  const requestSeq = useRef(0);
+
+  const fetchData = useCallback(() => {
+    const seq = ++requestSeq.current;
+    return apiTry<DeliveryItem[]>(query).then((res) => {
+      if (seq !== requestSeq.current) return;
+      if (res.error || !res.data) {
+        log.error("delivery list load failed", { query, status: res.status, isAuth: res.isAuth, error: res.error });
+        setResult({ query, rows: [], error: res.error ?? "Could not load deliveries." });
+        return;
       }
-    } catch {
-      /* ignore */
-    }
-    setLoading(false);
-  }, [fetchUrl, fetchParams, statusFilter, debouncedSearch, clientFilter]);
+      const rows = clientFilter ? res.data.filter(clientFilter) : res.data;
+      log.debug("delivery list loaded", { query, received: res.data.length, shown: rows.length });
+      setResult({ query, rows, error: null });
+    });
+  }, [query, clientFilter]);
 
   useEffect(() => {
-    fetchData();
+    void fetchData();
   }, [fetchData]);
 
+  const retry = () => {
+    setResult(null);
+    void fetchData();
+  };
+
+  const loading = result?.query !== query;
+  const deliveries = loading ? [] : result.rows;
+  const error = loading ? null : result.error;
   const hasFilters = statusFilters.length > 0;
 
   return (
@@ -134,6 +165,17 @@ export function DeliveryListView({
         <div className="flex justify-center py-12">
           <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
         </div>
+      ) : error ? (
+        <div className="text-center py-12 px-4">
+          <AlertTriangle className="h-8 w-8 text-red-400 mx-auto mb-2" />
+          <p className="text-sm text-red-600 mb-3 break-words">{error}</p>
+          <button
+            onClick={retry}
+            className="min-h-[44px] px-4 rounded-lg bg-slate-900 text-white text-sm font-medium"
+          >
+            Try again
+          </button>
+        </div>
       ) : deliveries.length === 0 ? (
         <div className="text-center py-12">
           <Truck className="h-8 w-8 text-slate-300 mx-auto mb-2" />
@@ -150,7 +192,7 @@ export function DeliveryListView({
               <Card
                 key={d.id}
                 className="cursor-pointer hover:shadow-md transition-shadow"
-                onClick={() => router.push(`/deliveries/${d.id}`)}
+                onClick={() => router.push(detailHref(d.id))}
               >
                 <CardContent className="p-3.5">
                   {/* Top row: name + badges */}
@@ -233,3 +275,5 @@ export function DeliveryListView({
     </div>
   );
 }
+
+export type { DeliveryItem as DeliveryListItem };

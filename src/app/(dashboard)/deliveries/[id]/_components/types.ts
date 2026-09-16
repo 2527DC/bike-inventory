@@ -1,3 +1,5 @@
+import type { DeliveryZoneValue } from "@/lib/deliveries/zone";
+
 export interface LineItem {
   name: string;
   sku: string;
@@ -63,6 +65,31 @@ export interface DeliveryData {
   customerId: string | null;
   /** The linked `Customer` row; its name can differ from `customerName` when it already existed. */
   customer: { id: string; name: string; phone: string } | null;
+  /** Bangalore / Outstation; null = not chosen yet (plan 1609 A22, T6). The truth over `isOutstation`. */
+  deliveryZone: DeliveryZoneValue | null;
+  /**
+   * Paid and balance for the summary card (A31, A32): the receivables row first, else Zoho's
+   * snapshot from import, else null ("Payment: not available").
+   */
+  payment: DeliveryPaymentData | null;
+}
+
+export interface DeliveryPaymentData {
+  source: "receivables" | "zoho";
+  /** Zoho's word ("partially_paid") or the receivables enum ("PARTIALLY_PAID"). */
+  status: string | null;
+  total: number;
+  paid: number;
+  balance: number;
+  hasPending: boolean;
+}
+
+/**
+ * Outstation for every screen branch: the zone when it is set, else the legacy boolean the
+ * server still writes beside it for one release (T6).
+ */
+export function isOutstationDelivery(d: Pick<DeliveryData, "deliveryZone" | "isOutstation">) {
+  return d.deliveryZone === "OUTSTATION" || d.isOutstation;
 }
 
 /** One line the floor warehouse cannot hold or hand over (plan 1609 §1.3). */

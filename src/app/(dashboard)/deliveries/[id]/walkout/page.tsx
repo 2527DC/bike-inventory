@@ -17,7 +17,7 @@ import { WALKOUT_STATUSES, formatINR } from "../_components/types";
 import { useDelivery } from "../_components/use-delivery";
 import { CustomerInfoCard } from "../_components/customer-info-card";
 import { LineItemsCard } from "../_components/line-items-card";
-import { PaymentWarning } from "../_components/payment-warning";
+import { SummaryCard } from "../_components/summary-card";
 import { HandoverChecklist } from "../_components/handover-checklist";
 
 const log = createLogger("deliveries:walkout");
@@ -118,7 +118,7 @@ export default function DeliveryWalkoutPage({ params }: { params: Promise<{ id: 
       ) : (
         <>
           <LineItemsCard lineItems={data.lineItems} />
-          <PaymentWarning data={data} />
+          <SummaryCard data={data} paymentOnly />
           <CustomerInfoCard data={data} onSaved={() => void refetch()} />
 
           {needsCustomer ? (

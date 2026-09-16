@@ -26,6 +26,8 @@ import {
   toISTDateString,
 } from "@/lib/deliveries/slots";
 import { toPlus91, samePhone } from "@/lib/phone";
+import { zoneColumns, zoneFromOutstation } from "@/lib/deliveries/zone";
+import { deliveryPayment } from "@/lib/deliveries/payment";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("deliveries:api");
@@ -51,6 +53,30 @@ const DELIVERY_INCLUDE = {
   customer: { select: { id: true, name: true, phone: true } },
 } as const;
 
+/** `Delivery.zohoBalance` as a JSON number — a Prisma Decimal would otherwise serialise as a string. */
+function decimalToNumber(v: { toString(): string } | null): number | null {
+  if (v === null) return null;
+  const n = Number(v.toString());
+  return Number.isFinite(n) ? n : null;
+}
+
+/** The receivables row for an invoice, or null. A failed lookup is logged and treated as absent. */
+async function receivableFor(deliveryId: string, invoiceNo: string) {
+  try {
+    return await prisma.customerInvoice.findFirst({
+      where: { invoiceNo },
+      select: { amount: true, paidAmount: true, status: true },
+    });
+  } catch (err) {
+    log.warn("payment lookup failed", {
+      deliveryId,
+      invoiceNo,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
 /** A refusal thrown inside the transaction that carries its own HTTP status (404, 409). */
 class DeliveryActionError extends Error {
   status: number;
@@ -75,32 +101,32 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
     if (!delivery) return errorResponse("Delivery not found", 404);
 
-    // Check payment status from receivables
+    // Check payment status from receivables. `paymentStatus` is the older shape
+    // (handover-checklist.tsx still reads it); `payment` is the summary card's (A31): the
+    // receivables row first, else Zoho's snapshot from import, else null ("not available").
+    // One lookup feeds both. Payment is a nice-to-have on the detail screen: a failed lookup is
+    // logged inside receivableFor, the delivery still loads, and `payment` falls back to the
+    // Zoho snapshot rather than losing both.
+    const invoice = await receivableFor(id, delivery.invoiceNo);
     let paymentStatus: { hasPending: boolean; balance: number; paidAmount: number; totalAmount: number } | null = null;
-    try {
-      const invoice = await prisma.customerInvoice.findFirst({
-        where: { invoiceNo: delivery.invoiceNo },
-        select: { amount: true, paidAmount: true, status: true },
-      });
-      if (invoice) {
-        const balance = invoice.amount - invoice.paidAmount;
-        paymentStatus = {
-          hasPending: balance > 0,
-          balance,
-          paidAmount: invoice.paidAmount,
-          totalAmount: invoice.amount,
-        };
-      }
-    } catch (err) {
-      // Payment status is a nice-to-have on the detail screen; the delivery still loads.
-      log.warn("payment status lookup failed", {
-        deliveryId: id,
-        invoiceNo: delivery.invoiceNo,
-        error: err instanceof Error ? err.message : String(err),
-      });
+    if (invoice) {
+      const balance = invoice.amount - invoice.paidAmount;
+      paymentStatus = {
+        hasPending: balance > 0,
+        balance,
+        paidAmount: invoice.paidAmount,
+        totalAmount: invoice.amount,
+      };
     }
+    const payment = deliveryPayment(delivery, invoice);
 
-    return successResponse({ ...delivery, isDummy: isDummy(delivery), paymentStatus });
+    return successResponse({
+      ...delivery,
+      zohoBalance: decimalToNumber(delivery.zohoBalance),
+      isDummy: isDummy(delivery),
+      paymentStatus,
+      payment,
+    });
   } catch (error) {
     if (error instanceof AuthError) {
       log.warn("delivery fetch refused", { deliveryId, status: error.status });
@@ -197,7 +223,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         }
 
         // SHIPPED requires tracking number for outstation deliveries
-        if (data.status === "SHIPPED" && existing.isOutstation && !existing.courierTrackingNo && !data.courierTrackingNo) {
+        const outstation = existing.deliveryZone === "OUTSTATION" || existing.isOutstation;
+        if (data.status === "SHIPPED" && outstation && !existing.courierTrackingNo && !data.courierTrackingNo) {
           throw new Error("Tracking number is required for outstation shipments before marking as Shipped");
         }
       }
@@ -236,8 +263,15 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         updateData.scheduledDate = istDayBounds(day).start;
       }
 
-      // Outstation & courier fields
-      if (data.isOutstation !== undefined) updateData.isOutstation = data.isOutstation;
+      // Zone (A22, T6): `deliveryZone` and `isOutstation` are always written together. The
+      // three-state `deliveryZone` wins; a body carrying only the legacy boolean still sets a zone.
+      if (data.deliveryZone !== undefined) {
+        Object.assign(updateData, zoneColumns(data.deliveryZone));
+      } else if (data.isOutstation !== undefined) {
+        Object.assign(updateData, zoneColumns(zoneFromOutstation(data.isOutstation)));
+      }
+
+      // Courier fields
       if (data.courierName !== undefined) updateData.courierName = data.courierName;
       if (data.courierTrackingNo !== undefined) updateData.courierTrackingNo = data.courierTrackingNo;
       if (data.courierTrackingLink !== undefined) updateData.courierTrackingLink = data.courierTrackingLink;
@@ -372,11 +406,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       deliveryId: result.id,
       invoiceNo: result.invoiceNo,
       status: data.status ?? null,
+      zone: result.deliveryZone,
       stockShortLines: stockShort.length,
       outwardLines: crossings.length,
     });
 
-    return successResponse({ ...result, isDummy: isDummy(result), stockShort });
+    const payment = deliveryPayment(result, await receivableFor(result.id, result.invoiceNo));
+
+    return successResponse({
+      ...result,
+      zohoBalance: decimalToNumber(result.zohoBalance),
+      isDummy: isDummy(result),
+      stockShort,
+      payment,
+    });
   } catch (error) {
     if (error instanceof AuthError) {
       log.warn("delivery update refused", { deliveryId, status: error.status });

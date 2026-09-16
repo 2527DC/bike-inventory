@@ -6,7 +6,8 @@ import { Input } from "@/components/ui/input";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 import { whatsappDigits } from "@/lib/phone";
-import { DeliveryData, StockShortLine } from "./types";
+import { DeliveryData, StockShortLine, isOutstationDelivery } from "./types";
+import { ZonePicker, ReadOnlyField } from "./schedule-form-parts";
 
 const log = createLogger("deliveries:schedule");
 
@@ -45,7 +46,9 @@ function openWhatsApp(phone: string | null, message: string): boolean {
 }
 
 export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCancel, onConfirmation }: ScheduleFormProps) {
-  const [isOutstation, setIsOutstation] = useState(data.isOutstation || false);
+  // A30: a row with a zone schedules only on that side; the toggle exists only when it is not chosen.
+  const fixedZone = data.deliveryZone;
+  const [isOutstation, setIsOutstation] = useState(fixedZone ? fixedZone === "OUTSTATION" : isOutstationDelivery(data));
   const [editPincode, setEditPincode] = useState(data.customerPincode || "");
   const [editAddress, setEditAddress] = useState(data.customerAddress || "");
   const [editAltPhone, setEditAltPhone] = useState(data.alternatePhone || "");
@@ -72,6 +75,8 @@ export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCance
       const payload: Record<string, unknown> = {
         status: "SCHEDULED",
         deliveryNotes: delNotes,
+        // deliveryZone is the truth (T6); isOutstation is still sent for the older server logic.
+        deliveryZone: isOutstation ? "OUTSTATION" : "BANGALORE",
         isOutstation,
         alternatePhone: editAltPhone.trim() || undefined,
         freeAccessories: freeAccessories.trim() || undefined,
@@ -148,51 +153,13 @@ export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCance
           </div>
         )}
 
-        {/* Toggle: Inside / Outside Bangalore */}
-        <div className="flex rounded-lg overflow-hidden border border-slate-200">
-          <button
-            type="button"
-            onClick={() => setIsOutstation(false)}
-            className={`flex-1 py-2 text-xs font-medium transition-colors ${
-              !isOutstation ? "bg-blue-600 text-white" : "bg-slate-50 text-slate-600"
-            }`}
-          >
-            Inside Bangalore
-          </button>
-          <button
-            type="button"
-            onClick={() => setIsOutstation(true)}
-            className={`flex-1 py-2 text-xs font-medium transition-colors ${
-              isOutstation ? "bg-amber-600 text-white" : "bg-slate-50 text-slate-600"
-            }`}
-          >
-            Outside Bangalore
-          </button>
-        </div>
+        {/* The row's zone decides the side; both only when not chosen yet (A30) */}
+        <ZonePicker fixedZone={fixedZone} isOutstation={isOutstation} onChange={setIsOutstation} />
 
-        {/* Auto-populated: Invoice Number */}
-        <div>
-          <label className="text-xs text-slate-500">Invoice Number</label>
-          <div className="text-xs font-medium text-slate-900 bg-slate-50 rounded-lg px-3 py-2 border border-slate-100">
-            {data.invoiceNo}
-          </div>
-        </div>
-
-        {/* Auto-populated: Product Name */}
-        <div>
-          <label className="text-xs text-slate-500">Product Name</label>
-          <div className="text-xs font-medium text-slate-900 bg-slate-50 rounded-lg px-3 py-2 border border-slate-100">
-            {data.lineItems?.map((i) => i.name).join(", ") || "\u2014"}
-          </div>
-        </div>
-
-        {/* Auto-populated: Sales Person */}
-        <div>
-          <label className="text-xs text-slate-500">Sales Person</label>
-          <div className="text-xs font-medium text-slate-900 bg-slate-50 rounded-lg px-3 py-2 border border-slate-100">
-            {data.salesPerson || "\u2014"}
-          </div>
-        </div>
+        {/* Auto-populated */}
+        <ReadOnlyField label="Invoice Number" value={data.invoiceNo} />
+        <ReadOnlyField label="Product Name" value={data.lineItems?.map((i) => i.name).join(", ") || "\u2014"} />
+        <ReadOnlyField label="Sales Person" value={data.salesPerson || "\u2014"} />
 
         {/* Alternate Phone */}
         <div>

@@ -9,7 +9,7 @@ import { getAging, AGING_BADGE } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
 import { DesktopTable } from "@/components/desktop-table";
-import { isDummyDelivery, type DeliveryItem } from "./delivery-card";
+import { isDummyDelivery, ZoneBadge, type DeliveryItem } from "./delivery-card";
 
 interface DeliveryTableProps {
   deliveries: DeliveryItem[];
@@ -36,8 +36,9 @@ export function DeliveryTable({ deliveries, isAdmin, deleting, prebooking, onDel
           <div>
             <div className="flex items-center gap-1.5">
               <span className="font-medium text-slate-900">{d.invoiceNo}</span>
-              {isDummyDelivery(d) && <Badge variant="danger" className="text-[9px]" title="No floor warehouse matched this invoice number">Dummy</Badge>}
-              {d.isOutstation && <Badge variant="warning" className="text-[9px]">Outstation</Badge>}
+              {isDummyDelivery(d)
+                ? <Badge variant="danger" className="text-[9px]" title="No floor warehouse matched this invoice number">Dummy</Badge>
+                : <ZoneBadge zone={d.deliveryZone} className="text-[9px]" />}
               {d.reversePickup && <Badge variant="info" className="text-[9px]">Reverse</Badge>}
             </div>
             {!isDummyDelivery(d) && d.warehouse && <p className="text-[11px] text-slate-400">{d.warehouse.name}</p>}

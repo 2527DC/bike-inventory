@@ -6,7 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 import { whatsappDigits } from "@/lib/phone";
-import { DeliveryData } from "./types";
+import { DeliveryData, isOutstationDelivery } from "./types";
 
 const log = createLogger("deliveries:whatsapp");
 
@@ -108,7 +108,7 @@ export function WhatsAppActions({ data, deliveryId, templates, onSent }: WhatsAp
     let msg: string;
     if (templates.delivered) {
       msg = renderTemplate(templates.delivered, { customerName: data.customerName, reviewLink });
-    } else if (data.isOutstation) {
+    } else if (isOutstationDelivery(data)) {
       msg = `Hello ${data.customerName},\n\nYour order from Bharath Cycle Hub has been delivered!\n\nWe hope you enjoy your new cycle. If you have any issues with assembly or setup, please don't hesitate to reach out.\n\nWe'd love your feedback:\n${reviewLink}\n\nThank you for choosing Bharath Cycle Hub!\n- Team BCH`;
     } else {
       msg = `Hello ${data.customerName},\n\nThank you for your purchase from Bharath Cycle Hub!\n\nWe'd love to hear about your experience. Please leave us a review:\n${reviewLink}\n\nThank you!\n- Bharath Cycle Hub`;
