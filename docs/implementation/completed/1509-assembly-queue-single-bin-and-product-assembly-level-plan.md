@@ -1,6 +1,6 @@
 # /assembly gets tabs and a searchable "awaiting assignment" list; inbound puts a line in ONE bin with no loose-parts split; the assembly condition level lives on the product
 
-Status: in-progress — 15 Sep 2026, Q1–Q5 answered (see §1 and Clarifications); building Parts A–E with parallel agents.
+Status: completed — 16 Sep 2026, `/assembly` has tabs and a searchable Awaiting Assignment list, every received inbound line lands in ONE bin with no loose-parts split, and the condition level lives on the product as `Product.assemblyLevel` (saved at the first assign, editable from `/stock` and the details page). Parts A–E built by parallel agents, `npx tsc --noEmit` exit 0. Committed and pushed as `3d1cf9e`, `ef9810e`, `164f95a`, `f20e080`, `fe50ca2`. Still owed by the owner: `npm run build`, the browser walk, and `migrate deploy` of the assembly migrations on the test/production database.
 Branch: `feat/remove-static-team-health` (owner: "i need to implemnt in this branch level only").
 
 Every `file:line` below was read from disk on 15 Sep 2026 by three parallel read-only agents

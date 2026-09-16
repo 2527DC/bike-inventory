@@ -1,4 +1,12 @@
 
+Questions 
+# delevery and dispatch
+- is the batching done for only the bangalore scheduled items or what  and the batching is done for only those which are scheduled 
+- what is the  packed -> does this operation or the status update for the outard happens  before the schedule or diferore the dispatch when does it happens 
+-> Shipped -> when does this status of the   delevery happen i think  its done after  the dispatch is clicked 
+- what is Intransit which
+- who performs the deleverd  action do u want the customer to also confirm the or perfoem delverd 
+
  # 16-9-26
 -> need to work on the delevery diapacth page 
 

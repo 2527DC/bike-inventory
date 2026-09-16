@@ -1,6 +1,6 @@
 # The sheet's MRP becomes the PO line's locked unit price; the PO PDF drops SKU and HSN
 
-Status: in-progress — built 15 Sep 2026 (§6), committed and pushed on the owner's instruction; the owner owes `npm run build` and the browser walk (§4).
+Status: completed — 16 Sep 2026, shipped as `0c2aa14` and pushed, then **R1–R5 were deliberately reversed the same day** by `1509-po-product-and-quantity-only-plan.md` on the owner's instruction, so the locked MRP unit price and the GST-0 default are no longer in the code. Only **R6 survives**: the PO PDF drops the SKU and HSN columns — its head row is `["#", "Product", "Qty"]` (`src/lib/purchase-orders/pdf.ts:162`). Nothing outstanding; filed here as the record of what shipped and why it was undone.
 Branch: **`feat/remove-static-team-health`**, the existing branch (owner, Q0).
 
 Every `file:line` below was read from disk on 15 Sep 2026. Check rather than trust.
