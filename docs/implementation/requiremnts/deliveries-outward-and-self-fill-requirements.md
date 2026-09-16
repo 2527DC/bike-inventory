@@ -61,6 +61,37 @@ Lines marked *Today:* describe what the app does now, so the reader can see what
 > doubts and clarification qustion in the file and i need u to look at the
 > & 'f:\bharath  Cycle\BCH-Management\outwordapproevresponse.js' the response when i clicked import
 
+### 1.1a The owner's change, verbatim (16 Sep 2026, later the same day)
+
+> in the plan i need to change this like  i need to keep the scheduled time and as teh customer
+> confirsms the and submits teh form by choosing that is scheduled time and must be named as
+> schedules no need of progress option and  /deliveries/blr & 'f:\bharath  Cycle\BCH-Management\docs\asset\image.png'
+> when i clict teh listin  i see this i need to be imporved i need to show the detaisl of paid
+> and balace things  and i dont need this Estimated Delivery * at all remove it where the
+> schedule time if taken by the customer not the  staff the staff must see the  scheduled time
+> in the details
+
+**This supersedes R16 and R17 below** — there is no "in progress" status. See R25–R28 and §4.0.
+
+### 1.1b The owner's second change, verbatim (16 Sep 2026) — which stock an outward reduces
+
+> what we will do is as the store dont hold the stoc where its warehouse where if the warehouse
+> as a tag of  floor then  which holds the stock i think we need to give the prifix for the
+> warehouse  which has the floore tag to add the invoice prefix not to the store where the
+> warehouse with this tag acts as storeand while importing and   the invoice it should use the
+> warehouse and reduce from the related stock and i think addind the prefix must be manditory
+> in the aplication level let keep  it null in databse level and in the deleveries when i make
+> it walk out i think i dont need the have  it has  schedule deletry and other things ijust makr
+> it as the   walkout and  stock must be resuced  and  the cutomer data must be added first and
+> then  mared as the walkout  and lets have the thing of setting the primary store   in the
+> store for the warehouse with the floore tag as manditory which one as primary for the floor
+> tag if it has more than one floor tag warehose ware for  us its store holding stock  this is
+> my requiremnt   update the related requiremnt and ask any question if u need clarity
+
+Asked after this explanation of today's code: the store is resolved from `Store.invoicePrefix`
+at import (`zoho-invoice.ts:39-56`), falls back to the primary store, and `deductFromStore`
+drains that store's FLOOR then GODOWN (`stock-location.ts:90-144`). **This replaces Q26.**
+
 ### 1.2 Restated
 
 **Explain first**
@@ -125,6 +156,32 @@ Lines marked *Today:* describe what the app does now, so the reader can see what
   exists**.
 - **R24** — When looking at the details of an **outward invoice**, the **items in that outward**
   must be visible.
+
+**The change (§1.1a) — supersedes R16 and R17**
+
+- **R25** — **No "in progress" status.** When the customer submits the form with a chosen date,
+  the delivery becomes **`SCHEDULED`** and that date **is** the scheduled time.
+- **R26** — The scheduled time is **taken by the customer, not the staff**. Staff **see** it in
+  the details.
+- **R27** — **Remove "Estimated Delivery \*" completely** — not a read-only fallback, gone.
+- **R28** — The detail screen opened from `/deliveries/blr` (screenshot
+  `docs/asset/image.png`) must be improved: it must show **paid and balance**.
+
+**Which stock an outward reduces (§1.1b) — replaces Q26**
+
+- **R29** — A store does not hold stock; its **warehouses** do. A warehouse tagged **FLOOR** is,
+  for the business, "the store holding stock".
+- **R30** — The **invoice prefix moves from the Store to the FLOOR warehouse.** It is not set
+  on a store any more.
+- **R31** — At **import**, the invoice is matched to a FLOOR warehouse by its prefix, and the
+  outward **reduces that warehouse's stock**.
+- **R32** — The prefix is **mandatory in the application** (a FLOOR warehouse cannot be saved
+  without one) but **nullable in the database**.
+- **R33** — Each store must have **one primary FLOOR warehouse**, and choosing it is
+  **mandatory** when the store has **more than one** FLOOR warehouse.
+- **R34** — **Walk-out is a straight action**: no Schedule Delivery or other steps in the way —
+  mark it Walk-out and the **stock is reduced**.
+- **R35** — Before Walk-out, the **customer data must be saved first** (consistent with A6).
 
 ---
 
@@ -416,6 +473,109 @@ the mobile delivery cards, and the *Actions* tab. **Which one R24 means is Q19.*
 
 ## 4. The questions
 
+### 4.0 Answers from the owner (16 Sep 2026, asked one at a time)
+
+The owner's answers **override** the recommendations written in §4.1 below. Where an answer
+number (A-n) settles a §4.1 question, that question is marked in the table.
+
+**Corrections to this document found in the same review** (code and captures re-read 16 Sep):
+
+| Where | Was written | Actually |
+|---|---|---|
+| §3.3 | "4 of the 100 rows" carry `+91-` / `+91 ` | **58 of 100** are `+91-XXXXXXXXXX`, 41 are bare 10 digits, 1 is null. **No** `+91 ` (space) and **no** bare `91…` 12-digit form exists in the capture — those table rows were illustrative. 2 rows are **11 digits** after `+91-` (`+91-89512050058`, `+91-96322139817`). |
+| §3.6 | the mobile card shows no Bangalore/Outstation tag | `delivery-card.tsx:105-109` **does** show an `Outstation` badge; only a "Bangalore" tag is missing. The BLR/Outstation list cards (`delivery-list-view.tsx`) show none. |
+| §3.11, Q19(c) | list cards would need an item summary | Already there: `delivery-card.tsx:82-92` (all items), `delivery-list-view.tsx:184-190` (first + N more). |
+| Q7 | reuse `POST /api/customers` guarded by `deliveries.edit` | That route is guarded by `customers.create` and is called by the receivables import (`receivables/page.tsx:208-212`). Changing its guard changes receivables. Needs a shared server helper instead. The route comment claiming the delivery import calls it is wrong — neither delivery import creates customers. |
+| Q7 | — | `customerSchema` (`validations.ts:679-689`) normalises phone to the **last 10 digits** — which would turn `+91-89512050058` into a wrong number. |
+| intro, R16, §3.9 | "Q1…Q22", "see Q9", "See Q22" | questions run Q1–Q26; R16's is Q14; §3.9's is Q26 |
+| §6 files table | captures are "in this folder" | `outwordfetch.js`, `outwordapproevresponse.js`, `requirement.md` are still in `docs/deliveries/` |
+| §2.2 | "top navbar" ambiguous (Q20) | the screenshot `docs/asset/image.png` shows it is the **Actions / Details tab switcher** on `/deliveries/<id>` |
+
+**Answers**
+
+| # | Question | Owner's answer | Settles |
+|---|---|---|---|
+| A1 | WALKIN / `9999999999` | **No special case.** Look up by phone; if present, don't save; if absent, save. (First walk-in creates one "WALKIN" row; later ones skip.) | Q1, Q4 |
+| A2 | Link Delivery → Customer? | **Yes** — store `Delivery.customerId`. | Q2 |
+| A3 | Wrong-length phone (`+91-89512050058`) | **Save as-is, as a string.** No refusal, no truncation. | — |
+| A3b | Duplicate check comparison | **Exact text** comparison … | — |
+| A12b | … made exact by one format | **Every phone in this flow is written `+91-XXXXXXXXXX`** (prefix `+91-` if missing; `+91 ` → `+91-`) — delivery phone, alternate, Customer save, duplicate check, main≠alternate check. Wrong-length numbers keep their digits. | Q13 |
+| A13 | Existing `Customer` rows are bare 10 digits | **Also look up the bare 10-digit form** before inserting; if either exists, skip the insert and link to it. Old rows are not rewritten. | — |
+| A4 | Permission for Save Contact | **`deliveries.edit`** | Q6 |
+| A5 | Where "saved before link" is enforced | **Server + button** — the token route refuses without a linked customer. | Q8 |
+| A6 | Walk-out gate | **Walk-out still requires the customer saved first.** | — |
+| A7 | Link expiry | **24 hours** (was 48). **Once submitted, the form is locked** — not editable or re-submittable by the customer. | Q9 |
+| A8 | Customer's mistake after submit | **Staff edit it on the details screen.** No re-send, the link stays locked. | — |
+| A9 | WhatsApp number | **Main phone only**, cleaned to digits for the URL. | Q10 |
+| A10 | Can the customer change the main phone on the form? | **No — read-only.** Customer types only the alternate. | — |
+| A11 | Alternate mandatory where? | **Both** — Bangalore and outstation. | Q11 |
+| A12 | Main ≠ alternate | Enforced client **and** server, compared in the `+91-` format (A12b). | Q12, Q13 |
+| A14–A21 | In Progress status, requested-date column, approve permission, escape transitions, dashboard count | **Withdrawn by §1.1a.** No `IN_PROGRESS`. Customer submit → **`SCHEDULED`**, customer's date → `scheduledDate`. | Q14, Q15, Q16, Q17, Q18 void |
+| A17 | Link sent while `VERIFIED` | Submitting moves it on the same way as from `PENDING` (now: → `SCHEDULED`). | — |
+| A20 | Stock hold | Stock is reserved at `SCHEDULED`, as today. *(Now that the customer's submit makes it `SCHEDULED`, see open question N3.)* | — |
+| A22 | Bangalore vs outstation before anyone chooses | **Three states: Bangalore / Outstation / Not chosen.** `/deliveries/blr` shows only Bangalore, `/deliveries/outstation` only Outstation. Needs a schema change (`isOutstation` is a boolean today). | Q23 (part) |
+| A23 | Where the tag shows | **`/deliveries` only** (mobile cards + desktop table on that screen). | Q23 |
+| A24 | "Top navbar" | Screenshot: the **Actions / Details tabs**. | Q20 (part) |
+| A25 | Detail screen layout | **Remove the tabs. One scrolling screen**: summary card on top (amount, paid, balance, payment status, scheduled date "chosen by customer", Bangalore/Outstation), then customer, items, then actions. | Q25, R23, R28 |
+| — | "Estimated Delivery \*" | **Removed completely** (R27). | Q22 superseded |
+| A26 | Stock when the **customer's** submit makes it `SCHEDULED` | **Reserve if available; if short, still accept.** The delivery becomes `SCHEDULED` without the hold and the detail screen shows a red "Stock not reserved – short" warning. The public form never fails on stock. | — |
+| A27 | Outstation date | **No date picker for outstation customers.** | — |
+| A27b | Outstation status on submit | **`SCHEDULED`, no date.** Stock per A26. | — |
+| A28 | Staff scheduling without the link | **Staff can still Schedule Delivery — without a date.** Only the customer's form sets a date. | Q22 |
+| A29 | Separate route | **`/deliveries/blr/<id>` and `/deliveries/outstation/<id>`**, same one-screen layout (A25), back arrow returns to the list opened from. `/deliveries/<id>` stays for the main list. | Q20 |
+| A30 | Inside/Outside toggle in the schedule form | **The row decides.** Bangalore → only Bangalore fields; Outstation → only outstation fields, on every route. **Only a Not-chosen row shows both buttons.** | Q21, R21 |
+| A31 | Paid / balance source | **Save Zoho's `status` and `balance` on the delivery at import** (both import paths); paid = amount − balance. If a `CustomerInvoice` row exists for the invoice, show that instead. A snapshot — nothing refreshes it. | Q24 |
+| A32 | Deliveries imported before this | **No backfill.** Show "Payment: not available". | — |
+| A33 | Where items must show (R24) | **The one-screen detail is enough** (name, SKU, qty, amount). No items in the import review, no extra Zoho calls. | Q19 |
+| A34 | Existing rows vs "Not chosen" | Rows the customer filled (`selfFillCompletedAt` set) or that reached `SCHEDULED` or later **keep** their Bangalore/Outstation value; unfilled `PENDING`/`VERIFIED` rows become **Not chosen**. | — |
+| A35 | `storeId` null on all imports (Q26) | ~~Left open on purpose~~ — **superseded the same day by §1.1b (R29–R35) and A40–A46**: the prefix moves to the FLOOR warehouse. | Q26 → A40–A46 |
+| A36 | The "change delivery date" editor (`delivery-date-editor.tsx`, same presets) | **Replace the presets with the 10-per-day slot calendar** the customer uses. Staff can change the date. | — |
+| A37 | Stock when **staff** schedule and stock is short | **Same as A26** — accept, no hold, red warning. (Today it refuses.) | — |
+| A38 | Short stock arrives later | **"Reserve stock now" button** on the warning. Mark Delivered still checks stock, so a short delivery cannot be delivered until stock exists. | — |
+| A39 | WhatsApp confirmation when the customer scheduled | **Staff button on the detail:** "Scheduled by customer – confirmation not sent" + "Send confirmation on WhatsApp", which sets `whatsAppScheduledSent`. | — |
+
+**Status flow after the owner's change**
+
+```
+PENDING / VERIFIED ──customer submits form (Bangalore: with date; Outstation: no date)──► SCHEDULED
+PENDING / VERIFIED ──staff Schedule Delivery (no date)────────────────────────────────► SCHEDULED
+SCHEDULED ──► dispatch / pack / ship … ──► DELIVERED        (unchanged)
+```
+
+Every move to `SCHEDULED` tries to reserve stock and never fails on a shortage (A26, A37).
+
+**Which stock an outward reduces — answers to §1.1b (R29–R35)**
+
+| # | Question | Owner's answer |
+|---|---|---|
+| A40 | Floor warehouse short, same store's godown has it | **An outward never reduces a GODOWN.** Only the matched FLOOR warehouse is reduced. (Today `deductFromStore` cascades FLOOR → GODOWN — `stock-location.ts:113-129`; that cascade goes for outward.) |
+| A40b | Floor has too little at Walk-out / Delivered | **Refuse**: "Not enough stock on <floor warehouse> (has X, needs Y). Transfer from godown first." Nothing is saved. |
+| A41 | What the primary FLOOR warehouse is for | Initially "fallback when no prefix matches" — **withdrawn by A41b**. |
+| A41b | Invoice matching no prefix | **Imported with no warehouse, tagged "Dummy".** No fallback to any store or warehouse. |
+| A41c | What staff can do with a Dummy delivery | **No actions, for now.** Listed only — no Schedule, Walk-out, Delivered, link. |
+| A41d | Primary floor warehouse, now | **Mark it only.** A store with 2+ FLOOR warehouses must choose one primary on `/stores` (mandatory there), but **nothing uses it yet**. |
+| A42 | `INVOICE-003951` | **A duplicate** — ignore it (it will simply be Dummy). |
+| A42b | Which floor warehouse gets `INV/` and `BCC/` | **The owner sets the prefixes on `/stores` after the build.** Not recorded here. |
+| A43 | The 265 already-imported deliveries | **Match them once**: open deliveries get their FLOOR warehouse from the prefix; unmatched become Dummy; `DELIVERED` / `WALK_OUT` rows are left untouched (their stock already moved). |
+| A43b | Who starts that match (no cron allowed) | **A "Match warehouses" button on `/deliveries`** (`deliveries.edit`). Matches only open deliveries with no warehouse; re-runnable after prefix changes; never changes a delivery that already has one. |
+| A44 | Walk-out handover checklist | **Keep the checklist** (items, accessories, salesperson ticks). |
+| A45 | What the Walk-out screen shows | **A focused walk-out view only:** invoice, items, paid/balance, Save Customer (if not saved), the checklist, Confirm Walk-out. **No** self-fill link, Schedule, Flag, or Bangalore/Outstation. |
+| A46 | Where the Scheduled stock hold is counted | **On the matched FLOOR warehouse** (`StockLevel.reservedQuantity`, which already exists), not product-wide. The A26 "short" warning means that floor is short. |
+
+**Defaults taken without asking** (say if wrong):
+- `Store.invoicePrefix` stops being read and is hidden on `/stores`; the column is dropped in a
+  later release (CLAUDE.md rule 7).
+- Prefixes are unique across FLOOR warehouses; a GODOWN has no prefix field. Matching stays
+  "longest prefix wins", case-insensitive.
+- `Product.reservedStock` is kept as the cached sum of the warehouse holds, the same way
+  `currentStock` is the sum of `StockLevel.quantity`, so screens that read it keep working.
+- The batch dispatch route (`api/deliveries/batch/route.ts:80-118`) follows the same rule as the
+  single delivery route.
+
+**Still open:** nothing. Everything needed for a plan is answered.
+
+### 4.1 The original questions
+
 ⛔ = blocks a plan. The rest have a recommended default and can be answered while building.
 
 ### Save Contact and the Customer table
@@ -598,7 +758,7 @@ Nothing here is a new module. Proposed grants, all existing actions on the exist
 | `deliveries.view` | the lists, the detail, the stats — unchanged |
 | `deliveries.edit` | saving the customer (Q6), editing the phone, the address |
 | `deliveries.create` | generating the self-fill link — unchanged, plus the new "customer must be saved" precondition (Q8) |
-| `deliveries.approve` | **moving `IN_PROGRESS → SCHEDULED`** (Q17) |
+| ~~`deliveries.approve`~~ | ~~moving `IN_PROGRESS → SCHEDULED`~~ — withdrawn with the status (§1.1a); no new grant needed |
 | *(public, no permission)* | `/fill/<token>` and `/api/public/delivery/<token>` — **must stay public**; CLAUDE.md names this route as one that has already been broken once by adding a check |
 
 A new `deliveries.schedule` action is possible instead of reusing `approve`. It is a catalog
@@ -618,19 +778,30 @@ edit plus `npm run db:seed:rbac` after deploy — data, never code.
 **Migrations this work would need** (none written, none applied — CLAUDE.md: Claude may apply
 to local `bch` only, and the owner runs `migrate deploy` by hand):
 
-1. `DeliveryStatus` += `IN_PROGRESS` — additive (Q14).
-2. `Delivery.customerId` → `Customer` — nullable (Q2).
-3. `Delivery.customerRequestedDate` — nullable (Q15).
-4. `Delivery.paymentStatus` + `Delivery.balance` — nullable (Q24).
+~~1. `DeliveryStatus` += `IN_PROGRESS`~~ — withdrawn (§1.1a).
+2. `Delivery.customerId` → `Customer` — nullable (A2).
+~~3. `Delivery.customerRequestedDate`~~ — withdrawn (§1.1a: the customer's date is `scheduledDate`).
+4. `Delivery.paymentStatus` + `Delivery.balance` — nullable (A31).
+5. **Bangalore / Outstation / Not chosen** (A22, A34) — `isOutstation` is a boolean. The shape
+   (nullable boolean vs a new enum column) is a plan decision; either way it is additive first,
+   with a backfill per A34, and the boolean is dropped only in a later release (rule 7).
 
-All four are additive and safe under CLAUDE.md rule 7. **None should be written until Q1, Q2,
-Q8, Q14, Q15, Q19, Q20 and Q24 are answered.**
+A stock-reservation flag or "reserved short" marker may also be needed for A26/A37/A38 —
+decided in the plan against the existing `stockReservedAt`.
+
+6. `Warehouse.invoicePrefix` — nullable, unique (R30, R32).
+7. `Warehouse.isPrimary` (or an equivalent per-store marker) — nullable/default false (R33, A41d).
+8. `Delivery.warehouseId` → `Warehouse` — nullable; null + no prefix match = Dummy (R31, A41b).
+   Whether "Dummy" is derived from `warehouseId IS NULL` or stored as its own flag is a plan
+   decision.
 
 **Work record**
 
 | When | What |
 |---|---|
 | 16 Sep 2026 | Document written. Requirements listed, module mapped against the code at `file:line`, both captured responses parsed, 26 questions raised, 8 blocking. **No code changed. No plan written. Nothing built.** |
+| 16 Sep 2026 (later) | Re-verified against code and captures; errors corrected in §4.0. Owner answered A1–A25 one at a time, then changed the flow (§1.1a, R25–R28): **no In Progress status**, customer submit → `SCHEDULED`, Estimated Delivery removed, tabs removed. Then answered A26–A39 (stock on schedule, outstation, routes, toggle, payment, items, Not-chosen backfill, date editor, WhatsApp confirm). **Only Q26 left open, by choice. Ready for a plan.** Still no code, no plan. |
+| 16 Sep 2026 (evening) | Owner's second change §1.1b (R29–R35): invoice prefix on the FLOOR warehouse, outward reduces that floor only, Dummy for unmatched, primary floor warehouse, focused walk-out. Answered A40–A46. Q26 closed. **Nothing open.** No code, no plan. |
 
 **Files in this folder**
 
