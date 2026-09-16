@@ -26,6 +26,9 @@ export async function GET(
         category: true,
         brand: true,
         bin: true,
+        // The details page's Reorder card names the vendor (plan 1509-reorder-inside-purchase-
+        // orders, Q13). Id and name only — the vendor's contacts are not this screen's business.
+        reorderVendor: { select: { id: true, name: true } },
         serialItems: { orderBy: { createdAt: "desc" }, take: 20 },
         transactions: {
           orderBy: { createdAt: "desc" },

@@ -24,6 +24,11 @@ export interface ReorderSaved {
   reorderLevel: number;
   reorderQty: number;
   reorderVendorId: string | null;
+  /**
+   * PUT /api/products/[id]/reorder also returns the vendor's name. Optional so the callers that
+   * ignore it (/stock, the Reorder tab) are untouched; the details page shows it.
+   */
+  reorderVendor?: { id: string; name: string } | null;
 }
 
 interface Props {
