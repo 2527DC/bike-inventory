@@ -770,7 +770,10 @@ export const deliveryUpdateSchema = z.object({
   notes: z.string().optional(),
   flagReason: z.string().optional(),
   rejectionReason: z.string().optional(),
+  // Legacy: still accepted, written as the matching zone. `deliveryZone` wins when both are sent.
   isOutstation: z.boolean().optional(),
+  // Bangalore / Outstation; null = Not chosen (plan 1609-deliveries, A22, T6).
+  deliveryZone: z.enum(["BANGALORE", "OUTSTATION"]).nullable().optional(),
   courierName: z.string().optional(),
   courierTrackingNo: z.string().optional(),
   courierTrackingLink: z.string().optional(),

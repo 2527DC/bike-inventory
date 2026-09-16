@@ -641,6 +641,15 @@ export async function POST(req: NextRequest) {
               // +91-XXXXXXXXXX, as every phone in the deliveries flow is written (B3b).
               customerPhone: toPlus91(fields?.customerPhone ?? String(d.phone || "")),
               salesPerson: fields?.salesPerson || String(d.salesPerson || "") || null,
+              // Zoho's payment snapshot at import (A31). The detail is fresher; the preview's
+              // listing values stand in when the detail fetch did not happen or said nothing.
+              zohoPaymentStatus:
+                fields?.zohoPaymentStatus ?? (typeof d.status === "string" && d.status.trim() ? d.status.trim() : null),
+              zohoBalance:
+                fields?.zohoBalance ??
+                (d.balance !== null && d.balance !== undefined && d.balance !== "" && Number.isFinite(Number(d.balance))
+                  ? Number(d.balance)
+                  : null),
               warehouseId: match?.warehouseId ?? null,
               storeId: match?.storeId ?? null,
               status: "PENDING",

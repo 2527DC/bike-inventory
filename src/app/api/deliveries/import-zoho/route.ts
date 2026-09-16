@@ -102,6 +102,10 @@ export async function POST(req: NextRequest) {
             ...fields,
             // +91-XXXXXXXXXX, as every phone in the deliveries flow is written (B3b).
             customerPhone: toPlus91(fields.customerPhone),
+            // Zoho's payment snapshot at import (A31) — already in `fields`, named here so a
+            // later edit to the spread cannot drop it silently.
+            zohoPaymentStatus: fields.zohoPaymentStatus,
+            zohoBalance: fields.zohoBalance,
             invoiceNo,
             warehouseId: match?.warehouseId ?? null,
             storeId: match?.storeId ?? null,

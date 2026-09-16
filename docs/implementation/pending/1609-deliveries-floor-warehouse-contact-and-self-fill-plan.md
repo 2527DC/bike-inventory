@@ -1,8 +1,8 @@
 # Deliveries: the floor warehouse sells, the customer is saved, the customer schedules, and one detail screen shows what was paid
 
-Status: pending — written 16 Sep 2026. **Phase 1 built** on `feat/1609-deliveries-p1-floor-warehouse` and **Phase 2 built** on `feat/1609-deliveries-p2-contact-self-fill`, both 16 Sep 2026 (§6). Phase 3 not started.
+Status: pending — written 16 Sep 2026. **Phase 1 built** on `feat/1609-deliveries-p1-floor-warehouse` and **Phase 2 built** on `feat/1609-deliveries-p2-contact-self-fill` and **Phase 3 built** on `feat/1609-deliveries-p3-detail-zones-payment`, all 16 Sep 2026 (§6). All three phases built; `npm run build` and the browser walk (§4) outstanding.
 Branch: Phase 1 on `feat/1609-deliveries-p1-floor-warehouse` (off `376fa13`, Q0); Phase 2 on
-`feat/1609-deliveries-p2-contact-self-fill` (off Phase 1 `9974e9a`, owner). Claude asks before Phase 3 (B5).
+`feat/1609-deliveries-p2-contact-self-fill` (off Phase 1 `9974e9a`, owner); Phase 3 on `feat/1609-deliveries-p3-detail-zones-payment` (off Phase 2 `d3dd3d0`, owner).
 
 Source of every decision: `docs/implementation/requiremnts/deliveries-outward-and-self-fill-requirements.md`
 §4.0 — answers **A1–A46** and **B1–B5**, asked one at a time on 16 Sep 2026. Where that document's
@@ -767,3 +767,57 @@ public calendar, the public submit and the staff date editor).
 - Raw `fetch` remains in `delivery-details-card.tsx`, `free-accessories-editor.tsx`,
   `service-invoice-section.tsx` and the courier save in `courier-info-card.tsx` (it never checks
   the response).
+
+### Phase 3 — 16 Sep 2026, branch `feat/1609-deliveries-p3-detail-zones-payment` (off Phase 2 `d3dd3d0`)
+
+Owner: "yes continue phase 3 from this branch with multiple agents". Claude wrote the schema,
+migration and shared helpers; three agents built in parallel (API zone + payment; one-screen
+detail + routes; lists + tags).
+
+**Migration** `20260916183558_delivery_zone_and_payment` — enum `DeliveryZone`,
+`Delivery.deliveryZone`, `Delivery.zohoPaymentStatus`, `Delivery.zohoBalance Decimal(12,2)`, and
+the A34 backfill (filled or scheduled-and-later rows keep their side; unfilled PENDING / VERIFIED /
+PREBOOKED / FLAGGED become Not chosen). Applied to local `bch_local` only (all 232 local rows are
+unfilled PENDING → Not chosen); `migrate diff` reports no difference. **Owner owes** `migrate deploy`
+on the cloud test db.
+
+**Shared helpers** — `src/lib/deliveries/zone.ts` (`zoneColumns`, `zoneFromOutstation`, `zoneLabel`,
+`parseZoneFilter`), `src/lib/deliveries/payment.ts` (`deliveryPayment`: receivables row → Zoho
+snapshot → null).
+
+**Built**
+- Import (both paths) stores Zoho's `status` and `balance`. `GET /api/deliveries/[id]` returns
+  `payment { source, status, total, paid, balance, hasPending }` (old `paymentStatus` kept for the
+  handover checklist). Staff and public PUT write `deliveryZone` and `isOutstation` together.
+  `GET /api/deliveries?zone=BANGALORE|OUTSTATION|NONE`; the legacy `?outstation=` maps onto it.
+- One detail component `deliveries/_components/delivery-detail.tsx`, **no tabs**, rendered by
+  `/deliveries/[id]`, and new `/deliveries/blr/[id]` and `/deliveries/outstation/[id]`, each with a
+  back arrow to its own list. Order: header → Dummy banner → **summary card** (amount / paid /
+  balance / payment word and source or "Payment: not available"; delivery date with "chosen by
+  customer"; zone; floor) → customer → items → stock hold → link → actions → editors → WhatsApp.
+- Schedule form: a delivery with a zone shows only that side, labelled; only Not chosen shows both.
+- `/deliveries/blr` and `/deliveries/outstation` list only their zone and open their own route;
+  `/deliveries` cards and table tag Bangalore / Outstation / Not set.
+
+**Deviations, on record**
+- Columns are `zohoPaymentStatus` / `zohoBalance`, not `paymentStatus` / `balance` (§3.1): the detail
+  API already returns a computed `paymentStatus` object, and spreading the row would have collided.
+- `payment-warning.tsx` deleted; the walk-out screen uses the summary card's payment part.
+- The duplicate big call button of the old Actions tab was dropped (the customer card has the same
+  tap-to-call).
+- Actions sit above the editors (the plan listed them after).
+- `delivery-list-view.tsx` moved to `apiTry` with an error state and ignores stale responses.
+
+**Verified**
+- `npx tsc --noEmit -p .` exit 0 (whole project); `npx eslint` exit 0 on every changed file.
+- 7 checks of the helpers: no data → "not available"; a Zoho partial payment (paid = amount −
+  balance, Decimal input); paid; a receivables row overrides; zone columns; zone labels / filter
+  parsing; the invoice-detail mapping carries status and balance.
+
+**Not verified** — no `npm run build`, no browser walk of §4 Phase 3 (or of Phases 1–2).
+
+**Noted**
+- The walk-out screen's back arrow always returns to `/deliveries/<id>`, also when reached from a
+  BLR / Outstation detail.
+- A reverse-pickup Bangalore row shows two blue badges (Reverse and Bangalore).
+- `GET /api/deliveries` rows serialise `zohoBalance` as a string; the lists do not read it.
