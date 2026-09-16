@@ -88,15 +88,11 @@ export default function NewStockAuditPage() {
   );
   const pickedBin = warehouseBins.find((b) => b.id === selectedBin) ?? null;
 
-  // Name the audit after what it actually covers — the same rule in both bin modes.
-  useEffect(() => {
-    if (!selectedWarehouse) return;
-    setTitle(
-      pickedBin
-        ? `Stock Count - ${selectedWarehouse.name} · Bin ${pickedBin.code}`
-        : `Stock Count - ${selectedWarehouse.name}`
-    );
-  }, [selectedWarehouse?.name, pickedBin?.code]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Name the audit after what it actually covers — the same rule in both bin modes. Set where
+  // the choice is made, not in an effect: an effect that sets state renders twice
+  // (react-hooks/set-state-in-effect).
+  const autoTitle = (warehouseName: string, binCode?: string) =>
+    binCode ? `Stock Count - ${warehouseName} · Bin ${binCode}` : `Stock Count - ${warehouseName}`;
 
   const selectStore = (id: string) => {
     setStoreId(id);
@@ -109,6 +105,14 @@ export default function NewStockAuditPage() {
   const selectWarehouse = (id: string) => {
     setWarehouseId(id);
     setSelectedBin("");
+    const w = selectedStore?.warehouses.find((x) => x.id === id);
+    if (w) setTitle(autoTitle(w.name));
+  };
+
+  /** `null` = the whole warehouse. */
+  const selectBin = (bin: Bin | null) => {
+    setSelectedBin(bin?.id ?? "");
+    if (selectedWarehouse) setTitle(autoTitle(selectedWarehouse.name, bin?.code));
   };
 
   const handleSubmit = async () => {
@@ -246,7 +250,7 @@ export default function NewStockAuditPage() {
             <label className="block text-sm font-medium text-slate-700 mb-1">Bin</label>
             <div className="space-y-1.5 max-h-[50vh] overflow-y-auto">
               <button
-                onClick={() => setSelectedBin("")}
+                onClick={() => selectBin(null)}
                 className={`w-full min-h-[44px] text-left px-3 py-2.5 rounded-lg border transition-all ${
                   selectedBin === ""
                     ? "border-slate-900 bg-slate-50 ring-1 ring-slate-900"
@@ -259,7 +263,7 @@ export default function NewStockAuditPage() {
               {warehouseBins.map((b) => {
                 const isSelected = selectedBin === b.id;
                 return (
-                  <button key={b.id} onClick={() => setSelectedBin(b.id)}
+                  <button key={b.id} onClick={() => selectBin(b)}
                     className={`w-full min-h-[44px] text-left px-3 py-2.5 rounded-lg border transition-all ${
                       isSelected
                         ? "border-slate-900 bg-slate-50 ring-1 ring-slate-900"
