@@ -764,7 +764,8 @@ export const deliveryUpdateSchema = z.object({
   customerPincode: z.string().regex(/^\d{6}$/, "Must be 6 digits").optional().or(z.literal("")),
   customerPhone: z.string().optional(),
   alternatePhone: z.string().optional(),
-  scheduledDate: z.string().optional(),
+  // "YYYY-MM-DD" (IST day) or an ISO moment; null clears it (plan 1609-deliveries, A28, A36).
+  scheduledDate: z.string().nullable().optional(),
   deliveryNotes: z.string().optional(),
   notes: z.string().optional(),
   flagReason: z.string().optional(),

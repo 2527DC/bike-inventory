@@ -5,6 +5,7 @@ import { AlertTriangle, CheckCircle2, Loader2, Package, Check } from "lucide-rea
 import { Card, CardContent } from "@/components/ui/card";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
+import { whatsappDigits } from "@/lib/phone";
 import { DeliveryData, formatINR } from "./types";
 
 const log = createLogger("deliveries:handover");
@@ -76,15 +77,19 @@ export function HandoverChecklist({
           const msg = data.isOutstation
             ? `Hello ${data.customerName},\n\nYour order from Bharath Cycle Hub has been delivered!\n\nWe hope you enjoy your new cycle. If you have any issues with assembly or setup, please don't hesitate to reach out.\n\nWe'd love your feedback:\n${reviewLink}\n\nThank you for choosing Bharath Cycle Hub!\n- Team BCH`
             : `Hello ${data.customerName},\n\nThank you for your purchase from Bharath Cycle Hub!\n\nWe'd love to hear about your experience. Please leave us a review:\n${reviewLink}\n\nThank you!\n- Bharath Cycle Hub`;
-          const cleanPhone = data.customerPhone.replace(/\D/g, "").slice(-10);
-          window.open(`https://api.whatsapp.com/send?phone=91${cleanPhone}&text=${encodeURIComponent(msg)}`, "_blank");
+          const digits = whatsappDigits(data.customerPhone);
+          if (digits) {
+            window.open(`https://api.whatsapp.com/send?phone=${digits}&text=${encodeURIComponent(msg)}`, "_blank");
 
-          // Best effort: the delivery is already DELIVERED; a missed flag only affects the badge.
-          const sent = await apiTry(`/api/deliveries/${deliveryId}`, {
-            method: "PUT",
-            json: { whatsAppDeliveredSent: true },
-          });
-          if (sent.error) log.warn("whatsAppDeliveredSent flag not saved", { deliveryId, httpStatus: sent.status });
+            // Best effort: the delivery is already DELIVERED; a missed flag only affects the badge.
+            const sent = await apiTry(`/api/deliveries/${deliveryId}`, {
+              method: "PUT",
+              json: { whatsAppDeliveredSent: true },
+            });
+            if (sent.error) log.warn("whatsAppDeliveredSent flag not saved", { deliveryId, httpStatus: sent.status });
+          } else {
+            log.warn("delivered WhatsApp not opened: the phone has no digits", { deliveryId });
+          }
         }
 
         onConfirmation({

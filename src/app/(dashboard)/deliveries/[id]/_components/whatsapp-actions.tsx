@@ -1,8 +1,14 @@
 "use client";
 
-import { MessageCircle, Check } from "lucide-react";
+import { useState } from "react";
+import { MessageCircle, Check, AlertTriangle } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+import { whatsappDigits } from "@/lib/phone";
 import { DeliveryData } from "./types";
+
+const log = createLogger("deliveries:whatsapp");
 
 interface WhatsAppActionsProps {
   data: DeliveryData;
@@ -10,6 +16,8 @@ interface WhatsAppActionsProps {
   templates: Record<string, string>;
   onSent: () => void;
 }
+
+type SentField = "whatsAppScheduledSent" | "whatsAppDispatchedSent" | "whatsAppDeliveredSent";
 
 function renderTemplate(template: string, vars: Record<string, string>) {
   let msg = template;
@@ -22,13 +30,18 @@ function renderTemplate(template: string, vars: Record<string, string>) {
   return msg.trim();
 }
 
-function openWhatsApp(phone: string, message: string) {
-  const cleanPhone = phone.replace(/\D/g, "").slice(-10);
-  const encodedMsg = encodeURIComponent(message);
-  window.open(`https://api.whatsapp.com/send?phone=91${cleanPhone}&text=${encodedMsg}`, "_blank");
+/** Opens WhatsApp on the delivery's main phone (A9). False when the number has no digits. */
+function openWhatsApp(phone: string | null, message: string): boolean {
+  const digits = whatsappDigits(phone);
+  if (!digits) return false;
+  window.open(`https://api.whatsapp.com/send?phone=${digits}&text=${encodeURIComponent(message)}`, "_blank");
+  return true;
 }
 
 export function WhatsAppActions({ data, deliveryId, templates, onSent }: WhatsAppActionsProps) {
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState<SentField | null>(null);
+
   if (!data.customerPhone) return null;
 
   const getProductName = () => {
@@ -41,30 +54,33 @@ export function WhatsAppActions({ data, deliveryId, templates, onSent }: WhatsAp
     return data.lineItems.map((item) => `- ${item.name} (Qty: ${item.quantity})`).join("\n");
   };
 
-  const markWhatsAppSent = async (field: "whatsAppScheduledSent" | "whatsAppDispatchedSent" | "whatsAppDeliveredSent") => {
-    try {
-      await fetch(`/api/deliveries/${deliveryId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [field]: true }),
-      });
-      onSent();
-    } catch { /* silent */ }
+  /** Opens the chat, then records that the message went out. Failures are shown, not swallowed. */
+  const send = async (field: SentField, message: string) => {
+    setError("");
+    if (!openWhatsApp(data.customerPhone, message)) {
+      log.warn("WhatsApp not opened: the phone has no digits", { deliveryId, field });
+      setError("The customer's phone number is not valid for WhatsApp.");
+      return;
+    }
+    setBusy(field);
+    const res = await apiTry(`/api/deliveries/${deliveryId}`, { method: "PUT", json: { [field]: true } });
+    setBusy(null);
+    if (res.error) {
+      log.warn("WhatsApp sent flag not saved", { deliveryId, field, httpStatus: res.status });
+      setError(`WhatsApp opened, but it was not marked as sent: ${res.error}`);
+      return;
+    }
+    log.info("WhatsApp marked sent", { deliveryId, field });
+    onSent();
   };
 
   const sendScheduledWhatsApp = () => {
-    const date = data.scheduledDate ? new Date(data.scheduledDate).toLocaleDateString("en-IN") : "TBD";
+    const date = data.scheduledDate ? new Date(data.scheduledDate).toLocaleDateString("en-IN") : "to be confirmed";
     const productName = getProductName();
-    let msg: string;
-    if (templates.scheduled) {
-      msg = renderTemplate(templates.scheduled, { customerName: data.customerName, productName, deliveryDate: date });
-    } else if (data.isOutstation) {
-      msg = `Hi ${data.customerName},\n\nYour order #${data.invoiceNo} has been shipped!\n\n${productName}\n\nYour package is on the way. We'll share tracking details once available.\n\nFor queries: 9876543210\n\nThank you!`;
-    } else {
-      msg = `Hi ${data.customerName},\n\nYour order #${data.invoiceNo} is out for delivery!\n\n${productName}\n\nOur delivery boy will call before arriving.\n\nFor queries: 9876543210\n\nThank you!`;
-    }
-    openWhatsApp(data.customerPhone!, msg);
-    markWhatsAppSent("whatsAppScheduledSent");
+    const msg = templates.scheduled
+      ? renderTemplate(templates.scheduled, { customerName: data.customerName, productName, deliveryDate: date })
+      : `Hello ${data.customerName},\n\nYour order from Bharath Cycle Hub has been scheduled for delivery.\n\nProduct: ${productName}\nDelivery Date: ${date}\n\nPlease share your delivery location on WhatsApp so our rider can reach you.\n\nThank you!\n- Bharath Cycle Hub`;
+    void send("whatsAppScheduledSent", msg);
   };
 
   const sendDispatchedWhatsApp = () => {
@@ -84,8 +100,7 @@ export function WhatsAppActions({ data, deliveryId, templates, onSent }: WhatsAp
           accessories,
         })
       : `Hello ${data.customerName},\n\nYour ${productName} is on the way!${vNo ? `\n\nVehicle No: ${vNo}` : ""}${trackingLink ? `\nTrack: ${trackingLink}` : ""}\n\nItems:\n${lineItemsText}\n\nFree Accessories:\n${accessories}\n\nThank you for choosing Bharath Cycle Hub!`;
-    openWhatsApp(data.customerPhone!, msg);
-    markWhatsAppSent("whatsAppDispatchedSent");
+    void send("whatsAppDispatchedSent", msg);
   };
 
   const sendDeliveredWhatsApp = () => {
@@ -98,15 +113,34 @@ export function WhatsAppActions({ data, deliveryId, templates, onSent }: WhatsAp
     } else {
       msg = `Hello ${data.customerName},\n\nThank you for your purchase from Bharath Cycle Hub!\n\nWe'd love to hear about your experience. Please leave us a review:\n${reviewLink}\n\nThank you!\n- Bharath Cycle Hub`;
     }
-    openWhatsApp(data.customerPhone!, msg);
-    markWhatsAppSent("whatsAppDeliveredSent");
+    void send("whatsAppDeliveredSent", msg);
   };
 
   const showScheduled = data.status === "SCHEDULED";
   const showDispatched = ["OUT_FOR_DELIVERY", "SHIPPED", "IN_TRANSIT"].includes(data.status);
   const showDelivered = data.status === "DELIVERED";
+  // A39: the customer's form moved it to SCHEDULED, and nobody has confirmed on WhatsApp yet.
+  const scheduledByCustomerUnconfirmed = showScheduled && !!data.selfFillCompletedAt && !data.whatsAppScheduledSent;
 
   if (!showScheduled && !showDispatched && !showDelivered) return null;
+
+  const sendButton = (field: SentField, label: string, onClick: () => void) => (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy !== null}
+      className="w-full min-h-[44px] flex items-center justify-center gap-2 bg-green-600 text-white py-2 rounded-lg text-xs font-medium disabled:opacity-50"
+    >
+      <MessageCircle className="h-3.5 w-3.5" /> {busy === field ? "Marking as sent..." : label}
+    </button>
+  );
+
+  const sentRow = (label: string) => (
+    <div className="flex items-center gap-1.5">
+      <Check className="h-3.5 w-3.5 text-green-600" />
+      <p className="text-xs text-green-600">{label}</p>
+    </div>
+  );
 
   return (
     <Card className="mb-3 border-green-200 bg-green-50">
@@ -116,55 +150,36 @@ export function WhatsAppActions({ data, deliveryId, templates, onSent }: WhatsAp
           <p className="text-xs font-semibold text-green-900">WhatsApp Messages</p>
         </div>
 
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-2 text-xs text-red-700">{error}</div>
+        )}
+
+        {scheduledByCustomerUnconfirmed && (
+          <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg p-2">
+            <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+            <p className="text-xs font-medium text-amber-800">Scheduled by customer – confirmation not sent</p>
+          </div>
+        )}
+
         {/* Scheduled message */}
         {showScheduled && (
-          data.whatsAppScheduledSent ? (
-            <div className="flex items-center gap-1.5">
-              <Check className="h-3.5 w-3.5 text-green-600" />
-              <p className="text-xs text-green-600">Scheduled msg sent</p>
-            </div>
-          ) : (
-            <button
-              onClick={sendScheduledWhatsApp}
-              className="w-full flex items-center justify-center gap-2 bg-green-600 text-white py-2 rounded-lg text-xs font-medium"
-            >
-              <MessageCircle className="h-3.5 w-3.5" /> Send Scheduled
-            </button>
-          )
+          data.whatsAppScheduledSent
+            ? sentRow("Scheduled msg sent")
+            : sendButton("whatsAppScheduledSent", scheduledByCustomerUnconfirmed ? "Send Confirmation" : "Send Scheduled", sendScheduledWhatsApp)
         )}
 
         {/* Dispatched message */}
         {showDispatched && (
-          data.whatsAppDispatchedSent ? (
-            <div className="flex items-center gap-1.5">
-              <Check className="h-3.5 w-3.5 text-green-600" />
-              <p className="text-xs text-green-600">Dispatched msg sent</p>
-            </div>
-          ) : (
-            <button
-              onClick={sendDispatchedWhatsApp}
-              className="w-full flex items-center justify-center gap-2 bg-green-600 text-white py-2 rounded-lg text-xs font-medium"
-            >
-              <MessageCircle className="h-3.5 w-3.5" /> Send Dispatched
-            </button>
-          )
+          data.whatsAppDispatchedSent
+            ? sentRow("Dispatched msg sent")
+            : sendButton("whatsAppDispatchedSent", "Send Dispatched", sendDispatchedWhatsApp)
         )}
 
         {/* Delivered message */}
         {showDelivered && (
-          data.whatsAppDeliveredSent ? (
-            <div className="flex items-center gap-1.5">
-              <Check className="h-3.5 w-3.5 text-green-600" />
-              <p className="text-xs text-green-600">Delivered msg sent</p>
-            </div>
-          ) : (
-            <button
-              onClick={sendDeliveredWhatsApp}
-              className="w-full flex items-center justify-center gap-2 bg-green-600 text-white py-2 rounded-lg text-xs font-medium"
-            >
-              <MessageCircle className="h-3.5 w-3.5" /> Send Delivered
-            </button>
-          )
+          data.whatsAppDeliveredSent
+            ? sentRow("Delivered msg sent")
+            : sendButton("whatsAppDeliveredSent", "Send Delivered", sendDeliveredWhatsApp)
         )}
       </CardContent>
     </Card>

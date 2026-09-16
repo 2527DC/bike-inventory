@@ -1,170 +1,192 @@
 "use client";
 
-import { useState, useEffect, use } from "react";
-import { CheckCircle2, Loader2, MapPin, Phone, Navigation, Calendar, ChevronRight } from "lucide-react";
+import { useState, useEffect, useCallback, use } from "react";
+import { Loader2, MapPin, Navigation, ChevronRight } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+import { isValidMobile, samePhone } from "@/lib/phone";
+import type { SlotDay } from "@/lib/deliveries/slots";
+import { ContactCard, SlotPicker, SubmittedScreen } from "./_components/self-fill-parts";
+
+/**
+ * The customer's delivery form, opened from a WhatsApp link. PUBLIC — no session, no permission
+ * check (CLAUDE.md "Routes that must stay public").
+ *
+ * Plan 1609-deliveries §2.8: main phone read-only (A10); alternate mandatory and different from
+ * the main number (A11, A12); Bangalore picks a slot, outstation has no date (A27); once
+ * submitted the link is locked and shows the thank-you screen (A7).
+ */
+const log = createLogger("fill:self-fill");
 
 interface DeliveryInfo {
   invoiceNo: string;
   customerName: string;
   customerPhone: string | null;
+  alternatePhone: string | null;
   customerAddress: string | null;
   customerArea: string | null;
   customerPincode: string | null;
   lineItems: Array<{ name: string; quantity: number }> | null;
+  isOutstation: boolean;
+  scheduledDate: string | null;
   selfFillCompletedAt: string | null;
+  locked: boolean;
 }
 
-interface SlotDay {
-  date: string;
-  available: boolean;
-  spotsLeft: number;
-  reason: "FULL" | "CUTOFF" | "PAST" | null;
+interface Submitted {
+  outstation: boolean;
+  scheduledDate: string | null;
 }
 
-const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-function formatSlotDate(dateStr: string) {
-  const d = new Date(dateStr + "T00:00:00");
-  return `${DAY_LABELS[d.getDay()]} ${d.getDate()} ${MONTH_LABELS[d.getMonth()]}`;
-}
+const PINCODE_RE = /^\d{6}$/;
+const inputBase = "w-full border rounded-lg p-3 text-sm focus:ring-2";
 
 export default function CustomerSelfFillPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = use(params);
+  const deliveryUrl = `/api/public/delivery/${encodeURIComponent(token)}`;
 
   const [data, setData] = useState<DeliveryInfo | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [error, setError] = useState("");
-  const [submitted, setSubmitted] = useState(false);
+  const [submitted, setSubmitted] = useState<Submitted | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // Step 0: delivery type
   const [deliveryType, setDeliveryType] = useState<"BANGALORE" | "OUTSIDE" | null>(null);
 
-  // Bangalore form fields
+  // One set of fields for both branches; each branch shows the ones it needs.
   const [address, setAddress] = useState("");
   const [area, setArea] = useState("");
   const [pincode, setPincode] = useState("");
   const [mapsLink, setMapsLink] = useState("");
-  const [phone, setPhone] = useState("");
   const [alternatePhone, setAlternatePhone] = useState("");
   const [deliveryNotes, setDeliveryNotes] = useState("");
-
-  // Outside Bangalore form fields
-  const [outstationAddress, setOutstationAddress] = useState("");
-  const [outstationPincode, setOutstationPincode] = useState("");
-  const [outstationPhone, setOutstationPhone] = useState("");
-  const [outstationAltPhone, setOutstationAltPhone] = useState("");
-  const [outstationNotes, setOutstationNotes] = useState("");
 
   // Slot selection (Bangalore only)
   const [slots, setSlots] = useState<SlotDay[]>([]);
   const [nextAvailable, setNextAvailable] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [slotsLoading, setSlotsLoading] = useState(false);
+  const [slotsLoaded, setSlotsLoaded] = useState(false);
+  const [slotsFailed, setSlotsFailed] = useState(false);
 
   useEffect(() => {
-    fetch(`/api/public/delivery/${token}`)
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success) {
-          setData(res.data);
-          setAddress(res.data.customerAddress || "");
-          setArea(res.data.customerArea || "");
-          setPincode(res.data.customerPincode || "");
-          setPhone(res.data.customerPhone || "");
-          setOutstationAddress(res.data.customerAddress || "");
-          setOutstationPincode(res.data.customerPincode || "");
-          setOutstationPhone(res.data.customerPhone || "");
-          if (res.data.selfFillCompletedAt) setSubmitted(true);
-        } else {
-          setError(res.error || "Invalid or expired link");
-        }
-      })
-      .catch(() => setError("Could not connect. Please check your internet and try again."))
-      .finally(() => setLoading(false));
-  }, [token]);
+    let cancelled = false;
+    (async () => {
+      const res = await apiTry<DeliveryInfo>(deliveryUrl);
+      if (cancelled) return;
+      if (res.data) {
+        const d = res.data;
+        setData(d);
+        setAddress(d.customerAddress || "");
+        setArea(d.customerArea || "");
+        setPincode(d.customerPincode || "");
+        if (d.locked) setSubmitted({ outstation: d.isOutstation, scheduledDate: d.scheduledDate });
+        log.info("self-fill form loaded", { locked: d.locked });
+      } else {
+        log.warn("self-fill form failed to load", { status: res.status });
+        setLoadError(res.error || "Invalid or expired link");
+      }
+      setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [deliveryUrl]);
 
-  // Load slots when customer selects Bangalore
-  useEffect(() => {
-    if (deliveryType !== "BANGALORE") return;
+  /** Fetch the calendar. `pickEarliest` moves the selection to the earliest open day. */
+  const loadSlots = useCallback(async (pickEarliest: boolean) => {
     setSlotsLoading(true);
-    fetch("/api/public/delivery-slots")
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success) {
-          setSlots(res.data.slots);
-          setNextAvailable(res.data.nextAvailable);
-          if (res.data.nextAvailable) setSelectedDate(res.data.nextAvailable);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setSlotsLoading(false));
-  }, [deliveryType]);
+    setSlotsFailed(false);
+    const res = await apiTry<{ slots: SlotDay[]; nextAvailable: string | null }>("/api/public/delivery-slots");
+    if (res.data) {
+      setSlots(res.data.slots);
+      setNextAvailable(res.data.nextAvailable);
+      if (pickEarliest) setSelectedDate(res.data.nextAvailable);
+      setSlotsLoaded(true);
+    } else {
+      log.warn("delivery slots failed to load", { status: res.status });
+      setSlotsFailed(true);
+    }
+    setSlotsLoading(false);
+  }, []);
+
+  const chooseType = (type: "BANGALORE" | "OUTSIDE") => {
+    setDeliveryType(type);
+    setError("");
+    if (type === "BANGALORE" && !slotsLoaded && !slotsLoading) void loadSlots(true);
+  };
+
+  // ── Validation (mirrors the server) ──
+  const mainPhone = data?.customerPhone ?? null;
+  const altTrim = alternatePhone.trim();
+  const altIsTen = /^\d{10}$/.test(altTrim) && isValidMobile(altTrim);
+  const altSameAsMain = altIsTen && samePhone(altTrim, mainPhone);
+  const alternateError = !altTrim
+    ? null
+    : !altIsTen
+      ? "Enter a valid 10-digit alternate number."
+      : altSameAsMain
+        ? "The alternate number must be different from your main number."
+        : null;
+  const alternateValid = altIsTen && !altSameAsMain;
+
+  const addressValid = address.trim().length >= 5 && address.trim().length <= 500;
+  const pincodeValid = PINCODE_RE.test(pincode.trim());
+
+  const bangaloreFormValid = addressValid && pincodeValid && alternateValid && selectedDate !== null;
+  const outstationFormValid = addressValid && pincodeValid && alternateValid;
+
+  const canSubmit =
+    deliveryType === "BANGALORE" ? bangaloreFormValid : deliveryType === "OUTSIDE" ? outstationFormValid : false;
 
   const handleSubmit = async () => {
-    if (deliveryType === "BANGALORE") {
-      if (!address.trim()) return;
-      if (!pincode.trim() || !/^\d{6}$/.test(pincode.trim())) return;
-      if (!selectedDate) return;
-    } else {
-      if (!outstationAddress.trim()) return;
-      if (!outstationPincode.trim()) return;
-    }
+    if (!deliveryType || !canSubmit || saving) return;
+    const outstation = deliveryType === "OUTSIDE";
+
+    // No customerPhone: the main number is not the customer's to change here (A10).
+    const payload = outstation
+      ? {
+          isOutstation: true,
+          customerAddress: address.trim(),
+          customerPincode: pincode.trim(),
+          alternatePhone: altTrim,
+          deliveryNotes: deliveryNotes.trim(),
+        }
+      : {
+          isOutstation: false,
+          customerAddress: address.trim(),
+          customerArea: area.trim(),
+          customerPincode: pincode.trim(),
+          mapsLink: mapsLink.trim(),
+          alternatePhone: altTrim,
+          deliveryNotes: deliveryNotes.trim(),
+          requestedDate: selectedDate,
+        };
 
     setSaving(true);
-    try {
-      const payload =
-        deliveryType === "BANGALORE"
-          ? {
-              isOutstation: false,
-              customerAddress: address.trim(),
-              customerArea: area.trim() || undefined,
-              customerPincode: pincode.trim() || undefined,
-              mapsLink: mapsLink.trim() || undefined,
-              customerPhone: phone.trim() || undefined,
-              alternatePhone: alternatePhone.trim() || undefined,
-              deliveryNotes: deliveryNotes.trim() || undefined,
-              requestedDate: selectedDate,
-            }
-          : {
-              isOutstation: true,
-              customerAddress: outstationAddress.trim(),
-              customerPincode: outstationPincode.trim() || undefined,
-              customerPhone: outstationPhone.trim() || undefined,
-              alternatePhone: outstationAltPhone.trim() || undefined,
-              deliveryNotes: outstationNotes.trim() || undefined,
-            };
+    setError("");
+    const res = await apiTry<{ saved: boolean; scheduledDate: string | null }>(deliveryUrl, {
+      method: "PUT",
+      json: payload,
+    });
+    setSaving(false);
 
-      const res = await fetch(`/api/public/delivery/${token}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      }).then((r) => r.json());
+    if (res.data) {
+      log.info("self-fill submitted", { outstation });
+      setSubmitted({ outstation, scheduledDate: res.data.scheduledDate });
+      return;
+    }
 
-      if (res.success) {
-        setSubmitted(true);
-      } else if (res.error?.includes("slot is now full")) {
-        setError("This date just got fully booked. Please choose another date.");
-        // Refresh slots
-        fetch("/api/public/delivery-slots")
-          .then((r) => r.json())
-          .then((res2) => {
-            if (res2.success) {
-              setSlots(res2.data.slots);
-              setNextAvailable(res2.data.nextAvailable);
-              setSelectedDate(res2.data.nextAvailable);
-            }
-          })
-          .catch(() => {});
-      } else {
-        setError(res.error || "Failed to save. Please try again.");
-      }
-    } catch {
-      setError("Network error. Please try again.");
-    } finally {
-      setSaving(false);
+    log.warn("self-fill submit refused", { status: res.status, outstation });
+    if (res.error?.includes("slot is now full")) {
+      setError("This date just got fully booked. Please choose another date.");
+      void loadSlots(true);
+    } else {
+      setError(res.error || "Failed to save. Please try again.");
+      // A past or cut-off day: the calendar on screen is stale, so refresh it.
+      if (!outstation && res.status === 409 && res.error?.includes("choose another date")) void loadSlots(true);
     }
   };
 
@@ -178,64 +200,38 @@ export default function CustomerSelfFillPage({ params }: { params: Promise<{ tok
   }
 
   // ── Error state (no data) ──
-  if (error && !data) {
+  if (loadError || !data) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
         <Card className="w-full max-w-md">
           <CardContent className="p-6 text-center">
-            <p className="text-red-600 font-medium text-base">{error}</p>
-            <p className="text-slate-400 text-sm mt-2">This link may have expired. Please contact the store for a new link.</p>
+            <p className="text-red-600 font-medium text-base">{loadError || "Invalid or expired link"}</p>
+            <p className="text-slate-400 text-sm mt-2">
+              This link may have expired. Please contact the store for a new link.
+            </p>
           </CardContent>
         </Card>
       </div>
     );
   }
 
-  // ── Already submitted ──
+  // ── Submitted / locked ──
   if (submitted) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
-        <Card className="w-full max-w-md">
-          <CardContent className="p-6 text-center">
-            <CheckCircle2 className="h-16 w-16 text-green-500 mx-auto mb-4" />
-            <h2 className="text-xl font-bold text-slate-900 mb-2">Thank You!</h2>
-            <p className="text-slate-600 text-sm">
-              Your delivery details have been saved. Our team will contact you before the delivery.
-            </p>
-            {selectedDate && (
-              <div className="mt-4 bg-blue-50 rounded-lg p-3 text-left">
-                <p className="text-xs text-blue-600 font-medium">Requested Delivery Date</p>
-                <p className="text-sm font-semibold text-blue-900">{formatSlotDate(selectedDate)} at 6:00 PM</p>
-              </div>
-            )}
-            {data && (
-              <div className="mt-3 bg-slate-50 rounded-lg p-3 text-left">
-                <p className="text-xs text-slate-500">Invoice</p>
-                <p className="text-sm font-medium text-slate-900">{data.invoiceNo}</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+      <SubmittedScreen
+        invoiceNo={data.invoiceNo}
+        outstation={submitted.outstation}
+        scheduledDate={submitted.scheduledDate}
+      />
     );
   }
 
-  const bangaloreFormValid =
-    address.trim().length >= 5 &&
-    /^\d{6}$/.test(pincode.trim()) &&
-    selectedDate !== null;
-
-  const outstationFormValid =
-    outstationAddress.trim().length >= 5 &&
-    outstationPincode.trim().length >= 1;
-
-  const canSubmit =
-    deliveryType === "BANGALORE" ? bangaloreFormValid : deliveryType === "OUTSIDE" ? outstationFormValid : false;
+  const isOutside = deliveryType === "OUTSIDE";
+  const ring = isOutside ? "focus:ring-amber-400" : "focus:ring-blue-500 focus:border-blue-500";
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 pb-10">
       <div className="max-w-md mx-auto space-y-4">
-
         {/* Store Header */}
         <div className="text-center py-4">
           <h1 className="text-lg font-bold text-slate-900">Bharath Cycle Hub</h1>
@@ -246,12 +242,14 @@ export default function CustomerSelfFillPage({ params }: { params: Promise<{ tok
         <Card>
           <CardContent className="p-4">
             <p className="text-xs text-slate-500 mb-1">Invoice</p>
-            <p className="text-sm font-semibold text-slate-900">{data?.invoiceNo}</p>
-            <p className="text-sm text-slate-600 mt-1">{data?.customerName}</p>
-            {data?.lineItems && data.lineItems.length > 0 && (
+            <p className="text-sm font-semibold text-slate-900 break-all">{data.invoiceNo}</p>
+            <p className="text-sm text-slate-600 mt-1">{data.customerName}</p>
+            {data.lineItems && data.lineItems.length > 0 && (
               <div className="mt-2 space-y-0.5">
                 {data.lineItems.slice(0, 3).map((item, i) => (
-                  <p key={i} className="text-xs text-slate-500">{item.name} ×{item.quantity}</p>
+                  <p key={i} className="text-xs text-slate-500">
+                    {item.name} ×{item.quantity}
+                  </p>
                 ))}
                 {data.lineItems.length > 3 && (
                   <p className="text-xs text-slate-400">+{data.lineItems.length - 3} more</p>
@@ -263,7 +261,7 @@ export default function CustomerSelfFillPage({ params }: { params: Promise<{ tok
 
         {/* Error Banner */}
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+          <div role="alert" className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
             {error}
           </div>
         )}
@@ -274,7 +272,7 @@ export default function CustomerSelfFillPage({ params }: { params: Promise<{ tok
             <p className="text-sm font-bold text-slate-900 mb-3">Where should we deliver?</p>
             <div className="grid grid-cols-2 gap-2">
               <button
-                onClick={() => { setDeliveryType("BANGALORE"); setError(""); }}
+                onClick={() => chooseType("BANGALORE")}
                 className={`py-4 rounded-xl text-sm font-semibold border-2 transition-all ${
                   deliveryType === "BANGALORE"
                     ? "bg-blue-600 text-white border-blue-600"
@@ -284,11 +282,9 @@ export default function CustomerSelfFillPage({ params }: { params: Promise<{ tok
                 🏙️ Inside Bangalore
               </button>
               <button
-                onClick={() => { setDeliveryType("OUTSIDE"); setError(""); }}
+                onClick={() => chooseType("OUTSIDE")}
                 className={`py-4 rounded-xl text-sm font-semibold border-2 transition-all ${
-                  deliveryType === "OUTSIDE"
-                    ? "bg-amber-600 text-white border-amber-600"
-                    : "bg-white text-slate-700 border-slate-200"
+                  isOutside ? "bg-amber-600 text-white border-amber-600" : "bg-white text-slate-700 border-slate-200"
                 }`}
               >
                 🚚 Outside Bangalore
@@ -297,278 +293,166 @@ export default function CustomerSelfFillPage({ params }: { params: Promise<{ tok
           </CardContent>
         </Card>
 
-        {/* ── BANGALORE FORM ── */}
-        {deliveryType === "BANGALORE" && (
+        {deliveryType && (
           <>
+            {/* Address */}
             <Card>
               <CardContent className="p-4 space-y-4">
                 <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <MapPin className="h-4 w-4 text-blue-500" /> Delivery Address
+                  <MapPin className={`h-4 w-4 ${isOutside ? "text-amber-500" : "text-blue-500"}`} /> Delivery Address
                 </h2>
 
                 <div>
-                  <label className="text-xs font-medium text-slate-600 block mb-1">
-                    Full Address <span className="text-red-500">*</span>
+                  <label htmlFor="address" className="text-xs font-medium text-slate-600 block mb-1">
+                    {isOutside ? "Full Address (with city, state)" : "Full Address"}{" "}
+                    <span className="text-red-500">*</span>
                   </label>
                   <textarea
+                    id="address"
                     value={address}
                     onChange={(e) => setAddress(e.target.value)}
-                    placeholder="House no, street, landmark..."
-                    className="w-full border border-slate-200 rounded-lg p-3 text-sm min-h-[72px] focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+                    maxLength={500}
+                    placeholder={isOutside ? "House no, street, area, city, state..." : "House no, street, landmark..."}
+                    className={`${inputBase} border-slate-200 ${ring} resize-none ${
+                      isOutside ? "min-h-[88px]" : "min-h-[72px]"
+                    }`}
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className={isOutside ? "" : "grid grid-cols-2 gap-3"}>
+                  {!isOutside && (
+                    <div>
+                      <label htmlFor="area" className="text-xs font-medium text-slate-600 block mb-1">
+                        Area
+                      </label>
+                      <input
+                        id="area"
+                        type="text"
+                        value={area}
+                        onChange={(e) => setArea(e.target.value)}
+                        maxLength={100}
+                        placeholder="e.g. Jayanagar"
+                        className={`${inputBase} border-slate-200 ${ring}`}
+                      />
+                    </div>
+                  )}
                   <div>
-                    <label className="text-xs font-medium text-slate-600 block mb-1">Area</label>
-                    <input
-                      type="text"
-                      value={area}
-                      onChange={(e) => setArea(e.target.value)}
-                      placeholder="e.g. Jayanagar"
-                      className="w-full border border-slate-200 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-slate-600 block mb-1">
+                    <label htmlFor="pincode" className="text-xs font-medium text-slate-600 block mb-1">
                       Pincode <span className="text-red-500">*</span>
                     </label>
                     <input
+                      id="pincode"
                       type="text"
                       value={pincode}
-                      onChange={(e) => setPincode(e.target.value)}
-                      placeholder="560011"
+                      onChange={(e) => setPincode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                      placeholder={isOutside ? "6-digit pincode" : "560011"}
                       maxLength={6}
                       inputMode="numeric"
-                      className={`w-full border rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
-                        pincode && !/^\d{6}$/.test(pincode) ? "border-red-300 bg-red-50" : "border-slate-200"
+                      className={`${inputBase} ${ring} ${
+                        pincode && !pincodeValid ? "border-red-300 bg-red-50" : "border-slate-200"
                       }`}
                     />
                   </div>
                 </div>
 
-                <div>
-                  <label className="text-xs font-medium text-slate-600 block mb-1">
-                    Google Maps Location Link <span className="text-slate-400 font-normal">(optional — share later if needed)</span>
-                  </label>
-                  <input
-                    type="url"
-                    value={mapsLink}
-                    onChange={(e) => setMapsLink(e.target.value)}
-                    placeholder="https://maps.app.goo.gl/..."
-                    className="w-full border border-slate-200 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    inputMode="url"
-                  />
-                  <p className="text-[11px] text-slate-400 mt-1">Open Google Maps → tap &apos;Share&apos; → paste the link here</p>
-                </div>
+                {!isOutside && (
+                  <div>
+                    <label htmlFor="maps-link" className="text-xs font-medium text-slate-600 block mb-1">
+                      Google Maps Location Link{" "}
+                      <span className="text-slate-400 font-normal">(optional — share later if needed)</span>
+                    </label>
+                    <input
+                      id="maps-link"
+                      type="url"
+                      value={mapsLink}
+                      onChange={(e) => setMapsLink(e.target.value)}
+                      maxLength={500}
+                      placeholder="https://maps.app.goo.gl/..."
+                      className={`${inputBase} border-slate-200 ${ring}`}
+                      inputMode="url"
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Open Google Maps → tap &apos;Share&apos; → paste the link here
+                    </p>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
-            <Card>
-              <CardContent className="p-4 space-y-4">
-                <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Phone className="h-4 w-4 text-green-500" /> Contact Details
-                </h2>
-                <div>
-                  <label className="text-xs font-medium text-slate-600 block mb-1">Phone Number</label>
-                  <input
-                    type="tel"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder="10-digit mobile number"
-                    maxLength={10}
-                    inputMode="tel"
-                    className="w-full border border-slate-200 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-slate-600 block mb-1">Alternate Phone</label>
-                  <input
-                    type="tel"
-                    value={alternatePhone}
-                    onChange={(e) => setAlternatePhone(e.target.value)}
-                    placeholder="Optional"
-                    maxLength={10}
-                    inputMode="tel"
-                    className="w-full border border-slate-200 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  />
-                </div>
-              </CardContent>
-            </Card>
+            <ContactCard
+              mainPhone={mainPhone}
+              alternatePhone={alternatePhone}
+              onAlternateChange={setAlternatePhone}
+              alternateError={alternateError}
+              accent={isOutside ? "amber" : "blue"}
+            />
 
+            {/* Instructions */}
             <Card>
               <CardContent className="p-4">
                 <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2 mb-3">
-                  <Navigation className="h-4 w-4 text-orange-500" /> Delivery Instructions
+                  <Navigation className="h-4 w-4 text-orange-500" />{" "}
+                  {isOutside ? "Courier Instructions" : "Delivery Instructions"}
                 </h2>
                 <textarea
                   value={deliveryNotes}
                   onChange={(e) => setDeliveryNotes(e.target.value)}
-                  placeholder="Call before delivery, gate code, building number..."
-                  className="w-full border border-slate-200 rounded-lg p-3 text-sm min-h-[60px] focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+                  maxLength={500}
+                  aria-label={isOutside ? "Courier instructions" : "Delivery instructions"}
+                  placeholder={
+                    isOutside
+                      ? "Any packing instructions, fragile items, assembly notes..."
+                      : "Call before delivery, gate code, building number..."
+                  }
+                  className={`${inputBase} border-slate-200 ${ring} min-h-[60px] resize-none`}
                 />
               </CardContent>
             </Card>
 
-            {/* Slot Picker */}
-            <Card>
-              <CardContent className="p-4">
-                <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2 mb-1">
-                  <Calendar className="h-4 w-4 text-purple-500" /> Choose Delivery Date <span className="text-red-500 font-normal text-xs">*</span>
-                </h2>
-                <p className="text-xs text-slate-500 mb-3">Delivery at 6:00 PM. Max 10 deliveries per day.</p>
-
-                {slotsLoading ? (
-                  <div className="flex justify-center py-4">
-                    <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
-                  </div>
-                ) : (
-                  <>
-                    {nextAvailable && (
-                      <p className="text-xs text-green-700 font-medium mb-2">
-                        ✓ Earliest available: {formatSlotDate(nextAvailable)}
-                      </p>
-                    )}
-                    <div className="grid grid-cols-2 gap-2">
-                      {slots.filter((s) => !s.reason || s.reason !== "PAST").slice(0, 10).map((slot) => (
-                        <button
-                          key={slot.date}
-                          disabled={!slot.available}
-                          onClick={() => { setSelectedDate(slot.date); setError(""); }}
-                          className={`py-3 px-3 rounded-xl text-xs font-medium text-left transition-all border-2 ${
-                            !slot.available
-                              ? "bg-slate-100 text-slate-400 border-slate-100 cursor-not-allowed"
-                              : selectedDate === slot.date
-                              ? "bg-blue-600 text-white border-blue-600"
-                              : "bg-white text-slate-700 border-slate-200 active:bg-blue-50"
-                          }`}
-                        >
-                          <span className="block font-semibold">{formatSlotDate(slot.date)}</span>
-                          <span className="block text-[10px] mt-0.5">
-                            {!slot.available
-                              ? slot.reason === "FULL"
-                                ? "Full"
-                                : slot.reason === "CUTOFF"
-                                ? "Cutoff passed"
-                                : ""
-                              : `${slot.spotsLeft} slot${slot.spotsLeft === 1 ? "" : "s"} left`}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </CardContent>
-            </Card>
-          </>
-        )}
-
-        {/* ── OUTSIDE BANGALORE FORM ── */}
-        {deliveryType === "OUTSIDE" && (
-          <>
-            <Card>
-              <CardContent className="p-4 space-y-4">
-                <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <MapPin className="h-4 w-4 text-amber-500" /> Delivery Address
-                </h2>
-                <div>
-                  <label className="text-xs font-medium text-slate-600 block mb-1">
-                    Full Address (with city, state) <span className="text-red-500">*</span>
-                  </label>
-                  <textarea
-                    value={outstationAddress}
-                    onChange={(e) => setOutstationAddress(e.target.value)}
-                    placeholder="House no, street, area, city, state..."
-                    className="w-full border border-slate-200 rounded-lg p-3 text-sm min-h-[88px] focus:ring-2 focus:ring-amber-400 resize-none"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-slate-600 block mb-1">
-                    Pincode <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={outstationPincode}
-                    onChange={(e) => setOutstationPincode(e.target.value)}
-                    placeholder="6-digit pincode"
-                    maxLength={6}
-                    inputMode="numeric"
-                    className="w-full border border-slate-200 rounded-lg p-3 text-sm focus:ring-2 focus:ring-amber-400"
-                  />
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-4 space-y-4">
-                <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Phone className="h-4 w-4 text-green-500" /> Contact Details
-                </h2>
-                <div>
-                  <label className="text-xs font-medium text-slate-600 block mb-1">Phone Number</label>
-                  <input
-                    type="tel"
-                    value={outstationPhone}
-                    onChange={(e) => setOutstationPhone(e.target.value)}
-                    placeholder="10-digit mobile number"
-                    maxLength={10}
-                    inputMode="tel"
-                    className="w-full border border-slate-200 rounded-lg p-3 text-sm focus:ring-2 focus:ring-amber-400"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-slate-600 block mb-1">Alternate Phone</label>
-                  <input
-                    type="tel"
-                    value={outstationAltPhone}
-                    onChange={(e) => setOutstationAltPhone(e.target.value)}
-                    placeholder="Optional"
-                    maxLength={10}
-                    inputMode="tel"
-                    className="w-full border border-slate-200 rounded-lg p-3 text-sm focus:ring-2 focus:ring-amber-400"
-                  />
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-4">
-                <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2 mb-3">
-                  <Navigation className="h-4 w-4 text-orange-500" /> Courier Instructions
-                </h2>
-                <textarea
-                  value={outstationNotes}
-                  onChange={(e) => setOutstationNotes(e.target.value)}
-                  placeholder="Any packing instructions, fragile items, assembly notes..."
-                  className="w-full border border-slate-200 rounded-lg p-3 text-sm min-h-[60px] focus:ring-2 focus:ring-amber-400 resize-none"
-                />
-              </CardContent>
-            </Card>
-          </>
-        )}
-
-        {/* Submit */}
-        {deliveryType && (
-          <button
-            onClick={handleSubmit}
-            disabled={saving || !canSubmit}
-            className={`w-full py-4 rounded-xl text-base font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 ${
-              deliveryType === "OUTSIDE"
-                ? "bg-amber-600 active:bg-amber-700 text-white"
-                : "bg-blue-600 active:bg-blue-700 text-white"
-            }`}
-          >
-            {saving ? (
-              <><Loader2 className="h-4 w-4 animate-spin" /> Saving...</>
-            ) : (
-              <><ChevronRight className="h-4 w-4" /> Submit Delivery Details</>
+            {/* Date: Bangalore only (A27) */}
+            {!isOutside && (
+              <SlotPicker
+                slots={slots}
+                nextAvailable={nextAvailable}
+                selectedDate={selectedDate}
+                loading={slotsLoading}
+                loadFailed={slotsFailed}
+                onSelect={(date) => {
+                  setSelectedDate(date);
+                  setError("");
+                }}
+                onRetry={() => void loadSlots(true)}
+              />
             )}
-          </button>
+
+            {isOutside && (
+              <p className="text-xs text-slate-500 px-1">
+                The store will confirm the dispatch date with you after you submit.
+              </p>
+            )}
+
+            {/* Submit */}
+            <button
+              onClick={handleSubmit}
+              disabled={saving || !canSubmit}
+              className={`w-full py-4 rounded-xl text-base font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 text-white ${
+                isOutside ? "bg-amber-600 active:bg-amber-700" : "bg-blue-600 active:bg-blue-700"
+              }`}
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Saving...
+                </>
+              ) : (
+                <>
+                  <ChevronRight className="h-4 w-4" /> Submit Delivery Details
+                </>
+              )}
+            </button>
+          </>
         )}
 
-        <p className="text-xs text-slate-400 text-center pb-4">
-          Bharath Cycle Hub | Your details are secure
-        </p>
+        <p className="text-xs text-slate-400 text-center pb-4">Bharath Cycle Hub | Your details are secure</p>
       </div>
     </div>
   );

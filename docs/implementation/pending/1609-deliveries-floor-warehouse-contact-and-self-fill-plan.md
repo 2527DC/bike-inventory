@@ -1,8 +1,8 @@
 # Deliveries: the floor warehouse sells, the customer is saved, the customer schedules, and one detail screen shows what was paid
 
-Status: pending — written 16 Sep 2026. **Phase 1 built** 16 Sep 2026 on `feat/1609-deliveries-p1-floor-warehouse` (§6). Phases 2 and 3 not started.
-Branch: Phase 1 on `feat/1609-deliveries-p1-floor-warehouse` (off `376fa13`, Q0). Claude asks
-the owner which branch Phases 2 and 3 start from before creating each (B5).
+Status: pending — written 16 Sep 2026. **Phase 1 built** on `feat/1609-deliveries-p1-floor-warehouse` and **Phase 2 built** on `feat/1609-deliveries-p2-contact-self-fill`, both 16 Sep 2026 (§6). Phase 3 not started.
+Branch: Phase 1 on `feat/1609-deliveries-p1-floor-warehouse` (off `376fa13`, Q0); Phase 2 on
+`feat/1609-deliveries-p2-contact-self-fill` (off Phase 1 `9974e9a`, owner). Claude asks before Phase 3 (B5).
 
 Source of every decision: `docs/implementation/requiremnts/deliveries-outward-and-self-fill-requirements.md`
 §4.0 — answers **A1–A46** and **B1–B5**, asked one at a time on 16 Sep 2026. Where that document's
@@ -703,3 +703,67 @@ existing hold — run the two count queries in the migration header first).
   `self-fill-link-button.tsx` and the Details-tab editors still use raw `fetch().then(r => r.json())`.
 - A VERIFIED delivery with a phone cannot be walked out: the customer card offers Save only for
   PENDING. Pre-existing; Phase 2's database save replaces that gate.
+
+### Phase 2 — 16 Sep 2026, branch `feat/1609-deliveries-p2-contact-self-fill` (off Phase 1 `9974e9a`)
+
+Owner: "yes continue phase 2 from this branch with multiple agents". Claude wrote the schema,
+migration and shared helpers; four agents built in parallel (staff API + import phones; public
+submit + customer form; customer card + link + gates; schedule form + date editor + WhatsApp).
+
+**Migration** `20260916181032_delivery_customer_link` — `Delivery.customerId` → `Customer`,
+Restrict + index. Applied to local `bch_local` only; `migrate diff` reports no difference.
+**Owner owes** `migrate deploy` on the cloud test db (additive, no data step).
+
+**Shared helpers** — `src/lib/phone.ts` (`toPlus91`, `bare10`, `isValidMobile`, `samePhone`,
+`whatsappDigits`), `src/lib/customers/find-or-create-by-phone.ts` (both phone forms, never edits an
+existing row, savepoint on the unique race), `src/lib/deliveries/slots.ts` (one slot rule for the
+public calendar, the public submit and the staff date editor).
+
+**Built**
+- `POST /api/deliveries/[id]/customer` (`deliveries.edit`): Save Contact → Customer, links `customerId`,
+  writes the phone `+91-`. The customer card lost the vCard/download and the localStorage flag;
+  staff can type a missing phone (B2).
+- `PUT /api/deliveries/[id]`: → `SCHEDULED` / `WALK_OUT` need `customerId` (409 "Save the customer
+  first."); phones through `toPlus91`; changing the phone of a saved delivery unlinks the customer;
+  staff `scheduledDate` checked against the slot limit, `null` clears it.
+- `generate-token`: needs the saved customer, 24 h, refuses after submit, no longer re-opens a filled form.
+- Public `GET/PUT /api/public/delivery/[token]` (still public): zod; locked after one submit;
+  `customerPhone` in the body ignored; alternate mandatory, different from the main number;
+  Bangalore needs a slot date, outstation has none; submit → `SCHEDULED` and tries to hold stock,
+  never failing on a shortage; a conditional update closes the double-submit race.
+- `/fill/[token]`: main phone read-only, "Alternate Phone \*", submitted screen per branch.
+- Schedule form: "Estimated Delivery \*" removed, schedules without a date. Date editor: slot
+  calendar, and "Set delivery date" when a scheduled delivery has none. WhatsApp: `whatsappDigits`
+  everywhere, "Scheduled by customer – confirmation not sent" banner (A39).
+- Import paths write phones `+91-` (B3b).
+
+**Deviations, on record**
+- The public GET still returns address, area and pincode (the form pre-fills from them).
+- Staff re-sending a delivery's current day skips the slot check; PREBOOKED / WALK_OUT skip it too.
+- The default "scheduled" WhatsApp text (no saved template) was corrected — it said "shipped" / "out
+  for delivery" and carried no date.
+- The red-flag alert WhatsApp now adds the `91` country code it was missing.
+
+**Verified**
+- `npx tsc --noEmit -p .` exit 0 (whole project); `npx eslint` exit 0 on every changed file.
+- 17 checks of the helpers on `bch_local` in a rolled-back transaction: every captured phone format
+  (`9964288130`, `+91-9986282818`, `+91 …`, `91…`, `0…`, the 11-digit `+91-89512050058` kept), a
+  bare-10 legacy customer matched without renaming it, a second save links the same row, the
+  savepoint leaves the transaction usable, past / cutoff slot refusals.
+- 15 checks calling the real public `GET`/`PUT` handlers against `bch_local` (test rows deleted
+  afterwards, verified 0 left): alternate missing / invalid / same as main → 400; past date → 409;
+  valid Bangalore submit → `SCHEDULED`, chosen IST day, alternate `+91-`, main phone untouched,
+  stock held on the floor; second submit → 409 locked; GET reports locked; outstation with short
+  stock → `SCHEDULED`, no date, not held.
+
+**Not verified** — no `npm run build`, no browser walk of §4 Phase 2.
+
+**Found, not fixed**
+- Two different deliveries booking the last slot of a day at the same instant can both succeed —
+  the count is not locked (pre-existing).
+- `src/lib/api-client.ts` logs request bodies at debug level (`NEXT_PUBLIC_LOG_LEVEL=0`), which on
+  `/fill` would print the alternate phone and address in the customer's own browser console.
+  Default level does not print it.
+- Raw `fetch` remains in `delivery-details-card.tsx`, `free-accessories-editor.tsx`,
+  `service-invoice-section.tsx` and the courier save in `courier-info-card.tsx` (it never checks
+  the response).

@@ -10,6 +10,7 @@ import {
   listFloorWarehousesWithPrefix,
   deliveryFieldsFromInvoiceDetail,
 } from "@/lib/deliveries/zoho-invoice";
+import { toPlus91 } from "@/lib/phone";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("deliveries:import-zoho");
@@ -99,6 +100,8 @@ export async function POST(req: NextRequest) {
         const created = await prisma.delivery.create({
           data: {
             ...fields,
+            // +91-XXXXXXXXXX, as every phone in the deliveries flow is written (B3b).
+            customerPhone: toPlus91(fields.customerPhone),
             invoiceNo,
             warehouseId: match?.warehouseId ?? null,
             storeId: match?.storeId ?? null,

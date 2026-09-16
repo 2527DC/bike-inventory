@@ -1,7 +1,7 @@
 "use client";
 
 // Focused walk-out screen (plan 1609 R34, R35, A44, A45). The customer takes the cycle at the
-// counter: invoice, items, payment, the customer card with Save Contact, then the handover
+// counter: invoice, items, payment, the customer card with Save Customer, then the handover
 // checklist. Deliberately absent: the self-fill link, Schedule, Flag, and the zone toggle.
 
 import { useState, use } from "react";
@@ -14,7 +14,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { createLogger } from "@/lib/logger";
 import { WALKOUT_STATUSES, formatINR } from "../_components/types";
-import { useContactSaved, useDelivery } from "../_components/use-delivery";
+import { useDelivery } from "../_components/use-delivery";
 import { CustomerInfoCard } from "../_components/customer-info-card";
 import { LineItemsCard } from "../_components/line-items-card";
 import { PaymentWarning } from "../_components/payment-warning";
@@ -34,7 +34,6 @@ export default function DeliveryWalkoutPage({ params }: { params: Promise<{ id: 
   const { id } = use(params);
   const router = useRouter();
   const { data, loading, error, refetch } = useDelivery(id);
-  const { contactSaved, markContactSaved } = useContactSaved(id);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [done, setDone] = useState(false);
 
@@ -70,9 +69,9 @@ export default function DeliveryWalkoutPage({ params }: { params: Promise<{ id: 
   }
 
   const available = !data.isDummy && WALKOUT_STATUSES.includes(data.status);
-  // Today's gate, unchanged: a delivery with a phone needs its contact saved first (R35).
-  // Phase 2 replaces the localStorage flag with a database save.
-  const needsContact = !!data.customerPhone && !contactSaved;
+  // Walk-out needs the saved customer — the database link, not a per-device flag (plan 1609 A6).
+  // The server refuses WALK_OUT without it too; this only keeps the checklist out of the way.
+  const needsCustomer = !data.customerId;
 
   return (
     <div className="max-w-xl mx-auto">
@@ -120,10 +119,10 @@ export default function DeliveryWalkoutPage({ params }: { params: Promise<{ id: 
         <>
           <LineItemsCard lineItems={data.lineItems} />
           <PaymentWarning data={data} />
-          <CustomerInfoCard data={data} onContactSaved={markContactSaved} contactSaved={contactSaved} />
+          <CustomerInfoCard data={data} onSaved={() => void refetch()} />
 
-          {needsContact ? (
-            <p className="text-xs text-amber-600 font-medium py-2">Save customer contact above to proceed</p>
+          {needsCustomer ? (
+            <p className="text-xs text-amber-600 font-medium py-2">Save the customer above to walk out</p>
           ) : (
             <HandoverChecklist
               data={data}

@@ -1725,6 +1725,9 @@ model Customer {
   serviceJobs    ServiceJob[]
   serviceReviews Review[]
 
+  // Outward deliveries linked by Save Contact (plan 1609-deliveries, A2).
+  deliveries Delivery[]
+
   @@index([name])
 }
 
@@ -1870,6 +1873,13 @@ model Delivery {
   warehouseId String?
   warehouse   Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
 
+  // The Customer row Save Contact found or created by phone (plan 1609-deliveries, A1, A2).
+  // "The customer is saved" means exactly this is set: Schedule, Walk-out and Generate Link all
+  // require it on the server (A5, A6). Restrict: a customer with delivery history is not
+  // deletable (nothing deletes customers today; this keeps it that way).
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
   status       DeliveryStatus @default(PENDING)
   verifiedAt   DateTime?
   verifiedById String?
@@ -1931,6 +1941,7 @@ model Delivery {
   @@index([storeId])
   // Same reasoning for the Restrict FK to Warehouse, and the Dummy list is `warehouseId IS NULL`.
   @@index([warehouseId])
+  @@index([customerId])
 }
 
 model AlertConfig {

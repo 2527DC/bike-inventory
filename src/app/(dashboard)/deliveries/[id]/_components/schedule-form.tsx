@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
+import { whatsappDigits } from "@/lib/phone";
 import { DeliveryData, StockShortLine } from "./types";
 
 const log = createLogger("deliveries:schedule");
@@ -35,15 +36,16 @@ function renderTemplate(template: string, vars: Record<string, string>) {
   return msg.trim();
 }
 
-function openWhatsApp(phone: string, message: string) {
-  const cleanPhone = phone.replace(/\D/g, "").slice(-10);
-  const encodedMsg = encodeURIComponent(message);
-  window.open(`https://api.whatsapp.com/send?phone=91${cleanPhone}&text=${encodedMsg}`, "_blank");
+/** Opens WhatsApp on the delivery's main phone (A9). False when the number has no digits. */
+function openWhatsApp(phone: string | null, message: string): boolean {
+  const digits = whatsappDigits(phone);
+  if (!digits) return false;
+  window.open(`https://api.whatsapp.com/send?phone=${digits}&text=${encodeURIComponent(message)}`, "_blank");
+  return true;
 }
 
 export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCancel, onConfirmation }: ScheduleFormProps) {
   const [isOutstation, setIsOutstation] = useState(data.isOutstation || false);
-  const [schedDate, setSchedDate] = useState("");
   const [editPincode, setEditPincode] = useState(data.customerPincode || "");
   const [editAddress, setEditAddress] = useState(data.customerAddress || "");
   const [editAltPhone, setEditAltPhone] = useState(data.alternatePhone || "");
@@ -60,7 +62,6 @@ export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCance
   };
 
   const handleSubmit = async () => {
-    if (!schedDate) return;
     if (!isOutstation && !/^\d{6}$/.test(editPincode.trim())) {
       setError("Pincode is required for Bangalore deliveries (6 digits)");
       return;
@@ -70,7 +71,6 @@ export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCance
     try {
       const payload: Record<string, unknown> = {
         status: "SCHEDULED",
-        scheduledDate: schedDate,
         deliveryNotes: delNotes,
         isOutstation,
         alternatePhone: editAltPhone.trim() || undefined,
@@ -93,7 +93,10 @@ export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCance
         return;
       }
       const stockShort = res.data?.stockShort ?? [];
-      log.info("delivery scheduled", { deliveryId, shortLines: stockShort.length });
+      // R27, A28: staff schedule without a date. Only the customer's form, or the slot
+      // calendar in the date editor, sets one — so show the row's date if it already has one.
+      const dateText = data.scheduledDate ? new Date(data.scheduledDate).toLocaleDateString("en-IN") : null;
+      log.info("delivery scheduled", { deliveryId, shortLines: stockShort.length, hasDate: dateText !== null });
 
       onConfirmation({
         type: "success",
@@ -101,26 +104,28 @@ export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCance
         referenceId: data.invoiceNo,
         items: [
           { label: "Customer", value: data.customerName },
-          { label: "Delivery Date", value: new Date(schedDate).toLocaleDateString("en-IN") },
+          { label: "Delivery Date", value: dateText ?? "To be confirmed" },
           { label: "Type", value: isOutstation ? "Outstation" : "Bangalore" },
         ],
       });
 
       // Auto-trigger WhatsApp scheduled message
       if (data.customerPhone) {
-        const date = new Date(schedDate).toLocaleDateString("en-IN");
+        const date = dateText ?? "to be confirmed";
         const productName = getProductName();
         const msg = templates.scheduled
           ? renderTemplate(templates.scheduled, { customerName: data.customerName, productName, deliveryDate: date })
           : `Hello ${data.customerName},\n\nYour order from Bharath Cycle Hub has been scheduled for delivery.\n\nProduct: ${productName}\nDelivery Date: ${date}\n\nPlease share your delivery location on WhatsApp so our rider can reach you.\n\nThank you!\n- Bharath Cycle Hub`;
-        openWhatsApp(data.customerPhone, msg);
-
-        // Mark WhatsApp as sent
-        const sent = await apiTry(`/api/deliveries/${deliveryId}`, {
-          method: "PUT",
-          json: { whatsAppScheduledSent: true },
-        });
-        if (sent.error) log.warn("whatsAppScheduledSent flag not saved", { deliveryId, httpStatus: sent.status });
+        if (openWhatsApp(data.customerPhone, msg)) {
+          // Mark WhatsApp as sent
+          const sent = await apiTry(`/api/deliveries/${deliveryId}`, {
+            method: "PUT",
+            json: { whatsAppScheduledSent: true },
+          });
+          if (sent.error) log.warn("whatsAppScheduledSent flag not saved", { deliveryId, httpStatus: sent.status });
+        } else {
+          log.warn("scheduled WhatsApp not opened: the phone has no digits", { deliveryId });
+        }
       }
 
       onScheduled(stockShort);
@@ -282,50 +287,6 @@ export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCance
           />
         </div>
 
-        {/* Estimated Delivery Date */}
-        <div>
-          <label className="text-xs text-slate-500">Estimated Delivery *</label>
-          <div className="grid grid-cols-3 gap-1.5 mt-1">
-            {[
-              { label: "Today", days: 0 },
-              { label: "Tomorrow", days: 1 },
-              { label: "After 3 days", days: 3 },
-              { label: "After a week", days: 7 },
-              { label: "After a month", days: 30 },
-            ].map((opt) => {
-              const d = new Date();
-              d.setDate(d.getDate() + opt.days);
-              const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-              return (
-                <button
-                  key={opt.label}
-                  type="button"
-                  onClick={() => setSchedDate(val)}
-                  className={`px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
-                    schedDate === val
-                      ? isOutstation
-                        ? "bg-amber-600 text-white"
-                        : "bg-blue-600 text-white"
-                      : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-          </div>
-          {schedDate && (
-            <p className={`text-xs mt-1 ${isOutstation ? "text-amber-600" : "text-blue-600"}`}>
-              Selected:{" "}
-              {new Date(schedDate + "T00:00:00").toLocaleDateString("en-IN", {
-                weekday: "short",
-                day: "numeric",
-                month: "short",
-              })}
-            </p>
-          )}
-        </div>
-
         {/* Delivery Notes */}
         <div>
           <label className="text-xs text-slate-500">Delivery Notes</label>
@@ -341,7 +302,7 @@ export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCance
         <div className="flex gap-2">
           <button
             onClick={handleSubmit}
-            disabled={!schedDate || loading}
+            disabled={loading}
             className={`flex-1 text-white py-2.5 rounded-lg text-xs font-medium disabled:opacity-50 ${
               isOutstation ? "bg-amber-600" : "bg-blue-600"
             }`}

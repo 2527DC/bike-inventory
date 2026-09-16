@@ -18,11 +18,38 @@ import {
   isDummy,
   type ShortLine,
 } from "@/lib/deliveries/floor-stock";
+import {
+  slotRefusal,
+  SLOT_REFUSAL_MESSAGE,
+  istDayBounds,
+  isDateString,
+  toISTDateString,
+} from "@/lib/deliveries/slots";
+import { toPlus91, samePhone } from "@/lib/phone";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("deliveries:api");
 
 const DUMMY_MESSAGE = "Dummy delivery: no warehouse matched this invoice number. No actions are allowed.";
+
+/** Statuses whose `scheduledDate` does not take one of the day's slots (same rule as slots.ts). */
+const SLOTLESS_STATUSES = ["PREBOOKED", "WALK_OUT"];
+
+/** The IST calendar day ("YYYY-MM-DD") a staff date means, or null when it is not a date. */
+function staffDateToISTDay(value: string): string | null {
+  if (isDateString(value)) {
+    const probe = new Date(`${value}T00:00:00+05:30`);
+    return Number.isNaN(probe.getTime()) || toISTDateString(probe) !== value ? null : value;
+  }
+  const moment = new Date(value);
+  return Number.isNaN(moment.getTime()) ? null : toISTDateString(moment);
+}
+
+const DELIVERY_INCLUDE = {
+  verifiedBy: { select: { name: true } },
+  warehouse: { select: { id: true, name: true, kind: true } },
+  customer: { select: { id: true, name: true, phone: true } },
+} as const;
 
 /** A refusal thrown inside the transaction that carries its own HTTP status (404, 409). */
 class DeliveryActionError extends Error {
@@ -43,10 +70,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
     const delivery = await prisma.delivery.findUnique({
       where: { id },
-      include: {
-        verifiedBy: { select: { name: true } },
-        warehouse: { select: { id: true, name: true, kind: true } },
-      },
+      include: DELIVERY_INCLUDE,
     });
 
     if (!delivery) return errorResponse("Delivery not found", 404);
@@ -110,6 +134,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     // Lines a SCHEDULED / PACKED move could not hold (A26, A37). The move is still accepted.
     let stockShort: ShortLine[] = [];
 
+    // Set when a staff phone edit dropped the saved customer; logged once the write commits.
+    let unlinkedCustomerId: string | null = null;
+
     const result = await prisma.$transaction(async (tx) => {
       // Re-read inside transaction to prevent race conditions
       const existing = await tx.delivery.findUnique({
@@ -124,6 +151,24 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       if (isDummy(existing) && changesSomething) {
         throw new DeliveryActionError(DUMMY_MESSAGE, 409);
       }
+
+      const updateData: Record<string, unknown> = {};
+
+      // Phones are written `+91-XXXXXXXXXX` (A12b, B3 — a row converts when it is touched);
+      // an empty string clears the column.
+      let customerId = existing.customerId;
+      if (data.customerPhone !== undefined) {
+        const phone = toPlus91(data.customerPhone);
+        updateData.customerPhone = phone;
+        // The saved customer is identified by this number. A different number means it no longer
+        // matches, so the link is dropped and staff must Save the customer again (A6).
+        if (existing.customerId && !samePhone(existing.customerPhone, phone)) {
+          updateData.customerId = null;
+          customerId = null;
+          unlinkedCustomerId = existing.customerId;
+        }
+      }
+      if (data.alternatePhone !== undefined) updateData.alternatePhone = toPlus91(data.alternatePhone);
 
       // Status transition guards (inside transaction for atomicity)
       if (data.status) {
@@ -145,9 +190,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           throw new Error(`Cannot change from ${existing.status} to ${data.status}`);
         }
 
-        // Walk-out requires customer phone to be saved (Phase 2 replaces this with customerId)
-        if (data.status === "WALK_OUT" && !existing.customerPhone) {
-          throw new Error("Cannot walk-out without saving customer contact first");
+        // Schedule and Walk-out require the saved customer (A5, A6) — Delivery.customerId, set by
+        // Save Contact (`POST /api/deliveries/[id]/customer`), not merely a phone on the row.
+        if ((data.status === "SCHEDULED" || data.status === "WALK_OUT") && !customerId) {
+          throw new DeliveryActionError("Save the customer first.", 409);
         }
 
         // SHIPPED requires tracking number for outstation deliveries
@@ -155,17 +201,40 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           throw new Error("Tracking number is required for outstation shipments before marking as Shipped");
         }
       }
-      const updateData: Record<string, unknown> = {};
 
-      // Copy simple fields
+      // Copy simple fields (phones are handled above)
       if (data.customerAddress !== undefined) updateData.customerAddress = data.customerAddress;
       if (data.customerArea !== undefined) updateData.customerArea = data.customerArea;
       if (data.customerPincode !== undefined) updateData.customerPincode = data.customerPincode;
-      if (data.customerPhone !== undefined) updateData.customerPhone = data.customerPhone;
-      if (data.alternatePhone !== undefined) updateData.alternatePhone = data.alternatePhone;
       if (data.deliveryNotes !== undefined) updateData.deliveryNotes = data.deliveryNotes;
       if (data.notes !== undefined) updateData.notes = data.notes;
-      if (data.scheduledDate) updateData.scheduledDate = new Date(data.scheduledDate);
+
+      // Staff date (A28, A36, T9). null clears it — staff may schedule without a date. A date is
+      // stored as the start of its IST day and must pass the same 10-per-day slot rule as the
+      // customer's calendar. Keeping the delivery's current day is never refused (it already
+      // holds that slot, and a past day would otherwise block every later edit). A delivery whose
+      // status takes no slot (PREBOOKED, WALK_OUT) is not counted, so it is not checked either.
+      if (data.scheduledDate === null) {
+        updateData.scheduledDate = null;
+      } else if (data.scheduledDate !== undefined) {
+        const day = staffDateToISTDay(data.scheduledDate);
+        if (!day) throw new DeliveryActionError("Enter a valid delivery date.", 400);
+        const currentDay = existing.scheduledDate ? toISTDateString(existing.scheduledDate) : null;
+        const effectiveStatus = data.status ?? existing.status;
+        if (day !== currentDay && !SLOTLESS_STATUSES.includes(effectiveStatus)) {
+          const refusal = await slotRefusal(tx, day, existing.id);
+          if (refusal) {
+            log.warn("staff date refused", {
+              deliveryId: existing.id,
+              invoiceNo: existing.invoiceNo,
+              day,
+              refusal,
+            });
+            throw new DeliveryActionError(SLOT_REFUSAL_MESSAGE[refusal], 409);
+          }
+        }
+        updateData.scheduledDate = istDayBounds(day).start;
+      }
 
       // Outstation & courier fields
       if (data.isOutstation !== undefined) updateData.isOutstation = data.isOutstation;
@@ -283,16 +352,21 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       return tx.delivery.update({
         where: { id },
         data: updateData,
-        include: {
-          verifiedBy: { select: { name: true } },
-          warehouse: { select: { id: true, name: true, kind: true } },
-        },
+        include: DELIVERY_INCLUDE,
       });
     });
 
     // §F.0: committed. Sent after the response has gone out; empty unless this PUT deducted
     // stock, and nothing is sent if the transaction threw.
     after(() => maybeNotifyBelowReorder(crossings));
+
+    if (unlinkedCustomerId) {
+      log.warn("customer phone changed — saved customer unlinked", {
+        deliveryId: result.id,
+        invoiceNo: result.invoiceNo,
+        customerId: unlinkedCustomerId,
+      });
+    }
 
     log.info("delivery updated", {
       deliveryId: result.id,

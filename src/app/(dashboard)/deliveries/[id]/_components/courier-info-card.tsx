@@ -4,7 +4,12 @@ import { useState } from "react";
 import { Truck } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+import { whatsappDigits } from "@/lib/phone";
 import { DeliveryData, formatINR } from "./types";
+
+const log = createLogger("deliveries:courier");
 
 interface CourierInfoCardProps {
   data: DeliveryData;
@@ -53,14 +58,20 @@ export function CourierInfoCard({ data, deliveryId, onSaved, onError }: CourierI
     const vNo = data.vehicleNo;
 
     const msg = `Hello ${data.customerName},\n\nYour ${productName} is on the way!${vNo ? `\n\nVehicle No: ${vNo}` : ""}${trackingLink ? `\nTrack: ${trackingLink}` : ""}\n\nItems:\n${lineItemsText}\n\nFree Accessories:\n${accessories}\n\nThank you for choosing Bharath Cycle Hub!`;
-    const cleanPhone = data.customerPhone.replace(/\D/g, "").slice(-10);
-    window.open(`https://api.whatsapp.com/send?phone=91${cleanPhone}&text=${encodeURIComponent(msg)}`, "_blank");
+    const digits = whatsappDigits(data.customerPhone);
+    if (!digits) {
+      log.warn("dispatched WhatsApp not opened: the phone has no digits", { deliveryId });
+      onError("The customer's phone number is not valid for WhatsApp.");
+      return;
+    }
+    window.open(`https://api.whatsapp.com/send?phone=${digits}&text=${encodeURIComponent(msg)}`, "_blank");
 
-    fetch(`/api/deliveries/${deliveryId}`, {
+    void apiTry(`/api/deliveries/${deliveryId}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ whatsAppDispatchedSent: true }),
-    }).catch(() => {});
+      json: { whatsAppDispatchedSent: true },
+    }).then((sent) => {
+      if (sent.error) log.warn("whatsAppDispatchedSent flag not saved", { deliveryId, httpStatus: sent.status });
+    });
     setShowDispatchWhatsApp(false);
   };
 
