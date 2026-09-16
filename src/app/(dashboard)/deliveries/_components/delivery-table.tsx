@@ -4,7 +4,7 @@
 // same Dummy rule (plan 1609 A41c, T2): a red badge, and no action but delete.
 
 import Link from "next/link";
-import { Loader2, Trash2 } from "lucide-react";
+import { Loader2, Trash2, CalendarClock, Footprints, PackagePlus } from "lucide-react";
 import { getAging, AGING_BADGE } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
@@ -71,16 +71,17 @@ export function DeliveryTable({ deliveries, isAdmin, deleting, prebooking, onDel
           const isDummy = isDummyDelivery(d);
           return (
             <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+              {/* Icon-only actions; the name is the tooltip and the accessible label. */}
               {!isDummy && d.status === "PENDING" && (
                 <>
-                  <Link href={`/deliveries/${d.id}`}><button className="px-2 py-1 rounded-md bg-blue-600 text-white text-xs font-medium">Schedule</button></Link>
-                  <Link href={`/deliveries/${d.id}/walkout`}><button className="px-2 py-1 rounded-md bg-green-600 text-white text-xs font-medium">Walk-out</button></Link>
-                  <button onClick={() => onPrebook(d)} disabled={prebooking === d.id} className="px-2 py-1 rounded-md bg-purple-600 text-white text-xs font-medium disabled:opacity-50">{prebooking === d.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Pre-book"}</button>
+                  <Link href={`/deliveries/${d.id}`} title="Schedule" aria-label="Schedule" className="flex items-center justify-center h-8 w-8 rounded-md bg-blue-600 text-white"><CalendarClock className="h-4 w-4" /></Link>
+                  <Link href={`/deliveries/${d.id}/walkout`} title="Walk-out" aria-label="Walk-out" className="flex items-center justify-center h-8 w-8 rounded-md bg-green-600 text-white"><Footprints className="h-4 w-4" /></Link>
+                  <button onClick={() => onPrebook(d)} disabled={prebooking === d.id} title="Pre-book" aria-label="Pre-book" className="flex items-center justify-center h-8 w-8 rounded-md bg-purple-600 text-white disabled:opacity-50">{prebooking === d.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackagePlus className="h-4 w-4" />}</button>
                 </>
               )}
               {!isDummy && d.status === "SCHEDULED" && <Link href="/deliveries/dispatch"><button className="px-2 py-1 rounded-md bg-orange-600 text-white text-xs font-medium">Dispatch</button></Link>}
               {!isDummy && d.status === "PREBOOKED" && <button onClick={() => onMarkReady(d.id)} className="px-2 py-1 rounded-md bg-blue-600 text-white text-xs font-medium">Mark Ready</button>}
-              {isAdmin && <button onClick={() => onDelete(d.id)} disabled={deleting === d.id} className="p-1.5 rounded-md bg-slate-100 text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50">{deleting === d.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}</button>}
+              {isAdmin && <button onClick={() => onDelete(d.id)} disabled={deleting === d.id} title="Delete" aria-label="Delete" className="p-1.5 rounded-md bg-slate-100 text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50">{deleting === d.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}</button>}
             </div>
           );
         } },
