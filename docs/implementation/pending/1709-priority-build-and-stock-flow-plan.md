@@ -25,6 +25,10 @@ with the key places re-checked by hand. Check rather than trust.
 
 > what u do is  i need u to switch to the other branch and commit it in the other branch and   create a implmentation plan  and stat implmenting use multiple agent to implemnt the implemenattion
 
+17 Sep 2026, later — **additional requirements** (while answering P2):
+
+> and i have this question that while outword the stock must be reduced in store level that is floore level and i have a queation will it track  the bin level too where  the requiremnet is we will create the bin and  i need a script or a function to perform this thing where as i set the rule and regulation in  home bine where choosing the brand and category 's and bin  at that time let me have button at that time only when i set it not only for the inbounding items it should also set the bin for the existing system  and for the existing items that are present the uniqie code that is getting generated must generate for all the bined  items   tell me this how can i make it  like for not only the items whcih are  getting inbounded shoudl get the unique code like u-0001 for the existing items also the unique code must be generated for thes that are in the bin so we can  mke it like have a button  to all those bin product we  teh unique code has to generate  and i have an another thing that every inbound itewm wont  be assemblable item  there are items which are non assemblable and those items  should not bee seen in the  unassembleing listing where this is the need tell me ur aproch and what i think is at the bin level only we can have set like status like non assembleable where we store the items and those items not not be listed in the unassembled because those are   not assamblabe items where we do need the asembling of it and we can filter listing in /stock  and also /assembley  a saparate tab on click thie tab   and another change in this  application  resepecetd to category is that i need parent and child category the child category need to have parent as zoho and same in the ui of /catgorys and also need to so in the /stock fillter thing need to see teh  child catehgory if the parent has any of them  and also tell me about this like  in the outword details on saving the conact  not only on saving  the phone number in application  i need it to save dirctly on the phone for that what  can be done how can we achive it   and in the /bin where we set the rule i think wee need the category and subcategory if it has as optional and brand and bin in the  rules setting  i need to be able to set it like this  this are my requiremnt and what are ur doubts aoung this requiremnt regarding this update the & 'f:\bharath  Cycle\BCH-Management\docs\implementation\pending\1709-priority-build-and-stock-flow-plan.md' implmentation plan
+
 The brief's words (Ibrahim, 15 Sep 2026) are quoted in full in the requirements doc §1.2.
 
 ### 0.2 Restated — the requirements, as narrowed by the owner's answers
@@ -41,7 +45,7 @@ stated in the row.
 | R5 | The timer freezes on hold and shows the frozen value after a reload. | defect 1 | E |
 | R6 | The chosen issue is stored against the build. Mechanic adds nothing; a supervisor may add a note. | Q3 | E |
 | R7 | Every unit carries a condition (assembled / unassembled) per model and location, and **unit records stay in sync with stock** on every transfer, sale, correction and audit. The app picks units (assembled first, then oldest); a person can swap. | Q33, Q41 | B |
-| R8 | The build line lists **all** unassembled units; no page limit may hide a unit from selection. **Every inbound item needs assembling** — no category filter. | Q34, Q44 | E |
+| R8 | The build line lists **all** unassembled units; no page limit may hide a unit from selection. ~~Every inbound item needs assembling — no category filter.~~ **Superseded by R42** (17 Sep, later): units in a non-assemblable bin are left out. | Q34, Q44, R42 | E |
 | R9 | Awaiting: multi-select + bulk assign; filter model / brand / location / bin; sort delivery day / received date / model; ★ first. | Q20 | E |
 | R10 | Assembled units show in Stock & inventory. | — | F |
 | R11 | A page shows assembled vs unassembled per model per location. No "not tracked" column: stock is **reset and re-audited at unit level**, one warehouse at a time — the audit records assembled qty + unassembled qty; the reset clears counts **and** units. | Q13, Q42, Q43 | B, F |
@@ -71,20 +75,49 @@ stated in the row.
 | R34 | Mobile bottom bar stays per-user pins; no code. | Q28 | — |
 | R35–R37 | **One** dashboard replaces the six variants; each card shows only if the viewer's role holds its grant; rows Money · Stuck · In progress · Done today · Stock by condition. Stuck = approvals > 24 h, inbound > 72 h, holds > 24 h, short outwards immediately; hours are settings. | Q29, Q30 | G |
 
+**Added 17 Sep 2026 (later)** — the owner's additional requirements above:
+
+| # | Requirement | Part |
+|---|---|---|
+| R38 | An outward reduces stock at **floor** level **and at bin level**: the bins the sold cycles sat in go down too. | H |
+| R39 | A **home-bin rule** is set as **brand · category · subcategory (optional) · bin**, per warehouse. | H |
+| R40 | When a rule is saved, a button **applies it to existing stock** — not only to future inbound items. | H |
+| R41 | A button **generates unit codes (`U-000001`…) for existing items that are in bins**, not only for inbound items. | H |
+| R42 | **Not every item needs assembly.** A **bin** can be marked **non-assemblable**; items stored there never appear in the unassembled listing. `/stock` can filter them, and `/assembly` has a **separate tab** listing them. *(Supersedes Q44 "every inbound item needs assembling".)* | H |
+| R43 | Categories have **parent and child**, the child's parent **as in Zoho**. `/categories` shows the tree; the `/stock` category filter shows a parent's children. | I |
+| R44 | **Save contact** on an outward also **saves the contact to the phone**. | C |
+
 ---
 
 ## 1. Questions and clarifications — raised by the code while planning
 
-All 41 requirement questions are answered in the requirements doc. These five came up while
-mapping the code for §3. Each changes the build; each has a recommended default.
+All 41 requirement questions are answered in the requirements doc. P1–P5 came up while
+mapping the code for §3; P6–P14 came with the additional requirements R38–R44. Each changes the
+build; each has a recommended default. Asked one at a time, in order.
 
 | # | Question | Why it changes the build | Options | Recommended default | **Answer** |
 |---|---|---|---|---|---|
-| **P1** | **Inbound receive in bin mode writes no `StockLevel`.** It updates `Product.currentStock` and `BinStock` only (`api/inbound/[id]/route.ts:265-284`), while no-bin mode calls `adjustWarehouseQty` (:286-301). Units are created either way (:312-324). Fix it here? | R7 needs per-warehouse quantity and units to agree. In bin mode the warehouse count stays 0 while units exist there, so the outward guard (per floor `StockLevel`) and the condition page disagree from the first receive. | (a) bin mode also writes `StockLevel` into the bin's warehouse; (b) leave it | (a) — it is the same root cause R7 exists to fix | |
+| **P1** | **Inbound receive in bin mode writes no `StockLevel`.** It updates `Product.currentStock` and `BinStock` only (`api/inbound/[id]/route.ts:265-284`), while no-bin mode calls `adjustWarehouseQty` (:286-301). Units are created either way (:312-324). Fix it here? | R7 needs per-warehouse quantity and units to agree. In bin mode the warehouse count stays 0 while units exist there, so the outward guard (per floor `StockLevel`) and the condition page disagree from the first receive. | (a) bin mode also writes `StockLevel` into the bin's warehouse; (b) leave it | (a) — it is the same root cause R7 exists to fix | **(a)** 17 Sep |
 | **P2** | **Deleting an inbound shipment leaves its units** (`api/inbound/[id]/route.ts:511-528` reverses stock with `deductAnywhere`, units untouched). | Orphan units stay "unassembled" on Awaiting for stock that no longer exists. | (a) the shipment's unsold units are retired with it; (b) leave | (a) | |
 | **P3** | **What "clear the unit records" means on reset (Q43).** A unit may already have assembly tasks, bin movements and transfer rows pointing at it. | Hard-deleting rows breaks that history (or cascades it away). | (a) mark them with a new status **`RESET`** (cleared by a stock reset) and close their open assembly tasks as `CANCELLED`; (b) delete the rows | (a) — history stays readable, and "reset" is distinguishable from "lost" in the error metrics | |
 | **P4** | **Two older stock paths.** `api/inventory/inwards/verify` adds quantity with no units (:50-52); `api/inventory/cleanup` reverses inwards/outwards **outside a transaction** (:37-39). | Either one breaks R7's sync if it is still used. | (a) inwards/verify creates unassembled units; cleanup is left alone and listed as a known gap; (b) both kept in sync; (c) leave both | (a) — cleanup is a maintenance route with no transaction; fixing it properly is its own piece of work | |
 | **P5** | **The divider inside Stock management (Q23).** The sidebar has no divider support (`app-sidebar.tsx:345-365`), and the menu is data. | A divider needs a signal that is data, not a hardcoded module key. | (a) new column `Module.dividerBefore Boolean @default(false)`, set by the catalog on `inbound`; (b) no divider, only ordering | (a) — one additive column, no module key in code | |
+
+#### Questions on the additional requirements (R38–R44)
+
+Facts behind them are in §2.5.
+
+| # | Question | Why it changes the build | Options | Recommended default | **Answer** |
+|---|---|---|---|---|---|
+| **P6** | **Non-assemblable at bin level (R42): what decides it for a unit?** A unit's assemblability would follow the bin it sits in *now*. | A cycle moved from a non-assemblable bin into a normal one would start showing on Awaiting, and a unit with **no bin** (bin tracking off, or not yet put away) has no flag at all. | (a) **bin flag only**, as the owner proposed: `Bin.nonAssemblable`; a unit counts as non-assemblable while its bin has the flag; no bin = assemblable; (b) bin flag **plus** a category flag, so spares are also caught before put-away; (c) a flag on the **unit**, set when it is put away into a flagged bin and kept after moves | (a) — exactly the owner's model, one column, and put-away already puts inbound items in their home bin | |
+| **P7** | **Non-assemblable units elsewhere.** On the assembled vs unassembled page (R11), in the outward ★ picking (R16) and in the dashboard's condition row. | Otherwise non-assemblable stock is counted as "unassembled" everywhere except the build line. | (a) a third column **"No assembly"** on the condition page and dashboard; ★ picks them like assembled units (they need only the transfer); (b) hide them from those screens | (a) | |
+| **P8** | **Generate unit codes for existing binned items (R41): how many, and in what condition?** Existing stock is a **quantity**: `BinStock` per bin (only where put-away/bins set it), `Product.binId` (a single home bin), and `StockLevel` per warehouse. Nothing records per-bin quantity for older stock. | Decides the source of the count and whether the build line floods: most **floor** stock is already built, so marking it all unassembled would put every floor cycle on Awaiting. | Count: (a) per warehouse, `StockLevel` − live units, placed in the product's bin from `BinStock` (then `Product.binId`); (b) `BinStock` rows only. Condition: (i) the person chooses per run; (ii) **FLOOR → assembled, GODOWN → unassembled**, non-assemblable bin → no assembly; (iii) all unassembled | (a) + (ii) — every counted item gets a code, and the default matches how stores hold stock; the person can still pick (i) before running | |
+| **P9** | **Does R41 replace the reset + unit-level audit (Q13, Q43)?** Generating codes gives existing stock units without a reset. | Two ways to create units for old stock; the reset clears counts and units. | (a) keep **both**: generate codes first (fast, no stock change), then a unit-level audit per warehouse corrects counts and condition, with reset only when a warehouse's numbers are unusable; (b) generate replaces reset + audit; (c) reset + audit only, no generate | (a) | |
+| **P10** | **"Apply rule to existing stock" (R40): what moves?** | Existing items may be in **no** bin or in **another** bin already. | (a) matching items with **no bin** move to the rule's bin; items already in another bin are listed and moved only if the person ticks "also move these N"; (b) move everything that matches; (c) only set `Product.binId` (the home bin) without moving any unit | (a) — nothing that was deliberately placed moves silently; every move writes a `BinMovementLog` | |
+| **P11** | **Bin-level stock source of truth (R38).** Today `BinStock` and unit `binId` are updated separately and already disagree (unit moves and transfers change `binId` only). | The outward must reduce "the bin" — by which record? | (a) **units are the truth**: once an item has units, `BinStock` is recomputed from the count of live units per bin after every unit change (sale, move, transfer, audit); items without units keep today's `BinStock`; (b) keep both and decrement `BinStock` alongside | (a) — one record cannot disagree with itself | |
+| **P12** | **Category parent from Zoho (R43).** The Zoho import is **deliberately flat** today — an earlier owner decision (D4) — and nothing pushes categories to Zoho. | Reverses D4; decides whether local edits go to Zoho. | (a) the import **sets `parentId` from Zoho's `parent_category_id`** (re-run fills existing rows); `/categories` gets a parent picker for local categories; **no push to Zoho**; (b) also push local changes to Zoho | (a) — Zoho stays the source; pushing is a separate integration | |
+| **P13** | **Subcategory in rules and filters (R39, R43).** | A rule on a **parent** could match its children's products or only products filed directly under the parent. | (a) a rule on a parent **matches the whole subtree** unless a more specific subcategory rule exists; precedence product > brand+subcategory > brand+category > subcategory > category > brand; the `/stock` filter on a parent includes its children | (a) | |
+| **P14** | **Saving the contact to the phone (R44).** The app is a web app (PWA). A browser **cannot write to the phone's contacts silently** — no web API allows it. | Decides what "save to phone" can mean. | (a) **Save contact** also downloads a **vCard** (`.vcf`); the phone opens "Add contact" pre-filled and the user taps Save once — works on Android and iPhone, reuses `api/vcard`; (b) **Google Contacts sync**: the app writes the contact into one shared business Google account (People API); every phone signed into that account gets it with no tap — needs a Google Cloud project, OAuth consent and a stored token; (c) a **native Android app** wrapper with contacts permission — silent save, a new app to build and ship | (a) now; (b) as a separate piece of work if one tap is too many | |
 
 ### 1.1 Decisions on record
 
@@ -92,6 +125,7 @@ mapping the code for §3. Each changes the build; each has a recommended default
 |---|---|---|
 | — | Build on `feat/1709-priority-build-stock-flow`; requirements committed as `dcdb594`. | 17 Sep 2026 |
 | — | Plan first, then **pause for approval**; the build then runs with parallel agents, one commit per wave. | 17 Sep 2026 |
+| P1 | (a) — bin-mode inbound receive also writes `StockLevel` into the bin's warehouse. Owner: *"a"*. | 17 Sep 2026 |
 
 ---
 
@@ -188,26 +222,63 @@ then writes `stockLevel.update` directly (:201). Pre-booked deliveries carry no 
 apply: `migrate` runs **only** against localhost. Export `DATABASE_URL` / `DIRECT_URL` to
 `bch_local` in the shell for the migration step; never edit `.env`; never `db push`.
 
+### 2.5 Bins, categories and contacts (for R38–R44)
+
+- **Category tree already exists in the schema**: `Category.parentId` + `children` (S:492-494),
+  `zohoCategoryId @unique` (S:500). API `api/categories` GET returns `parent` and `children`
+  (:26-34); POST/PATCH accept `parentId` (`validations.ts:123, 131-137`); PATCH rejects cycles
+  (:58-73) and deactivation cascades to the subtree (:109-164).
+- **Zoho import is deliberately flat**: `api/categories/zoho-import/route.ts:25-27` ignores
+  `parent_category_id` (earlier decision D4); rows created `{name, zohoCategoryId}` (:153-154).
+  The Zoho client already types `parent_category_id` (`src/lib/integrations/inventory.ts:27`,
+  list :121-141). Only the offline `scripts/gen-catalog-sql.js:214-215` sets parents. **No push
+  to Zoho exists.**
+- **`/categories` UI is flat**: list filtered by status (`categories/page.tsx:282-285`), "N sub"
+  badge (:405-409), "in {parent}" (:411-413); create sends `{name}` (:154), edit `{name}` (:134-135);
+  **no parent picker**.
+- **`/stock` category filter is flat** (`stock/page.tsx:547-561`); `api/products/route.ts:100`
+  filters `categoryId` exactly — a parent does **not** include its children.
+- **Home-bin rules** `api/bins/home-rules/route.ts`: GET `bins.view`, POST `bins.edit`
+  `{warehouseId, brandId?, categoryId?, productId?, binId}` upsert by criteria (:40-109), DELETE
+  (:111-125). Applied **only** as the put-away suggestion (`api/inbound/[id]/putaway/route.ts:49-113`,
+  precedence product → brand+category → category → brand → `Product.binId`), exact category match.
+  UI: modal in `bins/page.tsx:2070-2225` (brand, flat category, bin; no product). **No "apply to
+  existing stock" anywhere.**
+- **Where "in a bin" is recorded**: `BinStock` (written by receive-with-bin, put-away, `bins/assign`,
+  `bins/move`, bin-scoped audit — never seeded for older stock); `Product.binId` (receive,
+  `products/bulk` :116-129); unit `binId`. **They are not kept equal**: `bins/move` changes unit
+  `binId` only (:65-71); transfer dispatch/receive null unit `binId` without `BinStock`.
+- **Bin flags**: only `isAssemblyArea` (S:708) and `isActive`; no "non-assemblable".
+- **Outward never touches bins**: `deductDeliveryFromFloor` updates `StockLevel` only
+  (`floor-stock.ts:165-219`); `inventory/outwards` puts `binId` into notes text only (:102-103).
+- **Save contact** `api/deliveries/[id]/customer/route.ts:42-120` writes the database only
+  (`customer-info-card.tsx:6` says so). A vCard route exists with **no callers**
+  (`api/vcard/route.ts:3-26`), and the service counter already downloads a vCard in the browser
+  (`services/counter/page.tsx:51-80`). The app is a PWA (`public/manifest.json`); no Google user
+  OAuth, no Contact Picker, no native wrapper.
+
 ---
 
 ## 3. Implementation plan
 
 ### 3.0 Shape of the build
 
-Six parts, built in **four waves**. A wave's agents run in parallel on **disjoint files**; each
+Eight parts, built in **four waves**. A wave's agents run in parallel on **disjoint files**; each
 wave is checked (`npx tsc --noEmit`, `npx eslint` on touched files) and committed before the next
 starts.
 
 ```
 Wave 0  S  schema + migration + catalog + shared libs (one agent, serial)
         └─ schema-reviewer agent reads the migration before Wave 1
-Wave 1  B  unit lifecycle            E  assembly screen          F  sidebar, stock, stores
-Wave 2  C  outward guard, ★, outbound approval      D  approvals: transfer, inbound, audit, events
+Wave 1  B  unit lifecycle      E  assembly screen      F  sidebar, stock, stores      I  category tree
+Wave 2  C  outward guard, ★, outbound approval, vCard      D  approvals      H  bins: rules, codes, non-assemblable
 Wave 3  G  dashboard      Q  notification action buttons + quick approve
 ```
 
-Why this order: B's unit helpers are needed by C (★ reservation) and D (short receive, reversal);
-C and D both need S's `ApprovalEvent` writer and notify events; G reads what B–D write.
+Why this order: B's unit helpers are needed by C (★ reservation), D (short receive, reversal) and
+H (generate codes, apply rules, bin-level stock); I's subtree helper is used by H's rule matching;
+C and D both need S's `ApprovalEvent` writer and notify events; G reads what B–D and H write.
+**Parts H and I, and the R42 parts of B, E, F, assume the recommended defaults of P6–P14.**
 
 ### 3.1 Wave 0 — Part S: schema, migration, catalog, shared libs
 
@@ -228,6 +299,7 @@ C and D both need S's `ApprovalEvent` writer and notify events; G reads what B�
 | `enum ApprovalEventType` | new: `REQUESTED`, `APPROVED`, `REJECTED`, `RESUBMITTED`, `REVERSED`, `CORRECTED`, `SHORT_RECEIVED`, `FLAGGED` | R26 |
 | `ApprovalEvent` (new) | `id`, `activity`, `event`, `recordId`, `recordRef?`, `actorId` (→ User), `approverId?` (the approval this outcome judges), `productId?`, `warehouseId?`, `quantity Int?`, `note?`, `createdAt`; indexes `(activity, recordId)`, `(approverId, event, createdAt)`, `(productId, warehouseId, createdAt)` | R26 |
 | `Module` | `dividerBefore Boolean @default(false)` | P5 |
+| `Bin` | `nonAssemblable Boolean @default(false)` | R42, P6 |
 
 Enum `ADD VALUE` statements go in the migration without using the new value in the same
 migration. Generated with `migrate diff --script` into a hand-made folder (non-interactive here,
@@ -280,6 +352,14 @@ No key is renamed or removed — a renamed key deletes its grants (requirements 
 - `syncWarehouseUnits(tx, {productId, warehouseId, assembled, unassembled})` — creates or retires
   (`LOST`) so the location holds exactly those counts; retires unassembled first for the
   unassembled side and vice versa.
+- `syncBinStock(tx, binIds[])` — **R38, P11**: for each bin, `BinStock.quantity` per product =
+  count of live units (not SOLD / LOST / RESET / TRANSFERRED) in that bin. Every function above
+  that changes a unit's `binId` or status calls it for the bins it touched, so an outward that sells
+  a unit from `FLOOR-R3` lowers `FLOOR-R3`'s bin stock in the same transaction. Products with no
+  units keep today's `BinStock` untouched.
+- `isAssemblable` rule (R42, P6): a unit is **non-assemblable** while its bin has
+  `nonAssemblable = true`; exported as a Prisma `where` fragment (`assemblableUnitWhere`) so the
+  Awaiting query, the condition page and the dashboard all use the same filter.
 
 **Wiring** (each inside the route's existing transaction):
 
@@ -319,6 +399,7 @@ then build on the pieces:
 | `api/assembly/tasks/route.ts` POST | accept `unitIds[]` (≤ 500) in one transaction, same checks per unit as today |
 | `_components/awaiting-tab.tsx` | filter bar, sort select, row checkboxes, "Select all N matching", bulk Assign; ★ rows show delivery day and a **Swap** action (calls Part C's swap route; hidden until Wave 2 lands) |
 | **new** `src/components/scanner/scanner-panel.tsx` | body of `scanner/page.tsx` extracted; `/scanner` renders it; `_components/labels-tab.tsx` renders it |
+| Awaiting query + **new** `_components/no-assembly-tab.tsx` (`?tab=no-assembly`, `assembly.view`) | R42: Awaiting excludes units in non-assemblable bins (`assemblableUnitWhere`); the new tab lists them (unit · product · warehouse · bin), same filters, no assign action |
 
 ### 3.4 Wave 1 — Part F: sidebar, stock & inventory, store management (R10, R11, R27–R33)
 
@@ -327,10 +408,10 @@ then build on the pieces:
 | `src/stores/permissions.ts` + module API | carry `dividerBefore` |
 | `src/components/app-sidebar.tsx` | parent with `route: null` renders as a button that only toggles (R28); `dividerBefore` renders a divider above that child |
 | `components/desktop/sidebar.tsx`, `components/header-menu.tsx`, `(dashboard)/more/page.tsx` | same two behaviours so every renderer agrees |
-| `(dashboard)/stock/page.tsx` | chips row **Categories · Brands** linking to `/categories`, `/more/brands` (shown by `categories.view` / `brands.view`); **Assembled / Unassembled** columns (R10); link "Assembled vs unassembled" |
+| `(dashboard)/stock/page.tsx` | chips row **Categories · Brands** linking to `/categories`, `/more/brands` (shown by `categories.view` / `brands.view`); **Assembled / Unassembled / No assembly** columns (R10, P7); quick chip **No assembly** (R42); link "Assembled vs unassembled"; category filter uses Part I's tree picker (parent with children indented, R43) |
+| `api/products` GET | `categoryId` includes the whole subtree via Part I's `categorySubtreeIds` (R43, P13); `condition=no-assembly` filter |
 | `api/products` GET | per product `assembledUnits`, `unassembledUnits` (one grouped query over non-SOLD/LOST/RESET/TRANSFERRED units) |
-| **new** `(dashboard)/stock/condition/page.tsx` + `api/stock/condition/route.ts` (`stock.view`) | model · location · assembled · unassembled · total; filters store, warehouse, brand; unassembled number links to `/assembly?tab=awaiting&productId=&warehouseId=`, assembled to `/stock?…` (R11) |
-| `categories/page.tsx:293` | back link → `/stock` (Q27) |
+| **new** `(dashboard)/stock/condition/page.tsx` + `api/stock/condition/route.ts` (`stock.view`) | model · location · assembled · unassembled · **no assembly** (P7) · total; filters store, warehouse, brand; unassembled number links to `/assembly?tab=awaiting&productId=&warehouseId=`, assembled to `/stock?…` (R11) |
 | `(dashboard)/stores/page.tsx` | tabs **Stores · Warehouses · Bins** with `?tab=` (Suspense pattern); Stores = today's screen; Warehouses = today's nested warehouse list lifted to its own tab; Bins = today's `/bins` directory extracted into a component; each tab gated by `stores.view` / `warehouses.view` / `bins.view` |
 | `(dashboard)/bins/page.tsx` | renders the extracted component (URL kept) |
 | `settings/page.tsx` | "Bins & Locations" card → `/stores?tab=bins` |
@@ -351,6 +432,7 @@ then build on the pieces:
 | delivery release on DELETE (`[id]/route.ts:456-464`) | also clear units reserved for it |
 | `deliveries/[id]/_components/detail-actions.tsx`, `delivery-card.tsx`, `delivery-table.tsx` | ★ toggle (grant-gated); "Request approval" / "Approve" / "Reject" / returned banner; dispatch buttons disabled until approved; short warning shows godown quantities |
 | walk-out page `deliveries/[id]/walkout/page.tsx` | shows the new refusal text |
+| `deliveries/[id]/_components/customer-info-card.tsx` + `api/vcard/route.ts` | **R44, P14 (a)**: after Save Customer succeeds, the browser downloads `<name>.vcf` (name, `+91-` phone, alternate phone, invoice no. in the note) from `api/vcard` (made `deliveries.view`-guarded and fed by the delivery id); the phone opens "Add contact" pre-filled. The header comment "no vCard" is updated. |
 
 ### 3.6 Wave 2 — Part D: approvals, returned records, error rule (R22–R26)
 
@@ -374,6 +456,33 @@ then build on the pieces:
 | `stock-audit/[id]/page.tsx:450` | drop `!isAssignee` |
 | **new** `api/approvals/error-rate/route.ts` (`reports.view`) | per approver: approvals, errors by type, rate — applying `approval-rules` over stored events (corrections matched to the latest `APPROVED` inbound/transfer event for the same product + warehouse within `windowDays`) |
 | **new** `settings/approvals/page.tsx` (+ Settings index card) | edit the rule (`settings.edit`) and show the error-rate table |
+
+### 3.6a Wave 1 — Part I: category tree (R43, P12, P13)
+
+| File | Change |
+|---|---|
+| **new** `src/lib/categories/tree.ts` | `categorySubtreeIds(db, id)` (recursive CTE, cycle-safe) and `buildCategoryTree(rows)`; used by `api/products` (F), rule matching (H) and pickers |
+| **new** `src/components/category-tree-select.tsx` | searchable picker showing parents with children indented; optional "parent only" mode for the rule form's first select and "children of X" mode for the second |
+| `api/categories/zoho-import/route.ts` | **P12**: second pass sets `parentId` from Zoho `parent_category_id` → our row with that `zohoCategoryId`; existing rows get their parent on re-import; a parent that would create a cycle is skipped with `log.warn`; the "deliberately flat" comment (:25-27) is replaced with this decision |
+| `api/categories/zoho-preview/route.ts` | preview shows the Zoho parent name per row |
+| `(dashboard)/categories/page.tsx` | tree view (expand/collapse, children indented); **parent picker** on create and edit (sends `parentId`); back link → `/stock` (Q27) |
+
+### 3.6b Wave 2 — Part H: bins — rules, existing stock, unit codes, non-assemblable (R38–R42, P6–P11, P13)
+
+| File | Change |
+|---|---|
+| `api/bins/home-rules/route.ts` | POST accepts `categoryId` + optional `subcategoryId` (stored as the most specific `categoryId`, P13); response includes the category path |
+| **new** `src/lib/bins/rule-match.ts` | one matcher for put-away **and** apply: precedence product > brand+subcategory > brand+category (subtree) > subcategory > category (subtree) > brand, using `categorySubtreeIds` |
+| `api/inbound/[id]/putaway/route.ts` GET | uses `rule-match.ts` (replaces the inline chain :49-113) |
+| **new** `api/bins/home-rules/[id]/apply/route.ts` | **R40, P10** — `bins.edit`. `GET` = dry run: per product, units with **no bin** that would move, and units **in another bin** (listed separately). `POST {includeOtherBins: boolean}` moves them in one transaction, one `BinMovementLog` per unit, sets `Product.binId` to the rule's bin, `syncBinStock` for every bin touched |
+| **new** `api/bins/generate-unit-codes/route.ts` | **R41, P8** — `bins.edit`. Scope: warehouse (required), optional bin. `GET` = dry run: per product per warehouse `StockLevel.quantity − live units`, the bin each would go to (`BinStock` row, else `Product.binId` in that warehouse, else no bin) and the default condition. `POST {condition: "default" \| "assembled" \| "unassembled"}` — default = FLOOR → assembled, GODOWN → unassembled; units placed in a non-assemblable bin need no condition. Creates via `createUnits`, then `syncBinStock` |
+| `bins/page.tsx` rules modal (after F moved `/bins` into a component) | Category (parent) + **Subcategory (optional, children of the chosen category)** + Brand + Bin (R39); on save, a panel **"Apply to existing stock"** shows the dry run and a Confirm; checkbox "also move the N items already in other bins" (P10) |
+| bins directory (same component) | per bin **Non-assemblable** switch (`bins.edit`, R42); a **Generate unit codes** button per warehouse and per bin with the dry-run summary and the condition choice (R41) |
+| `api/bins/route.ts`, `api/bins/[id]/route.ts` | accept `nonAssemblable` |
+| `api/bins/move/route.ts`, `api/bins/assign/route.ts`, `api/inbound/[id]/putaway/route.ts` POST | after changing unit `binId`, call `syncBinStock` for the bins touched (P11) instead of the separate `BinStock` increments |
+
+The R38 bin-level reduction itself needs no code in the delivery routes: B's `sellUnits` calls
+`syncBinStock` for the bins the sold units were in.
 
 ### 3.7 Wave 3 — Part G: dashboard (R35–R37, Q29, Q30)
 
@@ -400,10 +509,12 @@ then build on the pieces:
 | 0 | schema-reviewer | read-only review of the migration | S |
 | 1 | B | `src/lib/units/*`, `src/lib/stock-location.ts`, inbound route, inventory inwards/outwards, transfer dispatch/receive, deliveries `[id]` + batch (sale only), stock-counts apply/items/zero-uncounted, stock-audit counting page, stock-reset/warehouse + its UI | S |
 | 1 | E | `src/app/(dashboard)/assembly/**`, `src/app/api/assembly/**`, `scanner/page.tsx`, `src/components/scanner/*`, vendor-issue create page | S |
-| 1 | F | sidebar renderers, `src/stores/permissions.ts`, module API, `stock/**` pages, `api/products`, `api/stock/condition`, `stores/page.tsx`, `bins/page.tsx`, `categories/page.tsx`, `settings/page.tsx` | S |
+| 1 | F | sidebar renderers, `src/stores/permissions.ts`, module API, `stock/**` pages, `api/products`, `api/stock/condition`, `stores/page.tsx`, `bins/page.tsx` (extraction only), `settings/page.tsx` | S; uses I's tree helper — F imports `src/lib/categories/tree.ts` and `category-tree-select.tsx` once I has written them (I writes those two files **first**) |
+| 1 | I | `src/lib/categories/tree.ts`, `src/components/category-tree-select.tsx`, `api/categories/**`, `(dashboard)/categories/page.tsx` | S |
 | 2 | C | `src/lib/deliveries/*`, `api/deliveries/**`, `api/public/delivery/**`, `deliveries/**` screens, `src/lib/approvals/actions/delivery.ts` | B |
 | 2 | D | `src/lib/transfers/*`, `api/transfer-orders/**`, `transfers/**`, `api/inbound/[id]/{approve,reject,resubmit}`, inbound create + DELETE event, `inbound/[id]/page.tsx`, `api/stock-counts/[id]/route.ts` (after B), `stock-audit/[id]/page.tsx:450`, `api/approvals/error-rate`, `settings/approvals/**`, `src/lib/approvals/actions/{inbound,transfer}.ts` | B |
-| 3 | G | `(dashboard)/page.tsx`, `api/dashboard/overview`, stuck-hours editor | C, D |
+| 2 | H | `api/bins/**` (home-rules, apply, generate-unit-codes, move, assign, bins CRUD), `src/lib/bins/*`, `api/inbound/[id]/putaway/route.ts`, the bins component F extracted | B, F, I |
+| 3 | G | `(dashboard)/page.tsx`, `api/dashboard/overview`, stuck-hours editor | C, D, H |
 | 3 | Q | `src/lib/notify/{types,push}.ts`, `public/sw.js`, `api/approvals/quick` | C, D |
 
 Every agent reads its board-of-agents docs before writing (below), follows CLAUDE.md logging
@@ -470,6 +581,17 @@ eslint per wave. Local database `bch_local` only.
 10. **Dashboard:** admin sees every row; a mechanic role sees only build cards; change stuck hours
     → Stuck counts change.
 11. **Push actions:** Android Chrome / desktop — Approve on the notification approves; iPhone opens.
+12. **Bin-level stock (R38):** sell a unit from `FLOOR-R3` → `FLOOR-R3`'s bin stock drops by one;
+    move a unit between bins → both bins' counts follow.
+13. **Rules on existing stock (R39, R40):** rule Hero · Bicycles › 29-inch · `GODOWN-A2` → dry run lists
+    unbinned Hero 29-inch items and those in other bins → confirm → units moved, movement log written.
+14. **Unit codes for existing stock (R41):** a godown with `StockLevel` 12 and 0 units → dry run says
+    12 → generate → 12 unassembled `U-` codes in the bin; the floor run creates assembled ones.
+15. **Non-assemblable (R42):** mark `GODOWN-S07` non-assemblable → its units leave Awaiting and appear
+    on `/assembly?tab=no-assembly`; `/stock` "No assembly" chip; condition page third column.
+16. **Categories (R43):** import from Zoho → children sit under their Zoho parent on `/categories`;
+    `/stock` filter on the parent shows the children's products too.
+17. **Save to phone (R44):** Save Customer on Android and iPhone → "Add contact" opens pre-filled.
 
 ---
 
@@ -483,3 +605,5 @@ eslint per wave. Local database `bch_local` only.
 - The old bin-prefix `api/stock-reset`.
 - Mechanic picker listing every active user (requirements doc defect 11).
 - Everything in the requirements doc §8.
+- Pushing categories (or parents) to Zoho (P12).
+- Saving contacts silently through Google Contacts or a native app (P14 (b), (c)).
