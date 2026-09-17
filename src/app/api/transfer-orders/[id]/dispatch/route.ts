@@ -10,6 +10,7 @@ import { assertTransition, TransitionError } from "@/lib/transfers/transitions";
 import { docTypeLabel, EWAY_BILL_THRESHOLD } from "@/lib/transfers/policy";
 import { moveOutOfWarehouse, writeTransferLedgerRow } from "@/lib/transfers/stock";
 import { logActivity } from "@/lib/activity-log";
+import { pickUnitsUpTo, markUnitsInTransit } from "@/lib/units";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("transfer-orders:dispatch");
@@ -64,6 +65,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         docType: true,
         docUrl: true,
         eWayBillNo: true,
+        deliveryId: true,
         items: {
           select: {
             id: true,
@@ -98,6 +100,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // P15's document gate. A null `requiredDocType` means the order predates the policy and
     // dispatches freely — demanding a tax invoice for a movement agreed before the rule
     // existed would strand it forever.
+    //
+    // P16 (plan 1709): a transfer may now be RAISED without its document (Find stock creates
+    // one from an outward), so the document is required here, before the van leaves, for every
+    // order — including a pre-policy one, whose null `requiredDocType` names no specific type.
+    // Every order created on /transfers attaches its document at create, so none of those is
+    // affected.
+    if (!order.docUrl) {
+      log.warn("dispatch refused: no document", { orderId: order.id, orderNo: order.orderNo });
+      return errorResponse(
+        order.requiredDocType
+          ? `Attach the ${docTypeLabel(order.requiredDocType)} first.`
+          : "Attach the delivery challan / tax invoice first.",
+        400
+      );
+    }
     if (order.requiredDocType) {
       const label = docTypeLabel(order.requiredDocType);
       if (!order.docUrl) {
@@ -131,6 +148,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (claim.count !== 1) return { claimed: false as const };
 
       let consignmentValue = 0;
+      // Units picked for lines where the dispatcher did not name them (plan 1709, R7).
+      const pickedUnitIds: string[] = [];
 
       for (const item of order.items) {
         // The cost the stock moves at, captured per line. A transfer between two GSTINs is a
@@ -159,6 +178,26 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           data: { unitCost },
         });
 
+        // ── THE UNITS GO ON THE VAN (plan 1709, R7, P18) ──
+        //
+        // The screen never sends `unitIds`, so every dispatch used to move the count and leave
+        // the units in the source. When none are named, pick them here — the customer's held
+        // units, then built, then oldest — AFTER moveOutOfWarehouse has row-locked the level.
+        // Tolerant: older stock without unit records dispatches only the units that exist.
+        if (!input.unitIds || input.unitIds.length === 0) {
+          const ids = await pickUnitsUpTo(tx, {
+            productId: item.productId,
+            warehouseId: sourceId,
+            qty: item.quantity,
+            order: "sale",
+            // A Find-stock transfer carries the units held for its outward (R45, P19); a
+            // plain transfer never takes units held for any outward.
+            reservedForDeliveryId: order.deliveryId,
+            excludeUnitIds: pickedUnitIds,
+          });
+          pickedUnitIds.push(...ids);
+        }
+
         await writeTransferLedgerRow(tx, {
           type: "TRANSFER",
           productId: item.productId,
@@ -173,9 +212,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         });
       }
 
-      // Record dispatched unit barcodes
-      if (input.unitIds && input.unitIds.length > 0) {
-        for (const unitId of input.unitIds) {
+      // Record dispatched unit barcodes — named by the dispatcher, or picked above.
+      const dispatchedUnitIds =
+        input.unitIds && input.unitIds.length > 0 ? [...new Set(input.unitIds)] : pickedUnitIds;
+      if (dispatchedUnitIds.length > 0) {
+        for (const unitId of dispatchedUnitIds) {
           await tx.transferOrderUnit.upsert({
             where: { transferOrderId_unitId: { transferOrderId: id, unitId } },
             update: { dispatchedAt: new Date() },
@@ -185,15 +226,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
               dispatchedAt: new Date(),
             },
           });
-
-          await tx.inventoryUnit.update({
-            where: { id: unitId },
-            data: {
-              status: "TRANSFERRED",
-              binId: null,
-            },
-          });
         }
+        // TRANSFERRED, out of their bins (recounted, R38), open build tasks closed. Refuses a
+        // named unit that is no longer in stock, rolling the dispatch back.
+        await markUnitsInTransit(tx, dispatchedUnitIds);
       }
 
       await tx.transferOrder.update({
@@ -220,8 +256,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         userName: user.name,
       });
 
-      return { claimed: true as const, consignmentValue };
-    });
+      return { claimed: true as const, consignmentValue, units: dispatchedUnitIds.length };
+    }, { timeout: 30_000 });
 
     if (!result.claimed) {
       return errorResponse("This transfer has already been dispatched.", 409);
@@ -243,6 +279,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       orderNo: order.orderNo,
       lines: order.items.length,
       hasEWayBill: Boolean(eWayBillNo),
+      units: result.units,
       warnings: warnings.length,
     });
 

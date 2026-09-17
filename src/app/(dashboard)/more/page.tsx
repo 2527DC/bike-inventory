@@ -9,30 +9,44 @@ import { Badge } from "@/components/ui/badge";
 import { NotificationPreferences } from "@/components/notification-preferences";
 import { usePermissions } from "@/lib/use-permissions";
 import { moduleIcon } from "@/lib/module-icons";
+import { buildNavTree, showDividerBefore, type NavGroup } from "@/lib/nav-tree";
+import { apiFetch } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("more:page");
+
+/** Links reachable in a group: routed roots plus every (routed) child. */
+function linkCount(group: NavGroup): number {
+  return group.items.reduce((n, item) => n + (item.route ? 1 : 0) + item.children.length, 0);
+}
 
 export default function MorePage() {
   const { data: session } = useSession();
   const user = session?.user as { name?: string; userId?: string } | undefined;
-  // Menu contents come from the granted module list, not a hardcoded per-role catalog.
+  // Menu contents come from the granted module list, not a hardcoded per-role catalog. The tree
+  // is the one every menu renderer shares (src/lib/nav-tree.ts): a routeless parent such as
+  // Stock management only toggles (R28), and a `dividerBefore` child gets a line above it (P5).
   const { modules, role, canView } = usePermissions();
   const [syncClearing, setSyncClearing] = useState(false);
   const [syncResult, setSyncResult] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
 
   const handleClearSync = async () => {
     setSyncClearing(true);
     setSyncResult("");
     try {
-      const res = await fetch("/api/sync/clear", { method: "POST" }).then(r => r.json());
-      if (res.success) {
-        const { clearedSyncs, clearedPulls } = res.data;
-        setSyncResult(clearedSyncs + clearedPulls > 0
-          ? `Cleared ${clearedSyncs} sync(s), ${clearedPulls} pull(s)`
-          : "No stuck syncs found");
-      } else {
-        setSyncResult(res.error || "Failed");
-      }
-    } catch { setSyncResult("Network error"); }
+      const { clearedSyncs, clearedPulls } = await apiFetch<{ clearedSyncs: number; clearedPulls: number }>(
+        "/api/sync/clear",
+        { method: "POST" }
+      );
+      setSyncResult(clearedSyncs + clearedPulls > 0
+        ? `Cleared ${clearedSyncs} sync(s), ${clearedPulls} pull(s)`
+        : "No stuck syncs found");
+    } catch (e) {
+      log.error("clear stuck syncs failed", { error: e instanceof Error ? e.message : String(e) });
+      setSyncResult(e instanceof Error ? e.message : "Network error");
+    }
     finally { setSyncClearing(false); }
   };
 
@@ -43,6 +57,17 @@ export default function MorePage() {
       return next;
     });
   };
+
+  const toggleParent = (key: string) => {
+    setExpandedParents((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const rowClass = "flex items-center gap-3 px-4 py-2.5 min-h-[44px] hover:bg-slate-50 transition-colors";
 
   return (
     <div>
@@ -66,19 +91,7 @@ export default function MorePage() {
 
       {/* Grouped Menu — built from the modules this user can view */}
       <div className="space-y-2">
-        {(() => {
-          const groups: { title: string; items: typeof modules }[] = [];
-          for (const m of modules) {
-            if (!m.route) continue; // permission-only modules have no page to link to
-            const title = m.group || "Other";
-            let g = groups.find((x) => x.title === title);
-            if (!g) groups.push((g = { title, items: [] }));
-            g.items.push(m);
-          }
-          return groups;
-        })().map((group) => {
-          const visibleItems = group.items;
-          if (visibleItems.length === 0) return null;
+        {buildNavTree(modules).map((group) => {
           const isExpanded = expandedGroups.has(group.title);
 
           return (
@@ -89,7 +102,7 @@ export default function MorePage() {
               >
                 <span className="text-[13px] font-bold uppercase tracking-wide text-slate-500">{group.title}</span>
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-medium text-slate-400 tabular-nums">{visibleItems.length}</span>
+                  <span className="text-[11px] font-medium text-slate-400 tabular-nums">{linkCount(group)}</span>
                   {isExpanded ? (
                     <ChevronDown className="h-4 w-4 text-slate-400" />
                   ) : (
@@ -99,16 +112,61 @@ export default function MorePage() {
               </button>
               {isExpanded && (
                 <div className="border-t border-slate-100">
-                  {visibleItems.map((item) => {
+                  {group.items.map((item) => {
                     const Icon = moduleIcon(item.icon);
+                    // A routeless parent has nowhere to go — it only toggles its children.
+                    // A routed parent links and keeps its children listed beneath it.
+                    const expander = !item.route;
+                    const showChildren = !expander || expandedParents.has(item.key);
                     return (
-                      <Link key={item.key} href={item.route!} className="block focus-ring rounded-lg">
-                        <div className="flex items-center gap-3 px-4 py-2.5 min-h-[44px] hover:bg-slate-50 transition-colors">
-                          <Icon className="h-4 w-4 text-slate-500 shrink-0" />
-                          <span className="flex-1 text-sm text-slate-700">{item.label}</span>
-                          <ChevronRight className="h-4 w-4 text-slate-300 shrink-0" />
-                        </div>
-                      </Link>
+                      <div key={item.key}>
+                        {expander ? (
+                          <button
+                            type="button"
+                            onClick={() => toggleParent(item.key)}
+                            aria-expanded={showChildren}
+                            className={`${rowClass} w-full text-left focus-ring rounded-lg`}
+                          >
+                            <Icon className="h-4 w-4 text-slate-500 shrink-0" />
+                            <span className="flex-1 text-sm text-slate-700">{item.label}</span>
+                            {showChildren ? (
+                              <ChevronDown className="h-4 w-4 text-slate-400 shrink-0" />
+                            ) : (
+                              <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
+                            )}
+                          </button>
+                        ) : (
+                          <Link href={item.route!} className="block focus-ring rounded-lg">
+                            <div className={rowClass}>
+                              <Icon className="h-4 w-4 text-slate-500 shrink-0" />
+                              <span className="flex-1 text-sm text-slate-700">{item.label}</span>
+                              <ChevronRight className="h-4 w-4 text-slate-300 shrink-0" />
+                            </div>
+                          </Link>
+                        )}
+
+                        {showChildren && item.children.length > 0 && (
+                          <div role="group" className="ml-6 border-l border-slate-100">
+                            {item.children.map((child, i) => {
+                              const ChildIcon = moduleIcon(child.icon);
+                              return (
+                                <div key={child.key}>
+                                  {showDividerBefore(item.children, i) && (
+                                    <div role="separator" className="my-1 mx-4 border-t border-slate-200" />
+                                  )}
+                                  <Link href={child.route!} className="block focus-ring rounded-lg">
+                                    <div className={rowClass}>
+                                      <ChildIcon className="h-4 w-4 text-slate-500 shrink-0" />
+                                      <span className="flex-1 text-sm text-slate-700">{child.label}</span>
+                                      <ChevronRight className="h-4 w-4 text-slate-300 shrink-0" />
+                                    </div>
+                                  </Link>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     );
                   })}
                 </div>

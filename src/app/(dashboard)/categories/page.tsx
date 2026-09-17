@@ -1,10 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Fragment } from "react";
 import Link from "next/link";
-import { ArrowLeft, Power, Tag, Plus, Pencil, Check, X, GitMerge, Package } from "lucide-react";
+import { ArrowLeft, Tag, Plus, Check, X, Package } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SkeletonList } from "@/components/ui/skeleton";
@@ -15,6 +14,9 @@ import { usePermissions } from "@/lib/use-permissions";
 import { apiFetch, apiTry, ApiError } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 import { PLACEHOLDER_CATEGORY } from "@/lib/import-placeholders";
+import { buildCategoryTree, type CategoryTreeNode } from "@/lib/categories/tree";
+import { CategoryTreeSelect } from "@/components/category-tree-select";
+import { CategoryRow, type CategoryItem } from "./_components/category-row";
 
 const log = createLogger("categories");
 
@@ -32,20 +34,10 @@ const log = createLogger("categories");
 // Deliberately modelled on /more/brands: same card list, same inline rename, same
 // ActionConfirmation for a refusal. Two screens that do the same job should not need to be
 // learned twice.
-
-interface CategoryItem {
-  id: string;
-  name: string;
-  description: string | null;
-  reorderLevel: number;
-  parent: { id: string; name: string } | null;
-  /**
-   * A category is never deleted (owner, 8 Sep 2026). Inactive hides it from every picker
-   * and sets its products — and its sub-categories, with theirs — inactive; every row stays.
-   */
-  isActive: boolean;
-  _count: { products: number; children: number };
-}
+//
+// Since plan 1709 (R43, P12) the list is the TREE: each parent followed by its children,
+// indented, with expand/collapse. The tree comes from Zoho's import; a parent can also be
+// chosen by hand on create and edit. Nothing is pushed back to Zoho.
 
 /** What PATCH answers when `isActive` flips: the row plus what the cascade did. */
 interface ToggleResult extends CategoryItem {
@@ -84,9 +76,14 @@ export default function CategoriesPage() {
   // Inline edit — one row at a time. `draft` holds only what is being changed.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
+  const [draftParentId, setDraftParentId] = useState<string | null>(null);
 
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newParentId, setNewParentId] = useState<string | null>(null);
+
+  // Collapsed rather than expanded is stored: a fresh visit shows the whole tree (~30 rows).
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   const [mergeSource, setMergeSource] = useState<string | null>(null);
   const [mergeTarget, setMergeTarget] = useState("");
@@ -114,27 +111,29 @@ export default function CategoriesPage() {
   function startEdit(c: CategoryItem) {
     setEditingId(c.id);
     setDraftName(c.name);
+    setDraftParentId(c.parentId);
   }
 
   function cancelEdit() {
     setEditingId(null);
     setDraftName("");
+    setDraftParentId(null);
   }
 
   async function saveEdit(c: CategoryItem) {
     if (!draftName.trim()) return setError("A category needs a name");
-    // Name is the only editable field now that movingLevel is gone. An unchanged save would
-    // send {} and the API answers 400 "Nothing to update", so close the row instead.
-    if (draftName.trim() === c.name) return cancelEdit();
+    // Only what moved is sent. An unchanged save would send {} and the API answers 400
+    // "Nothing to update", so close the row instead. The API re-checks the parent for a loop.
+    const json: { name?: string; parentId?: string | null } = {};
+    if (draftName.trim() !== c.name) json.name = draftName.trim();
+    if ((draftParentId ?? null) !== (c.parentId ?? null)) json.parentId = draftParentId;
+    if (Object.keys(json).length === 0) return cancelEdit();
 
     setBusy(c.id);
     setError(null);
     try {
-      await apiFetch(`/api/categories/${c.id}`, {
-        method: "PATCH",
-        json: { name: draftName.trim() },
-      });
-      log.info("category saved", { categoryId: c.id });
+      await apiFetch(`/api/categories/${c.id}`, { method: "PATCH", json });
+      log.info("category saved", { categoryId: c.id, fields: Object.keys(json) });
       cancelEdit();
       await load();
     } catch (e) {
@@ -151,9 +150,13 @@ export default function CategoriesPage() {
     setBusy("new");
     setError(null);
     try {
-      await apiFetch("/api/categories", { method: "POST", json: { name: newName.trim() } });
-      log.info("category created");
+      await apiFetch("/api/categories", {
+        method: "POST",
+        json: { name: newName.trim(), ...(newParentId ? { parentId: newParentId } : {}) },
+      });
+      log.info("category created", { parentId: newParentId });
       setNewName("");
+      setNewParentId(null);
       setCreating(false);
       await load();
     } catch (e) {
@@ -285,12 +288,78 @@ export default function CategoriesPage() {
     : categories.filter((c) => !c.isActive);
   // Merging INTO a retired category would hide the moved products; only live ones are targets.
   const mergeTargets = categories.filter((c) => c.isActive);
+  // A new or moved category goes under a live parent — the API refuses to activate a child
+  // of an inactive one, so offering one here would only set up that refusal.
+  const activeRows = mergeTargets;
+
+  // The tree is built from the FILTERED rows: a child whose parent is filtered out becomes a
+  // root of its own and says where it sits ("in Bicycles").
+  const tree = buildCategoryTree(visible);
+  const visibleIds = new Set(visible.map((c) => c.id));
+  const parentIds = visible.filter((c) => visible.some((k) => k.parentId === c.id)).map((c) => c.id);
+  const allCollapsed = parentIds.length > 0 && parentIds.every((id) => collapsed.has(id));
+
+  function toggleCollapsed(id: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function renderNodes(nodes: CategoryTreeNode<CategoryItem>[]): React.ReactNode {
+    return nodes.map((c) => {
+      const expanded = !collapsed.has(c.id);
+      // The picker must still label the current parent when that parent has gone inactive.
+      const parentOptions =
+        c.parentId && !activeRows.some((r) => r.id === c.parentId)
+          ? [...activeRows, ...categories.filter((r) => r.id === c.parentId)]
+          : activeRows;
+      return (
+        <Fragment key={c.id}>
+          <CategoryRow
+            category={c}
+            depth={c.depth}
+            visibleChildren={c.children.length}
+            expanded={expanded}
+            onToggleExpand={() => toggleCollapsed(c.id)}
+            showParentHint={!!c.parentId && !visibleIds.has(c.parentId)}
+            mayEdit={mayEdit}
+            mayMerge={mayMerge}
+            busy={busy === c.id}
+            editing={editingId === c.id}
+            draftName={draftName}
+            onDraftName={setDraftName}
+            draftParentId={draftParentId}
+            onDraftParentId={setDraftParentId}
+            parentOptions={parentOptions}
+            onStartEdit={() => startEdit(c)}
+            onSaveEdit={() => void saveEdit(c)}
+            onCancelEdit={cancelEdit}
+            merging={mergeSource === c.id}
+            mergeTargets={mergeTargets}
+            mergeTarget={mergeTarget}
+            onMergeTarget={setMergeTarget}
+            onStartMerge={() => setMergeSource(c.id)}
+            onMerge={() => void merge()}
+            onCancelMerge={() => {
+              setMergeSource(null);
+              setMergeTarget("");
+            }}
+            onToggleActive={() => void toggleActive(c)}
+          />
+          {expanded && c.children.length > 0 && renderNodes(c.children)}
+        </Fragment>
+      );
+    });
+  }
 
   return (
     <div>
       <div className="flex items-center gap-2 mb-4">
-        {/* Back to the parent hub, not /more — Categories is a Stock Management child now. */}
-        <Link href="/stock-management" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring">
+        {/* Back to /stock: Categories left the menu and is reached from /stock (plan 1709, Q27). */}
+        <Link href="/stock" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring">
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
         <div className="flex-1">
@@ -313,7 +382,7 @@ export default function CategoriesPage() {
 
       {creating && (
         <Card className="mb-3 border-blue-200">
-          <CardContent className="p-3 flex gap-2">
+          <CardContent className="p-3 flex flex-col gap-2">
             <Input
               placeholder="Category name"
               value={newName}
@@ -321,13 +390,33 @@ export default function CategoriesPage() {
               onKeyDown={(e) => e.key === "Enter" && void create()}
               autoFocus
               className="min-h-[40px]"
+              aria-label="Category name"
             />
-            <Button size="sm" onClick={() => void create()} disabled={!newName.trim() || busy === "new"}>
-              <Check className="h-3.5 w-3.5" />
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => { setCreating(false); setNewName(""); }}>
-              <X className="h-3.5 w-3.5" />
-            </Button>
+            <div>
+              <label htmlFor="new-category-parent" className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">
+                Parent (optional)
+              </label>
+              <CategoryTreeSelect
+                id="new-category-parent"
+                categories={activeRows}
+                value={newParentId}
+                onChange={setNewParentId}
+                placeholder="Top level (no parent)"
+              />
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button size="sm" onClick={() => void create()} disabled={!newName.trim() || busy === "new"} aria-label="Create">
+                <Check className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => { setCreating(false); setNewName(""); setNewParentId(null); }}
+                aria-label="Cancel"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -347,6 +436,15 @@ export default function CategoriesPage() {
             {s.label}
           </button>
         ))}
+        {parentIds.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setCollapsed(allCollapsed ? new Set() : new Set(parentIds))}
+            className="ml-auto shrink-0 px-2.5 py-1 min-h-[32px] rounded-full text-[11px] font-medium text-slate-500 hover:bg-slate-100 focus-ring"
+          >
+            {allCollapsed ? "Expand all" : "Collapse all"}
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -364,114 +462,7 @@ export default function CategoriesPage() {
           </p>
         </div>
       ) : (
-        <div className="space-y-1.5">
-          {visible.map((c) => {
-            const isEditing = editingId === c.id;
-            const isMerging = mergeSource === c.id;
-
-            return (
-              <Card key={c.id} className={c.isActive ? "" : "opacity-60"}>
-                <CardContent className="p-3">
-                  {isEditing ? (
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <Input
-                        value={draftName}
-                        onChange={(e) => setDraftName(e.target.value)}
-                        className="min-h-[40px] flex-1"
-                        aria-label="Category name"
-                        autoFocus
-                      />
-                      <div className="flex gap-1.5">
-                        <Button size="sm" onClick={() => void saveEdit(c)} disabled={busy === c.id}>
-                          <Check className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={cancelEdit}>
-                          <X className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <Tag className="h-4 w-4 text-slate-400 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <p className="text-sm font-semibold text-slate-900">{c.name}</p>
-                          {!c.isActive && (
-                            <Badge variant="danger" className="text-[10px]">Inactive</Badge>
-                          )}
-                          <Badge variant="info" className="text-[10px] tabular-nums">
-                            {c._count.products} product{c._count.products === 1 ? "" : "s"}
-                          </Badge>
-                          {c._count.children > 0 && (
-                            <Badge variant="default" className="text-[10px] tabular-nums">
-                              {c._count.children} sub
-                            </Badge>
-                          )}
-                        </div>
-                        {(c.parent || c.description) && (
-                          <p className="text-[11px] text-slate-500 mt-0.5 truncate">
-                            {[c.parent ? `in ${c.parent.name}` : null, c.description].filter(Boolean).join(" · ")}
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex gap-1 shrink-0">
-                        {mayEdit && (
-                          <IconBtn label={`Edit ${c.name}`} onClick={() => startEdit(c)}>
-                            <Pencil className="h-3.5 w-3.5" />
-                          </IconBtn>
-                        )}
-                        {mayMerge && mergeTargets.some((t) => t.id !== c.id) && (
-                          <IconBtn label={`Merge ${c.name} into another category`} onClick={() => setMergeSource(c.id)}>
-                            <GitMerge className="h-3.5 w-3.5" />
-                          </IconBtn>
-                        )}
-                        {mayEdit && (
-                          <IconBtn
-                            label={c.isActive ? `Deactivate ${c.name}` : `Activate ${c.name}`}
-                            tone={c.isActive ? "amber" : "green"}
-                            disabled={busy === c.id}
-                            onClick={() => void toggleActive(c)}
-                          >
-                            <Power className="h-3.5 w-3.5" />
-                          </IconBtn>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {isMerging && (
-                    <div className="mt-2 pt-2 border-t border-slate-200">
-                      <p className="text-[11px] text-slate-600 mb-1.5">
-                        Move {c._count.products} product{c._count.products === 1 ? "" : "s"} from{" "}
-                        <strong>{c.name}</strong> into another category, then delete <strong>{c.name}</strong>.
-                        This cannot be undone.
-                      </p>
-                      <div className="flex gap-2">
-                        <select
-                          value={mergeTarget}
-                          onChange={(e) => setMergeTarget(e.target.value)}
-                          aria-label={`Merge ${c.name} into`}
-                          className="flex-1 min-h-[40px] rounded-lg border border-slate-300 bg-white px-2 text-sm focus-ring"
-                        >
-                          <option value="">Merge into…</option>
-                          {mergeTargets.filter((t) => t.id !== c.id).map((t) => (
-                            <option key={t.id} value={t.id}>{t.name}</option>
-                          ))}
-                        </select>
-                        <Button size="sm" onClick={() => void merge()} disabled={!mergeTarget || busy === c.id}>
-                          {busy === c.id ? "Merging…" : "Merge"}
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={() => { setMergeSource(null); setMergeTarget(""); }}>
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
+        <div className="space-y-1.5">{renderNodes(tree)}</div>
       )}
 
       {/* Why this screen exists, said once at the bottom rather than as a banner nobody
@@ -501,30 +492,5 @@ export default function CategoriesPage() {
         />
       )}
     </div>
-  );
-}
-
-function IconBtn({
-  label, onClick, children, tone, disabled,
-}: {
-  label: string;
-  onClick: () => void;
-  children: React.ReactNode;
-  /** amber = about to take something away, green = about to bring it back. */
-  tone?: "amber" | "green";
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={label}
-      className={`min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 focus-ring ${
-        tone === "amber" ? "text-amber-600" : tone === "green" ? "text-green-600" : "text-slate-600"
-      }`}
-    >
-      {children}
-    </button>
   );
 }

@@ -1,19 +1,20 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bike, LogOut } from "lucide-react";
+import { Bike, ChevronRight, LogOut } from "lucide-react";
 import { signOut, useSession } from "next-auth/react";
 import { cn } from "@/lib/utils";
 import { desktopHref } from "@/lib/nav-config";
 import { usePermissions, clearPermissionCache } from "@/lib/use-permissions";
 import { moduleIcon } from "@/lib/module-icons";
 import { useScrollShadows } from "@/lib/use-scroll-shadows";
-import type { GrantedModule } from "@/stores/permissions";
+import { buildNavTree, showDividerBefore } from "@/lib/nav-tree";
 
-// The /desktop shell's sidebar. Same data source as the responsive sidebar — the `modules`
-// table filtered by `view` — but every href is prefixed for the desktop route tree.
+// The /desktop shell's sidebar. Same data source and the same tree as the responsive sidebar
+// (src/lib/nav-tree.ts) — a routeless parent only toggles its children, `dividerBefore` draws a
+// line — but every href is prefixed for the desktop route tree.
 export function Sidebar() {
   const pathname = usePathname();
   const { data: session } = useSession();
@@ -27,20 +28,19 @@ export function Sidebar() {
     .toUpperCase()
     .slice(0, 2);
 
-  const groups: { title: string; items: GrantedModule[] }[] = [];
-  for (const m of modules) {
-    if (!m.route) continue;
-    const title = m.group || "Other";
-    let g = groups.find((x) => x.title === title);
-    if (!g) groups.push((g = { title, items: [] }));
-    g.items.push(m);
-  }
+  const groups = buildNavTree(modules);
 
   function isActive(href: string) {
     const dHref = desktopHref(href);
     if (dHref === "/desktop") return pathname === "/desktop";
     return pathname.startsWith(dHref);
   }
+
+  // Explicit open/closed choices; a section with no choice follows the route (open when one of
+  // its children is the current page). Not persisted — this shell is a secondary surface.
+  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+  const isOpen = (key: string, children: { route: string | null }[]) =>
+    overrides[key] ?? children.some((c) => !!c.route && isActive(c.route));
 
   // See src/lib/use-scroll-shadows.ts — the granted-module list runs well past the fold.
   const { ref: navRef, atTop, atBottom, onScroll } = useScrollShadows<HTMLElement>([
@@ -104,17 +104,73 @@ export function Sidebar() {
             <div className="space-y-0.5">
               {group.items.map((item) => {
                 const Icon = moduleIcon(item.icon);
-                const active = isActive(item.route!);
+                const hasChildren = item.children.length > 0;
+                const open = hasChildren && isOpen(item.key, item.children);
+                const selfActive = !!item.route && isActive(item.route);
                 return (
-                  <Link
-                    key={item.key}
-                    ref={active ? activeRef : undefined}
-                    href={desktopHref(item.route!)}
-                    className={linkClass(active)}
-                  >
-                    <Icon className="h-4.5 w-4.5 shrink-0" />
-                    {item.label}
-                  </Link>
+                  <div key={item.key}>
+                    {item.route ? (
+                      <div className="flex items-center gap-0.5">
+                        <Link
+                          ref={selfActive ? activeRef : undefined}
+                          href={desktopHref(item.route)}
+                          className={cn(linkClass(selfActive), "flex-1 min-w-0")}
+                        >
+                          <Icon className="h-4.5 w-4.5 shrink-0" />
+                          <span className="truncate">{item.label}</span>
+                        </Link>
+                        {hasChildren && (
+                          <button
+                            type="button"
+                            onClick={() => setOverrides((p) => ({ ...p, [item.key]: !open }))}
+                            aria-expanded={open}
+                            aria-label={`${open ? "Collapse" : "Expand"} ${item.label}`}
+                            className="shrink-0 w-7 h-9 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-900 transition-colors"
+                          >
+                            <ChevronRight className={cn("h-4 w-4 transition-transform", open && "rotate-90")} />
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      // Routeless parent (R28): nowhere to go, so the whole row only toggles.
+                      <button
+                        type="button"
+                        onClick={() => setOverrides((p) => ({ ...p, [item.key]: !open }))}
+                        aria-expanded={open}
+                        className={cn(linkClass(false), "w-full text-left")}
+                      >
+                        <Icon className="h-4.5 w-4.5 shrink-0" />
+                        <span className="truncate">{item.label}</span>
+                        <ChevronRight
+                          className={cn("ml-auto h-4 w-4 shrink-0 text-slate-400 transition-transform", open && "rotate-90")}
+                        />
+                      </button>
+                    )}
+
+                    {open && (
+                      <div role="group" className="mt-0.5 ml-4 space-y-0.5 border-l border-slate-100 pl-2">
+                        {item.children.map((child, i) => {
+                          const ChildIcon = moduleIcon(child.icon);
+                          const childActive = isActive(child.route!);
+                          return (
+                            <div key={child.key}>
+                              {showDividerBefore(item.children, i) && (
+                                <div role="separator" className="my-1.5 mx-2 border-t border-slate-200" />
+                              )}
+                              <Link
+                                ref={childActive ? activeRef : undefined}
+                                href={desktopHref(child.route!)}
+                                className={linkClass(childActive)}
+                              >
+                                <ChildIcon className="h-4 w-4 shrink-0" />
+                                <span className="truncate">{child.label}</span>
+                              </Link>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>

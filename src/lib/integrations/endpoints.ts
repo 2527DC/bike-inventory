@@ -197,7 +197,16 @@ export const ENDPOINTS = {
     providers: INVENTORY_ONLY,
     owner: "InventoryClient.listCategories / listAllCategories",
     purpose:
-      "The category master, for the Fetch from Zoho sheet on /categories. Zoho returns a tree; the import is deliberately flat",
+      "The category master, for the Fetch from Zoho sheet on /categories. Zoho returns a tree; the import sets each category's parent from parent_category_id (plan 1709, P12)",
+  },
+  "items.list.inventory": {
+    key: "items.list.inventory",
+    method: "GET",
+    path: "/items?page&per_page&filter_by",
+    providers: INVENTORY_ONLY,
+    owner: "InventoryClient.listItems / listAllItems",
+    purpose:
+      "item_id -> category_id for every item, so the category import files each product under its Zoho category (plan 1709, R47). Read only",
   },
 } as const satisfies Record<string, EndpointSpec>;
 

@@ -41,6 +41,11 @@ export interface GrantedModule {
   route: string | null;
   group: string | null;
   sortOrder: number;
+  /**
+   * Draw a divider line ABOVE this module among its siblings in the menu. Data, not a
+   * hardcoded key (plan 1709, P5) — first set on `inbound` inside Stock management.
+   */
+  dividerBefore: boolean;
   /** Actions this user holds on this module, e.g. ["view", "edit"]. */
   actions: PermAction[];
   /**
@@ -163,6 +168,7 @@ export const getAccess = cache(async (userId: string): Promise<ResolvedAccess> =
                       route: true,
                       group: true,
                       sortOrder: true,
+                      dividerBefore: true,
                       isActive: true,
                       // The parent may not be granted — see GrantedModule.parent.
                       parent: {
@@ -210,6 +216,7 @@ export const getAccess = cache(async (userId: string): Promise<ResolvedAccess> =
         route: mod.route,
         group: mod.group,
         sortOrder: mod.sortOrder,
+        dividerBefore: mod.dividerBefore,
         actions: [],
         parent: mod.parent,
       };

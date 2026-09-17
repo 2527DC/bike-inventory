@@ -12,6 +12,10 @@ import { outwardSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { maybeNotifyBelowReorder, type ReorderCrossing } from "@/lib/notify/stock";
 import { deductFromStore } from "@/lib/stock-location";
+import { pickUnitsUpTo, sellUnits } from "@/lib/units";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("inventory:outwards");
 
 export async function GET(req: NextRequest) {
   try {
@@ -95,7 +99,35 @@ export async function POST(req: NextRequest) {
       // moved the cache and left StockLevel alone — so the next receipt, applied audit or
       // transfer recomputed the total from a ledger that never saw this outward and put the
       // units back.
-      await deductFromStore(tx, data.productId, storeId, data.quantity, product.name);
+      const deduction = await deductFromStore(tx, data.productId, storeId, data.quantity, product.name);
+
+      // ── THE UNITS LEAVE WITH THE COUNT (plan 1709, R7, R38) ──
+      //
+      // Per warehouse the deduction drew from: pick that many units there (built first, then
+      // oldest) and mark them SOLD, which also lowers the bins they sat in. Picked AFTER the
+      // StockLevel write, which row-locks the level, so a concurrent outward cannot pick the
+      // same units. Tolerant: stock that predates unit records sells only the units that
+      // exist there, and none when there are none — the quantity deduction above stands.
+      let unitsSold = 0;
+      for (const part of deduction.taken) {
+        const ids = await pickUnitsUpTo(tx, {
+          productId: data.productId,
+          warehouseId: part.warehouseId,
+          qty: part.qty,
+          order: "sale",
+        });
+        unitsSold += await sellUnits(tx, ids, {
+          invoiceNo: data.referenceNo ?? null,
+          customerName: typeof body.customerName === "string" ? body.customerName : null,
+        });
+      }
+      log.info("manual outward recorded", {
+        productId: data.productId,
+        storeId,
+        qty: data.quantity,
+        warehouses: deduction.taken.length,
+        unitsSold,
+      });
       crossings.push({ productId: data.productId, previousStock, newStock }); // collect only (§F.0)
 
       // Build notes with bin info
@@ -137,7 +169,7 @@ export async function POST(req: NextRequest) {
       }
 
       return transaction;
-    });
+    }, { timeout: 20_000 });
 
     // §F.0: the transaction has committed. after() runs this once the response has gone out, so
     // the sale is not slowed by SMTP/FCM, and nothing is sent if the transaction threw above.
@@ -148,6 +180,7 @@ export async function POST(req: NextRequest) {
     if (error instanceof AuthError) {
       return errorResponse(error.message, error.status);
     }
+    log.error("manual outward failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Failed to record outward", 400);
   }
 }

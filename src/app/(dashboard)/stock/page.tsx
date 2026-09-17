@@ -1,10 +1,11 @@
 "use client";
 import { useDebounce } from "@/hooks/use-debounce";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Suspense } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, Square, X, Package, EyeOff, RotateCcw, Store, Wrench } from "lucide-react";
+import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, Square, X, Package, EyeOff, RotateCcw, Store, Wrench, Tags, Layers, BarChart3 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -15,7 +16,7 @@ import { exportToExcel, exportToPDF, type ExportColumn } from "@/lib/export";
 import { usePermissions } from "@/lib/use-permissions";
 import { createLogger } from "@/lib/logger";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
-import { apiFetch, apiTry } from "@/lib/api-client";
+import { apiFetch, apiFetchEnvelope, apiTry } from "@/lib/api-client";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { useBinTracking } from "@/hooks/use-bin-tracking";
@@ -26,6 +27,7 @@ import { AssemblyLevelSheet, type AssemblyLevelTarget, type AssemblyLevelSaved }
 import { ASSEMBLY_LEVELS, assemblyLevelLabel, type AssemblyLevelValue } from "@/lib/assembly-level";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useStores } from "@/hooks/use-sites";
+import { CategoryTreeSelect } from "@/components/category-tree-select";
 
 const STOCK_COLUMNS: ExportColumn[] = [
   { header: "SKU", key: "sku" },
@@ -57,13 +59,20 @@ interface ProductItem {
   reorderVendorId: string | null;
   /** The product's one assembly condition level; null = the next Assign asks (plan 1509, D3). */
   assemblyLevel: AssemblyLevelValue | null;
+  /**
+   * Live units by condition (plan 1709, R10, P7) — counted from the units, in the scoped store
+   * when there is one. All three are 0 for a product whose stock has no unit codes yet.
+   */
+  assembledUnits: number;
+  unassembledUnits: number;
+  noAssemblyUnits: number;
 }
 
 interface BrandItem { id: string; name: string; _count: { products: number }; }
 interface BinItem { id: string; code: string; name: string; location: string; _count: { products: number }; }
-interface CategoryItem { id: string; name: string; _count: { products: number }; }
+interface CategoryItem { id: string; name: string; parentId: string | null; isActive?: boolean; _count: { products: number }; }
 
-type QuickFilter = "ALL" | "IN_STOCK" | "NO_STOCK" | "LOW_STOCK" | "INACTIVE" | "NEEDS_DETAILS";
+type QuickFilter = "ALL" | "IN_STOCK" | "NO_STOCK" | "LOW_STOCK" | "INACTIVE" | "NEEDS_DETAILS" | "NO_ASSEMBLY";
 
 const QUICK_CHIPS: { key: QuickFilter; label: string }[] = [
   { key: "ALL", label: "All" },
@@ -75,8 +84,13 @@ const QUICK_CHIPS: { key: QuickFilter; label: string }[] = [
   // described, describe them in one action. Category is not part of the test; see
   // api/products/route.ts, where including it would return every row.
   { key: "NEEDS_DETAILS", label: "Needs details" },
+  // R42: products holding items that need no assembly (units stamped non-assemblable by their
+  // bin). Server-side, like Needs details, for the same reason — the list is paginated.
+  { key: "NO_ASSEMBLY", label: "No assembly" },
   { key: "INACTIVE", label: "Inactive" },
 ];
+
+const QUICK_KEYS = new Set<string>(QUICK_CHIPS.map((c) => c.key));
 
 const log = createLogger("stock");
 
@@ -104,9 +118,33 @@ function getStockAccent(p: ProductItem) {
   return "border-l-green-500";
 }
 
+/**
+ * `useSearchParams` must sit under a Suspense boundary or the production build fails
+ * prerendering the page (node_modules/next/dist/docs/01-app/03-api-reference/04-functions/
+ * use-search-params.md) — same wrapper as purchase-orders/page.tsx.
+ */
 export default function StockPage() {
+  return (
+    <Suspense fallback={<SkeletonList count={6} type="card" />}>
+      <StockScreen />
+    </Suspense>
+  );
+}
+
+function StockScreen() {
   const { data: session } = useSession();
   const { canEdit, canView, canApprove } = usePermissions();
+
+  // Deep links (plan 1709, R11): /stock/condition links here with the product's SKU and store,
+  // and `?condition=no-assembly` opens the No assembly chip. Read ONCE as initial state — the
+  // screen's filters stay local state after that, as they always were.
+  const searchParams = useSearchParams();
+  const initialQuick: QuickFilter =
+    searchParams.get("condition") === "no-assembly"
+      ? "NO_ASSEMBLY"
+      : QUICK_KEYS.has(searchParams.get("quick") ?? "")
+        ? (searchParams.get("quick") as QuickFilter)
+        : "ALL";
   // Bulk edit writes product fields, so it is stock.edit.
   const canBulkEdit = canEdit("stock");
 
@@ -145,17 +183,17 @@ export default function StockPage() {
   const { isBinTrackingEnabled: BIN_TRACKING_ENABLED } = useBinTracking();
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => searchParams.get("search") ?? "");
   const debouncedSearch = useDebounce(search);
-  const [quickFilter, setQuickFilter] = useState<QuickFilter>("ALL");
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>(initialQuick);
   const [showFilters, setShowFilters] = useState(false);
-  const [selectedBrand, setSelectedBrand] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("");
+  const [selectedBrand, setSelectedBrand] = useState(() => searchParams.get("brandId") ?? "");
+  const [selectedCategory, setSelectedCategory] = useState(() => searchParams.get("categoryId") ?? "");
   const [selectedBin, setSelectedBin] = useState("");
   // The store scope (plan 0909-stock-store-and-warehouse-scoping, C2). "" is no scope. When
   // set, the API answers with only what that store holds and every Stock figure on the page
   // is that store's, not the global total — the caption under the control says so.
-  const [selectedStore, setSelectedStore] = useState("");
+  const [selectedStore, setSelectedStore] = useState(() => searchParams.get("storeId") ?? "");
   const { stores, loading: storesLoading, error: storesError } = useStores();
   const [brands, setBrands] = useState<BrandItem[]>([]);
   const [bins, setBins] = useState<BinItem[]>([]);
@@ -253,17 +291,22 @@ export default function StockPage() {
     return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
   }
 
-  // Fetch brands + categories + bins once
+  // Fetch brands + categories + bins once. apiTry, not `fetch().json()` (CLAUDE.md): each list
+  // failing on its own leaves its picker empty and says why in the log, rather than a parse
+  // error from a login page swallowing all three.
   useEffect(() => {
-    Promise.all([
-      fetch("/api/brands").then((r) => r.json()),
-      fetch("/api/bins").then((r) => r.json()),
-      fetch("/api/categories").then((r) => r.json()),
+    void Promise.all([
+      apiTry<BrandItem[]>("/api/brands"),
+      apiTry<BinItem[]>("/api/bins"),
+      apiTry<CategoryItem[]>("/api/categories"),
     ]).then(([brandsRes, binsRes, catsRes]) => {
-      if (brandsRes.success) setBrands(brandsRes.data);
-      if (binsRes.success) setBins(binsRes.data);
-      if (catsRes.success) setCategories(catsRes.data);
-    }).catch(() => {});
+      if (brandsRes.data) setBrands(brandsRes.data);
+      else log.warn("brand list unavailable", { message: brandsRes.error });
+      if (binsRes.data) setBins(binsRes.data);
+      else log.warn("bin list unavailable", { message: binsRes.error });
+      if (catsRes.data) setCategories(catsRes.data);
+      else log.warn("category list unavailable", { message: catsRes.error });
+    });
   }, []);
 
   // Vendors load only when the bulk Vendor tab is first opened, not with the brands and
@@ -294,6 +337,7 @@ export default function StockPage() {
     // rows needing attention are spread across the whole catalog — filtering what happens to
     // be loaded would report "3 need details" out of 151 and look like good news.
     else if (quickFilter === "NEEDS_DETAILS") { params.set("status", "ACTIVE"); params.set("needsDetails", "true"); }
+    else if (quickFilter === "NO_ASSEMBLY") { params.set("status", "ACTIVE"); params.set("condition", "no-assembly"); }
     else if (quickFilter === "ALL" || quickFilter === "LOW_STOCK") { params.set("status", "ACTIVE"); }
     if (selectedBrand) params.set("brandId", selectedBrand);
     if (selectedCategory) params.set("categoryId", selectedCategory);
@@ -307,18 +351,18 @@ export default function StockPage() {
     else setRefreshing(true);
 
     const params = buildParams(pageNum);
-    fetch(`/api/products?${params}`)
-      .then((r) => r.json())
+    // apiFetchEnvelope, not `fetch().json()`: the page block sits beside `data`, and an expired
+    // session must surface as "signed out", not `Unexpected token '<'`.
+    apiFetchEnvelope<ProductItem[]>(`/api/products?${params}`)
       .then((res) => {
-        if (res.success) {
-          if (append) setProducts((prev) => [...prev, ...res.data]);
-          else setProducts(res.data);
-          setTotal(res.pagination?.total || 0);
-          setHasMore(res.pagination?.hasMore || false);
-          setLastUpdated(new Date());
-        }
+        if (append) setProducts((prev) => [...prev, ...res.data]);
+        else setProducts(res.data);
+        setTotal(res.pagination?.total || 0);
+        setHasMore(res.pagination?.hasMore || false);
+        setLastUpdated(new Date());
       })
       .catch((e) => {
+        log.error("product list failed", { page: pageNum, message: e instanceof Error ? e.message : String(e) });
         if (typeof navigator !== "undefined" && !navigator.onLine) {
           setDataError("You're offline. Check your connection and retry.");
         } else {
@@ -472,6 +516,36 @@ export default function StockPage() {
         </div>
       </div>
 
+      {/* Stock & inventory's own chips (plan 1709, R33, R11). Categories and Brands left the
+          sidebar and live here; each shows only to a role holding its view grant — cosmetic, the
+          screens re-check. "Assembled vs unassembled" is stock.view, which this page already is. */}
+      {!selectMode && (
+        <div className="flex gap-1.5 overflow-x-auto scrollbar-hide pb-0.5 mb-2">
+          {canView("categories") && (
+            <Link
+              href="/categories"
+              className="shrink-0 flex items-center gap-1 px-3 py-1.5 min-h-[36px] rounded-full text-xs font-medium bg-violet-50 border border-violet-200 text-violet-700 hover:bg-violet-100"
+            >
+              <Layers className="h-3.5 w-3.5" /> Categories
+            </Link>
+          )}
+          {canView("brands") && (
+            <Link
+              href="/more/brands"
+              className="shrink-0 flex items-center gap-1 px-3 py-1.5 min-h-[36px] rounded-full text-xs font-medium bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100"
+            >
+              <Tags className="h-3.5 w-3.5" /> Brands
+            </Link>
+          )}
+          <Link
+            href="/stock/condition"
+            className="shrink-0 flex items-center gap-1 px-3 py-1.5 min-h-[36px] rounded-full text-xs font-medium bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-100"
+          >
+            <BarChart3 className="h-3.5 w-3.5" /> Assembled vs unassembled
+          </Link>
+        </div>
+      )}
+
       {/* Bulk success/error message */}
       {bulkMessage && (
         <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-lg p-2.5 mb-2">
@@ -546,14 +620,12 @@ export default function StockPage() {
                   text carried in brackets is the row's hint now, so it is still searchable. */}
               <div>
                 <label htmlFor="stock-filter-category" className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Category</label>
-                <SearchableSelect
+                {/* The tree (R43, P13): parents with their children indented. Choosing a parent
+                    lists its children's products too — the API expands the subtree. */}
+                <CategoryTreeSelect
                   id="stock-filter-category"
                   className="mt-0.5"
-                  options={categories.map((c) => ({
-                    id: c.id,
-                    label: c.name,
-                    hint: `${c._count.products} product${c._count.products === 1 ? "" : "s"}`,
-                  }))}
+                  categories={categories}
                   value={selectedCategory || null}
                   onChange={(id) => setSelectedCategory(id ?? "")}
                   placeholder={`All Categories (${categories.length})`}
@@ -642,6 +714,16 @@ export default function StockPage() {
             {canBulkEdit
               ? " Use Select to pick a group, then assign the real brand or category in one action."
               : ""}
+          </span>
+        </p>
+      )}
+
+      {quickFilter === "NO_ASSEMBLY" && !loading && (
+        <p className="text-[11px] text-slate-500 mb-2 flex items-start gap-1.5">
+          <Package className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <span>
+            Products holding items that need no assembly — stored in a non-assemblable bin. They
+            never appear on the build line.
           </span>
         </p>
       )}
@@ -775,6 +857,18 @@ export default function StockPage() {
                         <p className="text-[11px] text-slate-400 mt-1 tabular-nums">
                           Reorder @ {p.reorderLevel}
                           {p.reorderQty > 0 ? ` · order ${p.reorderQty}` : ""}
+                        </p>
+                      )}
+                      {/* Assembled / Unassembled / No assembly (R10, P7), from the live units.
+                          Only when the product has any — a row with no unit codes yet would
+                          otherwise print three zeros that read as "none built". */}
+                      {(p.assembledUnits ?? 0) + (p.unassembledUnits ?? 0) + (p.noAssemblyUnits ?? 0) > 0 && (
+                        <p className="text-[11px] mt-1 flex items-center gap-2 flex-wrap tabular-nums">
+                          <span className="text-emerald-700">Assembled {p.assembledUnits}</span>
+                          <span className="text-amber-700">Unassembled {p.unassembledUnits}</span>
+                          {p.noAssemblyUnits > 0 && (
+                            <span className="text-slate-500">No assembly {p.noAssemblyUnits}</span>
+                          )}
                         </p>
                       )}
                       {/* Only when set, like the reorder line above: "Not set" on every row

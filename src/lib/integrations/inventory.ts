@@ -19,12 +19,25 @@ export interface ZohoCategory {
    *  ITEM payload; the /categories endpoint uses `name`. Verified live 8 Sep 2026. */
   name: string;
   /**
-   * Read from Zoho and then DISCARDED — the owner decided on 8 Sep 2026 to import
-   * categories flat and arrange the tree by hand on /categories. Kept in the type so the
-   * next person can see the field exists and that ignoring it was a decision, not an
-   * oversight. Do not start honouring it without asking.
+   * The Zoho id of this category's parent; `"-1"` (the synthetic ROOT) means top level.
+   * Honoured since plan 1709 (P12, 17 Sep 2026): the category import sets `Category.parentId`
+   * from it. That reverses the flat-import decision D4 of 8 Sep 2026. Nothing is pushed back.
    */
   parent_category_id?: string;
+}
+
+/**
+ * A row of Zoho Inventory's item list — only what the category re-link reads (plan 1709, R47).
+ * `category_id` is on the LIST payload (verified live 7 Sep 2026: 154 of a 200-item sample
+ * carried one); an item with no category has it absent or as an empty string.
+ */
+export interface ZohoItem {
+  item_id: string;
+  name?: string;
+  sku?: string;
+  category_id?: string;
+  category_name?: string;
+  status?: string;
 }
 
 /** base.ts declares this shape but does not export it; the two files must not drift. */
@@ -139,6 +152,57 @@ export class InventoryClient extends IntegrationClient {
       page++;
     }
     log.info("categories pull finished", { categories: all.length, pages: page });
+    return all;
+  }
+
+  // ─── Items (plan 1709, R47) ────────────────────────────────────────────────
+  // Read only, for the category import's product re-link: item_id -> category_id.
+  // `filter_by=Status.All` so an item made inactive in Zoho still reports its category;
+  // a product here can outlive the item's active status there.
+
+  /** Pages fetched concurrently by listAllItems. Well under Zoho's concurrent-call limit. */
+  private static readonly ITEM_PAGE_WINDOW = 3;
+
+  async listItems(page = 1) {
+    return this.apiCall<{ items: ZohoItem[] } & PageContext>(
+      "GET",
+      `/items?page=${page}&per_page=200&filter_by=Status.All`,
+      undefined,
+      "items.list.inventory"
+    );
+  }
+
+  /**
+   * Every item, following `page_context.has_more_page`.
+   *
+   * Pages are requested in windows of three rather than one at a time: the catalog is ~5,700
+   * items (~29 pages) and the import that calls this runs inside one HTTP request, so a
+   * strictly sequential walk spends most of that request waiting. A window stops at the first
+   * page that says there is no more; any later page in the same window is empty and dropped.
+   */
+  async listAllItems(): Promise<ZohoItem[]> {
+    const all: ZohoItem[] = [];
+    const started = Date.now();
+    let page = 1;
+    let pages = 0;
+    for (;;) {
+      const window = Array.from({ length: InventoryClient.ITEM_PAGE_WINDOW }, (_, i) => page + i);
+      const results = await Promise.all(window.map((p) => this.listItems(p)));
+      let more = true;
+      for (let i = 0; i < results.length; i++) {
+        const rows = results[i].items || [];
+        pages++;
+        log.debug("items page fetched", { page: window[i], rows: rows.length });
+        all.push(...rows);
+        if (!results[i].page_context?.has_more_page) {
+          more = false;
+          break;
+        }
+      }
+      if (!more) break;
+      page += InventoryClient.ITEM_PAGE_WINDOW;
+    }
+    log.info("items pull finished", { items: all.length, pages, ms: Date.now() - started });
     return all;
   }
 }

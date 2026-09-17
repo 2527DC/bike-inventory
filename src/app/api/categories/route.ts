@@ -8,6 +8,9 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { categorySchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api:categories");
 
 // `stock.view`, NOT `categories.view`, and deliberately so: every product form reads this
 // for its category dropdown. Re-guarding it on the taxonomy module would empty those
@@ -35,6 +38,7 @@ export async function GET(req: NextRequest) {
     return successResponse(categories);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("category list failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Failed to fetch categories", 500);
   }
 }
@@ -55,12 +59,21 @@ export async function POST(req: NextRequest) {
     });
     if (clash) return errorResponse(`"${clash.name}" already exists`, 409);
 
+    // The /categories create form sends a parent (plan 1709, R43). A new row has no subtree,
+    // so the only check is that the parent exists — otherwise the FK error is the answer.
+    if (data.parentId) {
+      const parent = await prisma.category.findUnique({ where: { id: data.parentId }, select: { id: true } });
+      if (!parent) return errorResponse("The chosen parent category does not exist", 404);
+    }
+
     const category = await prisma.category.create({
-      data: { ...data, name: data.name.trim() },
+      data: { ...data, name: data.name.trim(), parentId: data.parentId || null },
     });
+    log.info("category created", { categoryId: category.id, parentId: category.parentId });
     return successResponse(category, 201);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("category create failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Failed to create category", 400);
   }
 }

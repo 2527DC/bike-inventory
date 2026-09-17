@@ -13,6 +13,10 @@
 // every consumer subscribes to real state, and nothing is granted until the data arrives.
 
 import { create } from "zustand";
+import { apiFetch } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("permissions:store");
 
 export type PermAction = "view" | "create" | "edit" | "delete" | "approve" | "fetch";
 
@@ -33,6 +37,12 @@ export interface GrantedModule {
   route: string | null;
   group: string | null;
   sortOrder: number;
+  /**
+   * Draw a divider line above this module among its siblings (plan 1709, P5). Menu data from
+   * `Module.dividerBefore`, never a module key compared in code. Optional so a response from
+   * a server that predates the column still renders — absent reads as "no divider".
+   */
+  dividerBefore?: boolean;
   actions: PermAction[];
   /**
    * `null` means this is a root module — every module outside Staff LMS.
@@ -82,23 +92,27 @@ let inFlight: Promise<void> | null = null;
 async function fetchAccess(set: (p: Partial<PermissionState>) => void) {
   set({ status: "loading", error: null });
   try {
-    const res = await fetch("/api/my-permissions", { cache: "no-store" });
-    const json = await res.json();
-
-    if (!res.ok || !json?.success) {
-      throw new Error(json?.error || `Request failed (${res.status})`);
-    }
+    // apiFetch, not fetch().json(): an expired session answers 307 -> /login HTML with status
+    // 200, which raw .json() turns into "Unexpected token '<'" (CLAUDE.md).
+    const data = await apiFetch<{
+      user?: PermissionState["user"];
+      role?: PermissionState["role"];
+      permissions?: PermissionMap;
+      modules?: GrantedModule[];
+      navTabs?: string[];
+    }>("/api/my-permissions", { cache: "no-store" });
 
     set({
       status: "ready",
-      user: json.data.user ?? null,
-      role: json.data.role ?? null,
-      permissions: (json.data.permissions as PermissionMap) ?? {},
-      modules: (json.data.modules as GrantedModule[]) ?? [],
-      navTabs: (json.data.navTabs as string[]) ?? [],
+      user: data.user ?? null,
+      role: data.role ?? null,
+      permissions: data.permissions ?? {},
+      modules: data.modules ?? [],
+      navTabs: data.navTabs ?? [],
       error: null,
     });
   } catch (e) {
+    log.error("permission load failed", { error: e instanceof Error ? e.message : String(e) });
     // Fail CLOSED: on error the user holds nothing rather than everything.
     set({
       status: "error",

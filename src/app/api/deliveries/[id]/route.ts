@@ -29,6 +29,7 @@ import { toPlus91, samePhone } from "@/lib/phone";
 import { zoneColumns, zoneFromOutstation } from "@/lib/deliveries/zone";
 import { deliveryPayment } from "@/lib/deliveries/payment";
 import { createLogger } from "@/lib/logger";
+import { sellDeliveryUnits } from "@/lib/units";
 
 const log = createLogger("deliveries:api");
 
@@ -373,6 +374,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
                 },
               });
             }
+            // Plan 1709, Part B (R7, R38): the units behind the lines are SOLD from this floor —
+            // the outward's own held units first — and the bins they sat in go down with them.
+            await sellDeliveryUnits(tx, existing, moved);
           }
         }
 

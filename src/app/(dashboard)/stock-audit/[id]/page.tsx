@@ -26,6 +26,9 @@ interface StockCountItemData {
   id: string;
   systemQty: number;
   countedQty: number | null;
+  /** The unit-level split (plan 1709, R11, Q42). Null on lines counted before it. */
+  assembledQty: number | null;
+  unassembledQty: number | null;
   variance: number | null;
   suggestedBrand: string | null;
   notes: string | null;
@@ -64,6 +67,55 @@ interface StockCountSummary {
   itemsWithVariance: number;
 }
 
+interface Split {
+  assembled: number;
+  unassembled: number;
+}
+
+/**
+ * One half of a line's count — Assembled or Unassembled — as a big-thumb stepper. The number
+ * opens a prompt for typing a large count.
+ */
+function SplitStepper({ label, value, onChange, compact }: {
+  label: string;
+  value: number;
+  onChange: (n: number) => void;
+  compact?: boolean;
+}) {
+  const h = compact ? "h-9" : "h-10";
+  return (
+    <div className="flex items-center gap-2">
+      <span className={`shrink-0 text-xs font-medium text-slate-600 ${compact ? "w-[74px]" : "w-[88px]"}`}>{label}</span>
+      <div className="flex items-center flex-1">
+        <button
+          onClick={() => { if (value > 0) onChange(value - 1); }}
+          aria-label={`${label}: one less`}
+          className={`${h} w-11 flex items-center justify-center bg-slate-100 rounded-l-lg border border-slate-200 active:bg-slate-200`}>
+          <Minus className="h-4 w-4 text-slate-600" />
+        </button>
+        <button
+          onClick={() => {
+            const input = prompt(`${label} count:`, String(value));
+            if (input !== null) {
+              const n = parseInt(input, 10);
+              if (!isNaN(n) && n >= 0) onChange(n);
+            }
+          }}
+          aria-label={`${label}: type a count`}
+          className={`${h} flex-1 min-w-[48px] flex items-center justify-center bg-white border-y border-slate-200 ${compact ? "text-sm" : "text-lg"} font-bold text-slate-900 tabular-nums`}>
+          {value}
+        </button>
+        <button
+          onClick={() => onChange(value + 1)}
+          aria-label={`${label}: one more`}
+          className={`${h} w-11 flex items-center justify-center bg-blue-50 rounded-r-lg border border-blue-200 active:bg-blue-100`}>
+          <Plus className="h-4 w-4 text-blue-600" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const STATUS_STYLE: Record<string, string> = {
   PENDING: "warning",
   IN_PROGRESS: "info",
@@ -97,6 +149,9 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search);
   const [counts, setCounts] = useState<Record<string, number | null>>({});
+  // The condition split per line (Q42). `counts` keeps the TOTAL, which every variance, tab
+  // and save path already reads; this holds the two halves it is the sum of.
+  const [splits, setSplits] = useState<Record<string, Split>>({});
   const [saving, setSaving] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -202,6 +257,15 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
       });
       return merged;
     });
+    setSplits((prev) => {
+      const merged = { ...prev };
+      fetchedItems.forEach((item) => {
+        if (!(item.id in merged) && item.assembledQty !== null && item.unassembledQty !== null) {
+          merged[item.id] = { assembled: item.assembledQty, unassembled: item.unassembledQty };
+        }
+      });
+      return merged;
+    });
   }
 
   useEffect(() => { fetchSummary(); }, [fetchSummary]);
@@ -241,6 +305,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
       .map((itemId) => ({
         id: itemId,
         countedQty: counts[itemId]!,
+        ...(splits[itemId] ? { assembledQty: splits[itemId].assembled, unassembledQty: splits[itemId].unassembled } : {}),
         ...(brands[itemId] ? { suggestedBrand: brands[itemId] } : {}),
       }));
 
@@ -274,6 +339,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
       .map(([itemId, val]) => ({
         id: itemId,
         countedQty: val!,
+        ...(splits[itemId] ? { assembledQty: splits[itemId].assembled, unassembledQty: splits[itemId].unassembled } : {}),
         ...(brands[itemId] ? { suggestedBrand: brands[itemId] } : {}),
       }));
 
@@ -418,14 +484,20 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
     }
   };
 
-  const increment = (itemId: string) => {
-    const current = counts[itemId] ?? 0;
-    setCount(itemId, current + 1);
+  // The split a line shows. A line counted before the split existed (total only) shows its
+  // total as Unassembled — the condition every inward starts in — until the counter corrects it.
+  const splitOf = (item: StockCountItemData): Split => {
+    if (splits[item.id]) return splits[item.id];
+    if (item.assembledQty !== null && item.unassembledQty !== null) {
+      return { assembled: item.assembledQty, unassembled: item.unassembledQty };
+    }
+    const total = counts[item.id] ?? item.countedQty;
+    return { assembled: 0, unassembled: total ?? 0 };
   };
 
-  const decrement = (itemId: string) => {
-    const current = counts[itemId] ?? 0;
-    if (current > 0) setCount(itemId, current - 1);
+  const setSplit = (itemId: string, next: Split) => {
+    setSplits((prev) => ({ ...prev, [itemId]: next }));
+    setCount(itemId, next.assembled + next.unassembled);
   };
 
 
@@ -742,58 +814,43 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
             const isCounted = displayVal !== null && displayVal !== undefined;
 
             if (quickMode && summary.status === "IN_PROGRESS") {
-              // Quick Count Mode — compact row with +/- buttons
+              // Quick Count Mode — compact row: the two halves of the count, stacked.
+              const qSplit = splitOf(item);
               return (
                 <div key={item.id} ref={(el) => { itemRefs.current[item.id] = el; }}
-                  className={`flex items-center gap-2 p-2 rounded-lg border ${isCounted ? "border-green-200 bg-green-50/50" : "border-slate-200"}`}>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-slate-900 truncate">{item.product.name}</p>
-                    <p className="text-[11px] text-slate-400 tabular-nums">{item.product.sku} {item.product.brand ? `| ${item.product.brand.name}` : ""}</p>
+                  className={`p-2 rounded-lg border ${isCounted ? "border-green-200 bg-green-50/50" : "border-slate-200"}`}>
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-slate-900 truncate">{item.product.name}</p>
+                      <p className="text-[11px] text-slate-400 tabular-nums">{item.product.sku} {item.product.brand ? `| ${item.product.brand.name}` : ""}</p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-[11px] text-slate-400">Sys</p>
+                      <p className="text-xs font-semibold text-slate-600 tabular-nums">{item.systemQty}</p>
+                    </div>
+                    {variance !== null && (
+                      <p className={`text-xs font-bold shrink-0 min-w-[30px] text-right tabular-nums ${variance === 0 ? "text-green-600" : "text-red-600"}`}>
+                        {variance > 0 ? "+" : ""}{variance}
+                      </p>
+                    )}
                   </div>
-                  <div className="text-right shrink-0 mr-1">
-                    <p className="text-[11px] text-slate-400">Sys</p>
-                    <p className="text-xs font-semibold text-slate-600 tabular-nums">{item.systemQty}</p>
+                  <div className="space-y-1">
+                    <SplitStepper compact label="Assembled" value={qSplit.assembled}
+                      onChange={(n) => setSplit(item.id, { ...qSplit, assembled: n })} />
+                    <SplitStepper compact label="Unassembled" value={qSplit.unassembled}
+                      onChange={(n) => setSplit(item.id, { ...qSplit, unassembled: n })} />
+                    {/* EXPLICIT ZERO: "I looked and there are none" — both halves 0, and the
+                        line counts as counted. The steppers alone cannot say it. */}
+                    {!isCounted && (
+                      <button
+                        onClick={() => setSplit(item.id, { assembled: 0, unassembled: 0 })}
+                        title="Record zero — none found"
+                        className="w-full h-9 flex items-center justify-center rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-600 active:bg-slate-100"
+                      >
+                        0 ✓ None found
+                      </button>
+                    )}
                   </div>
-                  <div className="flex items-center gap-0 shrink-0">
-                    {/* EXPLICIT ZERO. The baseline period has ended, so Complete needs every item
-                          counted — and "counted" means countedQty is not null. Neither "−" nor "+"
-                          can express "I looked and there are none": decrementing an uncounted row
-                          leaves it uncounted. Without this the only way to finish an audit with a
-                          genuinely empty shelf was to type 0 into the prompt. */}
-                      {!isCounted && (
-                        <button
-                          onClick={() => setCount(item.id, 0)}
-                          title="Record zero — none found"
-                          className="h-9 min-w-[44px] px-2 flex items-center justify-center rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-600 active:bg-slate-100 mr-1"
-                        >
-                          0 ✓
-                        </button>
-                      )}
-                    <button onClick={() => decrement(item.id)}
-                      className="h-9 w-9 flex items-center justify-center bg-slate-100 rounded-l-lg border border-slate-200 active:bg-slate-200">
-                      <Minus className="h-4 w-4 text-slate-600" />
-                    </button>
-                    <button
-                      onClick={() => {
-                        const input = prompt("Enter count:", String(displayVal ?? 0));
-                        if (input !== null) {
-                          const n = parseInt(input, 10);
-                          if (!isNaN(n) && n >= 0) setCount(item.id, n);
-                        }
-                      }}
-                      className="h-9 min-w-[44px] flex items-center justify-center bg-white border-y border-slate-200 text-sm font-bold text-slate-900 tabular-nums">
-                      {displayVal ?? 0}
-                    </button>
-                    <button onClick={() => increment(item.id)}
-                      className="h-9 w-9 flex items-center justify-center bg-blue-50 rounded-r-lg border border-blue-200 active:bg-blue-100">
-                      <Plus className="h-4 w-4 text-blue-600" />
-                    </button>
-                  </div>
-                  {variance !== null && (
-                    <p className={`text-xs font-bold shrink-0 min-w-[30px] text-right tabular-nums ${variance === 0 ? "text-green-600" : "text-red-600"}`}>
-                      {variance > 0 ? "+" : ""}{variance}
-                    </p>
-                  )}
                 </div>
               );
             }
@@ -821,50 +878,44 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
 
                   {summary.status === "IN_PROGRESS" ? (
                     <div className="space-y-2 mt-2">
-                      {/* Plus/Minus Counter */}
-                      <div className="flex items-center gap-3">
-                        <div className="flex items-center flex-1">
-                          {/* EXPLICIT ZERO. The baseline period has ended, so Complete needs every item
-                          counted — and "counted" means countedQty is not null. Neither "−" nor "+"
-                          can express "I looked and there are none": decrementing an uncounted row
-                          leaves it uncounted. Without this the only way to finish an audit with a
-                          genuinely empty shelf was to type 0 into the prompt. */}
-                      {!isCounted && (
-                        <button
-                          onClick={() => setCount(item.id, 0)}
-                          title="Record zero — none found"
-                          className="h-11 min-w-[44px] px-2 flex items-center justify-center rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-600 active:bg-slate-100 mr-1"
-                        >
-                          0 ✓
-                        </button>
-                      )}
-                          <button onClick={() => decrement(item.id)}
-                            className="h-10 w-12 flex items-center justify-center bg-slate-100 rounded-l-lg border border-slate-200 active:bg-slate-200">
-                            <Minus className="h-5 w-5 text-slate-600" />
-                          </button>
-                          <button
-                            onClick={() => {
-                              const input = prompt("Enter count:", String(displayVal ?? 0));
-                              if (input !== null) {
-                                const n = parseInt(input, 10);
-                                if (!isNaN(n) && n >= 0) setCount(item.id, n);
-                              }
-                            }}
-                            className="h-10 flex-1 flex items-center justify-center bg-white border-y border-slate-200 text-lg font-bold text-slate-900 min-w-[60px] tabular-nums">
-                            {displayVal ?? 0}
-                          </button>
-                          <button onClick={() => increment(item.id)}
-                            className="h-10 w-12 flex items-center justify-center bg-blue-50 rounded-r-lg border border-blue-200 active:bg-blue-100">
-                            <Plus className="h-5 w-5 text-blue-600" />
-                          </button>
-                        </div>
-                        {variance !== null && (
-                          <div className={`text-right shrink-0 min-w-[50px] ${variance === 0 ? "text-green-600" : "text-red-600"}`}>
-                            <p className="text-xs">Var</p>
-                            <p className="text-sm font-bold tabular-nums">{variance > 0 ? "+" : ""}{variance}</p>
+                      {/* The count, in two halves (plan 1709, R11, Q42): what is built and what
+                          is still boxed. The total — what "System" and the variance compare
+                          against — is their sum. */}
+                      {(() => {
+                        const cSplit = splitOf(item);
+                        return (
+                          <div className="space-y-1.5">
+                            <SplitStepper label="Assembled" value={cSplit.assembled}
+                              onChange={(n) => setSplit(item.id, { ...cSplit, assembled: n })} />
+                            <SplitStepper label="Unassembled" value={cSplit.unassembled}
+                              onChange={(n) => setSplit(item.id, { ...cSplit, unassembled: n })} />
+                            <div className="flex items-center gap-2">
+                              {/* EXPLICIT ZERO. Complete needs every line counted, and "counted"
+                                  means countedQty is not null — the steppers cannot say "I looked
+                                  and there are none". */}
+                              {!isCounted ? (
+                                <button
+                                  onClick={() => setSplit(item.id, { assembled: 0, unassembled: 0 })}
+                                  title="Record zero — none found"
+                                  className="h-10 flex-1 flex items-center justify-center rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-600 active:bg-slate-100"
+                                >
+                                  0 ✓ None found
+                                </button>
+                              ) : (
+                                <p className="flex-1 text-xs text-slate-600 tabular-nums">
+                                  Total <span className="font-semibold text-slate-900">{displayVal}</span>
+                                </p>
+                              )}
+                              {variance !== null && (
+                                <div className={`text-right shrink-0 min-w-[50px] ${variance === 0 ? "text-green-600" : "text-red-600"}`}>
+                                  <p className="text-xs">Var</p>
+                                  <p className="text-sm font-bold tabular-nums">{variance > 0 ? "+" : ""}{variance}</p>
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        )}
-                      </div>
+                        );
+                      })()}
                       <div className="mt-1">
                         <label className="text-[11px] text-slate-500 mb-0.5 block">
                           Brand {item.product.brand ? `(current: ${item.product.brand.name})` : ""}
@@ -890,6 +941,9 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                   ) : item.countedQty !== null ? (
                     <div className="flex items-center gap-2 mt-2 text-xs tabular-nums">
                       <span className="text-slate-700">Counted <span className="font-semibold">{item.countedQty}</span></span>
+                      {item.assembledQty !== null && item.unassembledQty !== null && (
+                        <span className="text-slate-500">({item.assembledQty} assembled · {item.unassembledQty} unassembled)</span>
+                      )}
                       {item.variance === 0 ? (
                         <span className="text-green-600">· matches</span>
                       ) : item.variance !== null ? (
