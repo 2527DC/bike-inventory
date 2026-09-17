@@ -50,6 +50,25 @@ export const NOTIFICATION_EVENTS = {
     description: "A pull ended — clean, or partial with errors",
     defaults: { push: true, email: false },
   },
+  // Plan 1709-priority-build-and-stock-flow. Recipients are resolved from grants
+  // (`usersWithPermission`), never from role names; the actor is always excluded.
+  "stock.transfer_needed": {
+    label: "Stock transfer needed for an outward",
+    description:
+      "An outward's floor is short, or Find stock raised a transfer request — goes to holders of transfers.create",
+    defaults: { push: true, email: false },
+  },
+  "approval.requested": {
+    label: "Approval requested",
+    description:
+      "An inbound, outbound, transfer or stock audit is waiting for approval — goes to holders of that module's approve grant",
+    defaults: { push: true, email: false },
+  },
+  "approval.returned": {
+    label: "Returned for correction",
+    description: "An approver sent your inbound, outbound or transfer back with a note to fix and resubmit",
+    defaults: { push: true, email: false },
+  },
 } as const satisfies Record<string, EventDefinition>;
 
 export type EventKey = keyof typeof NOTIFICATION_EVENTS;

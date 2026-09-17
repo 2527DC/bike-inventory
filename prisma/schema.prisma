@@ -21,22 +21,27 @@ datasource db {
 // ("stock.edit"). A role holds any number of permissions. A user has exactly one role.
 
 model Module {
-  id          String   @id @default(cuid())
-  key         String   @unique // stable identifier used in code: "stock", "inbound"
-  label       String // human label shown in the sidebar and the admin editor
-  description String?
-  icon        String? // lucide icon name, resolved client-side
-  route       String? // primary route, used to build the sidebar
-  group       String? // sidebar grouping: "Accounts", "Purchase", "Operations", "Admin"
-  sortOrder   Int      @default(0)
-  isActive    Boolean  @default(true)
+  id            String   @id @default(cuid())
+  key           String   @unique // stable identifier used in code: "stock", "inbound"
+  label         String // human label shown in the sidebar and the admin editor
+  description   String?
+  icon          String? // lucide icon name, resolved client-side
+  route         String? // primary route, used to build the sidebar
+  group         String? // sidebar grouping: "Accounts", "Purchase", "Operations", "Admin"
+  sortOrder     Int      @default(0)
+  isActive      Boolean  @default(true)
   // false = only the system role may hold this module's permissions. Enforced in the two
   // role-write routes by `Role.isSystem` (a column, never a role name — CLAUDE.md rule 1),
   // and shown greyed out on /team/permissions. Seeded from `ModuleSeed.assignable`.
   // First used by brand_ledger / brand_ledger_gaps (plan 0909-vendor-ledger-screens, R7).
-  assignable  Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  assignable    Boolean  @default(true)
+  // true = the sidebar draws a divider line ABOVE this module among its siblings. Data, not a
+  // hardcoded module key, so the menu stays changeable without a redeploy. Seeded from
+  // `ModuleSeed.dividerBefore`; first set on `inbound` inside Stock management (plan
+  // 1709-priority-build-and-stock-flow, R28, P5).
+  dividerBefore Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   // ── Sub-module tree ────────────────────────────────────────────────────────
   // NULL = a root module, which is every row that existed before Staff LMS. The sidebar
@@ -354,6 +359,7 @@ model Warehouse {
   inventoryUnits InventoryUnit[]
   assemblyTasks  AssemblyTask[]
   binMovements   BinMovementLog[]
+  approvalEvents ApprovalEvent[]
 
   // `code` is globally unique above, which already prevents a duplicate. This pair is kept
   // because the natural key of a warehouse is (site, code) and a future rename that relaxes
@@ -481,6 +487,14 @@ model User {
   pushDevices             PushDevice[]
   notificationPreferences NotificationPreference[]
   poExtractions           PoExtraction[]           @relation("PoExtractionCreatedBy")
+
+  // Priority build & approvals (plan 1709-priority-build-and-stock-flow)
+  priorityDeliveries          Delivery[]        @relation("DeliveryPriorityBy")
+  approvalRequestedDeliveries Delivery[]        @relation("DeliveryApprovalRequestedBy")
+  approvedDeliveries          Delivery[]        @relation("DeliveryApprovedBy")
+  rejectedInboundShipments    InboundShipment[] @relation("InboundRejectedBy")
+  approvalEventsActed         ApprovalEvent[]   @relation("ApprovalEventActor")
+  approvalEventsJudged        ApprovalEvent[]   @relation("ApprovalEventApprover")
 
   @@index([roleId])
 }
@@ -615,6 +629,7 @@ model Product {
   // JSON), not a stock-keeping unit, and it maps to N SKUs or to none. See LmsProduct.
   lmsProducts       LmsProduct[]       @relation("LmsProductSku")
   poExtractionItems PoExtractionItem[] @relation("PoExtractionItemProduct")
+  approvalEvents    ApprovalEvent[]
 
   @@index([status])
   @@index([categoryId])
@@ -695,20 +710,25 @@ model SerialTransactionItem {
 }
 
 model Bin {
-  id              String      @id @default(cuid())
-  code            String      // e.g. "A1", "ASM"
-  name            String      // e.g. "Shelf Rack 1"
-  warehouseId     String      @map("warehouse_id")
-  warehouse       Warehouse   @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  location        String?     // legacy "Store" or "Warehouse"
-  directions      String?     // "Ground floor, left of entrance, first rack"
-  floor           String?     // "Ground", "1st Floor"
-  zone            String?     // Zone within location e.g. "Zone A"
-  capacity        Int?        // Optional capacity
-  isAssemblyArea  Boolean     @default(false) @map("is_assembly_area")
-  isActive        Boolean     @default(true)
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  id             String    @id @default(cuid())
+  code           String // e.g. "A1", "ASM"
+  name           String // e.g. "Shelf Rack 1"
+  warehouseId    String    @map("warehouse_id")
+  warehouse      Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  location       String? // legacy "Store" or "Warehouse"
+  directions     String? // "Ground floor, left of entrance, first rack"
+  floor          String? // "Ground", "1st Floor"
+  zone           String? // Zone within location e.g. "Zone A"
+  capacity       Int? // Optional capacity
+  isAssemblyArea Boolean   @default(false) @map("is_assembly_area")
+  // Items stored here need no assembly and never appear on the build line (plan
+  // 1709-priority-build-and-stock-flow, R42, P6). Set ONLY when the bin is created — the edit
+  // route refuses a change (P6a) — and a unit that enters such a bin is stamped
+  // `InventoryUnit.nonAssemblable`, which is what keeps the rule true across transfers.
+  nonAssemblable Boolean   @default(false) @map("non_assemblable")
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   products         Product[]
   serialItems      SerialItem[]
@@ -718,11 +738,11 @@ model Bin {
   secondHandCycles SecondHandCycle[]   @relation("SecondHandBin")
   inboundLineItems InboundLineItem[]
 
-  binStocks       BinStock[]
-  units           InventoryUnit[]
-  homeBinRules    HomeBinRule[]
-  fromMovements   BinMovementLog[] @relation("MoveFromBin")
-  toMovements     BinMovementLog[] @relation("MoveToBin")
+  binStocks     BinStock[]
+  units         InventoryUnit[]
+  homeBinRules  HomeBinRule[]
+  fromMovements BinMovementLog[] @relation("MoveFromBin")
+  toMovements   BinMovementLog[] @relation("MoveToBin")
 
   @@unique([warehouseId, code])
   @@index([warehouseId, isActive])
@@ -730,13 +750,13 @@ model Bin {
 }
 
 model BinStock {
-  id          String    @id @default(cuid())
-  binId       String    @map("bin_id")
-  bin         Bin       @relation(fields: [binId], references: [id], onDelete: Cascade)
-  productId   String    @map("product_id")
-  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
-  quantity    Int       @default(0)
-  updatedAt   DateTime  @updatedAt
+  id        String   @id @default(cuid())
+  binId     String   @map("bin_id")
+  bin       Bin      @relation(fields: [binId], references: [id], onDelete: Cascade)
+  productId String   @map("product_id")
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  quantity  Int      @default(0)
+  updatedAt DateTime @updatedAt
 
   @@unique([binId, productId])
   @@index([productId])
@@ -744,61 +764,81 @@ model BinStock {
 }
 
 model HomeBinRule {
-  id          String     @id @default(cuid())
-  warehouseId String     @map("warehouse_id")
-  warehouse   Warehouse  @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  brandId     String?    @map("brand_id")
-  brand       Brand?     @relation(fields: [brandId], references: [id], onDelete: Cascade)
-  categoryId  String?    @map("category_id")
-  category    Category?  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  productId   String?    @map("product_id")
-  product     Product?   @relation(fields: [productId], references: [id], onDelete: Cascade)
-  binId       String     @map("bin_id")
-  bin         Bin        @relation(fields: [binId], references: [id], onDelete: Cascade)
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id          String    @id @default(cuid())
+  warehouseId String    @map("warehouse_id")
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  brandId     String?   @map("brand_id")
+  brand       Brand?    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  categoryId  String?   @map("category_id")
+  category    Category? @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  productId   String?   @map("product_id")
+  product     Product?  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  binId       String    @map("bin_id")
+  bin         Bin       @relation(fields: [binId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   @@index([warehouseId, brandId, categoryId])
   @@map("home_bin_rules")
 }
 
 model InventoryUnit {
-  id                String              @id @default(cuid())
-  unitCode          String              @unique @map("unit_code") // "U-000481"
-  productId         String              @map("product_id")
-  product           Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
-  warehouseId       String              @map("warehouse_id")
-  warehouse         Warehouse           @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
-  binId             String?             @map("bin_id")
-  bin               Bin?                @relation(fields: [binId], references: [id], onDelete: SetNull)
-  frameNumber       String?             @map("frame_number")
-  status            UnitStatus          @default(RECEIVED)
-  inboundShipmentId String?             @map("inbound_shipment_id")
-  inboundShipment   InboundShipment?    @relation(fields: [inboundShipmentId], references: [id])
-  
+  id                String           @id @default(cuid())
+  unitCode          String           @unique @map("unit_code") // "U-000481"
+  productId         String           @map("product_id")
+  product           Product          @relation(fields: [productId], references: [id], onDelete: Restrict)
+  warehouseId       String           @map("warehouse_id")
+  warehouse         Warehouse        @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  binId             String?          @map("bin_id")
+  bin               Bin?             @relation(fields: [binId], references: [id], onDelete: SetNull)
+  frameNumber       String?          @map("frame_number")
+  status            UnitStatus       @default(RECEIVED)
+  inboundShipmentId String?          @map("inbound_shipment_id")
+  inboundShipment   InboundShipment? @relation(fields: [inboundShipmentId], references: [id])
+
   // Assembly attribution
-  assembledById     String?             @map("assembled_by_id")
-  assembledBy       User?               @relation("UnitAssembler", fields: [assembledById], references: [id])
-  assembledAt       DateTime?           @map("assembled_at")
-  assemblyLevel     AssemblyLevel?      @map("assembly_level")
+  assembledById String?        @map("assembled_by_id")
+  assembledBy   User?          @relation("UnitAssembler", fields: [assembledById], references: [id])
+  assembledAt   DateTime?      @map("assembled_at")
+  assemblyLevel AssemblyLevel? @map("assembly_level")
 
   // Sales linkage
-  saleInvoiceNo     String?             @map("sale_invoice_no")
-  soldAt            DateTime?           @map("sold_at")
-  customerName      String?             @map("customer_name")
-  customerPhone     String?             @map("customer_phone")
+  saleInvoiceNo String?   @map("sale_invoice_no")
+  soldAt        DateTime? @map("sold_at")
+  customerName  String?   @map("customer_name")
+  customerPhone String?   @map("customer_phone")
 
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
+  // ★ priority reservation (plan 1709-priority-build-and-stock-flow, R16, R21). The outward this
+  // unit is held for; set when a short outward is starred, cleared when the star is removed.
+  // SetNull: deleting a delivery releases its units rather than failing or taking them with it.
+  reservedForDeliveryId String?   @map("reserved_for_delivery_id")
+  reservedForDelivery   Delivery? @relation(fields: [reservedForDeliveryId], references: [id], onDelete: SetNull)
+  reservedAt            DateTime? @map("reserved_at")
 
-  assemblyTasks     AssemblyTask[]
-  complaints        Complaint[]
-  transferItems     TransferOrderUnit[]
-  movements         BinMovementLog[]
+  // Stamped when the unit enters a non-assemblable bin and KEPT through transfers, when the unit
+  // has no bin at all (R42, P6). The Awaiting list and the bin-move check read this, not the bin.
+  nonAssemblable Boolean @default(false) @map("non_assemblable")
+
+  // The inward ledger row that created this unit, so a cleanup that reverses that inward can
+  // retire exactly its units (P4). SetNull: the unit is a physical item and outlives its ledger row.
+  sourceTransactionId String?               @map("source_transaction_id")
+  sourceTransaction   InventoryTransaction? @relation(fields: [sourceTransactionId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assemblyTasks AssemblyTask[]
+  complaints    Complaint[]
+  transferItems TransferOrderUnit[]
+  movements     BinMovementLog[]
 
   @@index([warehouseId, status])
   @@index([productId, status])
   @@index([binId])
+  // Both FKs are SetNull, so Postgres checks this table on every delivery / transaction delete;
+  // the delivery one also serves "units reserved for this outward" (R16, R21).
+  @@index([reservedForDeliveryId])
+  @@index([sourceTransactionId])
   @@map("inventory_units")
 }
 
@@ -814,39 +854,53 @@ enum UnitStatus {
   DAMAGED
   TRANSFERRED
   LOST
+  // Cleared by a stock reset (plan 1709-priority-build-and-stock-flow, P3, Q43). Kept as a row so
+  // the unit's history stays readable, and distinct from LOST so reset is not counted as loss.
+  RESET
+}
+
+// The two reasons a build can be put on hold (plan 1709-priority-build-and-stock-flow, R3, R6).
+enum HoldIssue {
+  CYCLE // ISSUE WITH THE CYCLE
+  WORKFLOOR // ISSUE ON THE WORKFLOOR
 }
 
 enum AssemblyLevel {
-  A50   // 50%
-  A85   // 85%
-  FULL  // 100%
+  A50 // 50%
+  A85 // 85%
+  FULL // 100%
 }
 
 model AssemblyTask {
-  id               String             @id @default(cuid())
-  unitId           String             @map("unit_id")
-  unit             InventoryUnit      @relation(fields: [unitId], references: [id], onDelete: Cascade)
-  warehouseId      String             @map("warehouse_id")
-  warehouse        Warehouse          @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
-  level            AssemblyLevel
-  status           AssemblyTaskStatus @default(PENDING)
-  
-  assignedToId     String             @map("assigned_to_id")
-  assignedTo       User               @relation("AssignedMechanic", fields: [assignedToId], references: [id])
-  assignedById     String             @map("assigned_by_id")
-  assignedBy       User               @relation("TaskAssignedBy", fields: [assignedById], references: [id])
-  assignedAt       DateTime           @default(now()) @map("assigned_at")
+  id          String             @id @default(cuid())
+  unitId      String             @map("unit_id")
+  unit        InventoryUnit      @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  warehouseId String             @map("warehouse_id")
+  warehouse   Warehouse          @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  level       AssemblyLevel
+  status      AssemblyTaskStatus @default(PENDING)
 
-  startedAt        DateTime?          @map("started_at")
-  holdStartedAt    DateTime?          @map("hold_started_at")
-  totalHoldSeconds Int                @default(0) @map("total_hold_seconds")
-  holdReason       String?            @map("hold_reason")
-  completedAt      DateTime?          @map("completed_at")
-  photoUrl         String?            @map("photo_url")
+  assignedToId String   @map("assigned_to_id")
+  assignedTo   User     @relation("AssignedMechanic", fields: [assignedToId], references: [id])
+  assignedById String   @map("assigned_by_id")
+  assignedBy   User     @relation("TaskAssignedBy", fields: [assignedById], references: [id])
+  assignedAt   DateTime @default(now()) @map("assigned_at")
+
+  startedAt        DateTime?  @map("started_at")
+  holdStartedAt    DateTime?  @map("hold_started_at")
+  totalHoldSeconds Int        @default(0) @map("total_hold_seconds")
+  // No longer written from plan 1709 (R3): the six free-text reasons became `holdIssue`. Kept so
+  // old rows stay readable; dropped a release later (CLAUDE.md migrations rule 7).
+  holdReason       String?    @map("hold_reason")
+  // The issue chosen on the one-tap hold (R3, R6), and a note only a supervisor adds (Q3).
+  holdIssue        HoldIssue? @map("hold_issue")
+  holdNote         String?    @map("hold_note")
+  completedAt      DateTime?  @map("completed_at")
+  photoUrl         String?    @map("photo_url")
   notes            String?
 
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([warehouseId, status])
   @@index([assignedToId, status])
@@ -874,7 +928,7 @@ model BinMovementLog {
   fromBin     Bin?           @relation("MoveFromBin", fields: [fromBinId], references: [id])
   toBinId     String?        @map("to_bin_id")
   toBin       Bin?           @relation("MoveToBin", fields: [toBinId], references: [id])
-  reason      String         // "Put-away round 1", "Moved by assignment", "Manual relocation"
+  reason      String // "Put-away round 1", "Moved by assignment", "Manual relocation"
   movedById   String         @map("moved_by_id")
   movedBy     User           @relation(fields: [movedById], references: [id])
   createdAt   DateTime       @default(now())
@@ -898,22 +952,22 @@ model TransferOrderUnit {
 }
 
 model Complaint {
-  id              String         @id @default(cuid())
-  ticketNo        String         @unique @map("ticket_no") // Auto: CMP-YYYYMM-NNNN
-  unitId          String         @map("unit_id")
-  unit            InventoryUnit  @relation(fields: [unitId], references: [id], onDelete: Restrict)
-  customerName    String         @map("customer_name")
-  customerPhone   String         @map("customer_phone")
+  id              String        @id @default(cuid())
+  ticketNo        String        @unique @map("ticket_no") // Auto: CMP-YYYYMM-NNNN
+  unitId          String        @map("unit_id")
+  unit            InventoryUnit @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  customerName    String        @map("customer_name")
+  customerPhone   String        @map("customer_phone")
   description     String
-  photoUrl        String?        @map("photo_url")
-  isAssemblyFault Boolean        @default(false) @map("is_assembly_fault")
-  faultMechanicId String?        @map("fault_mechanic_id")
-  faultMechanic   User?          @relation("MechanicAssemblyFaults", fields: [faultMechanicId], references: [id])
-  attributedById  String?        @map("attributed_by_id")
-  attributedBy    User?          @relation("ComplaintAttributedBy", fields: [attributedById], references: [id])
-  status          String         @default("OPEN")
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  photoUrl        String?       @map("photo_url")
+  isAssemblyFault Boolean       @default(false) @map("is_assembly_fault")
+  faultMechanicId String?       @map("fault_mechanic_id")
+  faultMechanic   User?         @relation("MechanicAssemblyFaults", fields: [faultMechanicId], references: [id])
+  attributedById  String?       @map("attributed_by_id")
+  attributedBy    User?         @relation("ComplaintAttributedBy", fields: [attributedById], references: [id])
+  status          String        @default("OPEN")
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
   @@index([unitId])
   @@index([faultMechanicId])
@@ -944,7 +998,9 @@ model InventoryTransaction {
 
   createdAt DateTime @default(now())
 
-  serialItems SerialTransactionItem[]
+  serialItems  SerialTransactionItem[]
+  // Units this inward created (plan 1709, P4) — what a cleanup of this row retires.
+  createdUnits InventoryUnit[]
 
   @@index([productId])
   @@index([userId])
@@ -1006,6 +1062,10 @@ model StockCountItem {
   suggestedBrand String? // Staff suggests brand for "Imported" items
   notes          String?
   countedAt      DateTime?
+  // The unit-level audit splits the count by condition (plan 1709-priority-build-and-stock-flow,
+  // R11, Q42). Null on every line counted before it, and on a count that did not split.
+  assembledQty   Int?
+  unassembledQty Int?
 
   // This table had NO index at all. It is the one that grows per product per audit -- a
   // 300-line count is 300 rows -- and both of its foreign keys are read on every screen that
@@ -1478,9 +1538,9 @@ model AiProvider {
 // Append-only record of every AI request across all modules.
 model AiCallLog {
   id           String   @id @default(cuid())
-  purpose      String   // e.g. "bank.statement_parse", "po.sheet_columns", "payments.screenshot_scan", etc.
-  providerKey  String   // "anthropic" | "google" | "openai"
-  model        String   // "claude-opus-5", "gemini-3.8-flash", etc.
+  purpose      String // e.g. "bank.statement_parse", "po.sheet_columns", "payments.screenshot_scan", etc.
+  providerKey  String // "anthropic" | "google" | "openai"
+  model        String // "claude-opus-5", "gemini-3.8-flash", etc.
   inputTokens  Int      @default(0)
   outputTokens Int      @default(0)
   totalTokens  Int      @default(0)
@@ -1489,8 +1549,8 @@ model AiCallLog {
   latencyMs    Int
   stopReason   String?
   ok           Boolean  @default(true)
-  errorKind    String?  // null if ok, or "rate_limit" | "max_tokens" | "parse" | etc.
-  userId       String?  // bare string, no relation — outlives a deleted user
+  errorKind    String? // null if ok, or "rate_limit" | "max_tokens" | "parse" | etc.
+  userId       String? // bare string, no relation — outlives a deleted user
   createdAt    DateTime @default(now())
 
   @@index([purpose, createdAt])
@@ -1728,6 +1788,13 @@ model Customer {
   // Outward deliveries linked by Save Contact (plan 1609-deliveries, A2).
   deliveries Delivery[]
 
+  // Google Contacts sync status, shown on the Customers list (plan 1709-priority-build-and-stock-flow,
+  // R44, P14c). Written only by the list's "Sync to Google" action, never by Save Customer (P14d).
+  // `googleContactId` = the People API resourceName; `googleSyncError` = the last failure, cleared on success.
+  googleContactId String?
+  googleSyncedAt  DateTime?
+  googleSyncError String?
+
   @@index([name])
 }
 
@@ -1930,7 +1997,7 @@ model Delivery {
   //
   // ⚠ `isOutstation` is superseded by `deliveryZone` (plan 1609-deliveries, T6) and is kept in
   // step with it for one release — every writer sets both — then dropped (CLAUDE.md rule 7).
-  isOutstation        Boolean @default(false)
+  isOutstation        Boolean       @default(false)
   // Bangalore, Outstation, or null = "Not chosen" (A22). A boolean cannot say "nobody has chosen
   // yet", which put every fresh import in the Bangalore list. Set by the customer's form or by
   // staff scheduling; backfilled in `…_delivery_zone_and_payment` per A34.
@@ -1947,8 +2014,31 @@ model Delivery {
   selfFillCompletedAt DateTime?
   mapsLink            String? // Google Maps location link shared by customer
 
+  // ★ Priority (plan 1709-priority-build-and-stock-flow, R19–R21). Set = starred; set and cleared
+  // by holders of `delivery_priority.edit`. `priorityAt` orders ★ jobs after the delivery day.
+  // Every set/clear is also written to ActivityLog. SetNull: the star outlives the user who set it.
+  priorityAt   DateTime?
+  priorityById String?
+  priorityBy   User?     @relation("DeliveryPriorityBy", fields: [priorityById], references: [id], onDelete: SetNull)
+
+  // Outbound approval before OUT_FOR_DELIVERY / SHIPPED (R26a, Q16, Q37), via `deliveries.approve`.
+  // Walk-outs and Dummy deliveries never use it. A return (R25) stamps `approvalReturnedAt` with a
+  // note; the creator fixes and re-requests the SAME delivery. SetNull on every user link.
+  approvalRequestedAt   DateTime?
+  approvalRequestedById String?
+  approvalRequestedBy   User?     @relation("DeliveryApprovalRequestedBy", fields: [approvalRequestedById], references: [id], onDelete: SetNull)
+  approvedAt            DateTime?
+  approvedById          String?
+  approvedBy            User?     @relation("DeliveryApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvalReturnedAt    DateTime?
+  approvalNote          String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Units held for this outward by ★ (R16), and Find-stock transfers raised for it (R45, P16).
+  reservedUnits  InventoryUnit[]
+  transferOrders TransferOrder[]
 
   @@index([status])
   @@index([invoiceDate])
@@ -2080,6 +2170,10 @@ enum TransferOrderStatus {
   CANCELLED
   IN_TRANSIT
   RECEIVED
+  // Sent back to the creator with a note, to be fixed and resubmitted as the SAME order (plan
+  // 1709-priority-build-and-stock-flow, R25, Q17). REJECTED stays for rows written before it.
+  // Nothing in this migration uses the value — the 55P04 rule above.
+  RETURNED
 }
 
 // Derived, never chosen by the user: both warehouses under one store = INTRA_STORE, different
@@ -2172,6 +2266,14 @@ model TransferOrder {
   receivedAt   DateTime?
   receiveNote  String?
 
+  // Last resubmit after a RETURNED (plan 1709-priority-build-and-stock-flow, R25).
+  resubmittedAt DateTime?
+
+  // The outward a Find-stock request was raised for (R45, P16, P19). Receiving an order that has
+  // one holds that outward's stock at once. SetNull: deleting the delivery leaves the transfer.
+  deliveryId String?
+  delivery   Delivery? @relation(fields: [deliveryId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -2187,6 +2289,7 @@ model TransferOrder {
   // either of these, and a composite that no query has asked for yet is dead weight.
   @@index([fromWarehouseId])
   @@index([toWarehouseId])
+  @@index([deliveryId]) // SetNull FK check on delivery delete, and "transfers for this outward"
 }
 
 model TransferOrderItem {
@@ -2263,6 +2366,13 @@ model InboundShipment {
   putawayAt            DateTime?
   putawayById          String?
   putawayBy            User?                 @relation("InboundPutawayBy", fields: [putawayById], references: [id])
+  // Reject returns the shipment to its creator with a note; they fix and resubmit the SAME
+  // shipment (plan 1709-priority-build-and-stock-flow, R25, Q17 — inbound Reject is new).
+  rejectedAt           DateTime?
+  rejectedById         String?
+  rejectedBy           User?                 @relation("InboundRejectedBy", fields: [rejectedById], references: [id], onDelete: SetNull)
+  rejectionNote        String?
+  resubmittedAt        DateTime?
   notes                String?
   createdById          String
   createdBy            User                  @relation("InboundCreatedBy", fields: [createdById], references: [id])
@@ -2509,6 +2619,70 @@ model ActivityLog {
   @@index([userId, createdAt])
   @@index([module, createdAt])
   @@index([entityType, entityId])
+}
+
+// ─── Approval events (plan 1709-priority-build-and-stock-flow, R22–R26) ──────
+//
+// One row per approval fact on the four controlled activities. It is what the approver-error
+// rate counts (R26): an APPROVED inbound/transfer followed within N days by CORRECTED, a
+// SHORT_RECEIVED, or a REVERSED one counts against `approverId`; FLAGGED is recorded but only
+// counted if the `approver_error_rule` setting says so. ActivityLog stays the human-readable
+// trail; this table is the queryable one.
+//
+// `recordId` is polymorphic (InboundShipment / Delivery / TransferOrder / StockCount by
+// `activity`), so it cannot be a foreign key; `recordRef` snapshots "IB-202609-0001" so a list
+// reads without four joins.
+//
+// Users are foreign keys with RESTRICT, unlike ActivityLog.userId. The two columns ARE the
+// metric — SetNull would silently erase who approved what — and a user is never hard-deleted
+// with history: api/users/[id] falls back to deactivating when a relation refuses the delete.
+// Product and warehouse are CONTEXT (which line was short, where), so they are SetNull: the
+// event and its record reference survive a product wipe or a warehouse delete.
+enum ApprovalActivity {
+  INBOUND
+  OUTBOUND
+  TRANSFER
+  STOCK_AUDIT
+}
+
+enum ApprovalEventType {
+  REQUESTED
+  APPROVED
+  REJECTED
+  RESUBMITTED
+  REVERSED
+  CORRECTED
+  SHORT_RECEIVED
+  FLAGGED
+}
+
+model ApprovalEvent {
+  id          String            @id @default(cuid())
+  activity    ApprovalActivity
+  event       ApprovalEventType
+  recordId    String            @map("record_id")
+  recordRef   String?           @map("record_ref")
+  // Who did this event.
+  actorId     String            @map("actor_id")
+  actor       User              @relation("ApprovalEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+  // The approval this outcome judges — on CORRECTED / SHORT_RECEIVED / REVERSED / FLAGGED it is
+  // the person who APPROVED the record, not the actor. Null where no approval exists yet.
+  approverId  String?           @map("approver_id")
+  approver    User?             @relation("ApprovalEventApprover", fields: [approverId], references: [id], onDelete: Restrict)
+  productId   String?           @map("product_id")
+  product     Product?          @relation(fields: [productId], references: [id], onDelete: SetNull)
+  warehouseId String?           @map("warehouse_id")
+  warehouse   Warehouse?        @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  quantity    Int?
+  note        String?
+  createdAt   DateTime          @default(now()) @map("created_at")
+
+  // One record's trail; the error-rate query per approver in a window; per product/place
+  // history. The actor FK is not separately indexed: users are deactivated, not deleted.
+  @@index([activity, recordId])
+  @@index([approverId, event, createdAt])
+  @@index([productId, warehouseId, createdAt])
+  @@map("approval_events")
 }
 
 model AppSetting {

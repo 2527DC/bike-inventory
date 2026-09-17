@@ -40,6 +40,9 @@ export const TRANSFER_TRANSITIONS: Record<TransferOrderStatus, TransferOrderStat
   RECEIVED: [],
   REJECTED: [],
   CANCELLED: [],
+  // Added by the plan 1709 migration (R25) so this Record stays exhaustive. Empty and
+  // unreachable until Part D adds PENDING -> RETURNED and RETURNED -> PENDING (resubmit).
+  RETURNED: [],
 };
 
 /** The statuses a transfer can still be cancelled from. Derived, so it cannot drift. */
