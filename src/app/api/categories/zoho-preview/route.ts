@@ -19,6 +19,9 @@ interface PreviewRow {
   status: Status;
   localId?: string;
   localName?: string;
+  /** The Zoho parent's name; absent for a top-level category (parent ROOT "-1"). */
+  parentName?: string;
+  parentZohoId?: string;
   // Always false for categories. The field is kept so both sheets render from one shape;
   // a category is never vendor-shaped, so no Vendor query is run on this route at all.
   vendorLike: boolean;
@@ -27,9 +30,9 @@ interface PreviewRow {
 /**
  * GET /api/categories/zoho-preview — WRITES NOTHING.
  *
- * Zoho returns categories as a tree and every node carries `parent_category_id`. It is read
- * and DISCARDED: the import is flat and the tree is arranged by hand on /categories (owner
- * decision D4, 8 Sep 2026). Do not start honouring it without asking.
+ * Zoho returns categories as a tree and every node carries `parent_category_id`. Each row
+ * names its Zoho parent, because the import now files every category under that parent
+ * (plan 1709, P12 — reversing the flat-import decision D4 of 8 Sep 2026).
  */
 export async function GET() {
   try {
@@ -58,6 +61,11 @@ export async function GET() {
       localCategories.filter((c) => c.zohoCategoryId).map((c) => [c.zohoCategoryId as string, c])
     );
     const byName = new Map(localCategories.map((c) => [c.name.trim().toLowerCase(), c]));
+    const zohoNameById = new Map(
+      zohoCategories
+        .filter((c) => c.category_id && c.category_id !== ROOT_CATEGORY_ID)
+        .map((c) => [c.category_id, (c.name ?? "").trim()])
+    );
 
     const rows: PreviewRow[] = [];
     let linked = 0;
@@ -74,6 +82,11 @@ export async function GET() {
       if (zohoId === ROOT_CATEGORY_ID) continue;
 
       const key = name.toLowerCase();
+      const parentZohoId = (c.parent_category_id ?? "").trim();
+      const parent =
+        parentZohoId && parentZohoId !== ROOT_CATEGORY_ID && zohoNameById.get(parentZohoId)
+          ? { parentZohoId, parentName: zohoNameById.get(parentZohoId) }
+          : {};
 
       const alreadyLinked = byZohoId.get(zohoId);
       if (alreadyLinked) {
@@ -84,6 +97,7 @@ export async function GET() {
           status: "linked",
           localId: alreadyLinked.id,
           localName: alreadyLinked.name,
+          ...parent,
           vendorLike: false,
         });
         continue;
@@ -98,13 +112,14 @@ export async function GET() {
           status: "adopt",
           localId: sameName.id,
           localName: sameName.name,
+          ...parent,
           vendorLike: false,
         });
         continue;
       }
 
       fresh++;
-      rows.push({ zohoId, name, status: "new", vendorLike: false });
+      rows.push({ zohoId, name, status: "new", ...parent, vendorLike: false });
     }
 
     log.info("category preview built", { linked, adopt, new: fresh, total: rows.length });

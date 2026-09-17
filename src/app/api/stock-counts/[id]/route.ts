@@ -15,6 +15,7 @@ import {
   getStoreQtyMap,
 } from "@/lib/stock-location";
 import { logActivity } from "@/lib/activity-log";
+import { syncWarehouseUnits, adjustWarehouseUnits } from "@/lib/units";
 import { createLogger } from "@/lib/logger";
 
 // This route applies a counter's numbers — and used to apply their spelling of a brand name
@@ -47,6 +48,14 @@ interface AppliedSummary {
   writtenOff: number;
   warehouse: string;
   scope: "warehouse" | "store";
+  /** Unit records brought in line with the counts (plan 1709, Part B, Q42). */
+  units: {
+    created: number;
+    markedAssembled: number;
+    markedUnassembled: number;
+    /** Codes retired as LOST — their labels are on real items, so they are listed (P9). */
+    retiredCodes: string[];
+  };
 }
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -302,6 +311,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
               where: { id: item.id },
               data: {
                 countedQty: item.countedQty,
+                // This older path carries no condition split; a split that no longer sums to
+                // the count would be applied wrongly, so it is cleared (plan 1709, Q42).
+                assembledQty: null,
+                unassembledQty: null,
                 variance: item.countedQty - existingItem.systemQty,
                 notes: item.notes ?? existingItem.notes,
                 countedAt: new Date(),
@@ -366,6 +379,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         const summary: AppliedSummary = {
           lines: 0, changed: 0, netUnits: 0, zeroLines: 0, writtenOff: 0,
           warehouse: target.name, scope: target.scope,
+          units: { created: 0, markedAssembled: 0, markedUnassembled: 0, retiredCodes: [] },
         };
 
         for (const item of countedItems) {
@@ -420,23 +434,61 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
               stockCountId: id, productId: product.id, snapshot: item.systemQty, live, counted,
             });
           }
+          // ── UNITS FOLLOW THE COUNT (plan 1709, Part B, R7, R11, Q42) ──
+          //
+          // A line counted with the condition split (assembled + unassembled) makes the
+          // warehouse hold exactly those units, keeping existing codes (P9) — and it runs even
+          // when the TOTAL matches, because the condition may not. A line without the split
+          // (older clients, whole-store audits) moves units by the delta only. Both are tolerant
+          // of stock that has fewer unit records than its count.
+          const hasSplit = item.assembledQty !== null && item.unassembledQty !== null;
+          const unitBin = existing.binId ?? null;
+          if (target.scope === "warehouse" && hasSplit) {
+            const synced = await syncWarehouseUnits(tx, {
+              productId: product.id,
+              warehouseId: target.warehouseId,
+              assembled: item.assembledQty!,
+              unassembled: item.unassembledQty!,
+              binId: unitBin,
+            });
+            summary.units.created += synced.createdAssembled + synced.createdUnassembled;
+            summary.units.markedAssembled += synced.markedAssembled;
+            summary.units.markedUnassembled += synced.markedUnassembled;
+            summary.units.retiredCodes.push(...synced.retired.map((r) => r.unitCode));
+          }
+
           if (delta === 0) continue;
           summary.changed += 1;
           summary.netUnits += delta;
 
           const label = `${product.name} (${product.sku})`;
+          const recordUnits = (r: { created: number; retired: Array<{ unitCode: string }> }) => {
+            summary.units.created += r.created;
+            summary.units.retiredCodes.push(...r.retired.map((u) => u.unitCode));
+          };
           if (target.scope === "warehouse") {
             // One warehouse: the counted number IS that warehouse's quantity.
             await setWarehouseQty(tx, product.id, target.warehouseId, counted);
+            if (!hasSplit) {
+              recordUnits(
+                await adjustWarehouseUnits(tx, { productId: product.id, warehouseId: target.warehouseId, delta, binId: unitBin })
+              );
+            }
           } else if (delta > 0) {
             // Whole store, surplus: booked to the warehouse the approver named.
             await adjustWarehouseQty(tx, product.id, target.warehouseId, delta);
+            recordUnits(await adjustWarehouseUnits(tx, { productId: product.id, warehouseId: target.warehouseId, delta }));
           } else {
             // Whole store, shortage: taken from the store's active warehouses in picker
             // order — the rule a sale follows. `live` was summed over the same active
             // warehouses inside this transaction, so the amount never exceeds what is held
             // and `deductFromStore`'s insufficiency refusal cannot fire here.
-            await deductFromStore(tx, product.id, target.storeId, -delta, label);
+            const deduction = await deductFromStore(tx, product.id, target.storeId, -delta, label);
+            for (const part of deduction.taken) {
+              recordUnits(
+                await adjustWarehouseUnits(tx, { productId: product.id, warehouseId: part.warehouseId, delta: -part.qty })
+              );
+            }
           }
 
           // If this audit was scoped to a bin, sync the BinStock record and log movement
@@ -503,6 +555,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           netUnits: summary.netUnits,
           zeroLines: summary.zeroLines,
           writtenOff: summary.writtenOff,
+          unitsCreated: summary.units.created,
+          unitsMarkedAssembled: summary.units.markedAssembled,
+          unitsMarkedUnassembled: summary.units.markedUnassembled,
+          unitsRetired: summary.units.retiredCodes.length,
         });
       }
 

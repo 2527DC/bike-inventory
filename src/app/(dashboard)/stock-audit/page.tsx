@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
-import { Plus, ClipboardCheck, AlertTriangle } from "lucide-react";
+import { Plus, ClipboardCheck, AlertTriangle, RotateCcw, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { FilterSheet } from "@/components/filter-sheet";
@@ -10,6 +10,7 @@ import { usePermissions } from "@/lib/use-permissions";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { apiTry } from "@/lib/api-client";
+import { useStores } from "@/hooks/use-sites";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("stock-audit");
@@ -38,9 +39,161 @@ const STATUS_STYLE: Record<string, string> = {
   REJECTED: "danger",
 };
 
+interface ResetResult {
+  warehouse: string;
+  products: number;
+  unitsCleared: number;
+  holdsReleased: number;
+  unitRecordsReset: number;
+}
+
+/**
+ * Reset one warehouse before its unit-level audit (plan 1709, R11, Q43). Approvers only — the
+ * button is cosmetic, `POST /api/stock-reset/warehouse` re-checks `stock_audit.approve`.
+ * Store → warehouse → type RESET_STOCK → Reset. Nothing is sent until all three are chosen.
+ */
+function WarehouseResetCard() {
+  const { stores, loading, error: storesError } = useStores();
+  const [open, setOpen] = useState(false);
+  const [storeId, setStoreId] = useState("");
+  const [warehouseId, setWarehouseId] = useState("");
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<ResetResult | null>(null);
+
+  const store = stores.find((s) => s.id === storeId) ?? null;
+  const warehouse = store?.warehouses.find((w) => w.id === warehouseId) ?? null;
+  const ready = !!warehouse && typed === "RESET_STOCK" && !busy;
+
+  const reset = async () => {
+    if (!warehouse) return;
+    setBusy(true);
+    setError("");
+    const { data, error: err } = await apiTry<ResetResult>("/api/stock-reset/warehouse", {
+      method: "POST",
+      json: { warehouseId: warehouse.id, confirm: "RESET_STOCK" },
+      timeoutMs: 70_000,
+    });
+    setBusy(false);
+    if (err || !data) {
+      log.error("warehouse reset failed", { warehouseId: warehouse.id, message: err ?? "empty response" });
+      setError(err ?? "Reset failed");
+      return;
+    }
+    log.info("warehouse reset", { warehouseId: warehouse.id, products: data.products });
+    setResult(data);
+    setTyped("");
+  };
+
+  return (
+    <div className="mb-3 rounded-xl border border-red-200 bg-white">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2 px-3 min-h-[44px] text-sm font-medium text-red-700 focus-ring rounded-xl"
+        aria-expanded={open}
+      >
+        <RotateCcw className="h-4 w-4" />
+        <span className="flex-1 text-left">Reset a warehouse for a unit-level audit</span>
+        <ChevronDown className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && (
+        <div className="px-3 pb-3 space-y-3">
+          <p className="text-xs text-slate-600">
+            Sets every product in the chosen warehouse to 0, releases its holds, empties its bins and clears its unit
+            records. Then count it again with a new audit — assembled and unassembled per product.
+          </p>
+
+          {storesError && <p className="text-xs text-red-600">{storesError}</p>}
+
+          <div>
+            <p className="text-[11px] font-medium text-slate-500 mb-1">1 · Store</p>
+            <div className="flex flex-wrap gap-1.5">
+              {loading ? (
+                <span className="text-xs text-slate-400">Loading…</span>
+              ) : (
+                stores.map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => { setStoreId(s.id); setWarehouseId(""); setResult(null); }}
+                    className={`px-3 min-h-[40px] rounded-lg text-xs font-medium ${storeId === s.id ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}
+                  >
+                    {s.name}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+
+          {store && (
+            <div>
+              <p className="text-[11px] font-medium text-slate-500 mb-1">2 · Warehouse</p>
+              <div className="flex flex-wrap gap-1.5">
+                {store.warehouses.map((w) => (
+                  <button
+                    key={w.id}
+                    onClick={() => { setWarehouseId(w.id); setResult(null); }}
+                    className={`px-3 min-h-[40px] rounded-lg text-xs font-medium ${warehouseId === w.id ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}
+                  >
+                    {w.name} <span className="opacity-70">· {w.kind === "FLOOR" ? "Floor" : "Godown"}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {warehouse && !result && (
+            <div>
+              <label htmlFor="reset-confirm" className="text-[11px] font-medium text-slate-500 mb-1 block">
+                3 · Type RESET_STOCK to reset {warehouse.name}
+              </label>
+              <input
+                id="reset-confirm"
+                value={typed}
+                onChange={(e) => setTyped(e.target.value.trim())}
+                autoCapitalize="characters"
+                autoComplete="off"
+                className="w-full rounded-lg border border-slate-300 px-3 min-h-[44px] text-sm font-mono"
+                placeholder="RESET_STOCK"
+              />
+              <button
+                onClick={() => void reset()}
+                disabled={!ready}
+                className="mt-2 w-full flex items-center justify-center gap-2 bg-red-600 text-white min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50 focus-ring"
+              >
+                <RotateCcw className="h-4 w-4" /> {busy ? "Resetting…" : `Reset ${warehouse.name}`}
+              </button>
+            </div>
+          )}
+
+          {error && <p className="text-xs text-red-600">{error}</p>}
+
+          {result && (
+            <div className="rounded-lg border border-green-200 bg-green-50 p-2.5 space-y-2">
+              <p className="text-xs text-green-800 tabular-nums">
+                {result.warehouse} reset: {result.unitsCleared} stock cleared across {result.products} products
+                {result.holdsReleased ? `, ${result.holdsReleased} held released` : ""}, {result.unitRecordsReset} unit records cleared.
+              </p>
+              <Link
+                href="/stock-audit/new"
+                className="w-full flex items-center justify-center gap-2 bg-slate-900 text-white min-h-[44px] rounded-lg text-sm font-medium focus-ring"
+              >
+                <Plus className="h-4 w-4" /> Start unit-level audit for this warehouse
+              </Link>
+              <p className="text-[11px] text-slate-500">Choose {store?.name} · {result.warehouse} on the next screen.</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function StockAuditPage() {
-  const { canCreate: canCreateCheck } = usePermissions();
+  const { canCreate: canCreateCheck, canApprove: canApproveCheck } = usePermissions();
   const canCreate = canCreateCheck("stock_audit");
+  const canReset = canApproveCheck("stock_audit");
   const [counts, setCounts] = useState<StockCountItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -116,6 +269,8 @@ export default function StockAuditPage() {
           )}
         </div>
       </div>
+
+      {canReset && <WarehouseResetCard />}
 
       <FilterSheet
         className="mb-3"

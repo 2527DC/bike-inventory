@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
-  Building2, Warehouse, Plus, Pencil, Trash2, ChevronDown, ChevronRight, X, Check,
+  Building2, Warehouse, Plus, Pencil, Trash2, X, Check, Boxes,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +16,7 @@ import { usePermissions } from "@/lib/use-permissions";
 import { apiFetch, apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 import type { WarehouseKind } from "@/hooks/use-sites";
+import { BinsManager } from "@/components/bins/bins-manager";
 
 const log = createLogger("stores");
 
@@ -74,13 +76,110 @@ function blockedReason(draft: Draft): string | null {
   return null;
 }
 
+// ─── Store management (plan 1709-priority-build-and-stock-flow, R32) ─────────
+// Admin › Settings › Store management is ONE screen with three tabs, each in the URL so a tab
+// survives a refresh and can be linked: /stores?tab=stores | warehouses | bins. Each tab is shown
+// by its own module's view grant (the module keys were kept — Q24); a tab the viewer may not see
+// falls back to the first one they can. Cosmetic like every frontend check: the APIs re-check.
+
+type TabKey = "stores" | "warehouses" | "bins";
+
+const TABS: { key: TabKey; label: string; module: string; icon: typeof Building2 }[] = [
+  { key: "stores", label: "Stores", module: "stores", icon: Building2 },
+  { key: "warehouses", label: "Warehouses", module: "warehouses", icon: Warehouse },
+  { key: "bins", label: "Bins", module: "bins", icon: Boxes },
+];
+
+/**
+ * `useSearchParams` in a Client Component must sit under a Suspense boundary, or the production
+ * build fails prerendering the page — the purchase-orders/page.tsx wrapper, copied.
+ */
 export default function StoresPage() {
+  return (
+    <Suspense fallback={<SkeletonList count={3} type="card" />}>
+      <StoreManagementScreen />
+    </Suspense>
+  );
+}
+
+function StoreManagementScreen() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { canView, loading: permsLoading } = usePermissions();
+
+  const allowed = TABS.filter((t) => canView(t.module));
+  const requested = searchParams.get("tab");
+  const tab: TabKey | null =
+    allowed.find((t) => t.key === requested)?.key ?? allowed[0]?.key ?? null;
+
+  // replace, not push: switching tabs is not a navigation the Back button should replay.
+  const selectTab = (next: TabKey) => router.replace(`/stores?tab=${next}`, { scroll: false });
+
+  return (
+    <div>
+      <div className="mb-3">
+        <h1 className="text-lg font-bold text-slate-900">Store management</h1>
+        <p className="text-xs text-slate-500">Stores, their warehouses, and the bins inside them</p>
+      </div>
+
+      {allowed.length > 1 && (
+        <div className="-mx-1 overflow-x-auto px-1 mb-3">
+          <div role="tablist" aria-label="Store management" className="flex min-w-max gap-1 rounded-xl bg-slate-100 p-1">
+            {allowed.map((t) => {
+              const Icon = t.icon;
+              const selected = tab === t.key;
+              return (
+                <button
+                  key={t.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={selected}
+                  onClick={() => selectTab(t.key)}
+                  className={`flex min-h-[44px] items-center gap-1.5 whitespace-nowrap rounded-lg px-4 text-xs font-semibold transition-all focus-ring ${
+                    selected ? "bg-white text-blue-700 shadow-xs" : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  <span>{t.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* While the grants load, which tab is allowed is unknown — rendering one first would fire
+          its request and then swap for a person who holds only another tab's grant. */}
+      {permsLoading ? (
+        <SkeletonList count={3} type="card" />
+      ) : tab === null ? (
+        <div className="text-center py-12">
+          <Building2 className="h-12 w-12 text-slate-300 mx-auto mb-3" />
+          <p className="text-sm text-slate-500">
+            Your role cannot view stores, warehouses or bins. Ask an admin for access.
+          </p>
+        </div>
+      ) : tab === "bins" ? (
+        <BinsManager />
+      ) : (
+        // keyed so switching Stores ↔ Warehouses starts from a clean form, not a half-typed draft
+        <SitesPanel key={tab} view={tab} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The Stores and Warehouses tabs. One component because they share the draft form, the save and
+ * delete handlers and the same GET /api/stores (stores with warehouses nested) — what was one
+ * screen before the tabs. `view` decides which half of the hierarchy is listed.
+ */
+function SitesPanel({ view }: { view: "stores" | "warehouses" }) {
   const { canCreate, canEdit, canDelete } = usePermissions();
 
   const [stores, setStores] = useState<StoreRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
   // A save failure belongs beside the form it came from, not in the page banner whose Retry
@@ -98,9 +197,6 @@ export default function StoresPage() {
       setStores([]);
     } else {
       setStores(data ?? []);
-      // Open every store on first load — with two sites, collapsing by default hides the
-      // whole point of the screen.
-      setExpanded(new Set((data ?? []).map((s) => s.id)));
     }
     setLoading(false);
   }, []);
@@ -108,15 +204,6 @@ export default function StoresPage() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  function toggle(id: string) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
 
   async function save() {
     if (!draft) return;
@@ -172,19 +259,19 @@ export default function StoresPage() {
   }
 
   const inputCls = "min-h-[40px]";
+  const warehouseCount = stores.reduce((n, s) => n + s.warehouses.length, 0);
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-lg font-bold text-slate-900">Stores</h1>
+          <h2 className="text-base font-bold text-slate-900">{view === "stores" ? "Stores" : "Warehouses"}</h2>
           <p className="text-xs text-slate-500 tabular-nums">
             {stores.length} store{stores.length === 1 ? "" : "s"} ·{" "}
-            {stores.reduce((n, s) => n + s.warehouses.length, 0)} warehouse
-            {stores.reduce((n, s) => n + s.warehouses.length, 0) === 1 ? "" : "s"}
+            {warehouseCount} warehouse{warehouseCount === 1 ? "" : "s"}
           </p>
         </div>
-        {canCreate("stores") && (
+        {view === "stores" && canCreate("stores") && (
           <Button
             size="sm"
             className="bg-blue-600 hover:bg-blue-700"
@@ -329,21 +416,12 @@ export default function StoresPage() {
           <p className="text-sm text-slate-500">No stores yet</p>
         </div>
       ) : (
+        view === "stores" ? (
         <div className="space-y-2">
-          {stores.map((s) => {
-            const open = expanded.has(s.id);
-            return (
+          {stores.map((s) => (
               <Card key={s.id}>
                 <CardContent className="p-3">
                   <div className="flex items-start gap-2">
-                    <button
-                      type="button"
-                      onClick={() => toggle(s.id)}
-                      aria-label={open ? `Collapse ${s.name}` : `Expand ${s.name}`}
-                      className="p-1 -ml-1 rounded hover:bg-slate-100 focus-ring shrink-0"
-                    >
-                      {open ? <ChevronDown className="h-4 w-4 text-slate-500" /> : <ChevronRight className="h-4 w-4 text-slate-500" />}
-                    </button>
                     <Building2 className="h-4 w-4 text-slate-400 shrink-0 mt-1" />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -382,8 +460,23 @@ export default function StoresPage() {
                     </div>
                   </div>
 
-                  {open && (
-                    <div className="mt-2 ml-7 pl-3 border-l border-slate-200 space-y-1.5">
+                </CardContent>
+              </Card>
+          ))}
+        </div>
+        ) : (
+        // Warehouses tab: the list that used to sit nested under each store, lifted out and
+        // grouped by store so a warehouse is never shown without the site it belongs to.
+        <div className="space-y-2">
+          {stores.map((s) => (
+              <Card key={s.id}>
+                <CardContent className="p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Building2 className="h-4 w-4 text-slate-400 shrink-0" />
+                    <p className="text-sm font-semibold text-slate-900">{s.name}</p>
+                    <Badge variant="default" className="font-mono text-[10px]">{s.code}</Badge>
+                  </div>
+                    <div className="ml-2 pl-3 border-l border-slate-200 space-y-1.5">
                       {s.warehouses.length === 0 && (
                         <p className="text-[11px] text-slate-500 py-1">
                           No warehouses. Stock cannot be held at this site until one exists.
@@ -452,12 +545,11 @@ export default function StoresPage() {
                         </button>
                       )}
                     </div>
-                  )}
                 </CardContent>
               </Card>
-            );
-          })}
+          ))}
         </div>
+        )
       )}
 
       {outcome && (

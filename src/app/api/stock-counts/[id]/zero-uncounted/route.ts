@@ -83,7 +83,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       const now = new Date();
       const { count } = await tx.stockCountItem.updateMany({
         where: { stockCountId: id, countedQty: null },
-        data: { countedQty: 0, countedAt: now },
+        // Both halves of the unit-level split too (plan 1709, Q42): "none found" is 0 built and
+        // 0 boxed, so the approval makes the warehouse hold no units of these products.
+        data: { countedQty: 0, assembledQty: 0, unassembledQty: 0, countedAt: now },
       });
       // variance = counted − system, per line. `updateMany` cannot reference another column,
       // so the one statement that can. Scoped to the rows this call just zeroed: variance is

@@ -13,7 +13,7 @@ import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
 import { resolveWarehouse, primaryFloorWarehouse } from "@/lib/warehouses";
 import { adjustWarehouseQty, deductAnywhere } from "@/lib/stock-location";
 import { inboundReceiveLineSchema, inboundCategorySchema } from "@/lib/validations";
-import { nextUnitCode } from "@/lib/sequence";
+import { createUnits, retireUnits } from "@/lib/units";
 import { logActivity } from "@/lib/activity-log";
 import { finaliseDelivered, scheduleDeliveredSideEffects } from "@/lib/inbound/complete-shipment";
 import { createLogger } from "@/lib/logger";
@@ -261,76 +261,52 @@ export async function PUT(
             throw new Error(`Product not found for "${lineItem.productName}" — import it from Zoho Items first`);
           }
 
-          let runningStock = matchedProduct.currentStock;
-          if (binId) {
-            // One line, one bin, one transaction (D2).
-            const previousStock = runningStock;
-            runningStock += qty;
-            await tx.inventoryTransaction.create({
-              data: {
-                type: "INWARD",
-                productId: matchedProduct.id,
-                quantity: qty,
-                previousStock,
-                newStock: runningStock,
-                referenceNo: lineItem.shipment.shipmentNo,
-                notes: `[INBOUND] Brand: ${lineItem.shipment.brand.name} | Bill: ${lineItem.shipment.billNo} | ${lineItem.productName} x${qty} → Bin: ${binId.slice(-6)}`,
-                userId: user.id,
-              },
-            });
-            await tx.product.update({
-              where: { id: matchedProduct.id },
-              data: { currentStock: runningStock, binId },
-            });
-          } else {
-            // Location mode: add qty to the chosen location; currentStock recomputes as the sum.
-            const previousStock = runningStock;
-            runningStock += qty;
-            await tx.inventoryTransaction.create({
-              data: {
-                type: "INWARD",
-                productId: matchedProduct.id,
-                quantity: qty,
-                previousStock,
-                newStock: runningStock,
-                referenceNo: lineItem.shipment.shipmentNo,
-                notes: `[INBOUND] Brand: ${lineItem.shipment.brand.name} | Bill: ${lineItem.shipment.billNo} | ${lineItem.productName} x${qty} → ${warehouse.name}`,
-                userId: user.id,
-              },
-            });
-            await adjustWarehouseQty(tx, matchedProduct.id, warehouse.id, qty);
-          }
-
-          // ── Mint company-wide unit codes U-xxxxxx — for EVERY received product (R2, R6, R19) ──
+          // ── THE QUANTITY, IN BOTH MODES (plan 1709, P1) ──
           //
-          // Everything this business inbounds is a bicycle (plan 1509-assembly-queue…, D1). The
-          // old test — category name containing "cycle"/"bike", or a "bicycle"/"cycle" tag —
-          // left any other product as bulk stock with no unit rows, so it never reached
-          // /assembly and showed on /bins as "loose parts". Same in both bin-tracking modes:
-          // with a bin the units are PUT_AWAY there, without one they are RECEIVED and wait
-          // in "Unmatched Inbound" for a bin.
-          for (let i = 0; i < qty; i++) {
-            const unitCode = await nextUnitCode(tx);
-            await tx.inventoryUnit.create({
-              data: {
-                unitCode,
-                productId: matchedProduct.id,
-                warehouseId: warehouse.id,
-                binId,
-                status: binId ? "PUT_AWAY" : "RECEIVED",
-                inboundShipmentId: id,
-              },
-            });
+          // Bin mode used to write `Product.currentStock` and `BinStock` only, never a
+          // `StockLevel` row — so the warehouse the bin stands in read 0 while units sat there,
+          // and the next recompute of the total dropped the receipt. Both modes now add to the
+          // warehouse (the bin's, resolved above) and let the total recompute from the rows.
+          // Exactly one `adjustWarehouseQty` per line in either mode, so nothing is counted twice.
+          const previousStock = matchedProduct.currentStock;
+          const newStock = await adjustWarehouseQty(tx, matchedProduct.id, warehouse.id, qty);
+          if (binId) {
+            // One line, one bin (D2): the bin also becomes the product's home bin.
+            await tx.product.update({ where: { id: matchedProduct.id }, data: { binId } });
           }
+          const inward = await tx.inventoryTransaction.create({
+            data: {
+              type: "INWARD",
+              productId: matchedProduct.id,
+              quantity: qty,
+              previousStock,
+              newStock,
+              referenceNo: lineItem.shipment.shipmentNo,
+              notes: binId
+                ? `[INBOUND] Brand: ${lineItem.shipment.brand.name} | Bill: ${lineItem.shipment.billNo} | ${lineItem.productName} x${qty} → Bin: ${binId.slice(-6)}`
+                : `[INBOUND] Brand: ${lineItem.shipment.brand.name} | Bill: ${lineItem.shipment.billNo} | ${lineItem.productName} x${qty} → ${warehouse.name}`,
+              userId: user.id,
+            },
+            select: { id: true },
+          });
+
+          // ── One unit per item, each its own code — for EVERY received product (R2, R6, R19) ──
+          //
+          // Everything this business inbounds is a bicycle (plan 1509-assembly-queue…, D1).
+          // Unassembled, as every inward (P4). With a bin they are PUT_AWAY there — stamped
+          // non-assemblable when the bin is (P6b) — and the bin's stock is recounted from its
+          // units (P11); without one they are RECEIVED and wait in "Unmatched Inbound".
+          // `sourceTransactionId` ties them to this INWARD row so a cleanup can find them (P4).
+          await createUnits(tx, {
+            productId: matchedProduct.id,
+            warehouseId: warehouse.id,
+            qty,
+            binId,
+            inboundShipmentId: id,
+            sourceTransactionId: inward.id,
+          });
 
           if (binId) {
-            // BinStock stays: stock counts and transfers read it (plan §5). Only the "loose"
-            // presentation of it on /bins went.
-            await tx.binStock.upsert({
-              where: { binId_productId: { binId, productId: matchedProduct.id } },
-              update: { quantity: { increment: qty } },
-              create: { binId, productId: matchedProduct.id, quantity: qty },
-            });
             await tx.binMovementLog.create({
               data: {
                 warehouseId: warehouse.id,
@@ -441,7 +417,9 @@ export async function PUT(
         }
 
         return { updated: true, alreadyReceived: false, shipmentDelivered: false, snapshot: null };
-      });
+        // One code allocation per item (row-locked counter): a 40-cycle line is 80+ statements,
+        // past Prisma's 5 s default.
+      }, { timeout: 30_000 });
 
       // AFTER the transaction resolved, never inside it. `after()` fires even when the
       // response throws, so registering the Zoho push inside would bill a shipment that then
@@ -508,7 +486,19 @@ export async function DELETE(
     });
     if (!shipment) return errorResponse("Not found", 404);
 
-    await prisma.$transaction(async (tx) => {
+    const retired = await prisma.$transaction(async (tx) => {
+      // ── THE SHIPMENT'S UNITS GO WITH IT (plan 1709, P2) ──
+      //
+      // The stock is reversed below; its unit records used to stay behind, "unassembled" on
+      // Awaiting for cycles that no longer exist. Every unit not already sold, lost or reset is
+      // retired as LOST (history kept, P3), its open build tasks closed and its bin recounted.
+      // Done before the shipment row goes, while `inboundShipmentId` still points at it.
+      const unsold = await tx.inventoryUnit.findMany({
+        where: { inboundShipmentId: id, status: { notIn: ["SOLD", "LOST", "RESET"] } },
+        select: { id: true },
+      });
+      const retiredUnits = await retireUnits(tx, unsold.map((u) => u.id), "LOST");
+
       // Reverse stock for delivered items
       for (const li of shipment.lineItems) {
         if (li.isDelivered && li.productId) {
@@ -553,11 +543,17 @@ export async function DELETE(
       }
 
       await tx.inboundShipment.delete({ where: { id } });
+      return retiredUnits;
     });
 
-    return successResponse({ deleted: true });
+    log.info("shipment deleted", { shipmentId: id, shipmentNo: shipment.shipmentNo, unitsRetired: retired });
+    return successResponse({ deleted: true, unitsRetired: retired });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("shipment delete failed", {
+      shipmentId: (await params).id,
+      message: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse(error instanceof Error ? error.message : "Failed to delete", 400);
   }
 }

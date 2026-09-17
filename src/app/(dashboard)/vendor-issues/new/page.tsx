@@ -1,10 +1,15 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState, useEffect, useRef } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Camera, X, Image as ImageIcon, Search, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { SkeletonList } from "@/components/ui/skeleton";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("vendor-issues:new");
 import { uploadMedia } from "@/lib/media-upload";
 import { compressImageFull, compressVideo, MAX_UNCOMPRESSED_VIDEO_BYTES } from "@/lib/media-compress";
 
@@ -53,18 +58,34 @@ const PRIORITY_COLORS: Record<string, string> = {
   URGENT: "bg-red-100 text-red-700 border-red-200",
 };
 
+/**
+ * `useSearchParams` needs a Suspense boundary or the production build fails prerendering
+ * (node_modules/next/dist/docs/01-app/03-api-reference/04-functions/use-search-params.md).
+ */
 export default function NewVendorIssuePage() {
+  return (
+    <Suspense fallback={<SkeletonList count={4} type="card" />}>
+      <NewVendorIssueForm />
+    </Suspense>
+  );
+}
+
+function NewVendorIssueForm() {
   const router = useRouter();
+  // Pre-fill from a link — "Raise vendor issue" on a build held for Issue with the cycle
+  // (/assembly?tab=tasks, plan 1709 Q5) sends `description` and, when known, `vendorId`.
+  const searchParams = useSearchParams();
+  const initialVendorId = searchParams.get("vendorId") ?? "";
 
   const [issueSource, setIssueSource] = useState<"VENDOR" | "CLIENT">("VENDOR");
   const [clientName, setClientName] = useState("");
   const [clientPhone, setClientPhone] = useState("");
   const [vendors, setVendors] = useState<VendorOption[]>([]);
   const [bills, setBills] = useState<BillOption[]>([]);
-  const [vendorId, setVendorId] = useState("");
+  const [vendorId, setVendorId] = useState(initialVendorId);
   const [issueType, setIssueType] = useState<string>("");
   const [priority, setPriority] = useState<string>("MEDIUM");
-  const [description, setDescription] = useState("");
+  const [description, setDescription] = useState(() => (searchParams.get("description") ?? "").slice(0, 2000));
   const [ticketNo, setTicketNo] = useState("");
   const [serviceLocation, setServiceLocation] = useState("");
   const [billId, setBillId] = useState("");
@@ -108,6 +129,26 @@ export default function NewVendorIssuePage() {
       })
       .catch(() => {});
   }, []);
+
+  // A pre-filled vendor shows its name in the search box. It may not be in the first 100, so it
+  // is read on its own.
+  useEffect(() => {
+    if (!initialVendorId) return;
+    let cancelled = false;
+    (async () => {
+      const { data, error, status } = await apiTry<VendorOption>(`/api/vendors/${encodeURIComponent(initialVendorId)}`);
+      if (cancelled) return;
+      if (error || !data) {
+        log.warn("pre-filled vendor not loaded", { vendorId: initialVendorId, status });
+        setVendorId("");
+        return;
+      }
+      setVendorSearch((current) => current || `${data.name} (${data.code})`);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [initialVendorId]);
 
   // Click outside to close vendor dropdown
   useEffect(() => {

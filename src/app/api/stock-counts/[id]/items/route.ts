@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
@@ -9,6 +10,29 @@ import { getWarehouseQtyMap, getStoreQtyMap } from "@/lib/stock-location";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("stock-counts:items");
+
+const qty = z.number().int().min(0);
+
+/**
+ * One counted line. The unit-level audit (plan 1709, R11, Q42) counts a line as
+ * **assembled + unassembled**, and `countedQty` is their sum. An older client that sends only
+ * `countedQty` still saves a valid line — with no split, which the approval applies as a plain
+ * count change.
+ */
+const lineSchema = z
+  .object({
+    id: z.string().min(1),
+    countedQty: qty.optional(),
+    assembledQty: qty.optional(),
+    unassembledQty: qty.optional(),
+    suggestedBrand: z.string().max(200).nullable().optional(),
+    notes: z.string().max(1000).nullable().optional(),
+  })
+  .refine((l) => l.countedQty !== undefined || (l.assembledQty !== undefined && l.unassembledQty !== undefined), {
+    message: "Each line needs Assembled and Unassembled counts",
+  });
+
+const putSchema = z.object({ items: z.array(lineSchema) });
 
 /**
  * The system quantity for these products WITHIN this audit's scope (R2, §5.1).
@@ -171,27 +195,37 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         409
       );
     }
-    const body = await req.json();
-
-    if (!body.items || !Array.isArray(body.items)) {
+    const body = await req.json().catch(() => null);
+    if (!body || !Array.isArray(body.items)) {
       return errorResponse("Items array is required", 400);
     }
+    const parsed = putSchema.safeParse(body);
+    if (!parsed.success) {
+      log.warn("count save refused: invalid lines", { stockCountId: id, issue: parsed.error.issues[0]?.message });
+      return errorResponse(parsed.error.issues[0]?.message ?? "Invalid counts", 400);
+    }
 
+    let splitLines = 0;
     const results = await prisma.$transaction(async (tx) => {
       const updated = [];
-      for (const item of body.items) {
-        if (!item.id || item.countedQty === undefined) continue;
-
+      for (const item of parsed.data.items) {
         const existing = await tx.stockCountItem.findUnique({
           where: { id: item.id },
         });
         if (!existing || existing.stockCountId !== id) continue;
 
+        // The split wins when both halves are sent: the total is derived, never trusted.
+        const split = item.assembledQty !== undefined && item.unassembledQty !== undefined;
+        const countedQty = split ? item.assembledQty! + item.unassembledQty! : item.countedQty!;
+        if (split) splitLines += 1;
+
         const result = await tx.stockCountItem.update({
           where: { id: item.id },
           data: {
-            countedQty: item.countedQty,
-            variance: item.countedQty - existing.systemQty,
+            countedQty,
+            assembledQty: split ? item.assembledQty! : null,
+            unassembledQty: split ? item.unassembledQty! : null,
+            variance: countedQty - existing.systemQty,
             suggestedBrand: item.suggestedBrand ?? existing.suggestedBrand,
             notes: item.notes ?? existing.notes,
             countedAt: new Date(),
@@ -202,6 +236,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       return updated;
     });
 
+    log.debug("counts saved", { stockCountId: id, lines: results.length, splitLines });
     return successResponse({ updated: results.length });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);

@@ -8,6 +8,7 @@ import { categoryUpdateSchema } from "@/lib/validations";
 import { createLogger } from "@/lib/logger";
 import { logActivity } from "@/lib/activity-log";
 import { isPlaceholderCategory } from "@/lib/import-placeholders";
+import { categorySubtreeIds } from "@/lib/categories/tree";
 
 const log = createLogger("api:categories:id");
 
@@ -52,9 +53,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
     }
 
-    // The tree is exactly two deep by convention and nothing enforces it in the schema, so
-    // both illegal shapes are rejected here: a category cannot parent itself, and it cannot
-    // adopt one of its own children (which would make a cycle no query could terminate on).
+    // Nothing in the schema stops a loop, so both illegal shapes are rejected here: a category
+    // cannot parent itself, and it cannot move under anything in its own subtree — a child,
+    // a grandchild, any depth (plan 1709, R43: the /categories picker hides those rows, but a
+    // picker is cosmetic and this is the check).
     if (data.parentId) {
       if (data.parentId === id) {
         return errorResponse("A category cannot be its own parent", 400);
@@ -64,9 +66,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         select: { id: true, name: true, parentId: true },
       });
       if (!parent) return errorResponse("The chosen parent category does not exist", 404);
-      if (parent.parentId === id) {
+      const subtree = await categorySubtreeIds(prisma, id);
+      if (subtree.includes(parent.id)) {
+        log.warn("parent refused - would create a cycle", { categoryId: id, parentId: parent.id });
         return errorResponse(
-          `"${parent.name}" is already a child of this category. Move it out first.`,
+          `"${parent.name}" is inside this category's own sub-tree. Move it out first.`,
           400
         );
       }

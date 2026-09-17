@@ -60,12 +60,22 @@ const ENTRIES: Entry[] = [
     icon: "AlertCircle",
     module: "settings",
   },
+  // Store management is one screen with three tabs (plan 1709, R32). Each card is shown by the
+  // grant of what it opens: the screen by `store_management`, the Bins tab by `bins` — the tab
+  // itself falls back if the viewer holds neither.
   {
-    href: "/more/bins",
+    href: "/stores",
+    title: "Store management",
+    description: "Stores, their floor and godown warehouses, and bins",
+    icon: "Building2",
+    module: "store_management",
+  },
+  {
+    href: "/stores?tab=bins",
     title: "Bins & Locations",
     description: "Warehouse bins and storage locations",
     icon: "Package",
-    module: "settings",
+    module: "bins",
   },
   {
     href: "/more/label-designer",

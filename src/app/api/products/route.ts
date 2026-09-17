@@ -16,6 +16,8 @@ import { PLACEHOLDER_BRAND_NAMES_LOWER } from "@/lib/import-placeholders";
 import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
 import { storeById } from "@/lib/stores";
 import { createLogger } from "@/lib/logger";
+import { categorySubtreeIds } from "@/lib/categories/tree";
+import { conditionByProduct, hasNoAssemblyUnitsWhere, ZERO_CONDITION } from "@/lib/stock-condition";
 
 const log = createLogger("products:list");
 
@@ -47,6 +49,16 @@ export async function GET(req: NextRequest) {
     }
     const storeId = store?.id;
 
+    // R43, P13: a parent category includes its children's products; a child (a leaf) is just
+    // itself. One recursive CTE (Part I's helper), then a plain `IN`.
+    const categoryIds = categoryId ? await categorySubtreeIds(prisma, categoryId) : undefined;
+
+    // R42: `condition=no-assembly` keeps products that hold at least one live non-assemblable
+    // unit — in the scoped store when there is one. Any other value is ignored, not refused, so
+    // an old bookmark still loads the list.
+    const condition = searchParams.get("condition") || undefined;
+    const noAssemblyOnly = condition === "no-assembly";
+
     // Search and needsDetails BOTH produce an OR group, and both used to want the same
     // top-level key. Collecting every OR group into one `AND` array is the only form that
     // survives combining them: `{ OR: search } + { OR: needsDetails }` in one object literal
@@ -67,6 +79,8 @@ export async function GET(req: NextRequest) {
         and.push({ OR: fieldOR(word) });
       }
     }
+
+    if (noAssemblyOnly) and.push(hasNoAssemblyUnitsWhere(storeId));
 
     if (needsDetails) {
       // A product "needs details" when nobody has given it a real brand. `Product.brandId` is
@@ -97,7 +111,7 @@ export async function GET(req: NextRequest) {
 
     const where = {
       ...(and.length > 0 && { AND: and }),
-      ...(categoryId && { categoryId }),
+      ...(categoryIds && { categoryId: categoryIds.length === 1 ? categoryIds[0] : { in: categoryIds } }),
       ...(brandId && { brandId }),
       ...(binId && { binId }),
       ...(status && { status: status as never }),
@@ -174,7 +188,7 @@ export async function GET(req: NextRequest) {
         );
       }
       const total = rows.length;
-      const pageRows = rows.slice(skip, skip + limit);
+      const pageRows = await withCondition(rows.slice(skip, skip + limit), storeId);
 
       log.debug("scoped product list", { storeId, held: qtyOf.size, returned: pageRows.length });
       return paginatedResponse(pageRows, total, page, limit);
@@ -191,7 +205,7 @@ export async function GET(req: NextRequest) {
       prisma.product.count({ where }),
     ]);
 
-    return paginatedResponse(products, total, page, limit);
+    return paginatedResponse(await withCondition(products), total, page, limit);
   } catch (error) {
     if (error instanceof AuthError) {
       return errorResponse(error.message, error.status);
@@ -204,6 +218,23 @@ export async function GET(req: NextRequest) {
       500
     );
   }
+}
+
+/**
+ * Attach `assembledUnits` / `unassembledUnits` / `noAssemblyUnits` to one page of rows (R10,
+ * P7) — a single grouped query over the page's ids, so the list is not slowed by its length.
+ */
+async function withCondition<T extends { id: string }>(rows: T[], storeId?: string) {
+  const counts = await conditionByProduct(rows.map((r) => r.id), { storeId });
+  return rows.map((r) => {
+    const c = counts.get(r.id) ?? ZERO_CONDITION;
+    return {
+      ...r,
+      assembledUnits: c.assembled,
+      unassembledUnits: c.unassembled,
+      noAssemblyUnits: c.noAssembly,
+    };
+  });
 }
 
 export async function POST(req: NextRequest) {

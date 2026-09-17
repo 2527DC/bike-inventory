@@ -9,6 +9,7 @@ import { warehouseById } from "@/lib/warehouses";
 import { assertTransition, TransitionError } from "@/lib/transfers/transitions";
 import { moveIntoWarehouse, writeTransferLedgerRow } from "@/lib/transfers/stock";
 import { logActivity } from "@/lib/activity-log";
+import { moveUnits, retireUnits } from "@/lib/units";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("transfer-orders:receive");
@@ -191,26 +192,59 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         }
       }
 
-      // Also relocate received units to destination warehouse
+      // ── UNITS: ONLY WHAT ARRIVED (plan 1709, Part B, R7) ──────────────────────────────────
+      //
+      // Kept as one block, apart from the approval and delivery-hold changes that follow in
+      // Parts C and D.
+      //
+      // This used to move EVERY dispatched unit into the destination as PUT_AWAY with no bin,
+      // ignoring `receivedQty` — a short receipt left phantom units at the destination. Now,
+      // per line, exactly `receivedQty` of that product's dispatched units arrive (held for
+      // an outward first, then built, then oldest) as ASSEMBLED / RECEIVED, and the rest are
+      // retired as LOST: they left the source at dispatch and never came off the van.
+      // Tolerant: a line whose stock had fewer unit records moves what there is.
       const transferUnits = await tx.transferOrderUnit.findMany({
-        where: { transferOrderId: id, receivedAt: null },
+        where: { transferOrderId: id, receivedAt: null, unit: { status: "TRANSFERRED" } },
+        select: {
+          id: true,
+          unitId: true,
+          unit: { select: { productId: true, reservedForDeliveryId: true, assembledAt: true, createdAt: true } },
+        },
       });
-
+      const pool = new Map<string, typeof transferUnits>();
       for (const tu of transferUnits) {
-        await tx.transferOrderUnit.update({
-          where: { id: tu.id },
+        const list = pool.get(tu.unit.productId) ?? [];
+        list.push(tu);
+        pool.set(tu.unit.productId, list);
+      }
+      for (const list of pool.values()) {
+        list.sort(
+          (a, b) =>
+            Number(b.unit.reservedForDeliveryId !== null) - Number(a.unit.reservedForDeliveryId !== null) ||
+            Number(b.unit.assembledAt !== null) - Number(a.unit.assembledAt !== null) ||
+            a.unit.createdAt.getTime() - b.unit.createdAt.getTime()
+        );
+      }
+
+      const arrived: typeof transferUnits = [];
+      for (const item of order.items) {
+        const list = pool.get(item.productId) ?? [];
+        // splice: a product on two lines draws from the same pool without double-counting.
+        arrived.push(...list.splice(0, submitted.get(item.id)!));
+      }
+      const missing = [...pool.values()].flat();
+
+      if (arrived.length > 0) {
+        await tx.transferOrderUnit.updateMany({
+          where: { id: { in: arrived.map((tu) => tu.id) } },
           data: { receivedAt: new Date() },
         });
-
-        await tx.inventoryUnit.update({
-          where: { id: tu.unitId },
-          data: {
-            warehouseId: destId,
-            binId: null, // ready for put-away into destination warehouse bin
-            status: "PUT_AWAY",
-          },
-        });
+        await moveUnits(tx, arrived.map((tu) => tu.unitId), destId);
       }
+      if (missing.length > 0) {
+        await retireUnits(tx, missing.map((tu) => tu.unitId), "LOST");
+      }
+      const unitMoves = { arrived: arrived.length, lost: missing.length };
 
       await logActivity(tx, {
         module: "transfers",
@@ -228,8 +262,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         userName: user.name,
       });
 
-      return { claimed: true as const, shortLines };
-    });
+      return { claimed: true as const, shortLines, unitMoves };
+    }, { timeout: 30_000 });
 
     if (!result.claimed) {
       return errorResponse("This transfer has already been received.", 409);
@@ -240,6 +274,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       orderNo: order.orderNo,
       lines: order.items.length,
       shortLines: result.shortLines,
+      unitsArrived: result.unitMoves.arrived,
+      unitsLost: result.unitMoves.lost,
     });
 
     return successResponse({

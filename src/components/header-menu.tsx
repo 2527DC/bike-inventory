@@ -3,11 +3,15 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, X, LayoutDashboard, MoreHorizontal, ChevronRight } from "lucide-react";
+import { Menu, X, LayoutDashboard, MoreHorizontal, ChevronRight, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePermissions } from "@/lib/use-permissions";
 import { moduleIcon } from "@/lib/module-icons";
-import type { GrantedModule } from "@/stores/permissions";
+import { buildNavTree, showDividerBefore, type NavGroup } from "@/lib/nav-tree";
+
+// The tree is the one every menu renderer shares (src/lib/nav-tree.ts): children sit indented
+// under their parent, a ROUTELESS parent such as Stock management is a toggle only (R28), and a
+// `dividerBefore` child gets a line above it (P5). Same order as the sidebar and /more.
 
 // ─── The mobile header's own way into the app ────────────────────────────────
 //
@@ -24,36 +28,19 @@ import type { GrantedModule } from "@/stores/permissions";
 // NOT A SECURITY BOUNDARY. `modules` is what the user may VIEW, resolved server-side per
 // request; hiding an entry here only tidies the menu. Every route re-checks its own grant.
 
-/** A group heading plus the granted, linkable modules under it. */
-interface MenuGroup {
-  title: string;
-  items: GrantedModule[];
-}
-
-/**
- * Group the granted modules exactly as /more does (src/app/(dashboard)/more/page.tsx:69-78):
- * skip anything without a route, bucket by `group`, and keep the store's order — which is
- * `Module.sortOrder`, so the drawer, the sidebar and /more all list things in one order.
- *
- * Sub-modules are NOT nested here the way the desktop sidebar nests them. A child carries the
- * same `group` as its parent, so it lands in the right bucket anyway, and a flat list is the
- * point of a rescue menu: every reachable page one tap away, no disclosure to fight with.
- */
-function groupModules(modules: GrantedModule[]): MenuGroup[] {
-  const groups: MenuGroup[] = [];
-  for (const m of modules) {
-    if (!m.route) continue; // permission-only modules have no page to link to
-    const title = m.group || "Other";
-    let g = groups.find((x) => x.title === title);
-    if (!g) groups.push((g = { title, items: [] }));
-    g.items.push(m);
-  }
-  return groups;
+/** Links reachable in a group: routed roots plus every (routed) child. */
+function linkCount(group: NavGroup): number {
+  return group.items.reduce((n, item) => n + (item.route ? 1 : 0) + item.children.length, 0);
 }
 
 export function HeaderMenu({ className }: { className?: string }) {
-  const [open, setOpen] = useState(false);
   const pathname = usePathname();
+  // The drawer remembers the route it was opened on and counts as open only while that is still
+  // the route. Every link closes itself on click, but a hardware/gesture back also changes the
+  // route — deriving it this way closes the drawer then too, without an effect that sets state.
+  const [openedOn, setOpenedOn] = useState<string | null>(null);
+  const open = openedOn !== null && openedOn === pathname;
+  const setOpen = (next: boolean) => setOpenedOn(next ? pathname : null);
   const { modules, loading } = usePermissions();
 
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -68,7 +55,7 @@ export function HeaderMenu({ className }: { className?: string }) {
     if (!open) return;
 
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") setOpenedOn(null);
     };
     document.addEventListener("keydown", onKey);
     panelRef.current?.focus();
@@ -83,18 +70,24 @@ export function HeaderMenu({ className }: { className?: string }) {
     };
   }, [open]);
 
-  // Every link closes itself on click, but a hardware/gesture back also changes the route —
-  // without this the drawer would stay open on top of the page the user just went back to.
-  useEffect(() => {
-    setOpen(false);
-  }, [pathname]);
-
   function isActive(href: string) {
     if (href === "/") return pathname === "/";
     return pathname === href || pathname.startsWith(href + "/");
   }
 
-  const groups = groupModules(modules);
+  const groups = buildNavTree(modules);
+
+  // Explicit expander choices; with none, a routeless parent is open when the current page is
+  // one of its children. Not persisted — the drawer is a rescue menu, not a workspace.
+  const [expanders, setExpanders] = useState<Record<string, boolean>>({});
+  const isExpanded = (key: string, children: { route: string | null }[]) =>
+    expanders[key] ?? children.some((c) => !!c.route && isActive(c.route));
+
+  const rowClass = (active: boolean) =>
+    cn(
+      "flex items-center gap-3 px-3 py-2.5 min-h-[44px] rounded-lg hover:bg-slate-50 transition-colors focus-ring",
+      active ? "bg-slate-100 text-slate-900 font-semibold" : "text-slate-700"
+    );
 
   return (
     <>
@@ -181,26 +174,71 @@ export function HeaderMenu({ className }: { className?: string }) {
                       {group.title}
                     </span>
                     <span className="text-[11px] font-medium text-slate-400 tabular-nums">
-                      {group.items.length}
+                      {linkCount(group)}
                     </span>
                   </div>
                   {group.items.map((item) => {
                     const Icon = moduleIcon(item.icon);
-                    const active = isActive(item.route!);
+                    // A routed parent keeps its children visible beneath it (one tap to any
+                    // page). A routeless parent has nowhere to go, so it only toggles (R28).
+                    const expander = !item.route;
+                    const showChildren = !expander || isExpanded(item.key, item.children);
                     return (
-                      <Link
-                        key={item.key}
-                        href={item.route!}
-                        onClick={() => setOpen(false)}
-                        className={cn(
-                          "flex items-center gap-3 px-3 py-2.5 min-h-[44px] rounded-lg hover:bg-slate-50 transition-colors focus-ring",
-                          active ? "bg-slate-100 text-slate-900 font-semibold" : "text-slate-700"
+                      <div key={item.key}>
+                        {expander ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpanders((p) => ({ ...p, [item.key]: !showChildren }))
+                            }
+                            aria-expanded={showChildren}
+                            className={cn(rowClass(false), "w-full text-left cursor-pointer")}
+                          >
+                            <Icon className="h-4 w-4 text-slate-500 shrink-0" />
+                            <span className="flex-1 text-sm truncate">{item.label}</span>
+                            <ChevronDown
+                              className={cn(
+                                "h-4 w-4 text-slate-400 shrink-0 transition-transform",
+                                !showChildren && "-rotate-90"
+                              )}
+                            />
+                          </button>
+                        ) : (
+                          <Link
+                            href={item.route!}
+                            onClick={() => setOpen(false)}
+                            className={rowClass(isActive(item.route!))}
+                          >
+                            <Icon className="h-4 w-4 text-slate-500 shrink-0" />
+                            <span className="flex-1 text-sm truncate">{item.label}</span>
+                            <ChevronRight className="h-4 w-4 text-slate-300 shrink-0" />
+                          </Link>
                         )}
-                      >
-                        <Icon className="h-4 w-4 text-slate-500 shrink-0" />
-                        <span className="flex-1 text-sm truncate">{item.label}</span>
-                        <ChevronRight className="h-4 w-4 text-slate-300 shrink-0" />
-                      </Link>
+
+                        {showChildren && item.children.length > 0 && (
+                          <div role="group" className="ml-5 border-l border-slate-100 pl-2">
+                            {item.children.map((child, i) => {
+                              const ChildIcon = moduleIcon(child.icon);
+                              return (
+                                <div key={child.key}>
+                                  {showDividerBefore(item.children, i) && (
+                                    <div role="separator" className="my-1 mx-3 border-t border-slate-200" />
+                                  )}
+                                  <Link
+                                    href={child.route!}
+                                    onClick={() => setOpen(false)}
+                                    className={rowClass(isActive(child.route!))}
+                                  >
+                                    <ChildIcon className="h-4 w-4 text-slate-500 shrink-0" />
+                                    <span className="flex-1 text-sm truncate">{child.label}</span>
+                                    <ChevronRight className="h-4 w-4 text-slate-300 shrink-0" />
+                                  </Link>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     );
                   })}
                 </div>

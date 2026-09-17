@@ -101,16 +101,23 @@ export async function adjustWarehouseQty(tx: Tx, productId: string, warehouseId:
  * Throws a readable Error naming the product and the shortfall. Call it inside the caller's
  * transaction so a refusal rolls the whole delivery back rather than leaving half a sale.
  *
- * @returns the product's new cached total.
+ * @returns the product's new cached total, and what was taken from which warehouse — the
+ *   unit lifecycle (plan 1709, Part B) sells or retires units per warehouse drawn from, so the
+ *   breakdown is part of the result rather than private to this function.
  */
+export interface StoreDeduction {
+  total: number;
+  taken: Array<{ warehouseId: string; qty: number; kind: string }>;
+}
+
 export async function deductFromStore(
   tx: Tx,
   productId: string,
   storeId: string,
   qty: number,
   productLabel?: string
-): Promise<number> {
-  if (qty <= 0) return recomputeCurrentStock(tx, productId);
+): Promise<StoreDeduction> {
+  if (qty <= 0) return { total: await recomputeCurrentStock(tx, productId), taken: [] };
 
   // Active only. An inactive warehouse is one nobody is putting stock into or taking it out
   // of, so draining it as a side effect of a sale would be a surprise.
@@ -156,7 +163,7 @@ export async function deductFromStore(
     log.warn("outbound reached the godown", { productId, storeId, fromFloor, fromGodown });
   }
 
-  return total;
+  return { total, taken: taken.map((t) => ({ ...t, kind: kindOf.get(t.warehouseId) ?? "GODOWN" })) };
 }
 
 /**
@@ -214,7 +221,19 @@ export async function addAnywhere(
   productId: string,
   qty: number
 ): Promise<number> {
-  if (qty <= 0) return recomputeCurrentStock(tx, productId);
+  return (await addAnywhereAt(tx, productId, qty)).total;
+}
+
+/**
+ * `addAnywhere`, also saying WHICH warehouse received the units — an inward that creates unit
+ * records (plan 1709, P4) has to put them in the same warehouse its quantity went to.
+ */
+export async function addAnywhereAt(
+  tx: Tx,
+  productId: string,
+  qty: number
+): Promise<{ total: number; warehouseId: string | null }> {
+  if (qty <= 0) return { total: await recomputeCurrentStock(tx, productId), warehouseId: null };
 
   const busiest = await tx.stockLevel.findFirst({
     where: { productId },
@@ -236,7 +255,7 @@ export async function addAnywhere(
     throw new Error(`Cannot restore ${qty} units: no active warehouse exists to put them in.`);
   }
 
-  return adjustWarehouseQty(tx, productId, warehouseId, qty);
+  return { total: await adjustWarehouseQty(tx, productId, warehouseId, qty), warehouseId };
 }
 
 /**

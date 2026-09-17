@@ -12,6 +12,7 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { maybeNotifyBelowReorder, type ReorderCrossing } from "@/lib/notify/stock";
 import { deductDeliveryFromFloor, releaseDeliveryStock, isDummy } from "@/lib/deliveries/floor-stock";
 import { createLogger } from "@/lib/logger";
+import { sellDeliveryUnits } from "@/lib/units";
 
 const log = createLogger("deliveries:api");
 
@@ -142,6 +143,8 @@ export async function PUT(req: NextRequest) {
                 },
               });
             }
+            // Plan 1709, Part B (R7, R38): sell the units behind the lines from this floor.
+            await sellDeliveryUnits(tx, delivery, moved);
           }
         }
 
@@ -150,7 +153,9 @@ export async function PUT(req: NextRequest) {
       }
 
       return { updated };
-    });
+      // Up to 50 deliveries, each now also picking and selling its units (plan 1709, Part B):
+      // past Prisma's 5 s default on a full batch.
+    }, { timeout: 30_000 });
 
     // §F.0: committed. One helper call for the whole batch, after the response has gone out;
     // nothing is sent if the transaction threw (e.g. a floor short on a later item).
