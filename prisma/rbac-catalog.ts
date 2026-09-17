@@ -50,12 +50,19 @@ export interface ModuleSeed {
    * `isSystem` is false. Omit for the normal case (assignable to any role).
    */
   assignable?: boolean;
+  /**
+   * true = the sidebar draws a divider line above this module among its siblings. Seeded into
+   * `Module.dividerBefore` — data, so no renderer names a module key. Omit for no divider.
+   * First used on `inbound` inside Stock management (plan 1709-priority-build-and-stock-flow,
+   * R28, P5).
+   */
+  dividerBefore?: boolean;
 }
 
 // Sidebar group order is NOT declared anywhere — it falls out of `sortOrder` below.
 // The sidebar walks modules in sortOrder and opens each new `group` as it first appears, so
-// the bands assigned here (Overview 0-99, Operations 100s, Purchase 200s, Accounts 300s,
-// Insights 400s, Admin 500s, Service 600s) ARE the group order. Keep a group's modules
+// the bands assigned here (Overview 0-89, Operations 90-199, Purchase 200-249, Sales 250-289,
+// Accounts 290-399, Insights 400s, Admin 500s, Service 600s) ARE the group order. Keep a group's modules
 // inside one band or that group will render split in two.
 //
 // A `MODULE_GROUPS` array used to sit here claiming to control this. Nothing imported it,
@@ -94,13 +101,20 @@ export const MODULE_CATALOG: ModuleSeed[] = [
 
   // ── Operations ────────────────────────────────────────────────────────────
   //
-  // Stock Management is a PARENT with six children — the third module tree in this catalog,
-  // after Staff LMS and Store Management.
+  // Plan 1709-priority-build-and-stock-flow (R27–R33), 17 Sep 2026: Operations reads
+  // Build-line assembly (90) first, then Stock management — which is now EXPAND-ONLY
+  // (`route: null`, R28, Q27). Its visible children are Stock & inventory, a divider
+  // (`inbound.dividerBefore`), then 1 Inbound · 2 Outbound · 3 Stock transfer · 4 Stock audit.
+  // Categories and Brands left the menu (chips inside Stock & inventory, R33), Bins moved to
+  // Admin › Settings › Store management (R32), Barcode became the Labels tab on /assembly (R29).
+  // /stock-management stays reachable by URL. The phone's bottom bar is per-user pins (R34,
+  // Q28), so the routeless parent no longer costs anyone a tab.
   //
-  // Unlike `store_management`, this parent HAS a route, and that is about the phone:
-  // bottom-nav.tsx filters to `!m.parent`, so a routeless parent would drop Stock, Inbound
-  // and Deliveries off the mobile bottom bar entirely and leave a stock user with
-  // Second-Hand / Scanner / POS. The hub page keeps the tab.
+  // ⚠ RUN `npm run db:seed:rbac` AFTER DEPLOY — the seeder upserts route, group, sortOrder,
+  //   parentId and dividerBefore on existing rows, and creates `delivery_priority`.
+  //
+  // Stock Management is a PARENT — the third module tree in this catalog, after Staff LMS
+  // and Settings.
   //
   // Every child KEEPS ITS KEY. Permissions are keyed on the module key, not on position in
   // the tree, so every existing stock.view / inbound.create / deliveries.approve /
@@ -113,7 +127,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     label: "Stock Management",
     description: "Stock, brand sheets, categories, audits, inbound, dispatch and transfers",
     icon: "Boxes",
-    route: "/stock-management",
+    route: null, // expand-only (R28); /stock-management is still served by URL
     group: "Operations",
     sortOrder: 100,
     // A grouping construct. Its own view grant gates the hub page and nothing else — the real
@@ -122,7 +136,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
   },
   {
     key: "stock",
-    label: "Stock & Inventory",
+    label: "Stock & inventory",
     description: "Products, serials, stock levels and locations",
     icon: "Package",
     route: "/stock",
@@ -148,108 +162,135 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     actions: ["view", "create", "edit", "delete"],
   },
   {
+    // The four controlled activities, numbered in flow order (R28). Each has a doer
+    // (`create`/`edit`) and an approver (`approve`) by role permission only (R22).
     key: "inbound",
-    label: "Inbound Tracking",
+    label: "1 Inbound",
     description: "Incoming shipments, receiving, putaway",
     icon: "ArrowDownCircle",
     route: "/inbound",
     parentKey: "stock_management",
     group: "Operations", // MUST equal the parent's — the seeder asserts it
-    sortOrder: 105,
+    sortOrder: 110,
+    dividerBefore: true, // the line between Stock & inventory and the four activities (P5)
     actions: ["view", "create", "edit", "delete", "approve"],
   },
   {
     key: "deliveries",
-    label: "Deliveries & Dispatch",
+    label: "2 Outbound (delivery & dispatch)",
     description: "Outward dispatch, delivery runs, pre-bookings",
     icon: "Truck",
     route: "/deliveries",
     parentKey: "stock_management",
     group: "Operations", // MUST equal the parent's — the seeder asserts it
-    sortOrder: 106,
+    sortOrder: 111,
+    // `approve` = outbound approval before OUT_FOR_DELIVERY / SHIPPED (R26a).
     actions: ["view", "create", "edit", "delete", "approve"],
   },
   {
     key: "transfers",
-    label: "Stock Transfers",
+    label: "3 Stock transfer",
     description: "Inter-location transfer orders",
     icon: "ArrowRightLeft",
     route: "/transfers",
     parentKey: "stock_management",
     group: "Operations", // MUST equal the parent's — the seeder asserts it
-    sortOrder: 107,
+    sortOrder: 112,
     actions: ["view", "create", "edit", "delete", "approve"],
   },
   {
     key: "stock_audit",
-    label: "Stock Audit / Count",
+    label: "4 Stock audit",
     description: "Physical stock counts, reconciliation and resets",
     icon: "ClipboardCheck",
     route: "/stock-audit",
     parentKey: "stock_management",
     group: "Operations", // MUST equal the parent's — the seeder asserts it
-    sortOrder: 104,
+    sortOrder: 113,
     actions: ["view", "create", "edit", "delete", "approve"],
   },
   {
+    // A ROOT again and routeless (plan 1709, R32): bins are a tab of Admin › Settings › Store
+    // management (/stores), so this module only holds the bins.* grants. It cannot stay a child
+    // of `store_management`, which is itself a child of `settings` now — a grandchild renders
+    // nowhere. Key and grants unchanged. 543 puts it in the Admin band beside stores/warehouses.
     key: "bins",
     label: "Warehouse Bins",
     description: "Warehouse bin directory, landmarks, directions and home bin rules",
     icon: "Boxes",
-    route: "/bins",
-    parentKey: "stock_management",
-    group: "Operations",
-    sortOrder: 108,
+    route: null,
+    group: "Admin",
+    sortOrder: 543,
     actions: ["view", "create", "edit", "delete"],
   },
   {
+    // Plan 1709, R19, Q21: who may set and clear ★ on an outward. Its own module so the star is
+    // grantable without `deliveries.edit`. Grant-only — no page.
+    key: "delivery_priority",
+    label: "Delivery Priority (★)",
+    description: "Star an outward so its cycles are built and moved first",
+    icon: "Star",
+    route: null,
+    group: "Operations",
+    sortOrder: 114,
+    actions: ["edit"],
+  },
+  {
+    // Moved to the new Sales group (plan 1709, R31). 250–260 sits after Purchase (200–240)
+    // and before Accounts (290+), so the band order stays intact.
     key: "second_hand",
     label: "Second-Hand Cycles",
     description: "Exchange and refurbished cycle inventory",
     icon: "Bike",
     route: "/second-hand",
-    group: "Operations",
-    sortOrder: 150,
+    group: "Sales",
+    sortOrder: 260,
     actions: ["view", "create", "edit", "delete", "approve"],
   },
   {
+    // Routeless (plan 1709, R29): Barcode & labels is the Labels tab on /assembly, which this
+    // module's grants still gate. /scanner stays reachable by URL.
     key: "barcode",
     label: "Barcode & Labels",
     description: "Scanner, label printing and label designer",
     icon: "QrCode",
-    route: "/scanner",
+    route: null,
     group: "Operations",
     sortOrder: 160,
     actions: ["view", "create"],
   },
   {
+    // Moved to Accounts (plan 1709, R30), after expenses (310).
     key: "pos",
     label: "POS & Settlement",
     description: "Point-of-sale sessions and daily cash settlement",
     icon: "CreditCard",
     route: "/accounts/settlement",
-    group: "Operations",
-    sortOrder: 170,
+    group: "Accounts",
+    sortOrder: 315,
     actions: ["view", "create", "edit", "approve"],
   },
   {
+    // Top of Operations, above Stock management (plan 1709, R27). 90 is below the Overview
+    // modules' 10/20 in order, so Overview still renders first and Operations opens here.
     key: "assembly",
     label: "Build-Line Assembly",
     description: "Workshop assembly task queue, timer tracking, hold states and completion verification",
     icon: "Wrench",
     route: "/assembly",
     group: "Operations",
-    sortOrder: 180,
+    sortOrder: 90,
     actions: ["view", "create", "edit", "approve"],
   },
   {
+    // Sales group (plan 1709, R31).
     key: "complaints",
     label: "Customer Complaints",
     description: "Cycle complaints logging, unit code lookup, and mechanic assembly fault attribution",
     icon: "AlertCircle",
     route: "/complaints",
-    group: "Operations",
-    sortOrder: 185,
+    group: "Sales",
+    sortOrder: 255,
     actions: ["view", "create", "edit", "approve"],
   },
   {
@@ -299,7 +340,10 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     label: "Brands",
     description: "Brand master, lead times and stock files",
     icon: "Tag",
-    route: "/more/brands",
+    // Routeless since plan 1709 (R33): Brands left the menu and is a chip inside Stock &
+    // inventory. /more/brands is still served. Nulling the route (rather than renaming it) is
+    // what the navTabs note below warns about: a pinned "/more/brands" tab stops resolving.
+    route: null,
     // Moved under Stock Management on 8 Sep 2026 (owner). The brand master is stock master
     // data — it sits beside Categories, which was already a child here — not a purchasing
     // screen. It was in "Purchase" at sortOrder 220, next to purchase orders.
@@ -311,7 +355,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     // is keyed on it.
     parentKey: "stock_management",
     group: "Operations",
-    sortOrder: 108, // after transfers (107); 100-107 are the existing stock_management children
+    sortOrder: 108, // routeless since plan 1709, so its place among the children no longer shows
     // CRUD plus `fetch`, and `fetch` is deliberately NOT `zoho.fetch`.
     //
     // `zoho.fetch` is the grant for pulling BILLS and INVOICES — a routine, high-frequency
@@ -359,7 +403,8 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     label: "Categories",
     description: "Product categories — the taxonomy Zoho imports into",
     icon: "Tag",
-    route: "/categories",
+    // Routeless since plan 1709 (R33): a chip inside Stock & inventory; /categories still served.
+    route: null,
     parentKey: "stock_management",
     group: "Operations", // MUST equal the parent's — the seeder asserts it
     sortOrder: 103, // 102 is now vacant (product_types removed); nothing renumbered
@@ -508,13 +553,16 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     //
     // Still five actions, and `create`/`edit` are the ones the list screen's add/edit sheet
     // checks. There is no separate grant for the list: one question, one answer.
+    //
+    // Moved from Accounts (320) to the Sales group (plan 1709-priority-build-and-stock-flow,
+    // R31): Customers · Customer complaints · Second-Hand Cycles.
     key: "customers",
     label: "Customers",
     description: "Customer master, invoices and receivables",
     icon: "Users",
     route: "/customers",
-    group: "Accounts",
-    sortOrder: 320,
+    group: "Sales",
+    sortOrder: 250,
     actions: ["view", "create", "edit", "delete"],
   },
 
@@ -765,8 +813,8 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     // with ADMIN unaffected so it would look fine to whoever tested it. Same argument as the
     // note above the `zoho` entry.
     //
-    // 530 -> 524 keeps it inside the Settings band. 523/524 are the last free slots before
-    // store_management at 540; see the band note at the top of this file.
+    // 530 -> 524 keeps it inside the Settings band; see the band note at the top of this file.
+    // (store_management joined these children at 526 in plan 1709.)
     key: "whatsapp_templates",
     label: "WhatsApp Templates",
     description: "Customer messaging templates",
@@ -779,35 +827,28 @@ export const MODULE_CATALOG: ModuleSeed[] = [
   },
 
   // ── Store Management ──────────────────────────────────────────────────────
-  // A parent plus two children, the second module tree in this catalog after Staff LMS.
+  // Plan 1709-priority-build-and-stock-flow (R32, Q24), 17 Sep 2026: Store management is ONE
+  // screen at /stores with tabs Stores · Warehouses · Bins, reached as Admin › Settings › Store
+  // management. So the tree is inverted: `store_management` becomes a CHILD of `settings` with
+  // the route, and `stores`, `warehouses` (and `bins`, above) become routeless ROOTS that only
+  // hold grants. They cannot stay children of `store_management` — as grandchildren of
+  // `settings` they would exist in the database and render nowhere (seed-rbac.ts rejects it).
   //
-  // `store_management` is a ROOT module and must stay one: `stores` and `warehouses` are its
-  // children, and nesting the parent under `settings` would make them GRANDCHILDREN, which
-  // seed-rbac.ts:48 rejects outright — the sidebar walks exactly two levels, so a grandchild
-  // would exist in the database and render nowhere.
+  // Every key is unchanged, so every stores.* / warehouses.* / bins.* grant survives. The
+  // screen's tabs are gated by those grants; `store_management.view` gates the menu entry.
   //
-  // The parent is a grouping construct and its own `view` grant does almost nothing:
-  // app-sidebar.tsx builds a placeholder parent from a child's carried parent data, so the
-  // heading appears whenever EITHER child is granted. The real gates are stores.* and
-  // warehouses.*. Do not give it CRUD expecting it to gate anything.
-  //
-  // Two modules rather than one, decided 30 Aug 2026: "open a new store" and "add a warehouse
-  // to an existing site" are different decisions, and a warehouse supervisor can reasonably
-  // hold the second without the first.
-  //
-  // Only the FIRST child has a page. `warehouses` is permission-only (route: null, 9 Sep
-  // 2026): warehouses are created and edited inside /stores, and the module exists to hold
-  // the create/edit/delete grants that gate /api/warehouses. The heading therefore survives
-  // on `stores` alone — app-sidebar.tsx keeps a parent while at least one child has a route,
-  // so if `stores` were ever nulled too the whole Store Management heading would vanish.
+  // Two grant modules rather than one, decided 30 Aug 2026: "open a new store" and "add a
+  // warehouse to an existing site" are different decisions, and a warehouse supervisor can
+  // reasonably hold the second without the first.
   {
     key: "store_management",
     label: "Store Management",
-    description: "Sites and the warehouses inside them",
+    description: "Stores, warehouses and bins — one screen with a tab each",
     icon: "Building2",
-    route: null, // a pure container — no page of its own
-    group: "Admin",
-    sortOrder: 540,
+    route: "/stores",
+    parentKey: "settings",
+    group: "Admin", // MUST equal the parent's — the seeder asserts it
+    sortOrder: 526, // after settings_ai (525)
     actions: ["view"],
   },
   {
@@ -815,9 +856,8 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     label: "Stores",
     description: "Store sites — the shops, their codes and contact details",
     icon: "Building2",
-    route: "/stores",
-    parentKey: "store_management",
-    group: "Admin", // MUST equal the parent's group — the seeder asserts it
+    route: null, // grant-only; the Stores tab of /stores (R32)
+    group: "Admin",
     sortOrder: 541,
     actions: CRUD,
   },
@@ -826,12 +866,9 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     label: "Warehouses",
     description: "Warehouses under each store — where stock physically lives",
     icon: "Warehouse",
-    // No page. Warehouses are managed inside /stores; this module exists to hold the
-    // `warehouses.create/edit/delete` grants that gate /api/warehouses. A routeless child
-    // renders nothing in the sidebar and cannot be pinned — plan
-    // 0909-stock-screens-size-category-and-sidebar, D14.
+    // Grant-only: the Warehouses tab of /stores (R32). Holds the `warehouses.create/edit/delete`
+    // grants that gate /api/warehouses.
     route: null,
-    parentKey: "store_management",
     group: "Admin",
     sortOrder: 542,
     actions: CRUD,

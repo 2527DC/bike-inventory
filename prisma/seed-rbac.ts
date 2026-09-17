@@ -81,6 +81,7 @@ export async function seedRbac(prisma: PrismaClient) {
         group: m.group,
         sortOrder: m.sortOrder,
         assignable: m.assignable ?? true,
+        dividerBefore: m.dividerBefore ?? false,
         isActive: true,
         parentId: null,
       },
@@ -93,6 +94,7 @@ export async function seedRbac(prisma: PrismaClient) {
         group: m.group,
         sortOrder: m.sortOrder,
         assignable: m.assignable ?? true,
+        dividerBefore: m.dividerBefore ?? false,
       },
     });
   }
@@ -116,6 +118,7 @@ export async function seedRbac(prisma: PrismaClient) {
         group: m.group,
         sortOrder: m.sortOrder,
         assignable: m.assignable ?? true,
+        dividerBefore: m.dividerBefore ?? false,
         isActive: true,
         parentId,
       },
@@ -128,6 +131,7 @@ export async function seedRbac(prisma: PrismaClient) {
         group: m.group,
         sortOrder: m.sortOrder,
         assignable: m.assignable ?? true,
+        dividerBefore: m.dividerBefore ?? false,
         parentId,
       },
     });
