@@ -131,7 +131,11 @@ export default function ExpensesPage() {
   const visibleExpenses = expenses.filter((exp) => {
     if (!searchText) return true;
     const q = searchText.toLowerCase();
-    return exp.description.toLowerCase().includes(q) || exp.paidBy.toLowerCase().includes(q);
+    return (
+      (exp.description && exp.description.toLowerCase().includes(q)) ||
+      exp.category.toLowerCase().includes(q) ||
+      exp.paidBy.toLowerCase().includes(q)
+    );
   });
 
   return (
@@ -193,7 +197,7 @@ export default function ExpensesPage() {
           rowKey={(exp) => exp.id}
           emptyText="No expenses found"
           columns={[
-            { header: "Description", cell: (exp) => <span className="font-medium text-slate-900">{exp.description}</span> },
+            { header: "Description", cell: (exp) => <span className="font-medium text-slate-900">{exp.description || exp.category.replace(/_/g, " ")}</span> },
             { header: "Date", cell: (exp) => new Date(exp.date).toLocaleDateString("en-IN"), className: "whitespace-nowrap text-slate-500" },
             { header: "Paid By", cell: (exp) => exp.paidBy },
             { header: "Mode", cell: (exp) => <span className="text-slate-500">{exp.paymentMode}</span> },
@@ -211,7 +215,7 @@ export default function ExpensesPage() {
               <div className="p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-slate-900 truncate">{exp.description}</p>
+                    <p className="text-sm font-semibold text-slate-900 truncate">{exp.description || exp.category.replace(/_/g, " ")}</p>
                     <p className="text-xs text-slate-500 tabular-nums mt-0.5 truncate">
                       {new Date(exp.date).toLocaleDateString("en-IN")} · {exp.paidBy} · {exp.paymentMode}
                     </p>

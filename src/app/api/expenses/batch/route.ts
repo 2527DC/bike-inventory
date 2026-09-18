@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
       date,
       amount: e.amount,
       category: e.category,
-      description: e.description,
+      description: e.description?.trim() || e.category.replace(/_/g, " "),
       paidBy: user.name,
       paymentMode: e.paymentMode,
       referenceNo: e.referenceNo,

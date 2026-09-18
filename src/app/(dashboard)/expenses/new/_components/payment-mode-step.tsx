@@ -9,12 +9,12 @@ interface PaymentModeStepProps {
   onNext: () => void;
 }
 
-/** Step 4 — all six `PaymentMode` values as chips (R6). CREDIT_ADJUSTMENT is reachable at last. */
+/** Step 3 — Payment mode selection: UPI and Cash only. */
 export function PaymentModeStep({ value, onChange, onNext }: PaymentModeStepProps) {
   return (
     <div>
       <p className="text-sm font-medium text-slate-700 mb-2">How was it paid?</p>
-      <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Payment mode">
+      <div className="grid grid-cols-2 gap-3" role="radiogroup" aria-label="Payment mode">
         {PAYMENT_MODE_ORDER.map((mode) => {
           const selected = value === mode;
           return (
@@ -24,8 +24,8 @@ export function PaymentModeStep({ value, onChange, onNext }: PaymentModeStepProp
               role="radio"
               aria-checked={selected}
               onClick={() => onChange(mode)}
-              className={`min-h-[48px] px-2 rounded-xl text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 ${
-                selected ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+              className={`min-h-[52px] px-3 rounded-xl text-base font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 ${
+                selected ? "bg-blue-600 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
               }`}
             >
               {PAYMENT_MODE_LABELS[mode]}
