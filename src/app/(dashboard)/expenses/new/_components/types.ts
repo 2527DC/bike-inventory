@@ -30,14 +30,14 @@ export const EMPTY_DRAFT: Draft = {
   amount: "",
   category: null,
   description: "",
-  paymentMode: "CASH",
+  paymentMode: "UPI",
   receiptUrl: null,
 };
 
-export type Step = "amount" | "category" | "description" | "paymentMode" | "photo" | "next" | "review";
+export type Step = "amount" | "category" | "paymentMode" | "photo";
 
-/** The per-expense steps, in the order the owner asked for (R3). "next" and "review" follow. */
-export const ENTRY_STEPS: readonly Step[] = ["amount", "category", "description", "paymentMode", "photo"];
+/** The per-expense steps: amount → category → paymentMode → photo. Description and review removed. */
+export const ENTRY_STEPS: readonly Step[] = ["amount", "category", "paymentMode", "photo"];
 
 // A Record rather than an array so that adding a value to the Prisma enum (and to the type
 // in src/types) fails compilation here until it gets a label — a category with no card would
@@ -59,15 +59,15 @@ export const CATEGORY_ORDER: ExpenseCategory[] = [
 ];
 
 export const PAYMENT_MODE_LABELS: Record<PaymentMode, string> = {
-  CASH: "Cash",
   UPI: "UPI",
+  CASH: "Cash",
   CHEQUE: "Cheque",
   NEFT: "NEFT",
   RTGS: "RTGS",
   CREDIT_ADJUSTMENT: "Credit adjustment",
 };
 
-export const PAYMENT_MODE_ORDER: PaymentMode[] = ["CASH", "UPI", "CHEQUE", "NEFT", "RTGS", "CREDIT_ADJUSTMENT"];
+export const PAYMENT_MODE_ORDER: PaymentMode[] = ["UPI", "CASH"];
 
 /** Today as YYYY-MM-DD in the device's own time zone (R2). */
 export function todayLocal(): string {
@@ -108,8 +108,8 @@ export function draftFromRow(row: ExpenseRow): Draft {
 /** A completed row from the draft, or null when a required step is still invalid. */
 export function rowFromDraft(draft: Draft, key: string): ExpenseRow | null {
   const amount = parseAmount(draft.amount);
-  const description = draft.description.trim();
-  if (amount === null || !draft.category || !description) return null;
+  if (amount === null || !draft.category) return null;
+  const description = draft.description.trim() || CATEGORY_LABELS[draft.category].label;
   return {
     key,
     amount,

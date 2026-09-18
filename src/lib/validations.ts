@@ -635,10 +635,10 @@ export const EXPENSE_PAYMENT_MODES = ["CASH", "CHEQUE", "NEFT", "RTGS", "UPI", "
 export const expenseRowSchema = z.object({
   amount: z.number().min(0.01, "Amount must be positive"),
   category: z.enum(EXPENSE_CATEGORIES),
-  description: z.string().min(1, "Description is required").max(500),
+  description: z.string().max(500).optional().default(""),
   paymentMode: z.enum(EXPENSE_PAYMENT_MODES),
   /** One receipt photo, already uploaded through /api/media/presign. Null when none. */
-  receiptUrl: z.string().url().optional(),
+  receiptUrl: z.string().url().optional().nullable(),
   referenceNo: z.string().optional(),
   notes: z.string().optional(),
 });
@@ -659,10 +659,11 @@ export const expenseSchema = z.object({
   date: z.string().min(1, "Date is required"),
   amount: z.number().min(0.01, "Amount must be positive"),
   category: z.enum(EXPENSE_CATEGORIES),
-  description: z.string().min(1, "Description is required"),
+  description: z.string().optional().default(""),
   paidBy: z.string().min(1, "Paid by is required").optional(),
   paymentMode: z.enum(EXPENSE_PAYMENT_MODES),
   referenceNo: z.string().optional(),
+  receiptUrl: z.string().url().optional().nullable(),
   notes: z.string().optional(),
 });
 

@@ -22,12 +22,11 @@ const COMPRESS_TARGET_BYTES = 220 * 1024;
 interface PhotoStepProps {
   value: string | null;
   onChange: (url: string | null) => void;
-  onNext: () => void;
-  /** Changes the forward button's wording: a row picked from review is being saved back. */
-  editing: boolean;
+  onSubmit: () => void;
+  submitting?: boolean;
 }
 
-export function PhotoStep({ value, onChange, onNext, editing }: PhotoStepProps) {
+export function PhotoStep({ value, onChange, onSubmit, submitting }: PhotoStepProps) {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -125,8 +124,20 @@ export function PhotoStep({ value, onChange, onNext, editing }: PhotoStepProps) 
         </Button>
       </div>
 
-      <Button type="button" size="lg" onClick={onNext} disabled={uploading} className="w-full min-h-[48px] mt-6">
-        {editing ? "Save changes" : value ? "Continue" : "Continue without photo"}
+      <Button
+        type="button"
+        size="lg"
+        onClick={onSubmit}
+        disabled={uploading || submitting}
+        className="w-full min-h-[52px] mt-6 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-base"
+      >
+        {submitting ? (
+          <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> Recording expense…</>
+        ) : value ? (
+          "Submit expense"
+        ) : (
+          "Submit without photo"
+        )}
       </Button>
     </div>
   );

@@ -48,11 +48,12 @@ export async function POST(req: NextRequest) {
         date: new Date(data.date),
         amount: data.amount,
         category: data.category,
-        description: data.description,
+        description: data.description?.trim() || data.category.replace(/_/g, " "),
         // D2: the payer is the signed-in user, derived here, never taken from the body.
         paidBy: user.name,
         paymentMode: data.paymentMode,
         referenceNo: data.referenceNo,
+        receiptUrl: data.receiptUrl ?? null,
         notes: data.notes,
         recordedById: user.id,
       },
