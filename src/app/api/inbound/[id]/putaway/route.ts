@@ -4,6 +4,11 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { loadHomeBinRules, pickHomeBin } from "@/lib/bins/rule-match";
+import { BinMoveRefused, placeUnitsInBin } from "@/lib/units";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("inbound:putaway");
 
 // GET: Retrieve shipment items for put-away with suggested HomeBinRules and existing bin assignments
 export async function GET(
@@ -45,62 +50,30 @@ export async function GET(
     const { searchParams } = new URL(req.url);
     const queryWarehouseId = searchParams.get("warehouseId");
 
-    // Fetch all home bin rules for active warehouse(s)
-    const homeRules = await prisma.homeBinRule.findMany({
-      where: queryWarehouseId
-        ? { warehouseId: queryWarehouseId, warehouse: { isActive: true } }
-        : { warehouse: { isActive: true } },
-      include: {
-        bin: { select: { id: true, code: true, name: true, directions: true, isAssemblyArea: true, warehouse: { select: { id: true, name: true, kind: true } } } },
-      },
-    });
+    // ── ONE MATCHER, SHARED WITH THE INWARD PATHS (P4, P13) ──
+    //
+    // The precedence chain used to live here, inline, and nowhere else — so an inward that went
+    // straight into stock ignored the rules. It is `src/lib/bins/rule-match.ts` now; this route
+    // only supplies the fallback (the SHIPMENT's brand/category for a line whose product carries
+    // none) and reads the answer.
+    const homeRules = await loadHomeBinRules(prisma, queryWarehouseId);
 
     // Map each line item with suggested home bin rule based on item-level brand and category
     const itemsWithSuggestions = shipment.lineItems.map((item) => {
-      let suggestedBin = null;
-      let matchedRule: { type: string; label: string } | null = null;
+      // Item/product level takes absolute priority; the shipment's own values are the fallback.
+      const match = item.productId
+        ? pickHomeBin(homeRules, {
+            productId: item.productId,
+            brandId: item.product?.brandId || shipment.brandId,
+            categoryId: item.product?.categoryId || shipment.categoryId,
+          })
+        : null;
 
-      if (item.productId) {
-        // Resolve item brand and category: item/product level takes absolute priority
-        const itemBrandId = item.product?.brandId || shipment.brandId;
-        const itemCategoryId = item.product?.categoryId || shipment.categoryId;
+      let matchedRule: { type: string; label: string } | null = match
+        ? { type: match.type, label: match.label }
+        : null;
 
-        // 1. Check direct product rule
-        const prodRule = homeRules.find((r) => r.productId === item.productId);
-        if (prodRule) {
-          suggestedBin = prodRule.bin;
-          matchedRule = { type: "product", label: "Product Rule" };
-        } else {
-          // 2. Check brand + category rule
-          const brandCatRule = homeRules.find(
-            (r) => r.brandId && r.categoryId && r.brandId === itemBrandId && r.categoryId === itemCategoryId
-          );
-          if (brandCatRule) {
-            suggestedBin = brandCatRule.bin;
-            matchedRule = { type: "brand_category", label: "Brand + Category Rule" };
-          } else {
-            // 3. Check category-only rule (where rule has no specific brand restriction)
-            const catRule = itemCategoryId
-              ? homeRules.find((r) => !r.brandId && r.categoryId === itemCategoryId)
-              : null;
-            if (catRule) {
-              suggestedBin = catRule.bin;
-              matchedRule = { type: "category", label: "Category Rule" };
-            } else {
-              // 4. Check brand-only rule (where rule has no specific category restriction)
-              const brandRule = itemBrandId
-                ? homeRules.find((r) => r.brandId === itemBrandId && !r.categoryId)
-                : null;
-              if (brandRule) {
-                suggestedBin = brandRule.bin;
-                matchedRule = { type: "brand", label: "Brand Rule" };
-              }
-            }
-          }
-        }
-      }
-
-      const finalBin = suggestedBin || item.product?.bin || null;
+      const finalBin = match?.bin || item.product?.bin || null;
       if (!matchedRule && item.product?.bin) {
         matchedRule = { type: "product_default", label: "Product Default Bin" };
       }
@@ -136,6 +109,9 @@ export async function GET(
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("put-away details fetch failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse(error instanceof Error ? error.message : "Failed to fetch putaway details", 500);
   }
 }
@@ -145,9 +121,9 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params;
   try {
     const user = await requireFeature("inbound", "approve");
-    const { id } = await params;
     const body = await req.json();
     const { items, round = 1, warehouseId } = body;
 
@@ -162,6 +138,7 @@ export async function POST(
     if (!shipment) return errorResponse("Shipment not found", 404);
 
     let updatedCount = 0;
+    let unitsPutAway = 0;
 
     await prisma.$transaction(async (tx) => {
       for (const item of items) {
@@ -200,34 +177,37 @@ export async function POST(
                   take: moveQty,
                 });
 
-          for (const u of unitsToUpdate) {
-            await tx.inventoryUnit.update({
-              where: { id: u.id },
-              data: { binId, status: "PUT_AWAY" },
-            });
-            await tx.binMovementLog.create({
-              data: {
-                warehouseId: effectiveWarehouseId,
-                unitId: u.id,
-                productId: lineItem.productId,
-                quantity: 1,
-                fromBinId: u.binId,
-                toBinId: binId,
-                reason: `Put-away round ${round} (${shipment.shipmentNo})`,
-                movedById: user.id,
-              },
-            });
-          }
+          if (unitsToUpdate.length > 0) {
+            // ── ONE PLACEMENT HELPER (P6, P11) ──
+            //
+            // Refuses a no-assembly item into a bin that holds items needing assembly, stamps
+            // the units when this bin is a no-assembly one, and recounts `BinStock` from the
+            // units in both bins. The `BinStock` increment that used to sit below ran on TOP of
+            // moving the units, so a recounted bin read double.
+            await placeUnitsInBin(tx, unitsToUpdate.map((u) => u.id), binId);
+            unitsPutAway += unitsToUpdate.length;
 
-          // Update BinStock
-          await tx.binStock.upsert({
-            where: { binId_productId: { binId, productId: lineItem.productId } },
-            update: { quantity: { increment: moveQty } },
-            create: { binId, productId: lineItem.productId, quantity: moveQty },
-          });
-
-          // Log movement for bulk loose products if no units existed
-          if (unitsToUpdate.length === 0) {
+            for (const u of unitsToUpdate) {
+              await tx.binMovementLog.create({
+                data: {
+                  warehouseId: effectiveWarehouseId,
+                  unitId: u.id,
+                  productId: lineItem.productId,
+                  quantity: 1,
+                  fromBinId: u.binId,
+                  toBinId: binId,
+                  reason: `Put-away round ${round} (${shipment.shipmentNo})`,
+                  movedById: user.id,
+                },
+              });
+            }
+          } else {
+            // No unit records: older loose stock, whose bin quantity is `BinStock` alone.
+            await tx.binStock.upsert({
+              where: { binId_productId: { binId, productId: lineItem.productId } },
+              update: { quantity: { increment: moveQty } },
+              create: { binId, productId: lineItem.productId, quantity: moveQty },
+            });
             await tx.binMovementLog.create({
               data: {
                 warehouseId: effectiveWarehouseId,
@@ -252,11 +232,28 @@ export async function POST(
           putawayById: user.id,
         },
       });
-    });
+      // A round can carry dozens of units, each with a movement log and a bin recount — past
+      // Prisma's 5 s default.
+    }, { timeout: 30_000 });
 
-    return successResponse({ updated: updatedCount, round });
+    log.info("put-away round completed", {
+      shipmentId: id,
+      round,
+      lines: updatedCount,
+      unitsPutAway,
+      userId: user.id,
+    });
+    return successResponse({ updated: updatedCount, unitsPutAway, round });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof BinMoveRefused) {
+      log.warn("put-away refused", { shipmentId: id, message: error.message });
+      return errorResponse(error.message, 409);
+    }
+    log.error("put-away failed", {
+      shipmentId: id,
+      message: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse(error instanceof Error ? error.message : "Putaway failed", 400);
   }
 }

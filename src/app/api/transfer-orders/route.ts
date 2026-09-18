@@ -11,9 +11,10 @@ import {
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { z } from "zod";
-import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
-import { getWarehouseBreakdown } from "@/lib/stock-location";
 import { listWarehouses, type WarehouseRef } from "@/lib/warehouses";
+import { transferItemSchema, validateTransferItems, isRefusal } from "@/lib/transfers/items";
+import { recordApprovalEvent } from "@/lib/approvals/events";
+import { notifyTransferApprovalRequested } from "@/lib/approvals/actions/transfer";
 import { nextSequence } from "@/lib/sequence";
 import { trfSeedSql, trfSequenceKey, currentTransferYm, TRF_SEQUENCE_PAD } from "@/lib/transfers/sequence";
 import { docTypeForMode, resolveStoreWarehouse } from "@/lib/transfers/mode";
@@ -31,31 +32,30 @@ const TRANSFER_DOC_PREFIX = "transfers/";
 const ALL_STATUSES: TransferOrderStatus[] = [
   "PENDING",
   "APPROVED",
+  "RETURNED",
   "REJECTED",
   "CANCELLED",
   "IN_TRANSIT",
   "RECEIVED",
 ];
 
-const itemSchema = z.object({
-  productId: z.string().min(1),
-  quantity: z.number().int().min(1),
-  fromBinId: z.string().optional(),
-  toBinId: z.string().optional(),
-  // The item lane is MIRRORED from the header, not chosen. These stay accepted so an older
-  // client keeps working, and are refused below when they disagree with the header — silently
-  // preferring one over the other is how a transfer would move stock out of a building nobody
-  // named. The columns themselves are kept this release (CLAUDE.md rule 7: drop only after the
-  // code stopped using them).
-  fromWarehouseId: z.string().min(1).optional(),
-  toWarehouseId: z.string().min(1).optional(),
-});
+// The line shape and its four rules now live in `src/lib/transfers/items.ts`, because the
+// PATCH that replaces a RETURNED order's lines (R25) must apply exactly the same ones.
+const itemSchema = transferItemSchema;
 
 /**
- * The document that travels with the transfer, attached AT CREATION (owner, 9 Sep 2026: the
- * file is required; the number and date are optional — "it's just we upload a file"). The
- * file has already been PUT to storage by the browser under `transfers/…`; `url` is what the
- * bucket answered. Its type is not chosen here: `docTypeForMode` decides it.
+ * The document that travels with the transfer.
+ *
+ * ─── OPTIONAL AT CREATE SINCE P16 ─────────────────────────────────────────────────────────
+ *
+ * It used to be required here (owner, 9 Sep 2026: "it's just we upload a file"). R45 broke
+ * that: Find stock raises a transfer request FROM AN OUTWARD, and the person standing at the
+ * counter has neither the delivery challan nor the tax invoice — those are written when the van
+ * is loaded. So the file is optional at create and REQUIRED BEFORE DISPATCH (P16 (a)); the
+ * dispatch route refuses without it and `documentSatisfied` hides the button. The number and
+ * date stay optional either way. The file has already been PUT to storage by the browser under
+ * `transfers/…`; `url` is what the bucket answered. Its type is not chosen here:
+ * `docTypeForMode` decides it.
  */
 const documentSchema = z.object({
   url: z.string().trim().min(1, "The document file is required"),
@@ -75,7 +75,8 @@ const commonSchema = {
   fromStoreId: z.string().min(1, "A source store is required"),
   items: z.array(itemSchema).min(1, "At least one item is required"),
   notes: z.string().max(1000).optional(),
-  document: documentSchema,
+  // P16: optional here, required before dispatch. See `documentSchema`.
+  document: documentSchema.optional(),
 };
 
 const createSchema = z.discriminatedUnion("mode", [
@@ -289,82 +290,58 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // An item lane that disagrees with the header is a client that has not been updated, and
-    // guessing which one it meant could move stock out of the wrong building.
-    for (const item of data.items) {
-      if (item.fromWarehouseId && item.fromWarehouseId !== fromWh.id) {
-        return errorResponse("Every line moves along the order's route. Remove the per-line source warehouse.", 400);
-      }
-      if (item.toWarehouseId && item.toWarehouseId !== toWh.id) {
-        return errorResponse("Every line moves along the order's route. Remove the per-line destination warehouse.", 400);
-      }
-    }
+    // ── The lines ────────────────────────────────────────────────────────────────────────
+    // Lane agreement, product existence, source stock and the bin requirement — all four in
+    // `src/lib/transfers/items.ts`, shared with the PATCH that replaces a RETURNED order's
+    // lines so the two can never drift (R25).
+    const lineCheck = await validateTransferItems({
+      items: data.items,
+      fromWh,
+      toWh,
+      context: {},
+    });
+    if (isRefusal(lineCheck)) return errorResponse(lineCheck.error, lineCheck.status);
+    const { binTrackingEnabled } = lineCheck;
 
     // ── The document ─────────────────────────────────────────────────────────────────────
-    // `document.url` is a client-supplied string the server never saw written. It must be a
-    // URL the LIVE provider issued (`keyFromUrl` answers null for anything else) and the key
-    // must sit under `transfers/` — the one prefix that accepts a PDF. Without this a caller
-    // could point the record at any object in the bucket, or at a foreign host. The order
-    // number does not exist yet, so the per-order folder check the replace route makes
-    // (`transfers/<orderNo>/`) cannot apply here.
+    // OPTIONAL since P16 — see `documentSchema`. When one IS supplied, `document.url` is a
+    // client-supplied string the server never saw written: it must be a URL the LIVE provider
+    // issued (`keyFromUrl` answers null for anything else) and the key must sit under
+    // `transfers/` — the one prefix that accepts a PDF. Without this a caller could point the
+    // record at any object in the bucket, or at a foreign host. The order number does not exist
+    // yet, so the per-order folder check the replace route makes (`transfers/<orderNo>/`)
+    // cannot apply here.
     const requiredDocType = docTypeForMode(mode);
-    const storage = await tryGetStorage();
-    if (!storage) {
-      log.warn("transfer refused: storage not configured", { mode, fromStoreId });
-      return errorResponse("Storage is not configured, so the document cannot be checked. Set it up in Settings → Storage.", 400);
-    }
-    const docKey = storage.keyFromUrl(data.document.url);
-    if (!docKey || !docKey.startsWith(TRANSFER_DOC_PREFIX)) {
-      log.warn("transfer refused: document url not a transfer upload", {
-        mode,
-        fromStoreId,
-        provider: storage.key,
-        keyPrefix: docKey ? docKey.split("/")[0] : null,
-      });
-      return errorResponse("That file was not uploaded as a transfer document.", 400);
-    }
-
     let docDate: Date | null = null;
-    if (data.document.date) {
-      const parsed = new Date(data.document.date);
-      if (Number.isNaN(parsed.getTime())) {
-        log.warn("transfer refused: bad document date", { mode, fromStoreId });
-        return errorResponse("That document date is not a valid date.", 400);
+    let docNumber: string | null = null;
+    const docUrl = data.document?.url ?? null;
+
+    if (data.document) {
+      const storage = await tryGetStorage();
+      if (!storage) {
+        log.warn("transfer refused: storage not configured", { mode, fromStoreId });
+        return errorResponse("Storage is not configured, so the document cannot be checked. Set it up in Settings → Storage.", 400);
       }
-      docDate = parsed;
-    }
-    const docNumber = data.document.number?.trim() || null;
-
-    const productIds = [...new Set(data.items.map((i) => i.productId))];
-    const products = await prisma.product.findMany({
-      where: { id: { in: productIds } },
-      select: { id: true, currentStock: true, name: true, costPrice: true },
-    });
-    const productMap = new Map(products.map((p) => [p.id, p]));
-
-    // A friendly up-front check so the person is told at the point of typing rather than at
-    // dispatch. It is NOT the safety net — dispatch rechecks inside its own transaction, which
-    // is the only check that can be trusted, because this one is read before any lock is held.
-    const breakdown = await getWarehouseBreakdown(productIds);
-    for (const item of data.items) {
-      const product = productMap.get(item.productId);
-      if (!product) return errorResponse(`Product not found: ${item.productId}`, 404);
-      const available = breakdown.get(product.id)?.[fromWh.code] ?? 0;
-      if (available < item.quantity) {
-        return errorResponse(
-          `Insufficient stock for ${product.name} at ${fromWh.name}. Available: ${available}`,
-          400
-        );
+      const docKey = storage.keyFromUrl(data.document.url);
+      if (!docKey || !docKey.startsWith(TRANSFER_DOC_PREFIX)) {
+        log.warn("transfer refused: document url not a transfer upload", {
+          mode,
+          fromStoreId,
+          provider: storage.key,
+          keyPrefix: docKey ? docKey.split("/")[0] : null,
+        });
+        return errorResponse("That file was not uploaded as a transfer document.", 400);
       }
-    }
 
-    const binTrackingEnabled = await isBinTrackingEnabled();
-    if (binTrackingEnabled) {
-      for (const item of data.items) {
-        if (!item.fromBinId || !item.toBinId) {
-          return errorResponse("Source and destination bins are required", 400);
+      if (data.document.date) {
+        const parsed = new Date(data.document.date);
+        if (Number.isNaN(parsed.getTime())) {
+          log.warn("transfer refused: bad document date", { mode, fromStoreId });
+          return errorResponse("That document date is not a valid date.", 400);
         }
+        docDate = parsed;
       }
+      docNumber = data.document.number?.trim() || null;
     }
 
     // Auto-approve for anyone who could have approved it anyway — it saves a round trip and
@@ -393,14 +370,15 @@ export async function POST(req: NextRequest) {
           toWarehouseId: toWh.id,
           // `transferType` is no longer written; it is dropped a release after this (rule 7).
           requiredDocType,
-          // The document, attached at creation. `docType` mirrors `requiredDocType` because the
-          // mode decided both — the dispatch gate compares them and must find them equal.
-          docType: requiredDocType,
-          docUrl: data.document.url,
+          // The document, when one was attached at creation. `docType` mirrors
+          // `requiredDocType` because the mode decided both — the dispatch gate compares them
+          // and must find them equal. All five stay null when the file comes later (P16).
+          docType: docUrl ? requiredDocType : null,
+          docUrl,
           docNumber,
           docDate,
-          docUploadedById: user.id,
-          docUploadedAt: new Date(),
+          docUploadedById: docUrl ? user.id : null,
+          docUploadedAt: docUrl ? new Date() : null,
           items: {
             create: data.items.map((item) => ({
               productId: item.productId,
@@ -424,6 +402,34 @@ export async function POST(req: NextRequest) {
         },
       });
 
+      // Every controlled activity records that an approval was ASKED FOR (R22, R26). This is
+      // what the Requests page's age column and the approver-error denominator are counted
+      // from, so it is written inside the transaction that creates the order — an order with
+      // no REQUESTED event would be invisible to both.
+      await recordApprovalEvent(tx, {
+        activity: "TRANSFER",
+        event: "REQUESTED",
+        recordId: order.id,
+        recordRef: order.orderNo,
+        actorId: user.id,
+        // Nobody has approved anything yet.
+        approverId: null,
+      });
+
+      // Auto-approve (Q15 keeps it) is still a real approval and is recorded as one, with the
+      // creator as the approver — they are who a later correction counts against.
+      if (isAutoApprove) {
+        await recordApprovalEvent(tx, {
+          activity: "TRANSFER",
+          event: "APPROVED",
+          recordId: order.id,
+          recordRef: order.orderNo,
+          actorId: user.id,
+          approverId: user.id,
+          note: "auto-approved: the creator holds transfers.approve",
+        });
+      }
+
       await logActivity(tx, {
         module: "transfers",
         action: "created",
@@ -445,8 +451,21 @@ export async function POST(req: NextRequest) {
       mode,
       status,
       requiredDocType,
+      hasDocument: Boolean(docUrl),
       itemCount: data.items.length,
     });
+
+    // AFTER the commit (notify/index.ts §F.0). Nothing to tell anyone when it approved itself.
+    if (!isAutoApprove) {
+      notifyTransferApprovalRequested({
+        orderId: result.id,
+        orderNo: result.orderNo,
+        actorId: user.id,
+        actorName: user.name,
+        routeLabel: `${fromWh.name} → ${toWh.name}`,
+        resubmitted: false,
+      });
+    }
 
     return successResponse(result, 201);
   } catch (error) {

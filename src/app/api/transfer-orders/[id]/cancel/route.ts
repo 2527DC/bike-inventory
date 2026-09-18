@@ -7,6 +7,7 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { z } from "zod";
 import { assertTransition, TransitionError } from "@/lib/transfers/transitions";
+import { recordApprovalEvent } from "@/lib/approvals/events";
 import { logActivity } from "@/lib/activity-log";
 import { createLogger } from "@/lib/logger";
 
@@ -42,7 +43,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     const order = await prisma.transferOrder.findUnique({
       where: { id },
-      select: { id: true, orderNo: true, status: true, createdById: true },
+      select: { id: true, orderNo: true, status: true, createdById: true, reviewedById: true },
     });
     if (!order) return errorResponse("Transfer order not found", 404);
 
@@ -67,6 +68,28 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         },
       });
       if (claim.count !== 1) return false;
+
+      // ── A CANCELLED APPROVAL IS A REVERSAL, AND IT COUNTS (R26) ──────────────────────────
+      //
+      // Cancelling a PENDING or RETURNED order reverses nothing: nobody agreed to it. Cancelling
+      // an APPROVED one undoes a decision somebody made, which is exactly what the approver-error
+      // rule calls a reversal (`countReversal`, src/lib/settings/approval-rules.ts) — so the event
+      // is written against the person who approved it, not against the person cancelling.
+      //
+      // `reviewedById` can be null on an order approved before this column was written; the event
+      // is still recorded, with no approver, so the reversal stays visible on the record's trail
+      // even when it cannot be attributed to anybody.
+      if (fromStatus === "APPROVED") {
+        await recordApprovalEvent(tx, {
+          activity: "TRANSFER",
+          event: "REVERSED",
+          recordId: order.id,
+          recordRef: order.orderNo,
+          actorId: user.id,
+          approverId: order.reviewedById,
+          note: reason?.trim() || null,
+        });
+      }
 
       await logActivity(tx, {
         module: "transfers",

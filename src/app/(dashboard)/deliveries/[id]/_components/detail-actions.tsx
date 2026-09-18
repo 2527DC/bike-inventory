@@ -4,12 +4,15 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, Truck, Package } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { usePermissions } from "@/lib/use-permissions";
 import { DeliveryData, StockShortLine, isOutstationDelivery } from "./types";
 import { ScheduleForm } from "./schedule-form";
 import { DispatchForm } from "./dispatch-form";
 import { HandoverChecklist } from "./handover-checklist";
 import { ServiceInvoiceSection } from "./service-invoice-section";
 import { FlagSection } from "./flag-section";
+import { ApprovalSection } from "./approval-section";
+import { PriorityStar } from "./priority-star";
 
 interface DetailActionsProps {
   data: DeliveryData;
@@ -51,6 +54,18 @@ export function DetailActions({
 
   const isOuts = isOutstationDelivery(data);
 
+  // Plan 1709, R19/R26a. Every one of these is COSMETIC — each route re-checks its own grant.
+  // `delivery_priority` is its own module (Q21), so starring does not require `deliveries.edit`.
+  const { canEdit, canApprove } = usePermissions();
+  const mayStar = canEdit("delivery_priority");
+  const mayApprove = canApprove("deliveries");
+  const mayEditDelivery = canEdit("deliveries");
+
+  // R26a: dispatch and ship are blocked until the outward is approved. The server refuses either
+  // way; disabling the button is what stops a person pressing it and reading a refusal instead.
+  const blockedByApproval = !data.approved;
+  const dispatchTitle = blockedByApproval ? "Approval is needed before dispatch" : undefined;
+
   const handleStatusUpdate = async (status: string, extra?: Record<string, unknown>) => {
     setActionLoading(true);
     try {
@@ -68,6 +83,26 @@ export function DetailActions({
         deliveryId={deliveryId}
         onFlagged={onRefetch}
         onResolved={onRefetch}
+      />
+
+      {/* ★ priority (R16, R19–R21). Shown to anyone who may set it; the grant is its own module. */}
+      {mayStar && (
+        <PriorityStar
+          deliveryId={deliveryId}
+          priorityAt={data.priorityAt}
+          canEdit={mayStar}
+          onChanged={onRefetch}
+          variant="button"
+        />
+      )}
+
+      {/* Outbound approval (R25, R26a). Blocks Dispatch and Ship; a walk-out needs none. */}
+      <ApprovalSection
+        data={data}
+        deliveryId={deliveryId}
+        canApprove={mayApprove}
+        canRequest={mayEditDelivery}
+        onChanged={onRefetch}
       />
 
       {/* Prebook Info */}
@@ -183,7 +218,8 @@ export function DetailActions({
       {data.status === "SCHEDULED" && isOuts && !showDispatch && (
         <button
           onClick={() => setShowDispatch(true)}
-          disabled={actionLoading}
+          disabled={actionLoading || blockedByApproval}
+          title={dispatchTitle}
           className="w-full flex items-center justify-center gap-2 bg-orange-600 text-white py-2.5 min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50"
         >
           <Truck className="h-4 w-4" /> Dispatch
@@ -214,7 +250,8 @@ export function DetailActions({
                 handleStatusUpdate("SHIPPED");
               }
             }}
-            disabled={actionLoading}
+            disabled={actionLoading || blockedByApproval}
+            title={dispatchTitle}
             className="w-full flex items-center justify-center gap-2 bg-amber-600 text-white py-2.5 min-h-[48px] rounded-lg text-sm font-medium disabled:opacity-50"
           >
             <Truck className="h-4 w-4" /> Mark Shipped

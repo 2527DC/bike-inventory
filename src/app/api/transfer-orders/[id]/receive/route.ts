@@ -10,6 +10,8 @@ import { assertTransition, TransitionError } from "@/lib/transfers/transitions";
 import { moveIntoWarehouse, writeTransferLedgerRow } from "@/lib/transfers/stock";
 import { logActivity } from "@/lib/activity-log";
 import { moveUnits, retireUnits } from "@/lib/units";
+import { recordApprovalEvent } from "@/lib/approvals/events";
+import { holdDeliveryStock, isDummy, TERMINAL_STATUSES } from "@/lib/deliveries/floor-stock";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("transfer-orders:receive");
@@ -71,6 +73,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         status: true,
         fromWarehouseId: true,
         toWarehouseId: true,
+        // Who approved this transfer — a short receipt is counted against them (R26), not
+        // against the clerk unloading the van.
+        reviewedById: true,
+        // The outward this transfer was raised for by Find stock (R45, P16). Receiving it holds
+        // that outward's stock at once (P19).
+        deliveryId: true,
         items: {
           select: {
             id: true,
@@ -136,6 +144,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (claim.count !== 1) return { claimed: false as const };
 
       let shortLines = 0;
+      let totalShortfall = 0;
 
       for (const item of order.items) {
         const received = submitted.get(item.id)!;
@@ -171,6 +180,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
         if (shortfall > 0) {
           shortLines += 1;
+          totalShortfall += shortfall;
           // See the header: this RECORDS the loss, it does not deduct it again. The units left
           // the total at dispatch and were never added back.
           const current = await tx.product
@@ -246,6 +256,68 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }
       const unitMoves = { arrived: arrived.length, lost: missing.length };
 
+      // ── A SHORT RECEIPT IS AN APPROVER ERROR (plan 1709, Part D, R26) ────────────────────
+      //
+      // ONE event per receipt, not one per short line. The rule counts "a short receive" as a
+      // single error (`countShortReceive`, src/lib/settings/approval-rules.ts); writing a row
+      // per line would make a five-line van that arrived one box short look like five separate
+      // mistakes and quietly multiply that approver's error rate by the size of the order.
+      // The lines themselves stay readable on `TransferOrderItem.receivedQty` and in the
+      // `[TRANSIT SHORTFALL]` ledger rows above.
+      //
+      // `approverId` is the person who APPROVED the transfer (`reviewedById`), never the
+      // receiving clerk — see the contract in src/lib/approvals/events.ts.
+      if (shortLines > 0) {
+        await recordApprovalEvent(tx, {
+          activity: "TRANSFER",
+          event: "SHORT_RECEIVED",
+          recordId: order.id,
+          recordRef: order.orderNo,
+          actorId: user.id,
+          approverId: order.reviewedById,
+          warehouseId: destId,
+          quantity: totalShortfall,
+          note: `${shortLines} line${shortLines === 1 ? "" : "s"} short by ${totalShortfall} in total`,
+        });
+      }
+
+      // ── P19: the outward this stock was fetched for is held AT ONCE ─────────────────────
+      //
+      // Deliberately after the units block and before the activity log, as its own step. Until
+      // now a received transfer held nothing and staff pressed "Reserve stock now" afterwards —
+      // which leaves a window in which the customer's cycle can be sold to a walk-in between
+      // the van arriving and somebody remembering.
+      //
+      // It is best effort BY DESIGN: `holdDeliveryStock` returns `{ held: false, short }` when a
+      // line is still short (another transfer is still in transit, say), and that must NOT
+      // fail the receipt — the stock is physically in the building either way, and the screens
+      // already show "Stock not reserved" with a button. A Dummy outward (no warehouse) and a
+      // terminal one (delivered / walked out) are skipped: the first cannot be acted on at all
+      // and the second has already gone.
+      let deliveryHold: { deliveryId: string; held: boolean; shortLines: number } | null = null;
+      if (order.deliveryId) {
+        const delivery = await tx.delivery.findUnique({
+          where: { id: order.deliveryId },
+          select: { id: true, invoiceNo: true, warehouseId: true, status: true, lineItems: true, stockReservedAt: true },
+        });
+        if (!delivery) {
+          log.warn("transfer names an outward that no longer exists", {
+            orderId: order.id,
+            deliveryId: order.deliveryId,
+          });
+        } else if (isDummy(delivery) || (TERMINAL_STATUSES as readonly string[]).includes(delivery.status)) {
+          log.info("outward not holdable on receive", {
+            orderId: order.id,
+            deliveryId: delivery.id,
+            status: delivery.status,
+            dummy: isDummy(delivery),
+          });
+        } else {
+          const hold = await holdDeliveryStock(tx, delivery);
+          deliveryHold = { deliveryId: delivery.id, held: hold.held, shortLines: hold.short.length };
+        }
+      }
+
       await logActivity(tx, {
         module: "transfers",
         action: "received",
@@ -262,7 +334,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         userName: user.name,
       });
 
-      return { claimed: true as const, shortLines, unitMoves };
+      return { claimed: true as const, shortLines, unitMoves, deliveryHold };
     }, { timeout: 30_000 });
 
     if (!result.claimed) {
@@ -276,12 +348,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       shortLines: result.shortLines,
       unitsArrived: result.unitMoves.arrived,
       unitsLost: result.unitMoves.lost,
+      deliveryId: result.deliveryHold?.deliveryId ?? null,
+      deliveryHeld: result.deliveryHold?.held ?? null,
     });
 
     return successResponse({
       message: "Transfer received",
       status: "RECEIVED",
       shortLines: result.shortLines,
+      // So the receive sheet can say "and the outward's stock is now held" — or why it is not.
+      deliveryHold: result.deliveryHold,
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);

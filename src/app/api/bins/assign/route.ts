@@ -4,6 +4,10 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { BinMoveRefused, placeUnitsInBin } from "@/lib/units";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("bins:assign");
 
 interface AssignItemInput {
   lineItemId: string;
@@ -21,6 +25,7 @@ export async function POST(req: NextRequest) {
     }
 
     let updatedCount = 0;
+    let unitsPlaced = 0;
 
     await prisma.$transaction(async (tx) => {
       for (const item of items) {
@@ -58,38 +63,41 @@ export async function POST(req: NextRequest) {
               productId: lineItem.productId,
               binId: null,
             },
+            select: { id: true, binId: true },
             take: moveQty,
           });
 
-          for (const u of unitsToUpdate) {
-            await tx.inventoryUnit.update({
-              where: { id: u.id },
-              data: { binId, status: "PUT_AWAY" },
+          if (unitsToUpdate.length > 0) {
+            // ── ONE PLACEMENT HELPER (P6, P11) ──
+            //
+            // Checks the non-assemblable rule, stamps the units when this bin is a no-assembly
+            // bin, and recounts `BinStock` from the units afterwards. The old code incremented
+            // `BinStock` by the whole line quantity ON TOP of moving the units, so a bin that
+            // is recounted from its units read double.
+            await placeUnitsInBin(tx, unitsToUpdate.map((u) => u.id), binId);
+            unitsPlaced += unitsToUpdate.length;
+
+            for (const u of unitsToUpdate) {
+              await tx.binMovementLog.create({
+                data: {
+                  warehouseId: targetBin.warehouseId,
+                  unitId: u.id,
+                  productId: lineItem.productId,
+                  quantity: 1,
+                  fromBinId: u.binId,
+                  toBinId: binId,
+                  reason: `Manual assignment from Unmatched Inbound (${lineItem.shipment.shipmentNo})`,
+                  movedById: user.id,
+                },
+              });
+            }
+          } else {
+            // No unit records: older loose stock, whose bin quantity is still `BinStock` alone.
+            await tx.binStock.upsert({
+              where: { binId_productId: { binId, productId: lineItem.productId } },
+              update: { quantity: { increment: moveQty } },
+              create: { binId, productId: lineItem.productId, quantity: moveQty },
             });
-
-            await tx.binMovementLog.create({
-              data: {
-                warehouseId: targetBin.warehouseId,
-                unitId: u.id,
-                productId: lineItem.productId,
-                quantity: 1,
-                fromBinId: u.binId,
-                toBinId: binId,
-                reason: `Manual assignment from Unmatched Inbound (${lineItem.shipment.shipmentNo})`,
-                movedById: user.id,
-              },
-            });
-          }
-
-          // Upsert BinStock
-          await tx.binStock.upsert({
-            where: { binId_productId: { binId, productId: lineItem.productId } },
-            update: { quantity: { increment: moveQty } },
-            create: { binId, productId: lineItem.productId, quantity: moveQty },
-          });
-
-          // Log movement for bulk loose products if no units existed
-          if (unitsToUpdate.length === 0) {
             await tx.binMovementLog.create({
               data: {
                 warehouseId: targetBin.warehouseId,
@@ -106,11 +114,17 @@ export async function POST(req: NextRequest) {
 
         updatedCount++;
       }
-    });
+    }, { timeout: 30_000 });
 
-    return successResponse({ updatedCount, success: true });
+    log.info("unmatched items assigned to bins", { lines: updatedCount, unitsPlaced, userId: user.id });
+    return successResponse({ updatedCount, unitsPlaced, success: true });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof BinMoveRefused) {
+      log.warn("bin assignment refused", { message: error.message });
+      return errorResponse(error.message, 409);
+    }
+    log.error("bin assignment failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Failed to assign bins", 500);
   }
 }

@@ -2,6 +2,7 @@
 
 import { useSession } from "next-auth/react";
 import { HeaderMenu } from "@/components/header-menu";
+import { ApprovalsBadge } from "@/components/approvals-badge";
 
 // Mobile top bar. Rendered only below `lg` (the dashboard layout wraps it in `lg:hidden`);
 // on desktop the sidebar carries branding, the user and the navigation.
@@ -30,6 +31,8 @@ export function Header() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {/* Requests waiting for this person (plan 1709, P17). Renders nothing at zero. */}
+          <ApprovalsBadge />
           <span className="text-sm text-slate-500 hidden min-[400px]:block">
             {userName}
           </span>

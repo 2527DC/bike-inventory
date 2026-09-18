@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Plus, ArrowRightLeft, ArrowRight, CheckCircle2, XCircle, Clock, Loader2, Package, FileCheck, ChevronRight, Truck } from "lucide-react";
+import { Plus, ArrowRightLeft, ArrowRight, CheckCircle2, XCircle, Clock, Loader2, Package, FileCheck, ChevronRight, Truck, Undo2 } from "lucide-react";
 // No warehouse lookup needed: the API now returns the warehouse names on each line, so
 // the page renders what it was given instead of translating a code through a table.
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
@@ -45,7 +45,9 @@ interface TransferOrder {
   // cannot check it against the enum — so a status it does not list would arrive as a value
   // TypeScript insists is impossible, and the accent/badge below would fall through to the
   // "unknown" branch. Listing them now is what makes that impossible.
-  status: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED" | "IN_TRANSIT" | "RECEIVED";
+  // RETURNED joined them in plan 1709 (R25) and is what Reject writes now; REJECTED stays for
+  // the rows written before it.
+  status: "PENDING" | "APPROVED" | "RETURNED" | "REJECTED" | "CANCELLED" | "IN_TRANSIT" | "RECEIVED";
   notes: string | null;
   rejectionNote: string | null;
   createdAt: string;
@@ -63,7 +65,7 @@ interface TransferOrder {
   docUrl: string | null;
 }
 
-type StatusFilter = "all" | "PENDING" | "APPROVED" | "IN_TRANSIT" | "RECEIVED" | "REJECTED" | "CANCELLED";
+type StatusFilter = "all" | "PENDING" | "APPROVED" | "RETURNED" | "IN_TRANSIT" | "RECEIVED" | "REJECTED" | "CANCELLED";
 
 export default function TransfersPage() {
   const { canApprove: canApproveCheck } = usePermissions();
@@ -84,6 +86,9 @@ export default function TransfersPage() {
     details?: string;
   } | null>(null);
   const [dataError, setDataError] = useState<string | null>(null);
+  // Reject asks for a note before it sends anything (R25).
+  const [rejectTarget, setRejectTarget] = useState<TransferOrder | null>(null);
+  const [rejectNote, setRejectNote] = useState("");
 
   // apiTry, not a raw fetch. An expired session answers a bare fetch with a 307 to /login and
   // 200 HTML, so `res.ok` is true and `.json()` throws "Unexpected token <" — which surfaced
@@ -123,12 +128,14 @@ export default function TransfersPage() {
     return () => { cancelled = true; };
   }, [fetchData]);
 
-  async function handleAction(id: string, action: "approve" | "reject") {
+  // Reject sends the transfer BACK with a note (R25), so it asks for one first. An empty
+  // "sent back" is what this replaced: the creator saw a dead record and no idea what to fix.
+  async function handleAction(id: string, action: "approve" | "reject", rejectionNote?: string) {
     setApproving(id);
     {
       const { data: ok, error } = await apiTry<{ message: string }>(
         `/api/transfer-orders/${id}/approve`,
-        { method: "POST", json: { action } }
+        { method: "POST", json: action === "reject" ? { action, rejectionNote } : { action } }
       );
       if (!ok) {
         // The refusal used to be swallowed by a bare `catch {}` and the button simply
@@ -143,7 +150,13 @@ export default function TransfersPage() {
         const order = orders.find((o) => o.id === id);
         setOrders((prev) =>
           prev.map((o) =>
-            o.id === id ? { ...o, status: action === "approve" ? "APPROVED" : "REJECTED" } : o
+            o.id === id
+              ? {
+                  ...o,
+                  status: action === "approve" ? "APPROVED" : "RETURNED",
+                  rejectionNote: action === "reject" ? rejectionNote ?? null : o.rejectionNote,
+                }
+              : o
           )
         );
         if (order) {
@@ -169,13 +182,13 @@ export default function TransfersPage() {
           } else {
             setConfirmation({
               type: "warning",
-              title: "Transfer Rejected",
+              title: "Sent back for correction",
               referenceId: order.orderNo,
               items: [
                 { label: "Items", value: `${order._count.items} item${order._count.items !== 1 ? "s" : ""}` },
-                { label: "Created by", value: order.createdBy.name },
+                { label: "Back with", value: order.createdBy.name },
               ],
-              details: order.rejectionNote || "No reason provided",
+              details: rejectionNote || "No reason provided",
             });
           }
         }
@@ -187,12 +200,19 @@ export default function TransfersPage() {
   const statusBadge = (status: string) => {
     // IN_TRANSIT gets a truck rather than a clock: "waiting for a decision" and "on a van"
     // are different situations and looked identical before. CANCELLED had no icon at all.
+    // RETURNED gets an arrow: it is not a refusal, it is work coming back to somebody.
     const icon = status === "APPROVED" || status === "RECEIVED" ? <CheckCircle2 className="h-3 w-3 mr-0.5" />
       : status === "IN_TRANSIT" ? <Truck className="h-3 w-3 mr-0.5" />
       : status === "PENDING" ? <Clock className="h-3 w-3 mr-0.5" />
+      : status === "RETURNED" ? <Undo2 className="h-3 w-3 mr-0.5" />
       : status === "REJECTED" || status === "CANCELLED" ? <XCircle className="h-3 w-3 mr-0.5" />
       : null;
-    return <Badge className={`text-xs ${getStatusColor(status)}`}>{icon}{getStatusLabel(status)}</Badge>;
+    // RETURNED has no entry in the shared colour map (it would be a second opinion about a
+    // status other modules render too), so it is coloured here: orange for "back with you".
+    const cls = status === "RETURNED"
+      ? "bg-orange-100 text-orange-700 border-orange-200"
+      : getStatusColor(status);
+    return <Badge className={`text-xs ${cls}`}>{icon}{getStatusLabel(status)}</Badge>;
   };
 
   return (
@@ -221,6 +241,9 @@ export default function TransfersPage() {
             { key: "all", label: "All" },
             { key: "PENDING", label: "Pending" },
             { key: "APPROVED", label: "Approved" },
+            // Sent back to its creator (R25). Without a chip a returned transfer would be
+            // invisible on every tab but All — the mistake CANCELLED made for months.
+            { key: "RETURNED", label: "Returned" },
             // Filterable from today even though P14 is what starts writing them. An order
             // that reaches one of these states must not be invisible on every tab.
             { key: "IN_TRANSIT", label: "In Transit" },
@@ -261,6 +284,8 @@ export default function TransfersPage() {
               ? "border-l-green-500"
               : order.status === "REJECTED"
               ? "border-l-red-500"
+              : order.status === "RETURNED"
+              ? "border-l-orange-400"
               : order.status === "PENDING" || order.status === "IN_TRANSIT"
               ? "border-l-amber-400"
               : "border-l-slate-200";
@@ -333,7 +358,9 @@ export default function TransfersPage() {
                 {/* Notes */}
                 {order.notes && <p className="text-xs text-slate-400 mb-2">{order.notes}</p>}
                 {order.rejectionNote && (
-                  <p className="text-xs text-red-500 mb-2">Rejected: {order.rejectionNote}</p>
+                  <p className={`text-xs mb-2 ${order.status === "RETURNED" ? "text-orange-600" : "text-red-500"}`}>
+                    {order.status === "RETURNED" ? "Sent back" : "Rejected"}: {order.rejectionNote}
+                  </p>
                 )}
 
                 {/* Actions */}
@@ -355,7 +382,7 @@ export default function TransfersPage() {
                       </Button>
                       <Button size="sm" variant="outline"
                         className="h-10 px-4 py-2 text-sm text-red-600 border-red-200 hover:bg-red-50"
-                        onClick={() => handleAction(order.id, "reject")}
+                        onClick={() => { setRejectTarget(order); setRejectNote(""); }}
                         disabled={approving === order.id}>
                         Reject
                       </Button>
@@ -366,6 +393,47 @@ export default function TransfersPage() {
             </Card>
             );
           })}
+        </div>
+      )}
+
+      {rejectTarget && (
+        <div
+          className="fixed inset-0 bg-black/50 z-[60] flex items-end sm:items-center justify-center p-4"
+          onClick={() => setRejectTarget(null)}
+        >
+          <div
+            className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-base font-bold text-slate-900">Send {rejectTarget.orderNo} back?</h2>
+            <p className="text-xs text-slate-500">
+              {rejectTarget.createdBy.name} gets your note and fixes this same transfer.
+            </p>
+            <textarea
+              value={rejectNote}
+              onChange={(e) => setRejectNote(e.target.value)}
+              rows={3}
+              maxLength={1000}
+              placeholder="What needs correcting?"
+              className="w-full rounded-lg border border-slate-200 p-2.5 text-sm focus-ring"
+            />
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setRejectTarget(null)} className="flex-1 min-h-[44px]">
+                Keep it
+              </Button>
+              <Button
+                onClick={() => {
+                  const target = rejectTarget;
+                  setRejectTarget(null);
+                  void handleAction(target.id, "reject", rejectNote.trim());
+                }}
+                disabled={rejectNote.trim().length === 0 || approving !== null}
+                className="flex-1 min-h-[44px] bg-red-600 hover:bg-red-700"
+              >
+                Send back
+              </Button>
+            </div>
+          </div>
         </div>
       )}
 

@@ -1,18 +1,34 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import {
   ArrowLeft, CheckCircle2, XCircle,
   Loader2, Clock,
   ChevronDown, ChevronUp,
-  BookOpen, Store, Boxes,
+  BookOpen, Store, Boxes, Contact,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SkeletonList } from "@/components/ui/skeleton";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+// Scoped to the Google card only; the Zoho sections above predate the logger rule and still use
+// raw fetch. Not rewritten here — that is a change to code this plan does not touch.
+const gLog = createLogger("settings:google-contacts");
+
+/** What `GET /api/integrations/google-contacts/status` answers. The secret is never among it. */
+interface GoogleStatus {
+  connected: boolean;
+  clientId: string | null;
+  hasClientSecret: boolean;
+  accountEmail: string | null;
+  lastSyncAt: string | null;
+  lastAuthErrorAt: string | null;
+}
 
 // GET status now returns the SAVED details whether or not the integration is connected —
 // disconnect only clears the tokens, so these survive it. `clientSecret` is never sent;
@@ -604,11 +620,199 @@ export default function ZohoSettingsPage() {
             </>
           )}
 
+          {/* Google Contacts (plan 1709, R44, P14a) — not a Zoho source, so it sits on its own
+              below the three connection cards rather than inside that grid. */}
+          <GoogleContactsCard />
+
           {/* Cleanup Section */}
           <CleanupSection />
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Google Contacts (plan 1709, R44, P14a, P14b).
+ *
+ * One shop Google account, connected once by an admin. The customer sync itself lives on
+ * /customers (P14c) — this card only holds the connection, because "which account are we writing
+ * into" is a setting and "who gets written" is a day's work.
+ *
+ * The client secret is never sent back to the browser: the field means "leave blank to keep the
+ * stored one", the same contract the three Zoho cards above use.
+ */
+function GoogleContactsCard() {
+  const [status, setStatus] = useState<GoogleStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+  const [form, setForm] = useState({ clientId: "", clientSecret: "", accountEmail: "" });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [flash, setFlash] = useState("");
+
+  // A promise chain rather than an async body: every setState happens inside the callback, which
+  // is what `react-hooks/set-state-in-effect` asks for when an effect kicks off the first load.
+  const load = useCallback(
+    () =>
+      apiTry<GoogleStatus>("/api/integrations/google-contacts/status").then((res) => {
+        setLoading(false);
+        if (res.error || !res.data) {
+          // Not fatal: an admin without settings.edit simply does not see a status here.
+          gLog.warn("google status not loaded", { status: res.status });
+          return;
+        }
+        const data = res.data;
+        setStatus(data);
+        setForm((f) => ({
+          ...f,
+          clientId: data.clientId ?? f.clientId,
+          accountEmail: data.accountEmail ?? f.accountEmail,
+        }));
+        // The callback redirects back here with ?google=connected|error. Read once, then clean
+        // the URL so a refresh does not repeat a stale message.
+        const params = new URLSearchParams(window.location.search);
+        const outcome = params.get("google");
+        if (outcome === "connected") setFlash("Google Contacts connected.");
+        else if (outcome === "error") setError(params.get("googleMessage") || "Google connection failed.");
+        if (outcome) window.history.replaceState({}, "", window.location.pathname);
+      }),
+    []
+  );
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function connect() {
+    setBusy(true);
+    setError("");
+    const res = await apiTry<{ url: string }>("/api/integrations/google-contacts/connect", {
+      method: "POST",
+      json: {
+        clientId: form.clientId.trim(),
+        ...(form.clientSecret.trim() ? { clientSecret: form.clientSecret.trim() } : {}),
+        ...(form.accountEmail.trim() ? { accountEmail: form.accountEmail.trim() } : {}),
+      },
+    });
+    setBusy(false);
+    if (res.error || !res.data?.url) {
+      gLog.warn("google connect refused", { status: res.status });
+      setError(res.error || "Could not start the Google connection.");
+      return;
+    }
+    // A full navigation, not a popup: Google refuses to render consent inside an iframe, and the
+    // callback has to land on this origin to set the session cookie it validates.
+    window.location.href = res.data.url;
+  }
+
+  async function disconnect() {
+    setBusy(true);
+    setError("");
+    const res = await apiTry("/api/integrations/google-contacts/disconnect", { method: "POST" });
+    setBusy(false);
+    if (res.error) {
+      gLog.warn("google disconnect refused", { status: res.status });
+      setError(res.error);
+      return;
+    }
+    setFlash("Google Contacts disconnected.");
+    void load();
+  }
+
+  const connected = !!status?.connected;
+
+  return (
+    <Card className={`mt-4 border ${connected ? "border-green-200 bg-green-50" : "border-slate-200"}`}>
+      <CardContent className="p-3 space-y-2">
+        <div className="flex items-center gap-2">
+          <Contact className="h-5 w-5 text-slate-500 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-slate-900">Google Contacts</p>
+            <p className="text-[11px] text-slate-500">
+              Customers synced from /customers land in the shop&apos;s Google account, so every
+              signed-in phone has them.
+            </p>
+          </div>
+          {loading ? (
+            <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+          ) : connected ? (
+            <Badge variant="success" className="text-[11px]">
+              <CheckCircle2 className="h-3 w-3 mr-1" /> Connected
+            </Badge>
+          ) : (
+            <Badge variant="default" className="text-[11px]">
+              <XCircle className="h-3 w-3 mr-1" /> Not connected
+            </Badge>
+          )}
+        </div>
+
+        {connected && (
+          <p className="text-[11px] text-slate-600">
+            Account: {status?.accountEmail || "—"}
+            {status?.lastSyncAt && ` · last sync ${new Date(status.lastSyncAt).toLocaleString("en-IN")}`}
+          </p>
+        )}
+
+        {status?.lastAuthErrorAt && (
+          <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
+            Google refused the token on {new Date(status.lastAuthErrorAt).toLocaleDateString("en-IN")} —
+            reconnect. Syncs will do nothing until you do.
+          </p>
+        )}
+
+        {flash && <p className="text-[11px] text-green-700">{flash}</p>}
+        {error && <p className="text-[11px] text-red-700 font-medium">{error}</p>}
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="text-[11px] font-medium text-slate-600 flex items-center gap-1 focus-ring rounded"
+          >
+            {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            {connected ? "Change credentials" : "Set up"}
+          </button>
+          {connected && (
+            <button
+              onClick={disconnect}
+              disabled={busy}
+              className="text-[11px] font-medium text-red-600 disabled:opacity-50 focus-ring rounded"
+            >
+              Disconnect
+            </button>
+          )}
+        </div>
+
+        {expanded && (
+          <div className="space-y-2 pt-1">
+            <Input
+              value={form.clientId}
+              onChange={(e) => setForm({ ...form, clientId: e.target.value })}
+              placeholder="OAuth client ID"
+            />
+            <Input
+              type="password"
+              value={form.clientSecret}
+              onChange={(e) => setForm({ ...form, clientSecret: e.target.value })}
+              placeholder={status?.hasClientSecret ? "Client secret (leave blank to keep)" : "OAuth client secret"}
+            />
+            <Input
+              value={form.accountEmail}
+              onChange={(e) => setForm({ ...form, accountEmail: e.target.value })}
+              placeholder="Shop Google account (label only, optional)"
+            />
+            <p className="text-[10px] text-slate-500">
+              Redirect URI in the Cloud Console must be exactly{" "}
+              <code>{typeof window === "undefined" ? "" : window.location.origin}/api/integrations/google-contacts/callback</code>
+            </p>
+            <Button onClick={connect} disabled={busy || !form.clientId.trim()} className="w-full">
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {connected ? "Reconnect Google" : "Connect Google"}
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

@@ -10,7 +10,16 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { maybeNotifyBelowReorder, type ReorderCrossing } from "@/lib/notify/stock";
-import { deductDeliveryFromFloor, releaseDeliveryStock, isDummy } from "@/lib/deliveries/floor-stock";
+import {
+  deductDeliveryFromFloor,
+  releaseDeliveryStock,
+  floorShortForDispatch,
+  shortRefusalMessage,
+  isDummy,
+  type ShortLine,
+} from "@/lib/deliveries/floor-stock";
+import { notifyTransferNeeded } from "@/lib/deliveries/transfer-needed";
+import { APPROVAL_GATED_STATUSES, approvalRefusal, isDeliveryApproved } from "@/lib/approvals/actions/delivery";
 import { createLogger } from "@/lib/logger";
 import { sellDeliveryUnits } from "@/lib/units";
 
@@ -29,8 +38,17 @@ class BatchRefusal extends Error {
 export async function PUT(req: NextRequest) {
   let action: string | undefined;
   let requested = 0;
+
+  // Plan 1709, R13/R14: the outward the batch refused, and what it was short of. Declared OUTSIDE
+  // the try because the refusal rolls the whole batch back and is reported from the catch — the
+  // shortage is still real, and the people who can move stock should hear about it.
+  let userId: string | undefined;
+  let refusedShort: ShortLine[] = [];
+  let refusedDelivery: { id: string; invoiceNo: string; warehouse: { name: string } | null } | null = null;
+
   try {
     const user = await requireFeature("deliveries", "edit");
+    userId = user.id;
     const body = await req.json();
     const parsed = body as { deliveryIds: string[]; action: string };
     const deliveryIds = parsed.deliveryIds;
@@ -85,6 +103,32 @@ export async function PUT(req: NextRequest) {
         const updateData: Record<string, unknown> = { status: batchAction };
 
         if (batchAction === "OUT_FOR_DELIVERY") {
+          // ─── Plan 1709: the same two gates the single route applies (R26a, R13) ──────────
+          // Per id, and the refusal names the invoice, so the clerk knows which one to take out
+          // of the selection. One failure rolls the whole batch back — deliberately: a batch is
+          // a single decision, and half a dispatch is worse than none.
+          if (APPROVAL_GATED_STATUSES.includes(batchAction) && !isDeliveryApproved(delivery)) {
+            log.warn("batch dispatch refused: not approved", {
+              deliveryId: delivery.id,
+              invoiceNo: delivery.invoiceNo,
+            });
+            throw new BatchRefusal(`Invoice ${delivery.invoiceNo}: ${approvalRefusal(delivery)}`, 409);
+          }
+
+          const short = await floorShortForDispatch(tx, delivery);
+          if (short.length > 0) {
+            refusedShort = short;
+            refusedDelivery = {
+              id: delivery.id,
+              invoiceNo: delivery.invoiceNo,
+              warehouse: delivery.warehouse,
+            };
+            throw new BatchRefusal(
+              `Invoice ${delivery.invoiceNo}: ${shortRefusalMessage(short, delivery.warehouse?.name ?? "the floor warehouse")}`,
+              409
+            );
+          }
+
           updateData.dispatchedAt = new Date();
         }
 
@@ -120,6 +164,17 @@ export async function PUT(req: NextRequest) {
                 deliveryId: delivery.id,
                 invoiceNo: delivery.invoiceNo,
               });
+              // R14: keep what it was short of, so the transfer push can go out after the
+              // rollback. Matched on `name` rather than `instanceof`, because this catch already
+              // has the error narrowed to `unknown` from a helper that may wrap it.
+              if (err instanceof Error && err.name === "FloorShortError") {
+                refusedShort = (err as Error & { short: ShortLine[] }).short;
+                refusedDelivery = {
+                  id: delivery.id,
+                  invoiceNo: delivery.invoiceNo,
+                  warehouse: delivery.warehouse,
+                };
+              }
               throw new BatchRefusal(`Invoice ${delivery.invoiceNo}: ${reason}`, 400);
             }
 
@@ -170,6 +225,13 @@ export async function PUT(req: NextRequest) {
 
     return successResponse(result);
   } catch (error) {
+    // R14: the batch rolled back, but the shortage it hit is real. Told after the response.
+    if (refusedShort.length > 0 && refusedDelivery) {
+      const delivery = refusedDelivery;
+      const short = refusedShort;
+      after(() => notifyTransferNeeded(delivery, short, userId));
+    }
+
     if (error instanceof AuthError) {
       log.warn("batch update refused", { action, status: error.status });
       return errorResponse(error.message, error.status);

@@ -33,6 +33,8 @@ export default function DeliveriesPage() {
   // Gates the delete button and is handed to the child as a prop. Deleting a delivery is
   // exactly deliveries.delete.
   const isAdmin = canDelete("deliveries");
+  // ★ is its own module (plan 1709, R19, Q21), so starring does not require deliveries.edit.
+  const canStar = canEdit("delivery_priority");
 
   // ─── Data state ───
   const [deliveries, setDeliveries] = useState<DeliveryItem[]>([]);
@@ -266,6 +268,8 @@ export default function DeliveriesPage() {
           onDelete={(id) => setDeleteConfirm(id)}
           onPrebook={(delivery) => setPrebookConfirm(delivery)}
           onMarkReady={handleMarkReady}
+          canStar={canStar}
+          onStarChanged={fetchData}
         />
         <div className="space-y-2.5 lg:hidden">
           {deliveries.map((d) => (
@@ -278,6 +282,8 @@ export default function DeliveriesPage() {
               isAdmin={isAdmin}
               deleting={deleting}
               prebooking={prebooking}
+              canStar={canStar}
+              onStarChanged={fetchData}
             />
           ))}
         </div>

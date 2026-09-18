@@ -26,11 +26,15 @@ import {
   Square,
   RefreshCw,
   Check,
+  ShieldOff,
+  Tags,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { CategoryTreeSelect } from "@/components/category-tree-select";
+import { UnitLabelSheet } from "@/components/units/unit-label-sheet";
 import { useBinTracking } from "@/hooks/use-bin-tracking";
 import { formatDateTime } from "@/lib/utils";
 import { apiTry } from "@/lib/api-client";
@@ -59,6 +63,8 @@ interface BinSummary {
   zone?: string | null;
   capacity?: number | null;
   isAssemblyArea: boolean;
+  /** Items stored here need no assembly (R42, P6). Fixed when the bin is created (P6a). */
+  nonAssemblable?: boolean;
   isActive: boolean;
   _count: {
     products: number;
@@ -72,6 +78,8 @@ interface InventoryUnitDetail {
   unitCode: string;
   frameNumber?: string | null;
   status: string;
+  /** Stamped when the unit entered a no-assembly bin; kept through transfers (P6). */
+  nonAssemblable?: boolean;
   assembledBy?: { id: string; name: string } | null;
   product: {
     id: string;
@@ -99,8 +107,53 @@ interface HomeRule {
   warehouseId: string;
   warehouse: { id: string; name: string; code: string };
   brand?: { id: string; name: string } | null;
-  category?: { id: string; name: string } | null;
-  bin: { id: string; code: string; name: string; directions?: string | null };
+  category?: { id: string; name: string; parentId?: string | null } | null;
+  /** "Cycles › Kids › 16 inch" — the rule names a leaf, so the leaf's name alone is ambiguous. */
+  categoryPath?: string | null;
+  bin: { id: string; code: string; name: string; directions?: string | null; nonAssemblable?: boolean };
+}
+
+/** The flat rows `/api/categories` returns, as much of them as the tree picker needs. */
+interface CategoryRow {
+  id: string;
+  name: string;
+  parentId: string | null;
+  isActive?: boolean;
+}
+
+/** `GET /api/bins/home-rules/[id]/apply` — what applying a rule to existing stock would move. */
+interface ApplyDryRun {
+  rule: {
+    id: string;
+    warehouse: { id: string; name: string };
+    bin: { id: string; code: string; name: string; nonAssemblable: boolean };
+  };
+  movingTotal: number;
+  skippedTotal: number;
+  moving: Array<{ productName: string; sku: string; fromBinCode: string | null; quantity: number }>;
+  skipped: Array<{ productName: string; sku: string; fromBinCode: string | null; quantity: number }>;
+}
+
+/** `GET /api/bins/generate-unit-codes` — how many codes existing stock is missing. */
+interface GenerateDryRun {
+  warehouse: { id: string; name: string };
+  binId: string | null;
+  totalCodes: number;
+  products: number;
+  withoutBin: number;
+  noAssembly: number;
+  maxPerRun: number;
+  truncated: boolean;
+  rows: Array<{
+    productId: string;
+    productName: string;
+    sku: string;
+    missing: number;
+    stockQty: number;
+    liveUnits: number;
+    binCode: string | null;
+    binNonAssemblable: boolean;
+  }>;
 }
 
 interface UnmatchedItem {
@@ -177,6 +230,8 @@ export function BinsManager() {
   const [newBinFloor, setNewBinFloor] = useState("");
   const [newBinZone, setNewBinZone] = useState("");
   const [newBinIsAssembly, setNewBinIsAssembly] = useState(false);
+  // R42, P6a: set here and nowhere else — the edit form shows it read-only.
+  const [newBinNonAssemblable, setNewBinNonAssemblable] = useState(false);
   const [newBinSaving, setNewBinSaving] = useState(false);
   const [formError, setFormError] = useState("");
 
@@ -204,18 +259,47 @@ export function BinsManager() {
   const [moveToBinId, setMoveToBinId] = useState("");
   const [moveReason, setMoveReason] = useState("");
   const [moveSaving, setMoveSaving] = useState(false);
+  const [moveError, setMoveError] = useState("");
 
   // Home Rules State
   const [rulesWarehouseId, setRulesWarehouseId] = useState("");
   const [homeRules, setHomeRules] = useState<HomeRule[]>([]);
   const [rulesLoading, setRulesLoading] = useState(false);
   const [brands, setBrands] = useState<{ id: string; name: string }[]>([]);
-  const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
+  const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [ruleBins, setRuleBins] = useState<BinSummary[]>([]);
   const [ruleBrandId, setRuleBrandId] = useState("");
-  const [ruleCategoryId, setRuleCategoryId] = useState("");
+  // R39, P13: the top-level category, then the SUBCATEGORY — required whenever the chosen
+  // category still has active children, because a rule always names a leaf.
+  const [ruleCategoryId, setRuleCategoryId] = useState<string | null>(null);
+  const [ruleSubcategoryId, setRuleSubcategoryId] = useState<string | null>(null);
   const [ruleBinId, setRuleBinId] = useState("");
   const [ruleSaving, setRuleSaving] = useState(false);
+  const [ruleError, setRuleError] = useState("");
+
+  // R40, P10 (b): after a rule is saved, offer to move the stock that is already here.
+  const [applyRuleId, setApplyRuleId] = useState<string | null>(null);
+  const [applyDryRun, setApplyDryRun] = useState<ApplyDryRun | null>(null);
+  const [applyLoading, setApplyLoading] = useState(false);
+  const [applyRunning, setApplyRunning] = useState(false);
+  const [applyMessage, setApplyMessage] = useState("");
+  const [applyError, setApplyError] = useState("");
+
+  // R41, R46, P8: give existing stock unit codes, then print their labels.
+  const [genScope, setGenScope] = useState<{ warehouseId: string; binId: string | null; label: string } | null>(null);
+  const [genDryRun, setGenDryRun] = useState<GenerateDryRun | null>(null);
+  const [genLoading, setGenLoading] = useState(false);
+  const [genRunning, setGenRunning] = useState(false);
+  const [genError, setGenError] = useState("");
+
+  // The printable sheet (R46), opened with the new codes, a whole bin, or one item.
+  const [labelSheet, setLabelSheet] = useState<{ unitIds?: string[]; binId?: string; heading: string } | null>(null);
+
+  // P6b: clear one unit's no-assembly stamp, with a reason.
+  const [markUnit, setMarkUnit] = useState<InventoryUnitDetail | null>(null);
+  const [markReason, setMarkReason] = useState("");
+  const [markSaving, setMarkSaving] = useState(false);
+  const [markError, setMarkError] = useState("");
 
   // Toggle Bin Tracking Setting
   async function handleToggleTracking() {
@@ -233,37 +317,26 @@ export function BinsManager() {
   useEffect(() => {
     async function loadInitialData() {
       setLoading(true);
-      try {
-        const [whRes, binRes] = await Promise.all([
-          fetch("/api/warehouses"),
-          fetch("/api/bins"),
-        ]);
-        const whJson = await whRes.json();
-        const binJson = await binRes.json();
-        if (whJson.success && Array.isArray(whJson.data)) {
-          setWarehouses(whJson.data);
-          if (whJson.data.length > 0) {
-            setNewBinWarehouseId(whJson.data[0].id);
-            setRulesWarehouseId(whJson.data[0].id);
-          }
+      // `apiTry`, never `fetch().then(r => r.json())`: an expired session answers 307 → /login
+      // → HTML with status 200, which `res.ok` does not catch and `.json()` dies on (CLAUDE.md).
+      const [wh, binList, unmatched] = await Promise.all([
+        apiTry<Warehouse[]>("/api/warehouses"),
+        apiTry<BinSummary[]>("/api/bins"),
+        apiTry<{ total: number }>("/api/bins/unmatched-items"),
+      ]);
+      if (wh.error) log.error("warehouse load failed", { message: wh.error });
+      else if (Array.isArray(wh.data)) {
+        setWarehouses(wh.data);
+        if (wh.data.length > 0) {
+          setNewBinWarehouseId(wh.data[0].id);
+          setRulesWarehouseId(wh.data[0].id);
         }
-        if (binJson.success && Array.isArray(binJson.data)) {
-          setBins(binJson.data);
-        }
-        // Also fetch initial count of unmatched inbound items
-        fetch("/api/bins/unmatched-items")
-          .then((r) => r.json())
-          .then((json) => {
-            if (json.success && json.data) {
-              setUnmatchedCount(json.data.total || 0);
-            }
-          })
-          .catch(() => {});
-      } catch (err) {
-        console.error("Failed to load warehouses/bins", err);
-      } finally {
-        setLoading(false);
       }
+      if (binList.error) log.error("bin load failed", { message: binList.error });
+      else if (Array.isArray(binList.data)) setBins(binList.data);
+      if (unmatched.error) log.warn("unmatched count unavailable", { message: unmatched.error });
+      else if (unmatched.data) setUnmatchedCount(unmatched.data.total || 0);
+      setLoading(false);
     }
     loadInitialData();
   }, []);
@@ -272,35 +345,25 @@ export function BinsManager() {
   async function fetchBins(warehouseId?: string) {
     const wId = warehouseId !== undefined ? warehouseId : selectedWarehouseId;
     setLoading(true);
-    try {
-      const url = wId && wId !== "ALL" ? `/api/bins?warehouseId=${encodeURIComponent(wId)}` : "/api/bins";
-      const res = await fetch(url);
-      const json = await res.json();
-      if (json.success) {
-        setBins(json.data);
-      }
-    } catch (err) {
-      console.error("Failed to load bins", err);
-    } finally {
-      setLoading(false);
-    }
+    const url = wId && wId !== "ALL" ? `/api/bins?warehouseId=${encodeURIComponent(wId)}` : "/api/bins";
+    const { data, error } = await apiTry<BinSummary[]>(url);
+    if (error) log.error("bin load failed", { warehouseId: wId, message: error });
+    else if (data) setBins(data);
+    setLoading(false);
   }
 
   // 3. Fetch Unmatched Inbound Items
   async function fetchUnmatchedItems() {
     setUnmatchedLoading(true);
-    try {
-      const res = await fetch("/api/bins/unmatched-items");
-      const json = await res.json();
-      if (json.success && json.data) {
-        setUnmatchedItems(json.data.items || []);
-        setUnmatchedCount(json.data.total || 0);
-      }
-    } catch (err) {
-      console.error("Failed to fetch unmatched items", err);
-    } finally {
-      setUnmatchedLoading(false);
+    const { data, error } = await apiTry<{ items: UnmatchedItem[]; total: number }>(
+      "/api/bins/unmatched-items"
+    );
+    if (error) log.error("unmatched items load failed", { message: error });
+    else if (data) {
+      setUnmatchedItems(data.items || []);
+      setUnmatchedCount(data.total || 0);
     }
+    setUnmatchedLoading(false);
   }
 
   async function handleAssignSingle(lineItemId: string) {
@@ -312,16 +375,14 @@ export function BinsManager() {
     setAssignLoadingId(lineItemId);
     setAssignError("");
     setAssignSuccessMsg("");
-    try {
-      const res = await fetch("/api/bins/assign", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: [{ lineItemId, binId }] }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json.error || "Failed to assign bin");
-      }
+    const { error } = await apiTry("/api/bins/assign", {
+      method: "POST",
+      json: { items: [{ lineItemId, binId }] },
+    });
+    if (error) {
+      log.error("bin assignment failed", { lineItemId, binId, message: error });
+      setAssignError(error);
+    } else {
       setAssignSuccessMsg("Item successfully assigned to bin!");
       setSelectedUnmatchedIds((prev) => {
         const next = new Set(prev);
@@ -330,11 +391,8 @@ export function BinsManager() {
       });
       await fetchUnmatchedItems();
       fetchBins();
-    } catch (err: unknown) {
-      setAssignError(err instanceof Error ? err.message : "Failed to assign bin");
-    } finally {
-      setAssignLoadingId(null);
     }
+    setAssignLoadingId(null);
   }
 
   async function handleAssignBulk() {
@@ -349,30 +407,22 @@ export function BinsManager() {
     setBulkAssignLoading(true);
     setAssignError("");
     setAssignSuccessMsg("");
-    try {
-      const items = Array.from(selectedUnmatchedIds).map((lineItemId) => ({
-        lineItemId,
-        binId: bulkBinId,
-      }));
-      const res = await fetch("/api/bins/assign", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json.error || "Failed to assign bins");
-      }
+    const items = Array.from(selectedUnmatchedIds).map((lineItemId) => ({
+      lineItemId,
+      binId: bulkBinId,
+    }));
+    const { error } = await apiTry("/api/bins/assign", { method: "POST", json: { items } });
+    if (error) {
+      log.error("bulk bin assignment failed", { count: items.length, binId: bulkBinId, message: error });
+      setAssignError(error);
+    } else {
       setAssignSuccessMsg(`Successfully assigned ${items.length} item(s) to bin!`);
       setSelectedUnmatchedIds(new Set());
       setBulkBinId("");
       await fetchUnmatchedItems();
       fetchBins();
-    } catch (err: unknown) {
-      setAssignError(err instanceof Error ? err.message : "Failed to assign bins");
-    } finally {
-      setBulkAssignLoading(false);
     }
+    setBulkAssignLoading(false);
   }
 
   const binsByWarehouse = useMemo(() => {
@@ -444,23 +494,46 @@ export function BinsManager() {
 
   // Load Rules and Bins for Rules modal
   useEffect(() => {
-    if (showRulesModal && rulesWarehouseId) {
+    if (!showRulesModal || !rulesWarehouseId) return;
+    let cancelled = false;
+    async function loadRules(warehouseId: string) {
       setRulesLoading(true);
-      Promise.all([
-        fetch(`/api/bins/home-rules?warehouseId=${encodeURIComponent(rulesWarehouseId)}`).then((r) => r.json()),
-        fetch("/api/brands").then((r) => r.json()),
-        fetch("/api/categories").then((r) => r.json()),
-        fetch(`/api/bins?warehouseId=${encodeURIComponent(rulesWarehouseId)}`).then((r) => r.json()),
-      ])
-        .then(([rulesRes, brandsRes, catRes, binsRes]) => {
-          if (rulesRes.success) setHomeRules(rulesRes.data);
-          if (brandsRes.success) setBrands(brandsRes.data);
-          if (catRes.success) setCategories(catRes.data);
-          if (binsRes.success) setRuleBins(binsRes.data);
-        })
-        .finally(() => setRulesLoading(false));
+      const [rules, brandList, catList, binList] = await Promise.all([
+        apiTry<HomeRule[]>(`/api/bins/home-rules?warehouseId=${encodeURIComponent(warehouseId)}`),
+        apiTry<{ id: string; name: string }[]>("/api/brands"),
+        apiTry<CategoryRow[]>("/api/categories"),
+        apiTry<BinSummary[]>(`/api/bins?warehouseId=${encodeURIComponent(warehouseId)}`),
+      ]);
+      if (cancelled) return;
+      if (rules.error) log.error("home rules load failed", { warehouseId, message: rules.error });
+      else if (rules.data) setHomeRules(rules.data);
+      if (brandList.error) log.error("brand load failed", { message: brandList.error });
+      else if (brandList.data) setBrands(brandList.data);
+      if (catList.error) log.error("category load failed", { message: catList.error });
+      else if (catList.data) setCategories(catList.data);
+      if (binList.error) log.error("rule bin load failed", { warehouseId, message: binList.error });
+      else if (binList.data) setRuleBins(binList.data);
+      setRulesLoading(false);
     }
+    loadRules(rulesWarehouseId);
+    return () => {
+      cancelled = true;
+    };
   }, [showRulesModal, rulesWarehouseId]);
+
+  // Changing the warehouse scope abandons any half-built rule and its apply panel.
+  useEffect(() => {
+    setApplyRuleId(null);
+    setApplyDryRun(null);
+    setApplyMessage("");
+    setApplyError("");
+  }, [rulesWarehouseId]);
+
+  /** Active children of the chosen category: while there are any, a subcategory is required (P13). */
+  const ruleSubcategories = useMemo(
+    () => (ruleCategoryId ? categories.filter((c) => c.parentId === ruleCategoryId) : []),
+    [categories, ruleCategoryId]
+  );
 
   // Load Bin Detailed Inventory
   async function openBinDetail(bin: BinSummary) {
@@ -498,25 +571,25 @@ export function BinsManager() {
     setNewBinSaving(true);
     setFormError("");
 
-    try {
-      const res = await fetch("/api/bins", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          code: newBinCode.trim(),
-          name: newBinName.trim(),
-          warehouseId: targetWhId,
-          directions: newBinDirections.trim() || undefined,
-          floor: newBinFloor.trim() || undefined,
-          zone: newBinZone.trim() || undefined,
-          isAssemblyArea: newBinIsAssembly,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json.error || "Failed to create bin");
-      }
-
+    const { error } = await apiTry<BinSummary>("/api/bins", {
+      method: "POST",
+      json: {
+        code: newBinCode.trim(),
+        name: newBinName.trim(),
+        warehouseId: targetWhId,
+        directions: newBinDirections.trim() || undefined,
+        floor: newBinFloor.trim() || undefined,
+        zone: newBinZone.trim() || undefined,
+        isAssemblyArea: newBinIsAssembly,
+        // R42, P6a: the ONLY place this is ever sent — the edit route refuses a change.
+        nonAssemblable: newBinNonAssemblable,
+      },
+    });
+    if (error) {
+      log.error("bin create failed", { code: newBinCode.trim(), warehouseId: targetWhId, message: error });
+      setFormError(error);
+    } else {
+      log.info("bin created", { code: newBinCode.trim(), nonAssemblable: newBinNonAssemblable });
       setShowAddModal(false);
       setNewBinCode("");
       setNewBinName("");
@@ -524,12 +597,10 @@ export function BinsManager() {
       setNewBinFloor("");
       setNewBinZone("");
       setNewBinIsAssembly(false);
+      setNewBinNonAssemblable(false);
       fetchBins();
-    } catch (err: unknown) {
-      setFormError(err instanceof Error ? err.message : "Failed to create bin");
-    } finally {
-      setNewBinSaving(false);
     }
+    setNewBinSaving(false);
   }
 
   // Open Edit Bin Modal
@@ -557,101 +628,235 @@ export function BinsManager() {
 
     setEditBinSaving(true);
     setEditFormError("");
-    try {
-      const res = await fetch(`/api/bins/${editingBin.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          code: editBinCode.trim().toUpperCase(),
-          name: editBinName.trim(),
-          directions: editBinDirections.trim() || null,
-          floor: editBinFloor.trim() || null,
-          zone: editBinZone.trim() || null,
-          capacity: editBinCapacity.trim() ? Number(editBinCapacity) : null,
-          isAssemblyArea: editBinIsAssembly,
-          isActive: editBinIsActive,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json.error || "Failed to update bin");
-      }
-
+    // `nonAssemblable` is deliberately NOT sent: it is fixed at creation (P6a) and the route
+    // refuses a change.
+    const { data, error } = await apiTry<BinSummary>(`/api/bins/${editingBin.id}`, {
+      method: "PATCH",
+      json: {
+        code: editBinCode.trim().toUpperCase(),
+        name: editBinName.trim(),
+        directions: editBinDirections.trim() || null,
+        floor: editBinFloor.trim() || null,
+        zone: editBinZone.trim() || null,
+        capacity: editBinCapacity.trim() ? Number(editBinCapacity) : null,
+        isAssemblyArea: editBinIsAssembly,
+        isActive: editBinIsActive,
+      },
+    });
+    if (error) {
+      log.error("bin update failed", { binId: editingBin.id, message: error });
+      setEditFormError(error);
+    } else {
       // Update active inspect modal if the currently edited bin is inspected
-      if (selectedBinForDetail && selectedBinForDetail.id === editingBin.id) {
-        setSelectedBinForDetail((prev) => (prev ? { ...prev, ...json.data } : null));
+      if (data && selectedBinForDetail && selectedBinForDetail.id === editingBin.id) {
+        setSelectedBinForDetail((prev) => (prev ? { ...prev, ...data } : null));
       }
-
       setEditingBin(null);
       fetchBins();
-    } catch (err: unknown) {
-      setEditFormError(err instanceof Error ? err.message : "Failed to update bin");
-    } finally {
-      setEditBinSaving(false);
     }
+    setEditBinSaving(false);
   }
 
   // Save Home Bin Rule
   async function handleSaveRule(e: React.FormEvent) {
     e.preventDefault();
+    setRuleError("");
     if (!ruleBinId) return;
     if (!ruleBrandId && !ruleCategoryId) {
-      alert("Select at least a Brand or Category");
+      setRuleError("Choose at least a brand or a category");
+      return;
+    }
+    // P13: a rule always names a leaf. While the chosen category still has active children,
+    // the subcategory decides — the server refuses it too, but saying so here is kinder.
+    if (ruleCategoryId && ruleSubcategories.length > 0 && !ruleSubcategoryId) {
+      setRuleError(
+        `Choose a subcategory of ${categories.find((c) => c.id === ruleCategoryId)?.name ?? "that category"}`
+      );
       return;
     }
 
     const targetWhId = rulesWarehouseId || (selectedWarehouseId !== "ALL" ? selectedWarehouseId : warehouses[0]?.id);
     if (!targetWhId) {
-      alert("Please select a target warehouse for this rule");
+      setRuleError("Choose the warehouse this rule is for");
       return;
     }
 
     setRuleSaving(true);
-    try {
-      const res = await fetch("/api/bins/home-rules", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          warehouseId: targetWhId,
-          brandId: ruleBrandId || undefined,
-          categoryId: ruleCategoryId || undefined,
-          binId: ruleBinId,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json.error || "Failed to save rule");
-      }
-
+    const { data, error } = await apiTry<HomeRule>("/api/bins/home-rules", {
+      method: "POST",
+      json: {
+        warehouseId: targetWhId,
+        brandId: ruleBrandId || undefined,
+        categoryId: ruleCategoryId || undefined,
+        subcategoryId: ruleSubcategoryId || undefined,
+        binId: ruleBinId,
+      },
+    });
+    if (error) {
+      log.error("home bin rule save failed", { warehouseId: targetWhId, message: error });
+      setRuleError(error);
+    } else {
+      log.info("home bin rule saved", { ruleId: data?.id, warehouseId: targetWhId, binId: ruleBinId });
       setRuleBrandId("");
-      setRuleCategoryId("");
+      setRuleCategoryId(null);
+      setRuleSubcategoryId(null);
       setRuleBinId("");
-      // Refresh rules
-      const rRes = await fetch(`/api/bins/home-rules?warehouseId=${encodeURIComponent(targetWhId)}`);
-      const rJson = await rRes.json();
-      if (rJson.success) setHomeRules(rJson.data);
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Failed to save rule");
-    } finally {
-      setRuleSaving(false);
+      const refreshed = await apiTry<HomeRule[]>(
+        `/api/bins/home-rules?warehouseId=${encodeURIComponent(targetWhId)}`
+      );
+      if (refreshed.error) log.error("home rules refresh failed", { message: refreshed.error });
+      else if (refreshed.data) setHomeRules(refreshed.data);
+      // R40: the rule is saved; now offer to move what is already on the shelves.
+      if (data?.id) openApplyPanel(data.id);
     }
+    setRuleSaving(false);
   }
 
   async function handleDeleteRule(id: string) {
     if (!confirm("Are you sure you want to delete this home bin rule?")) return;
-    try {
-      await fetch(`/api/bins/home-rules?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-      setHomeRules((prev) => prev.filter((r) => r.id !== id));
-    } catch (err) {
-      console.error(err);
+    const { error } = await apiTry(`/api/bins/home-rules?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (error) {
+      log.error("home bin rule delete failed", { ruleId: id, message: error });
+      setRuleError(error);
+      return;
     }
+    setHomeRules((prev) => prev.filter((r) => r.id !== id));
+    if (applyRuleId === id) {
+      setApplyRuleId(null);
+      setApplyDryRun(null);
+    }
+  }
+
+  // ── APPLY A RULE TO EXISTING STOCK (R40, P10 (b)) ──
+  //
+  // The dry run first, always: option (b) moves everything the rule matches, including items
+  // somebody deliberately put somewhere else, so the person sees the list before confirming.
+  async function openApplyPanel(ruleId: string) {
+    setApplyRuleId(ruleId);
+    setApplyDryRun(null);
+    setApplyMessage("");
+    setApplyError("");
+    setApplyLoading(true);
+    const { data, error } = await apiTry<ApplyDryRun>(`/api/bins/home-rules/${ruleId}/apply`);
+    if (error) {
+      log.error("apply dry run failed", { ruleId, message: error });
+      setApplyError(error);
+    } else if (data) {
+      setApplyDryRun(data);
+      log.info("apply dry run", { ruleId, moving: data.movingTotal, skipped: data.skippedTotal });
+    }
+    setApplyLoading(false);
+  }
+
+  async function confirmApply() {
+    if (!applyRuleId) return;
+    setApplyRunning(true);
+    setApplyError("");
+    const { data, error } = await apiTry<{ moved: number; remaining: number; binCode: string }>(
+      `/api/bins/home-rules/${applyRuleId}/apply`,
+      { method: "POST", timeoutMs: 180_000 }
+    );
+    if (error) {
+      log.error("apply rule failed", { ruleId: applyRuleId, message: error });
+      setApplyError(error);
+    } else if (data) {
+      log.info("rule applied to existing stock", {
+        ruleId: applyRuleId,
+        moved: data.moved,
+        remaining: data.remaining,
+      });
+      setApplyMessage(
+        `${data.moved} item(s) moved into ${data.binCode}.` +
+          (data.remaining > 0 ? ` ${data.remaining} still to go — press again.` : "")
+      );
+      await openApplyPanelRefresh(applyRuleId);
+      fetchBins();
+    }
+    setApplyRunning(false);
+  }
+
+  /** Re-read the dry run after a move, keeping the success message on screen. */
+  async function openApplyPanelRefresh(ruleId: string) {
+    const { data, error } = await apiTry<ApplyDryRun>(`/api/bins/home-rules/${ruleId}/apply`);
+    if (error) log.warn("apply dry run refresh failed", { ruleId, message: error });
+    else if (data) setApplyDryRun(data);
+  }
+
+  // ── GENERATE UNIT CODES FOR EXISTING STOCK (R41, R46, P8) ──
+  async function openGenerate(warehouseId: string, binId: string | null, label: string) {
+    setGenScope({ warehouseId, binId, label });
+    setGenDryRun(null);
+    setGenError("");
+    setGenLoading(true);
+    const query = `warehouseId=${encodeURIComponent(warehouseId)}${binId ? `&binId=${encodeURIComponent(binId)}` : ""}`;
+    const { data, error } = await apiTry<GenerateDryRun>(`/api/bins/generate-unit-codes?${query}`);
+    if (error) {
+      log.error("generate codes dry run failed", { warehouseId, binId, message: error });
+      setGenError(error);
+    } else if (data) {
+      setGenDryRun(data);
+      log.info("generate codes dry run", { warehouseId, binId, total: data.totalCodes, products: data.products });
+    }
+    setGenLoading(false);
+  }
+
+  async function confirmGenerate() {
+    if (!genScope) return;
+    setGenRunning(true);
+    setGenError("");
+    const query = `warehouseId=${encodeURIComponent(genScope.warehouseId)}${genScope.binId ? `&binId=${encodeURIComponent(genScope.binId)}` : ""}`;
+    const { data, error } = await apiTry<{ created: number; remaining: number; unitIds: string[] }>(
+      `/api/bins/generate-unit-codes?${query}`,
+      { method: "POST", timeoutMs: 240_000 }
+    );
+    if (error) {
+      log.error("generate codes failed", { ...genScope, message: error });
+      setGenError(error);
+    } else if (data) {
+      log.info("unit codes generated", { ...genScope, created: data.created, remaining: data.remaining });
+      const heading = `${data.created} new code${data.created === 1 ? "" : "s"} · ${genScope.label}${
+        data.remaining > 0 ? ` · ${data.remaining} still without a code` : ""
+      }`;
+      setGenScope(null);
+      setGenDryRun(null);
+      fetchBins();
+      if (selectedBinForDetail) openBinDetail(selectedBinForDetail);
+      // R46: straight to the labels, which is the whole point of the codes.
+      if (data.created > 0) setLabelSheet({ unitIds: data.unitIds, heading });
+    }
+    setGenRunning(false);
+  }
+
+  // ── P6b: this item does need assembly after all ──
+  async function confirmMarkAssemblable() {
+    if (!markUnit) return;
+    if (!markReason.trim()) {
+      setMarkError("Say why this item needs assembly after all");
+      return;
+    }
+    setMarkSaving(true);
+    setMarkError("");
+    const { error } = await apiTry(`/api/units/${markUnit.id}/assemblable`, {
+      method: "POST",
+      json: { reason: markReason.trim() },
+    });
+    if (error) {
+      log.error("mark assemblable failed", { unitId: markUnit.id, message: error });
+      setMarkError(error);
+    } else {
+      log.info("unit marked assemblable", { unitId: markUnit.id, unitCode: markUnit.unitCode });
+      setMarkUnit(null);
+      setMarkReason("");
+      if (selectedBinForDetail) openBinDetail(selectedBinForDetail);
+    }
+    setMarkSaving(false);
   }
 
   // Handle Relocate Move
   async function handleExecuteMove(e: React.FormEvent) {
     e.preventDefault();
     if (!moveToBinId || !moveReason.trim()) {
-      alert("Target bin and Reason are required");
+      setMoveError("Choose the destination bin and say why it is moving");
       return;
     }
 
@@ -661,23 +866,23 @@ export function BinsManager() {
         : bins.find((b) => b.id === moveToBinId)?.warehouseId || warehouses[0]?.id;
 
     setMoveSaving(true);
-    try {
-      const res = await fetch("/api/bins/move", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          warehouseId: targetWhId,
-          unitId: moveUnitId || undefined,
-          fromBinId: moveFromBinId || undefined,
-          toBinId: moveToBinId,
-          reason: moveReason.trim(),
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json.error || "Move failed");
-      }
-
+    setMoveError("");
+    const { error } = await apiTry("/api/bins/move", {
+      method: "POST",
+      json: {
+        warehouseId: targetWhId,
+        unitId: moveUnitId || undefined,
+        fromBinId: moveFromBinId || undefined,
+        toBinId: moveToBinId,
+        reason: moveReason.trim(),
+      },
+    });
+    if (error) {
+      // A 409 here is the P6 refusal: a no-assembly item cannot go into a bin that holds items
+      // needing assembly. Shown in the form rather than an alert, because it names the bin.
+      log.warn("bin move refused", { unitId: moveUnitId || null, toBinId: moveToBinId, message: error });
+      setMoveError(error);
+    } else {
       setShowMoveModal(false);
       setMoveUnitId("");
       setMoveFromBinId("");
@@ -689,11 +894,8 @@ export function BinsManager() {
       if (selectedBinForDetail) {
         openBinDetail(selectedBinForDetail);
       }
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Move failed");
-    } finally {
-      setMoveSaving(false);
     }
+    setMoveSaving(false);
   }
 
   // Unique Stores for filtering
@@ -803,6 +1005,11 @@ export function BinsManager() {
                 {bin.isAssemblyArea && (
                   <Badge variant="warning" className="gap-1 font-semibold">
                     <Wrench className="h-3 w-3" /> Assembly
+                  </Badge>
+                )}
+                {bin.nonAssemblable && (
+                  <Badge variant="default" className="gap-1 font-semibold">
+                    <ShieldOff className="h-3 w-3" /> No assembly
                   </Badge>
                 )}
               </div>
@@ -925,6 +1132,28 @@ export function BinsManager() {
             >
               <Sparkles className="h-4 w-4" />
               Home Bin Rules
+            </Button>
+          )}
+
+          {/* R41, R46: stock that was here before unit codes existed. One warehouse at a time,
+              because the count comes from that warehouse's StockLevel rows (P8). */}
+          {canEdit("bins") && (
+            <Button
+              variant="outline"
+              disabled={selectedWarehouseId === "ALL"}
+              title={
+                selectedWarehouseId === "ALL"
+                  ? "Choose one warehouse first"
+                  : "Give existing stock unit codes and print their labels"
+              }
+              onClick={() => {
+                const wh = warehouses.find((w) => w.id === selectedWarehouseId);
+                if (wh) openGenerate(wh.id, null, wh.name);
+              }}
+              className="gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-900 dark:text-emerald-300 dark:hover:bg-emerald-950/40"
+            >
+              <Tags className="h-4 w-4" />
+              Generate unit codes
             </Button>
           )}
 
@@ -1645,6 +1874,25 @@ export function BinsManager() {
                 </label>
               </div>
 
+              {/* R42, P6, P6a — set here and never again. */}
+              <div className="flex items-start gap-2 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+                <input
+                  type="checkbox"
+                  id="nonAssemblableCheck"
+                  checked={newBinNonAssemblable}
+                  onChange={(e) => setNewBinNonAssemblable(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <label htmlFor="nonAssemblableCheck" className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Items here <strong>need no assembly</strong> (spares, accessories). They never show on
+                  the build line, and once an item is in such a bin it cannot be moved into a bin that
+                  holds items needing assembly.
+                  <span className="mt-1 block text-[11px] font-normal text-amber-600 dark:text-amber-400">
+                    This cannot be changed later — to change it, create another bin and move the items.
+                  </span>
+                </label>
+              </div>
+
               <div className="flex justify-end gap-2 pt-2">
                 <Button type="button" variant="outline" onClick={() => setShowAddModal(false)}>
                   Cancel
@@ -1787,6 +2035,23 @@ export function BinsManager() {
                     Active (visible in putaway and audit selections)
                   </label>
                 </div>
+
+                {/* Read-only: the flag is fixed when the bin is created (R42, P6a). */}
+                <div className="flex items-center gap-2 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-2.5 dark:border-slate-800 dark:bg-slate-800/40">
+                  <ShieldOff className="h-4 w-4 shrink-0 text-slate-400" />
+                  <div className="text-xs text-slate-600 dark:text-slate-400">
+                    {editingBin.nonAssemblable ? (
+                      <>
+                        Items here <strong>need no assembly</strong>.
+                      </>
+                    ) : (
+                      <>
+                        Items here <strong>need assembly</strong>.
+                      </>
+                    )}{" "}
+                    Set when the bin was created and cannot be changed.
+                  </div>
+                </div>
               </div>
 
               <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
@@ -1824,6 +2089,11 @@ export function BinsManager() {
                     {selectedBinForDetail.isAssemblyArea && (
                       <Badge variant="warning" className="text-[10px] gap-1 font-semibold">
                         <Wrench className="h-3 w-3" /> Assembly Staging
+                      </Badge>
+                    )}
+                    {selectedBinForDetail.nonAssemblable && (
+                      <Badge variant="default" className="text-[10px] gap-1 font-semibold">
+                        <ShieldOff className="h-3 w-3" /> No assembly
                       </Badge>
                     )}
                     {selectedBinForDetail.floor && (
@@ -1867,6 +2137,40 @@ export function BinsManager() {
                 >
                   <ArrowRightLeft className="h-3.5 w-3.5 text-indigo-500" /> Move Out
                 </Button>
+
+                {/* R46: reprint every label on this shelf. */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={detailedUnits.length === 0}
+                  onClick={() =>
+                    setLabelSheet({
+                      binId: selectedBinForDetail.id,
+                      heading: `Bin ${selectedBinForDetail.code} · ${selectedBinForDetail.warehouse.name}`,
+                    })
+                  }
+                  className="h-8 gap-1.5 border-slate-200 text-xs text-slate-700 hover:bg-slate-100 dark:border-slate-800 dark:text-slate-200"
+                >
+                  <Printer className="h-3.5 w-3.5 text-indigo-500" /> Print labels
+                </Button>
+
+                {/* R41: the same button, scoped to this bin alone. */}
+                {canEdit("bins") && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      openGenerate(
+                        selectedBinForDetail.warehouseId,
+                        selectedBinForDetail.id,
+                        `Bin ${selectedBinForDetail.code}`
+                      )
+                    }
+                    className="h-8 gap-1.5 border-emerald-200 text-xs text-emerald-700 hover:bg-emerald-50 dark:border-emerald-900 dark:text-emerald-300"
+                  >
+                    <Tags className="h-3.5 w-3.5" /> Generate codes
+                  </Button>
+                )}
 
                 <button
                   onClick={() => setSelectedBinForDetail(null)}
@@ -1933,20 +2237,53 @@ export function BinsManager() {
                                     {u.assembledBy && (
                                       <span className="text-[11px] text-slate-400">Built by {u.assembledBy.name}</span>
                                     )}
+                                    {u.nonAssemblable && (
+                                      <Badge variant="default" className="gap-1 text-[10px]">
+                                        <ShieldOff className="h-3 w-3" /> No assembly
+                                      </Badge>
+                                    )}
                                   </div>
 
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => {
-                                      setMoveUnitId(u.id);
-                                      setMoveFromBinId(selectedBinForDetail.id);
-                                      setShowMoveModal(true);
-                                    }}
-                                    className="h-7 text-xs text-indigo-600 hover:bg-indigo-50"
-                                  >
-                                    Relocate
-                                  </Button>
+                                  <div className="flex shrink-0 items-center gap-1">
+                                    {/* P6b: the correction for an item stamped by mistake — it
+                                        cannot otherwise leave a no-assembly bin. */}
+                                    {u.nonAssemblable && canEdit("bins") && (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => {
+                                          setMarkUnit(u);
+                                          setMarkReason("");
+                                          setMarkError("");
+                                        }}
+                                        className="h-7 text-xs text-amber-600 hover:bg-amber-50"
+                                      >
+                                        Needs assembly
+                                      </Button>
+                                    )}
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() =>
+                                        setLabelSheet({ unitIds: [u.id], heading: u.unitCode })
+                                      }
+                                      className="h-7 text-xs text-slate-500 hover:bg-slate-100"
+                                    >
+                                      Label
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => {
+                                        setMoveUnitId(u.id);
+                                        setMoveFromBinId(selectedBinForDetail.id);
+                                        setShowMoveModal(true);
+                                      }}
+                                      className="h-7 text-xs text-indigo-600 hover:bg-indigo-50"
+                                    >
+                                      Relocate
+                                    </Button>
+                                  </div>
                                 </div>
                               ))}
                             </div>
@@ -2019,6 +2356,12 @@ export function BinsManager() {
             </div>
 
             <form onSubmit={handleExecuteMove} className="mt-4 space-y-4 text-xs">
+              {moveError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-medium text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+                  {moveError}
+                </div>
+              )}
+
               <div className="rounded-lg bg-blue-50 p-3 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
                 <div className="flex items-center gap-1.5 font-semibold">
                   <Info className="h-4 w-4" /> Move is Strictly Intra-Warehouse
@@ -2119,7 +2462,14 @@ export function BinsManager() {
               {/* Add Rule Form */}
               <form onSubmit={handleSaveRule} className="rounded-xl border border-slate-200 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-900/40">
                 <div className="font-semibold text-slate-800 dark:text-slate-200">Add New Home Bin Rule</div>
-                <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+
+                {ruleError && (
+                  <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2.5 text-[11px] font-medium text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+                    {ruleError}
+                  </div>
+                )}
+
+                <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                   <div>
                     <label className="text-[11px] font-medium text-slate-600 dark:text-slate-400">Brand</label>
                     <select
@@ -2136,21 +2486,48 @@ export function BinsManager() {
                     </select>
                   </div>
 
+                  {/* R39, P13: category, then subcategory. The picker shows the top level only —
+                      choosing a parent is never a rule on its own while it has children. */}
                   <div>
                     <label className="text-[11px] font-medium text-slate-600 dark:text-slate-400">Category</label>
-                    <select
+                    <CategoryTreeSelect
+                      categories={categories}
+                      mode="roots"
                       value={ruleCategoryId}
-                      onChange={(e) => setRuleCategoryId(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-900 dark:border-slate-800 dark:bg-slate-800 dark:text-white"
-                    >
-                      <option value="">(Any Category)</option>
-                      {categories.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(id) => {
+                        setRuleCategoryId(id);
+                        setRuleSubcategoryId(null);
+                        setRuleError("");
+                      }}
+                      placeholder="(Any category)"
+                      className="mt-1"
+                    />
                   </div>
+
+                  {/* Shown only when the chosen category HAS children — then it is required. */}
+                  {ruleCategoryId && ruleSubcategories.length > 0 && (
+                    <div>
+                      <label className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
+                        Subcategory *
+                      </label>
+                      <CategoryTreeSelect
+                        categories={categories}
+                        mode="childrenOf"
+                        parentId={ruleCategoryId}
+                        value={ruleSubcategoryId}
+                        onChange={(id) => {
+                          setRuleSubcategoryId(id);
+                          setRuleError("");
+                        }}
+                        placeholder="Choose a subcategory"
+                        className="mt-1"
+                      />
+                      <p className="mt-1 text-[10px] text-slate-400">
+                        A rule always names a category with nothing under it, so it cannot be
+                        ambiguous about which products it covers.
+                      </p>
+                    </div>
+                  )}
 
                   <div>
                     <label className="text-[11px] font-medium text-slate-600 dark:text-slate-400">Home Bin *</label>
@@ -2163,7 +2540,7 @@ export function BinsManager() {
                       <option value="">Select destination bin...</option>
                       {ruleBins.map((b) => (
                         <option key={b.id} value={b.id}>
-                          {b.code} ({b.name})
+                          {b.code} ({b.name}){b.nonAssemblable ? " — no assembly" : ""}
                         </option>
                       ))}
                     </select>
@@ -2176,6 +2553,123 @@ export function BinsManager() {
                   </Button>
                 </div>
               </form>
+
+              {/* ── APPLY TO EXISTING STOCK (R40, P10 (b)) ── */}
+              {applyRuleId && (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 dark:border-emerald-900 dark:bg-emerald-950/20">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-semibold text-emerald-900 dark:text-emerald-200">
+                        Apply to existing stock
+                      </div>
+                      <p className="mt-0.5 text-[11px] text-emerald-800/80 dark:text-emerald-300/80">
+                        A rule only places what arrives next. This moves what is already here into{" "}
+                        {applyDryRun ? <strong>{applyDryRun.rule.bin.code}</strong> : "the rule's bin"} —
+                        including items currently in another bin.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setApplyRuleId(null);
+                        setApplyDryRun(null);
+                      }}
+                      aria-label="Close"
+                      className="rounded-lg p-1 text-emerald-700/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  {applyError && (
+                    <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2.5 text-[11px] font-medium text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+                      {applyError}
+                    </div>
+                  )}
+                  {applyMessage && (
+                    <div className="mt-2 rounded-lg border border-emerald-300 bg-white p-2.5 text-[11px] font-medium text-emerald-800 dark:border-emerald-800 dark:bg-slate-900 dark:text-emerald-300">
+                      {applyMessage}
+                    </div>
+                  )}
+
+                  {applyLoading ? (
+                    <div className="py-4 text-center text-[11px] text-emerald-800/70">Working out what would move…</div>
+                  ) : applyDryRun ? (
+                    <div className="mt-3 space-y-3">
+                      <div className="flex flex-wrap gap-4 text-[11px]">
+                        <span className="font-semibold text-emerald-900 dark:text-emerald-200">
+                          Moving {applyDryRun.movingTotal} item(s)
+                        </span>
+                        {applyDryRun.skippedTotal > 0 && (
+                          <span className="font-semibold text-amber-700 dark:text-amber-400">
+                            Skipped {applyDryRun.skippedTotal} — no-assembly items cannot go into a bin
+                            that holds items needing assembly
+                          </span>
+                        )}
+                      </div>
+
+                      {applyDryRun.moving.length > 0 && (
+                        <div className="max-h-40 overflow-y-auto rounded-lg border border-emerald-200 bg-white dark:border-emerald-900 dark:bg-slate-900">
+                          {applyDryRun.moving.map((row, i) => (
+                            <div
+                              key={`${row.sku}-${row.fromBinCode ?? "none"}-${i}`}
+                              className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-1.5 text-[11px] last:border-0 dark:border-slate-800"
+                            >
+                              <span className="truncate text-slate-700 dark:text-slate-300">
+                                {row.productName} <span className="font-mono text-slate-400">{row.sku}</span>
+                              </span>
+                              <span className="shrink-0 text-slate-500">
+                                ×{row.quantity} from {row.fromBinCode || "no bin"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {applyDryRun.skipped.length > 0 && (
+                        <div className="max-h-28 overflow-y-auto rounded-lg border border-amber-200 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20">
+                          {applyDryRun.skipped.map((row, i) => (
+                            <div
+                              key={`skip-${row.sku}-${row.fromBinCode ?? "none"}-${i}`}
+                              className="flex items-center justify-between gap-2 border-b border-amber-100 px-3 py-1.5 text-[11px] last:border-0 dark:border-amber-900"
+                            >
+                              <span className="truncate text-amber-900 dark:text-amber-300">
+                                {row.productName} <span className="font-mono opacity-60">{row.sku}</span>
+                              </span>
+                              <span className="shrink-0 text-amber-700 dark:text-amber-400">
+                                ×{row.quantity} stays in {row.fromBinCode || "no bin"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => openApplyPanel(applyRuleId)}
+                          disabled={applyRunning}
+                          className="h-8 gap-1.5 text-xs"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${applyLoading ? "animate-spin" : ""}`} /> Recheck
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={confirmApply}
+                          disabled={applyRunning || applyDryRun.movingTotal === 0}
+                          className="h-8 bg-emerald-600 text-xs text-white hover:bg-emerald-700"
+                        >
+                          {applyRunning
+                            ? "Moving…"
+                            : `Move ${applyDryRun.movingTotal} item(s) into ${applyDryRun.rule.bin.code}`}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              )}
 
               {/* Existing Rules List */}
               <div>
@@ -2200,13 +2694,18 @@ export function BinsManager() {
                             </span>
                             <span className="text-slate-400">+</span>
                             <span className="font-semibold text-slate-800 dark:text-slate-200">
-                              {r.category ? r.category.name : "All Categories"}
+                              {r.categoryPath || r.category?.name || "All Categories"}
                             </span>
                             <span className="text-slate-400">→</span>
                             <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
                               {r.bin.code}
                             </span>
                             <span className="text-slate-500">({r.bin.name})</span>
+                            {r.bin.nonAssemblable && (
+                              <Badge variant="default" className="gap-1 text-[10px]">
+                                <ShieldOff className="h-3 w-3" /> No assembly
+                              </Badge>
+                            )}
                           </div>
                           {r.bin.directions && (
                             <div className="mt-0.5 text-[11px] italic text-slate-400">
@@ -2215,14 +2714,25 @@ export function BinsManager() {
                           )}
                         </div>
 
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleDeleteRule(r.id)}
-                          className="h-7 text-red-600 hover:bg-red-50 hover:text-red-700"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
+                        <div className="flex shrink-0 items-center gap-1">
+                          {/* R40: the same panel the save flow opens, for a rule saved earlier. */}
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => openApplyPanel(r.id)}
+                            className="h-7 text-xs text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400"
+                          >
+                            Apply to existing stock
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleDeleteRule(r.id)}
+                            className="h-7 text-red-600 hover:bg-red-50 hover:text-red-700"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -2231,6 +2741,202 @@ export function BinsManager() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── MODAL 5: GENERATE UNIT CODES FOR EXISTING STOCK (R41, R46, P8) ── */}
+      {genScope && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center sm:p-4">
+          <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl duration-200 animate-in slide-in-from-bottom-5 sm:rounded-2xl sm:zoom-in-95 dark:bg-slate-900">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3 dark:border-slate-800">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Tags className="h-5 w-5 text-emerald-600" />
+                  <h2 className="text-base font-bold text-slate-900 dark:text-white">Generate unit codes</h2>
+                </div>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {genScope.label} — one code per physical item, so every one can carry its own label.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setGenScope(null);
+                  setGenDryRun(null);
+                }}
+                aria-label="Close"
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-3 text-xs">
+              {genError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3 font-medium text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+                  {genError}
+                </div>
+              )}
+
+              {genLoading ? (
+                <div className="py-8 text-center text-slate-400">Counting what is missing a code…</div>
+              ) : genDryRun ? (
+                <>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
+                      <div className="text-lg font-bold text-slate-900 dark:text-white">{genDryRun.totalCodes}</div>
+                      <div className="text-[11px] text-slate-500">codes to create</div>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
+                      <div className="text-lg font-bold text-slate-900 dark:text-white">{genDryRun.products}</div>
+                      <div className="text-[11px] text-slate-500">products</div>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
+                      <div className="text-lg font-bold text-slate-900 dark:text-white">{genDryRun.withoutBin}</div>
+                      <div className="text-[11px] text-slate-500">with no bin yet</div>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
+                      <div className="text-lg font-bold text-slate-900 dark:text-white">{genDryRun.noAssembly}</div>
+                      <div className="text-[11px] text-slate-500">into no-assembly bins</div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg bg-blue-50 p-3 text-[11px] leading-relaxed text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
+                    Every item gets a code, whatever condition it is in — the codes are created{" "}
+                    <strong>unassembled</strong>, exactly as an inward creates them. Cycles that are
+                    already built are corrected by the unit-level stock count, not here.
+                    {genDryRun.totalCodes > genDryRun.maxPerRun && (
+                      <>
+                        {" "}
+                        At most <strong>{genDryRun.maxPerRun}</strong> are created per press; run it again
+                        for the rest.
+                      </>
+                    )}
+                  </div>
+
+                  {genDryRun.rows.length > 0 && (
+                    <div className="max-h-56 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                      {genDryRun.rows.map((row) => (
+                        <div
+                          key={row.productId}
+                          className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-1.5 last:border-0 dark:border-slate-800"
+                        >
+                          <span className="truncate text-slate-700 dark:text-slate-300">
+                            {row.productName} <span className="font-mono text-slate-400">{row.sku}</span>
+                          </span>
+                          <span className="shrink-0 text-[11px] text-slate-500">
+                            +{row.missing} → {row.binCode || "no bin"}
+                            {row.binNonAssemblable ? " (no assembly)" : ""}
+                          </span>
+                        </div>
+                      ))}
+                      {genDryRun.truncated && (
+                        <div className="px-3 py-1.5 text-[11px] italic text-slate-400">
+                          …and more; the totals above cover everything.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="flex justify-end gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        setGenScope(null);
+                        setGenDryRun(null);
+                      }}
+                      className="h-9 text-xs"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={confirmGenerate}
+                      disabled={genRunning || genDryRun.totalCodes === 0}
+                      className="h-9 bg-emerald-600 text-xs text-white hover:bg-emerald-700"
+                    >
+                      {genRunning
+                        ? "Creating codes…"
+                        : `Create ${Math.min(genDryRun.totalCodes, genDryRun.maxPerRun)} code(s)`}
+                    </Button>
+                  </div>
+                </>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL 6: THIS ITEM DOES NEED ASSEMBLY AFTER ALL (P6b) ── */}
+      {markUnit && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center sm:p-4">
+          <div className="w-full max-w-md rounded-t-3xl bg-white p-6 shadow-2xl duration-200 animate-in slide-in-from-bottom-5 sm:rounded-2xl sm:zoom-in-95 dark:bg-slate-900">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <Wrench className="h-5 w-5 text-amber-600" />
+                <h2 className="text-base font-bold text-slate-900 dark:text-white">
+                  {markUnit.unitCode} needs assembly
+                </h2>
+              </div>
+              <button
+                onClick={() => setMarkUnit(null)}
+                aria-label="Close"
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-3 text-xs">
+              <p className="leading-relaxed text-slate-600 dark:text-slate-400">
+                This item is in a bin whose contents need no assembly, so it is kept off the build
+                line and cannot be moved into a normal bin. Clearing that puts it back on the build
+                line. It stays in this bin until you relocate it — and putting it into a no-assembly
+                bin again marks it the same way.
+              </p>
+
+              {markError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3 font-medium text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+                  {markError}
+                </div>
+              )}
+
+              <div>
+                <label className="font-semibold text-slate-700 dark:text-slate-300">Why? *</label>
+                <Input
+                  autoFocus
+                  placeholder="e.g. Put in the spares bin by mistake — it is a cycle"
+                  value={markReason}
+                  onChange={(e) => setMarkReason(e.target.value)}
+                  className="mt-1 text-xs"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <Button type="button" variant="outline" onClick={() => setMarkUnit(null)} className="h-9 text-xs">
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  onClick={confirmMarkAssemblable}
+                  disabled={markSaving}
+                  className="h-9 bg-amber-600 text-xs text-white hover:bg-amber-700"
+                >
+                  {markSaving ? "Saving…" : "Mark as needing assembly"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL 7: PRINTABLE LABELS (R46) ── */}
+      {labelSheet && (
+        <UnitLabelSheet
+          unitIds={labelSheet.unitIds}
+          binId={labelSheet.binId}
+          heading={labelSheet.heading}
+          onClose={() => setLabelSheet(null)}
+        />
       )}
     </div>
   );

@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { getAging, AGING_BADGE } from "@/lib/utils";
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
 import { zoneLabel, type DeliveryZoneValue } from "@/lib/deliveries/zone";
+import { PriorityStar } from "../[id]/_components/priority-star";
 
 interface DeliveryItem {
   id: string;
@@ -30,6 +31,8 @@ interface DeliveryItem {
   invoiceType: string | null;
   /** The matched FLOOR warehouse (plan 1609 §1.4); null on a Dummy and on old closed rows. */
   warehouse: { id: string; name: string } | null;
+  /** ★ priority (plan 1709, R16, R19–R21). Set = starred; its cycles are built and moved first. */
+  priorityAt?: string | null;
 }
 
 /**
@@ -71,6 +74,10 @@ interface DeliveryCardProps {
   isAdmin: boolean;
   deleting: string | null;
   prebooking: string | null;
+  /** `delivery_priority.edit` (plan 1709, R19, Q21). Cosmetic — the route re-checks. */
+  canStar?: boolean;
+  /** Re-fetch the list after a star is set or cleared. */
+  onStarChanged?: () => void;
 }
 
 function formatINR(n: number) {
@@ -89,6 +96,8 @@ export function DeliveryCard({
   isAdmin,
   deleting,
   prebooking,
+  canStar = false,
+  onStarChanged,
 }: DeliveryCardProps) {
   const router = useRouter();
   const isDummy = isDummyDelivery(d);
@@ -114,7 +123,19 @@ export function DeliveryCard({
       <div className="p-3.5">
         <div className="flex items-start justify-between mb-1.5">
           <div className="flex-1 min-w-0 mr-2">
-            <p className="text-base font-semibold text-slate-900 tabular-nums">{d.invoiceNo}</p>
+            <div className="flex items-center gap-1">
+              {/* ★ before the invoice number: the first thing a picker scans down the column. */}
+              {(canStar || d.priorityAt) && (
+                <PriorityStar
+                  deliveryId={d.id}
+                  priorityAt={d.priorityAt ?? null}
+                  canEdit={canStar && !isDummy}
+                  onChanged={() => onStarChanged?.()}
+                  className="-ml-1.5"
+                />
+              )}
+              <p className="text-base font-semibold text-slate-900 tabular-nums">{d.invoiceNo}</p>
+            </div>
             <p className="text-sm font-medium text-slate-600">{d.customerName}</p>
             {items.length > 0 && (
               <p className="text-xs text-slate-700 font-medium mt-0.5">

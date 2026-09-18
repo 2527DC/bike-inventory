@@ -4,7 +4,7 @@ import { useState, useEffect, use } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Phone, CheckCircle2, Calendar, MapPin, Save, Trash2, ShieldCheck, AlertTriangle, Sparkles, Info } from "lucide-react";
+import { ArrowLeft, Phone, CheckCircle2, Calendar, MapPin, Save, Trash2, ShieldCheck, AlertTriangle, Sparkles, Info, Undo2, QrCode } from "lucide-react";
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -65,6 +65,11 @@ interface Shipment {
   totalItems: number;
   approvedAt: string | null;
   approvedBy: { name: string } | null;
+  // Sent back for correction (plan 1709, R25, Q17). `rejectedAt` set = it is with its creator,
+  // not with an approver; Resubmit clears it and stamps `resubmittedAt`.
+  rejectedAt: string | null;
+  rejectionNote: string | null;
+  resubmittedAt: string | null;
   deliveredAt: string | null;
   notes: string | null;
   brand: { name: string };
@@ -108,6 +113,9 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
   const [itemLoading, setItemLoading] = useState<string | null>(null);
   const [putawayLoading, setPutawayLoading] = useState(false);
   const [approveLoading, setApproveLoading] = useState(false);
+  // Reject asks for a note before anything is sent (R25).
+  const [showReject, setShowReject] = useState(false);
+  const [rejectNote, setRejectNote] = useState("");
   const [successMsg, setSuccessMsg] = useState<{ shipmentNo: string; deliveredCount: number } | null>(null);
   const [actionError, setActionError] = useState("");
   const [issueModal, setIssueModal] = useState<{ lineItem: LineItem; } | null>(null);
@@ -220,15 +228,63 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
   // the per-line route previously had NO approval check at all, so this button being hidden
   // was the only thing standing between an unapproved shipment and inventory.
   const isApproved = !!shipment?.approvedAt;
+  // Sent back to whoever raised it (R25). While this is true the shipment is theirs to fix:
+  // the approve gate is hidden and the API refuses an approval outright.
+  const isReturned = !isApproved && !!shipment?.rejectedAt;
 
+  // `apiTry`, not a raw fetch. An expired session answers a bare fetch with a 307 to /login and
+  // 200 HTML, so `res.ok` is true and `.json()` throws "Unexpected token <" — which reads as a
+  // server fault instead of "sign back in" (CLAUDE.md).
   const handleApprove = async () => {
     setApproveLoading(true);
-    try {
-      const res = await fetch(`/api/inbound/${id}/approve`, { method: "POST" }).then((r) => r.json());
-      if (res.success) { setActionError(""); await refreshShipment(); }
-      else setActionError(res.error || "Approval failed");
-    } catch (e) { setActionError(e instanceof Error ? e.message : "Approval failed"); }
-    finally { setApproveLoading(false); }
+    const { data, error } = await apiTry<{ message?: string }>(`/api/inbound/${id}/approve`, {
+      method: "POST",
+      json: {},
+    });
+    setApproveLoading(false);
+    if (!data) {
+      log.warn("shipment approval failed", { shipmentId: id, message: error });
+      setActionError(error || "Approval failed");
+      return;
+    }
+    setActionError("");
+    await refreshShipment();
+  };
+
+  /** Send it back with a note (R25, Q17). The note is required — see the modal. */
+  const handleReject = async () => {
+    setApproveLoading(true);
+    const { data, error } = await apiTry<{ message?: string }>(`/api/inbound/${id}/reject`, {
+      method: "POST",
+      json: { rejectionNote: rejectNote.trim() },
+    });
+    setApproveLoading(false);
+    if (!data) {
+      log.warn("shipment return failed", { shipmentId: id, message: error });
+      setActionError(error || "Could not send this shipment back");
+      return;
+    }
+    setActionError("");
+    setShowReject(false);
+    setRejectNote("");
+    await refreshShipment();
+  };
+
+  /** Ask for approval again once it is fixed (R25). */
+  const handleResubmit = async () => {
+    setApproveLoading(true);
+    const { data, error } = await apiTry<{ message?: string }>(`/api/inbound/${id}/resubmit`, {
+      method: "POST",
+      json: {},
+    });
+    setApproveLoading(false);
+    if (!data) {
+      log.warn("shipment resubmit failed", { shipmentId: id, message: error });
+      setActionError(error || "Could not resubmit this shipment");
+      return;
+    }
+    setActionError("");
+    await refreshShipment();
   };
 
   // ONE line at a time. Mark All / Partial / Undo are gone: the shipment finishes itself
@@ -576,21 +632,99 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
         </CardContent>
       </Card>
 
+      {/* ── Returned for correction (R25, Q17) ──────────────────────────────────────────
+          The note is the point. Before this, a shipment nobody approved just sat there and
+          the person who raised it had no way of learning that anything was wrong with it. */}
+      {isReturned && (
+        <div className="mb-3 rounded-xl border border-orange-200 bg-orange-50 p-3">
+          <div className="flex items-start gap-2">
+            <Undo2 className="h-4 w-4 text-orange-600 shrink-0 mt-0.5" />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-orange-900">Sent back for correction</p>
+              <p className="text-xs text-orange-800 mt-0.5 whitespace-pre-wrap">
+                {shipment.rejectionNote || "No reason was given."}
+              </p>
+              {canDeliver && (
+                <Button
+                  onClick={handleResubmit}
+                  disabled={approveLoading}
+                  className="mt-2 w-full min-h-[44px] bg-orange-600 hover:bg-orange-700"
+                >
+                  {approveLoading ? "Working..." : "Fixed — resubmit for approval"}
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Approval Gate */}
-      {!isApproved && shipment.status !== "DELIVERED" && (
+      {!isApproved && !isReturned && shipment.status !== "DELIVERED" && (
         <div className="mb-3">
           {canApprove ? (
-            <Button onClick={handleApprove} disabled={approveLoading}
-              className="w-full min-h-[48px] rounded-lg font-medium bg-indigo-600 hover:bg-indigo-700" size="lg">
-              <ShieldCheck className="h-4 w-4 mr-2" /> {approveLoading ? "Approving..." : "Approve Inward"}
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => { setShowReject(true); setRejectNote(""); }}
+                disabled={approveLoading}
+                className="flex-1 min-h-[48px] rounded-lg font-medium text-red-600 border-red-200 hover:bg-red-50" size="lg">
+                <Undo2 className="h-4 w-4 mr-2" /> Reject
+              </Button>
+              <Button onClick={handleApprove} disabled={approveLoading}
+                className="flex-1 min-h-[48px] rounded-lg font-medium bg-indigo-600 hover:bg-indigo-700" size="lg">
+                <ShieldCheck className="h-4 w-4 mr-2" /> {approveLoading ? "Approving..." : "Approve Inward"}
+              </Button>
+            </div>
           ) : (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-center">
               <ShieldCheck className="h-5 w-5 text-amber-500 mx-auto mb-1" />
               <p className="text-xs font-medium text-amber-800">Awaiting Approval</p>
-              <p className="text-xs text-amber-600 mt-0.5">Supervisor or Accounts Manager must approve before delivery</p>
+              <p className="text-xs text-amber-600 mt-0.5">Anyone whose role can approve inbound must sign this off before delivery</p>
             </div>
           )}
+        </div>
+      )}
+
+      {/* The labels are pasted on the physical items, so they are printed from the shipment
+          that brought them in (R46). The sheet itself is Part H's `/units/labels`. */}
+      {shipment.status === "DELIVERED" && (
+        <Link
+          href={`/units/labels?inboundShipmentId=${shipment.id}`}
+          className="mb-3 flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-3 focus-ring"
+        >
+          <span className="text-xs font-medium text-slate-700">Print unit labels for this shipment</span>
+          <QrCode className="h-4 w-4 text-slate-400 shrink-0" />
+        </Link>
+      )}
+
+      {/* Reject always takes a note — "sent back" with no reason is what this replaced. */}
+      {showReject && (
+        <div className="fixed inset-0 bg-black/50 z-[60] flex items-end sm:items-center justify-center p-4"
+          onClick={() => setShowReject(false)}>
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-3"
+            onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-base font-bold text-slate-900">Send {shipment.shipmentNo} back?</h2>
+            <p className="text-xs text-slate-500">
+              {shipment.createdBy.name} gets your note and fixes this same shipment. Nothing is
+              deleted and no stock has moved.
+            </p>
+            <textarea
+              value={rejectNote}
+              onChange={(e) => setRejectNote(e.target.value)}
+              rows={3}
+              maxLength={1000}
+              placeholder="What needs correcting?"
+              className="w-full rounded-lg border border-slate-200 p-2.5 text-sm focus-ring"
+            />
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setShowReject(false)} className="flex-1 min-h-[44px]">
+                Keep it
+              </Button>
+              <Button onClick={handleReject}
+                disabled={rejectNote.trim().length === 0 || approveLoading}
+                className="flex-1 min-h-[44px] bg-red-600 hover:bg-red-700">
+                Send back
+              </Button>
+            </div>
+          </div>
         </div>
       )}
 

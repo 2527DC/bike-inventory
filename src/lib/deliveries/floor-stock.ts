@@ -20,6 +20,12 @@ type Tx = Prisma.TransactionClient;
  *   line is short, nothing is held and `stockReservedAt` stays null, which the screens show as
  *   "Stock not reserved" with a "Reserve stock now" button (A38).
  * - Handing over (Walk-out / Delivered) REFUSES when the floor is short (A40b). Nothing clamps.
+ * - Plan 1709 (R13) adds a THIRD moment and one sentence. The third moment is `OUT_FOR_DELIVERY`
+ *   — `floorShortForDispatch` — which blocks unless the outward is held or the floor covers it.
+ *   The sentence is `shortLineMessage`: every refusal and every warning now names where the stock
+ *   actually is ("0 on BCH Floor · 2 in BCH Godown"), because "not enough stock" tells nobody what
+ *   to do next. "Elsewhere" here means a GODOWN OF THE SAME STORE (R12); the wider search across
+ *   every store is Find stock, in `api/deliveries/[id]/find-stock`.
  *
  * Call every function inside the caller's `$transaction`.
  */
@@ -30,11 +36,87 @@ export interface DeliveryLine {
   quantity: number;
 }
 
+/** One place, other than the outward's own floor, that holds this product (plan 1709, R13, Q10). */
+export interface ElsewhereStock {
+  warehouseId: string;
+  warehouseName: string;
+  kind: "FLOOR" | "GODOWN";
+  /** Usable = quantity − reservedQuantity. Quantity only, never condition (R13, Q11). */
+  quantity: number;
+}
+
 export interface ShortLine {
   name: string;
   sku: string;
   available: number;
   needed: number;
+  /**
+   * Where the missing stock actually is — the SAME STORE's godowns (R12: "the warehouse" means a
+   * godown of the same store). Empty when the store's godowns hold none either; the refusal then
+   * simply says nothing is anywhere, which is still the true answer.
+   */
+  elsewhere: ElsewhereStock[];
+  /** The product, so ★ and Find stock can pick units without re-resolving the SKU. */
+  productId: string;
+}
+
+/**
+ * The same store's GODOWN quantities for one product (plan 1709, R12, Q10).
+ *
+ * Deliberately store-scoped and godown-only: R12 defines "the warehouse" a shortage points at as
+ * a godown of the store that sold the invoice. Find stock (R45, P15) is the wider search — every
+ * store, floors and godowns — and lives in its own route.
+ */
+export async function stockElsewhere(
+  tx: Tx,
+  productId: string,
+  storeId: string,
+  floorWarehouseId: string
+): Promise<ElsewhereStock[]> {
+  const rows = await tx.stockLevel.findMany({
+    where: {
+      productId,
+      warehouseId: { not: floorWarehouseId },
+      warehouse: { isActive: true, storeId, kind: "GODOWN" },
+    },
+    select: {
+      quantity: true,
+      reservedQuantity: true,
+      warehouse: { select: { id: true, name: true, kind: true } },
+    },
+  });
+  return rows
+    .map((r) => ({
+      warehouseId: r.warehouse.id,
+      warehouseName: r.warehouse.name,
+      kind: r.warehouse.kind as "FLOOR" | "GODOWN",
+      quantity: Math.max(0, r.quantity - r.reservedQuantity),
+    }))
+    .filter((r) => r.quantity > 0)
+    .sort((a, b) => b.quantity - a.quantity);
+}
+
+/**
+ * The sentence a person reads when the floor cannot hand the goods over (plan 1709, R13):
+ *
+ *   "Hero Sprint 29: 0 on BCH Floor · 2 in BCH Godown. A transfer is needed."
+ *
+ * One line per short product, so the refusal names the product, the floor AND where the stock
+ * is — the whole point of R13 is that "not enough stock" on its own tells nobody what to do.
+ */
+export function shortLineMessage(line: ShortLine, floorName: string): string {
+  const here = `${line.available} on ${floorName}`;
+  const there = line.elsewhere.map((e) => `${e.quantity} in ${e.warehouseName}`).join(" · ");
+  const where = there ? `${here} · ${there}` : here;
+  const tail = there
+    ? "A transfer is needed."
+    : "None in this store's godowns either — use Find stock.";
+  return `${line.name}: ${where}. Needs ${line.needed}. ${tail}`;
+}
+
+/** The whole refusal for a set of short lines. */
+export function shortRefusalMessage(lines: ShortLine[], floorName: string): string {
+  return lines.map((l) => shortLineMessage(l, floorName)).join(" ");
 }
 
 /** Holdable lines: SKU present, positive quantity, the same SKU summed across lines. */
@@ -68,6 +150,13 @@ interface DeliveryForStock {
   stockReservedAt: Date | null;
 }
 
+/** The store a floor warehouse belongs to, for the godown lookup in `stockElsewhere`. */
+async function storeOfWarehouse(tx: Tx, warehouseId: string): Promise<string | null> {
+  const row = await tx.warehouse.findUnique({ where: { id: warehouseId }, select: { storeId: true } });
+  if (!row) log.warn("warehouse row missing while resolving its store", { warehouseId });
+  return row?.storeId ?? null;
+}
+
 async function levelOf(tx: Tx, productId: string, warehouseId: string) {
   const row = await tx.stockLevel.findUnique({
     where: { productId_warehouseId: { productId, warehouseId } },
@@ -92,6 +181,7 @@ export async function holdDeliveryStock(
     throw new Error("Dummy delivery: no warehouse matched this invoice number. No actions are allowed.");
   }
 
+  const storeId = await storeOfWarehouse(tx, delivery.warehouseId);
   const plan: Array<{ productId: string; qty: number }> = [];
   const short: ShortLine[] = [];
   for (const line of stockLines(delivery.lineItems)) {
@@ -100,7 +190,15 @@ export async function holdDeliveryStock(
     const { quantity, reserved } = await levelOf(tx, product.id, delivery.warehouseId);
     const available = quantity - reserved;
     if (available < line.quantity) {
-      short.push({ name: line.name, sku: line.sku, available: Math.max(0, available), needed: line.quantity });
+      short.push({
+        name: line.name,
+        sku: line.sku,
+        available: Math.max(0, available),
+        needed: line.quantity,
+        productId: product.id,
+        // R13: the warning names the godown quantity, so the screen can say where to transfer from.
+        elsewhere: storeId ? await stockElsewhere(tx, product.id, storeId, delivery.warehouseId) : [],
+      });
     } else {
       plan.push({ productId: product.id, qty: line.quantity });
     }
@@ -145,6 +243,60 @@ export async function releaseDeliveryStock(tx: Tx, delivery: DeliveryForStock): 
   return true;
 }
 
+/**
+ * A refusal caused by a short floor (plan 1709, R13, R14). It carries the short lines so the
+ * route can raise `stock.transfer_needed` AFTER the transaction has rolled back — a notification
+ * sent inside the transaction would survive a rollback it should not have outlived.
+ */
+export class FloorShortError extends Error {
+  short: ShortLine[];
+  constructor(message: string, short: ShortLine[]) {
+    super(message);
+    this.name = "FloorShortError";
+    this.short = short;
+  }
+}
+
+/**
+ * The dispatch gate (plan 1709, R13): may this outward leave the building?
+ *
+ * Passes when the delivery is HELD (`stockReservedAt` — the floor already owes it the goods) or
+ * when the floor's usable quantity covers every line. Otherwise it returns the short lines, with
+ * the godown quantities filled in, and the caller refuses and notifies. Reads only; call it
+ * inside the caller's transaction so the answer cannot go stale before the status is written.
+ */
+export async function floorShortForDispatch(tx: Tx, delivery: DeliveryForStock): Promise<ShortLine[]> {
+  if (!delivery.warehouseId) return []; // Dummy — every new rule skips it (Q37); the caller refuses separately.
+  if (delivery.stockReservedAt) return []; // Held: the quantity is already set aside for this outward.
+
+  const storeId = await storeOfWarehouse(tx, delivery.warehouseId);
+  const short: ShortLine[] = [];
+  for (const line of stockLines(delivery.lineItems)) {
+    const product = await findDeliveryProduct(tx, line.sku);
+    if (!product) continue;
+    const { quantity, reserved } = await levelOf(tx, product.id, delivery.warehouseId);
+    const usable = quantity - reserved;
+    if (usable < line.quantity) {
+      short.push({
+        name: line.name,
+        sku: line.sku,
+        available: Math.max(0, usable),
+        needed: line.quantity,
+        productId: product.id,
+        elsewhere: storeId ? await stockElsewhere(tx, product.id, storeId, delivery.warehouseId) : [],
+      });
+    }
+  }
+  if (short.length > 0) {
+    log.warn("dispatch gate: floor short", {
+      deliveryId: delivery.id,
+      warehouseId: delivery.warehouseId,
+      lines: short.length,
+    });
+  }
+  return short;
+}
+
 export interface DeductedLine {
   productId: string;
   name: string;
@@ -171,6 +323,7 @@ export async function deductDeliveryFromFloor(
     throw new Error("Dummy delivery: no warehouse matched this invoice number. No actions are allowed.");
   }
   const wasHeld = !!delivery.stockReservedAt;
+  const storeId = await storeOfWarehouse(tx, delivery.warehouseId);
 
   const plan: Array<DeliveryLine & { productId: string; quantity: number; reserved: number; onFloor: number }> = [];
   for (const line of stockLines(delivery.lineItems)) {
@@ -186,10 +339,18 @@ export async function deductDeliveryFromFloor(
         usable,
         needed: line.quantity,
       });
-      throw new Error(
-        `Not enough stock of ${line.name} (SKU: ${line.sku}) on ${warehouseName} ` +
-          `(has ${Math.max(0, usable)}, needs ${line.quantity}). Transfer from godown first.`
-      );
+      // Plan 1709, R13: the refusal names where the stock IS, not merely that it is missing.
+      // `FloorShortError` carries the lines so the route can notify `transfers.create` holders
+      // after the transaction has rolled back.
+      const shortLine: ShortLine = {
+        name: line.name,
+        sku: line.sku,
+        available: Math.max(0, usable),
+        needed: line.quantity,
+        productId: product.id,
+        elsewhere: storeId ? await stockElsewhere(tx, product.id, storeId, delivery.warehouseId) : [],
+      };
+      throw new FloorShortError(shortLineMessage(shortLine, warehouseName), [shortLine]);
     }
     plan.push({ ...line, productId: product.id, reserved, onFloor: quantity });
   }

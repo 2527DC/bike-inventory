@@ -18,7 +18,18 @@ import { canTransition } from "./transitions";
  * Site scoping is included here for the same reason: a clerk pinned to one warehouse should
  * not see a Dispatch button for a van leaving a different building.
  */
-export type TransferAction = "approve" | "reject" | "dispatch" | "receive" | "cancel" | "attach_document";
+export type TransferAction =
+  | "approve"
+  | "reject"
+  | "dispatch"
+  | "receive"
+  | "cancel"
+  | "attach_document"
+  // A RETURNED order goes back to its creator, who fixes the lines and sends it again
+  // (plan 1709-priority-build-and-stock-flow, R25). Both are the creator's — or any
+  // `transfers.create` holder's — and neither exists in any other status.
+  | "edit"
+  | "resubmit";
 
 export interface ActionContext {
   status: TransferOrderStatus;
@@ -36,6 +47,8 @@ export interface ActionContext {
     canApprove: boolean;
     canEdit: boolean;
     canDelete: boolean;
+    /** `transfers.create` — who may fix and resubmit somebody else's returned order (R25). */
+    canCreate: boolean;
   };
 }
 
@@ -89,16 +102,25 @@ export function computeActions(ctx: ActionContext): TransferAction[] {
     actions.push("receive");
   }
 
+  // A returned order is the creator's to fix (R25). `canCreate` lets a colleague do it while
+  // the creator is off the floor; nobody else, and in no other status — PATCH and resubmit
+  // both re-check exactly this.
+  if (ctx.status === "RETURNED" && (user.canCreate || ctx.createdById === ctx.user.id)) {
+    actions.push("edit", "resubmit");
+  }
+
   if (canTransition(ctx.status, "CANCELLED") && (user.canDelete || ctx.createdById === ctx.user.id)) {
     actions.push("cancel");
   }
 
   // The document may be attached or replaced right up until dispatch — after that it is what
   // the driver is carrying, and changing it would make the record disagree with the paperwork.
+  // RETURNED is in the list because "you did not attach the challan" is one of the reasons an
+  // approver sends a transfer back, and the fix has to be possible where the note is (P16).
   if (
     ctx.requiredDocType &&
-    (ctx.status === "PENDING" || ctx.status === "APPROVED") &&
-    (user.canEdit || ctx.createdById === ctx.user.id)
+    (ctx.status === "PENDING" || ctx.status === "APPROVED" || ctx.status === "RETURNED") &&
+    (user.canEdit || user.canCreate || ctx.createdById === ctx.user.id)
   ) {
     actions.push("attach_document");
   }

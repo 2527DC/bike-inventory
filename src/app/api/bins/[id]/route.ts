@@ -4,6 +4,9 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("bins:detail");
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -13,6 +16,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     const bin = await prisma.bin.findUnique({ where: { id } });
     if (!bin) return errorResponse("Bin not found", 404);
+
+    // ── THE NON-ASSEMBLABLE FLAG IS FIXED AT CREATION (R42, P6a) ──
+    //
+    // Flipping it would leave the units already inside stamped for a rule the bin no longer
+    // states — an assemblable cycle sitting in a bin the build line skips, or a spare suddenly
+    // on Awaiting. To change it, create a bin with the right flag and move the items (which
+    // `placeUnitsInBin` still checks). Sending the value it already has is not a change.
+    if (body.nonAssemblable !== undefined && Boolean(body.nonAssemblable) !== bin.nonAssemblable) {
+      return errorResponse(
+        `Whether bin ${bin.code} holds items that need assembly is set when the bin is created and cannot be changed. Create a new bin with the right setting and move the items into it.`,
+        400
+      );
+    }
 
     const updateData: Record<string, unknown> = {};
     if (body.code !== undefined) {
@@ -51,6 +67,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return successResponse(updated);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("bin update failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Failed to update bin", 400);
   }
 }
@@ -92,6 +109,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     return successResponse({ deleted: true });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("bin delete failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Failed to delete bin", 400);
   }
 }

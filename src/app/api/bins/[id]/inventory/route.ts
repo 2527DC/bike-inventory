@@ -4,6 +4,9 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("bins:inventory");
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -75,6 +78,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("bin inventory fetch failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse(error instanceof Error ? error.message : "Failed to fetch bin inventory", 500);
   }
 }

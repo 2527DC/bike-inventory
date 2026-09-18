@@ -53,6 +53,17 @@ const ENTRIES: Entry[] = [
     icon: "Bell",
     module: "settings_notifications",
   },
+  // Plan 1709, R26: what counts as an approver error, and the rate per approver. `settings.edit`
+  // is what changes the rule; the table inside needs `reports.view` and is simply absent without
+  // it, so the card is shown by the grant that makes the page worth opening.
+  {
+    href: "/settings/approvals",
+    title: "Approvals",
+    description: "What counts as an approver error, how long after an approval, and the rate per approver",
+    icon: "ShieldCheck",
+    module: "settings",
+    action: "edit",
+  },
   {
     href: "/more/alerts",
     title: "Alerts",

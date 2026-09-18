@@ -25,7 +25,11 @@ import type { TransferOrderStatus } from "@prisma/client";
  * disagree three ways.
  */
 export const TRANSFER_TRANSITIONS: Record<TransferOrderStatus, TransferOrderStatus[]> = {
-  PENDING: ["APPROVED", "REJECTED", "CANCELLED"],
+  // RETURNED is what Reject writes from Part D onward (R25): the order goes BACK to the person
+  // who raised it, with a note, and they fix the same record rather than typing it again.
+  // REJECTED stays reachable in the table only because rows written before R25 hold it — no
+  // route produces it any more.
+  PENDING: ["APPROVED", "RETURNED", "REJECTED", "CANCELLED"],
   // IN_TRANSIT is reachable only through POST /[id]/dispatch, and it IS listed here — P9's
   // hard-won lesson. Leaving SENT_TO_VENDOR out of the PO table on the reasoning that "the
   // transition belongs to the route" made every press of that button return 409, because the
@@ -40,9 +44,12 @@ export const TRANSFER_TRANSITIONS: Record<TransferOrderStatus, TransferOrderStat
   RECEIVED: [],
   REJECTED: [],
   CANCELLED: [],
-  // Added by the plan 1709 migration (R25) so this Record stays exhaustive. Empty and
-  // unreachable until Part D adds PENDING -> RETURNED and RETURNED -> PENDING (resubmit).
-  RETURNED: [],
+  // Sent back for correction (R25, Q36). The creator edits the lines, attaches the document if
+  // it is still missing, and RESUBMITS — which is PENDING again, the SAME order, so the approver
+  // sees the history rather than a second record. Cancelling a returned order is the way to drop
+  // it. It cannot go straight to APPROVED: an approver who wants to approve it as it stands is
+  // asking for a resubmit, and the resubmit is what records that the creator agreed.
+  RETURNED: ["PENDING", "CANCELLED"],
 };
 
 /** The statuses a transfer can still be cancelled from. Derived, so it cannot drift. */

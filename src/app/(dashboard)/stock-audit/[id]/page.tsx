@@ -517,9 +517,12 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
   const progress = summary.totalItems > 0 ? Math.round((summary.countedItems / summary.totalItems) * 100) : 0;
   const remaining = summary.totalItems - summary.countedItems;
 
-  // Counting is the assignee's job; approving is somebody else's. Both facts, once.
+  // Counting is the assignee's job. Approving is a grant, not a different person (R23).
   const isAssignee = summary.assignedToId === currentUserId;
-  const showApproveActions = summary.status === "COMPLETED" && canApprove && !isAssignee;
+  // `!isAssignee` dropped (plan 1709, R23, Q15): anyone whose role holds `approve` may approve,
+  // including their own audit. The API dropped the same block, and every approval is recorded as
+  // an ApprovalEvent naming who signed it off.
+  const showApproveActions = summary.status === "COMPLETED" && canApprove;
 
   return (
     <div>
