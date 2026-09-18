@@ -839,6 +839,17 @@ model InventoryUnit {
   // the delivery one also serves "units reserved for this outward" (R16, R21).
   @@index([reservedForDeliveryId])
   @@index([sourceTransactionId])
+  // Unit labels for a shipment, the put-away list and the inbound delete all read by shipment
+  // (Part H). The FK is nullable/SetNull too, so Postgres checks this table on every
+  // InboundShipment delete -- unindexed that is a sequential scan of every unit ever received.
+  @@index([inboundShipmentId])
+  // The Awaiting and no-assembly lists filter `nonAssemblable` + `status` ALWAYS and scope to a
+  // warehouse only SOMETIMES (api/assembly/tasks/route.ts awaitingBase + listWhere, R8, R42), so
+  // the boolean leads and warehouseId trails: the (nonAssemblable, status) prefix serves the
+  // unscoped list, all three serve the scoped one. Leading with warehouseId would leave the
+  // unscoped list on a sequential scan, and [warehouseId, status] above already covers the
+  // warehouse-scoped reads. The boolean is never indexed on its own.
+  @@index([nonAssemblable, status, warehouseId])
   @@map("inventory_units")
 }
 
@@ -904,6 +915,11 @@ model AssemblyTask {
 
   @@index([warehouseId, status])
   @@index([assignedToId, status])
+  // "does this unit already have an open task" -- read by the Awaiting filter
+  // (`assemblyTasks: { none: { status: { in: OPEN_TASK_STATUSES } } }`) and by every assign
+  // (Part E, R8). It is also the only index on `unitId`, whose FK is Cascade, so Postgres
+  // scans this table on every InventoryUnit delete without it.
+  @@index([unitId, status])
   @@map("assembly_tasks")
 }
 
@@ -2053,6 +2069,14 @@ model Delivery {
   // Same reasoning for the Restrict FK to Warehouse, and the Dummy list is `warehouseId IS NULL`.
   @@index([warehouseId])
   @@index([customerId])
+  // The Requests page reads "approval asked for, not yet given", oldest first
+  // (api/approvals/pending/route.ts, R26a). `approvedAt` leads because `approvedAt IS NULL` stays
+  // a small set while `approvalRequestedAt IS NOT NULL` grows to nearly every row; the second
+  // column then supplies the `orderBy` inside that group, so the page needs no sort.
+  @@index([approvedAt, approvalRequestedAt])
+  // ★ lists (R19-R21). Set on a minority of deliveries, so the non-null entries are a cheap
+  // range scan, and the column also orders the starred group.
+  @@index([priorityAt])
 }
 
 model AlertConfig {
@@ -2398,6 +2422,12 @@ model InboundShipment {
   // that is a sequential scan while the merge holds its locks. P7 then filters receiving by
   // category on the same index.
   @@index([categoryId])
+  // The Requests page reads "raised, not approved, not sent back"
+  // (api/approvals/pending/route.ts:80, R25, Q17). Both halves are `IS NULL`, which a btree
+  // serves, and the pair is the selective one: `rejectedAt IS NULL` alone matches nearly every
+  // shipment, so an index on `rejectedAt` by itself would never be chosen. The only other
+  // `rejectedAt` read (the resubmit route) is already by primary key.
+  @@index([approvedAt, rejectedAt])
 }
 
 model InboundLineItem {

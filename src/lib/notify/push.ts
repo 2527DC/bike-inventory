@@ -29,7 +29,9 @@ import { prisma } from "@/lib/db";
 import { createLogger } from "@/lib/logger";
 import { readJson } from "@/lib/http-json";
 import {
+  MAX_PUSH_ACTIONS,
   NotConfiguredError,
+  type PushAction,
   type PushMessage,
   type PushTarget,
   type SendResult,
@@ -374,9 +376,20 @@ function buildMessage(target: PushTarget, msg: PushMessage): Record<string, unkn
     notification: { title: msg.title, body: msg.body },
   };
 
+  // Buttons (plan 1709 §3.8). Capped and validated once, used twice below.
+  const actions = normaliseActions(msg.actions);
+
   // `data.link` travels on every platform: public/sw.js reads it on notificationclick and the
   // Expo app routes on it. It is the fallback when fcm_options.link cannot be sent (below).
-  const data = stringData(msg.data, msg.link);
+  //
+  // `data.actions` is the same list as a JSON STRING. Two reasons it is mirrored rather than
+  // only declared under webpush:
+  //   1. Every FCM `data` value must be a string, so an array cannot travel there as itself.
+  //   2. public/sw.js builds its own showNotification() call from the delivered payload. FCM
+  //      merges `webpush.notification` into the payload's `notification`, but that merge is
+  //      Google's behaviour, not a contract we control — the worker reads notification.actions
+  //      first and falls back to parsing this string, so one of the two always arrives.
+  const data = stringData(msg.data, msg.link, actions);
   if (data) message.data = data;
 
   // The platform block is the ONLY thing PushDevice.platform decides (plan D.1). iOS has no
@@ -384,7 +397,11 @@ function buildMessage(target: PushTarget, msg: PushMessage): Record<string, unkn
   if (target.platform === "WEB") {
     const link = absoluteHttpsLink(msg.link);
     message.webpush = {
-      notification: { icon: NOTIFICATION_ICON },
+      // `actions` is part of the standard Notification options object, which is what the
+      // webpush notification block is. A browser that does not support action buttons — iOS
+      // Safari, every browser before Chrome 48 — ignores the key and shows a plain
+      // notification whose body still opens `link` (Q19).
+      notification: { icon: NOTIFICATION_ICON, ...(actions ? { actions } : {}) },
       ...(link ? { fcm_options: { link } } : {}),
     };
   } else {
@@ -392,6 +409,37 @@ function buildMessage(target: PushTarget, msg: PushMessage): Record<string, unkn
   }
 
   return message;
+}
+
+/**
+ * Keep only usable buttons, and at most `MAX_PUSH_ACTIONS` of them.
+ *
+ * A malformed entry is DROPPED rather than sent: FCM rejects the whole message on a bad
+ * webpush notification object, so one caller's typo would silence a notification entirely
+ * instead of merely losing a button.
+ */
+function normaliseActions(actions: PushAction[] | undefined): PushAction[] | undefined {
+  if (!actions?.length) return undefined;
+
+  const clean: PushAction[] = [];
+  for (const a of actions) {
+    const action = typeof a?.action === "string" ? a.action.trim() : "";
+    const title = typeof a?.title === "string" ? a.title.trim() : "";
+    if (!action || !title) {
+      log.warn("dropped a notification action with no id or no title");
+      continue;
+    }
+    clean.push({ action, title });
+  }
+  if (clean.length === 0) return undefined;
+  if (clean.length > MAX_PUSH_ACTIONS) {
+    log.warn("more notification actions than any browser shows; extra ones dropped", {
+      asked: clean.length,
+      kept: MAX_PUSH_ACTIONS,
+    });
+    return clean.slice(0, MAX_PUSH_ACTIONS);
+  }
+  return clean;
 }
 
 /**
@@ -414,7 +462,8 @@ function absoluteHttpsLink(link: string | undefined): string | null {
 /** FCM `data` must be flat string→string. Coerce, drop Google's reserved keys, add the link. */
 function stringData(
   data: Record<string, string> | undefined,
-  link: string | undefined
+  link: string | undefined,
+  actions?: PushAction[]
 ): Record<string, string> | undefined {
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(data ?? {})) {
@@ -424,7 +473,9 @@ function stringData(
     }
     out[name] = String(value);
   }
+  // Ours last, so a caller's `data.link`/`data.actions` can never shadow the real ones.
   if (link) out.link = link;
+  if (actions?.length) out.actions = JSON.stringify(actions);
   return Object.keys(out).length > 0 ? out : undefined;
 }
 

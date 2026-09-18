@@ -33,6 +33,14 @@ export interface NotifyInput {
   link?: string;
   /** Extra key/value data for the push payload. FCM requires string values. */
   data?: Record<string, string>;
+  /**
+   * Buttons on the notification itself (plan 1709 §3.8, R24 / Q19). Optional everywhere: a
+   * caller that omits it gets exactly the notification it got before.
+   *
+   * At most TWO are shown — see `PushAction`. The body of the notification is always the
+   * "just open it" path, so an action is never the only way to act on the message.
+   */
+  actions?: PushAction[];
 }
 
 export interface NotifyOutcome {
@@ -104,12 +112,38 @@ export interface PushTarget {
   platform: PushPlatformKey;
 }
 
+/**
+ * One button on a notification (plan 1709 §3.8).
+ *
+ * `action` is the id the service worker reads back as `event.action` on notificationclick, so
+ * it is a stable code word ("approve", "reject") and NOT display text. `title` is what the
+ * person reads.
+ *
+ * **Two, and only two.** Chrome on Android shows two; desktop Chrome shows two; Firefox two.
+ * Anything beyond is silently dropped by the browser, and a button that exists in the payload
+ * but not on screen is a feature nobody can find. `normaliseActions` in push.ts caps the list
+ * rather than trusting callers to count.
+ *
+ * **They are a shortcut, never the only route.** iOS Safari ignores `actions` entirely (Q19),
+ * so every notification carrying them must still do the right thing when the body is tapped —
+ * which for approvals means opening `link`.
+ */
+export interface PushAction {
+  action: string;
+  title: string;
+}
+
+/** The most buttons any target browser renders. See `PushAction`. */
+export const MAX_PUSH_ACTIONS = 2;
+
 export interface PushMessage {
   title: string;
   body: string;
   /** Relative URL opened on notificationclick. Becomes webpush.fcm_options.link / data.link. */
   link?: string;
   data?: Record<string, string>;
+  /** Buttons. See `PushAction` — capped at `MAX_PUSH_ACTIONS`, mirrored into `data.actions`. */
+  actions?: PushAction[];
 }
 
 /**

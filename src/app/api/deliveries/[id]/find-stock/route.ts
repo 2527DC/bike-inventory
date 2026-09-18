@@ -17,6 +17,7 @@ import { nextSequence } from "@/lib/sequence";
 import { recordApprovalEvent } from "@/lib/approvals/events";
 import { usersWithPermission } from "@/lib/rbac";
 import { notify } from "@/lib/notify";
+import { APPROVAL_NOTIFICATION_ACTIONS } from "@/lib/approvals/notify-actions";
 import { logActivity } from "@/lib/activity-log";
 import { createLogger } from "@/lib/logger";
 import type { TransferMode, Prisma } from "@prisma/client";
@@ -408,7 +409,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             body: `${order.fromName} → ${result.floorName} for outward ${result.invoiceNo} (${order.lines} line${order.lines === 1 ? "" : "s"}).`,
             refId: order.id,
             link: `/transfers/${order.id}`,
-            data: { transferOrderId: order.id, orderNo: order.orderNo, activity: "TRANSFER" },
+            // `recordId` is what the service worker posts to /api/approvals/quick; the other
+            // two keys stay for the screens and the logs (plan 1709 §3.8, R24).
+            data: { transferOrderId: order.id, orderNo: order.orderNo, activity: "TRANSFER", recordId: order.id },
+            actions: APPROVAL_NOTIFICATION_ACTIONS,
           });
         }
       } catch (err) {
