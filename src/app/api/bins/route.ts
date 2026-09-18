@@ -5,6 +5,9 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { binSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("bins:crud");
 
 export async function GET(req: NextRequest) {
   try {
@@ -28,6 +31,7 @@ export async function GET(req: NextRequest) {
     return successResponse(bins);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("bins fetch failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Failed to fetch bins", 500);
   }
 }
@@ -55,6 +59,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ── NON-ASSEMBLABLE, AT CREATION ONLY (R42, P6, P6a) ──
+    //
+    // Items in such a bin need no building and never reach the assembly line; a unit that
+    // enters one is stamped, and `api/bins/[id]` PATCH refuses to change the flag afterwards.
+    // Read off the raw body rather than `binSchema`: that schema is shared with other callers
+    // and this is the only route that may set the flag.
+    const nonAssemblable = body?.nonAssemblable === true;
+
     const bin = await prisma.bin.create({
       data: {
         code: data.code.trim().toUpperCase(),
@@ -66,15 +78,24 @@ export async function POST(req: NextRequest) {
         zone: data.zone || null,
         capacity: data.capacity ?? null,
         isAssemblyArea: data.isAssemblyArea ?? false,
+        nonAssemblable,
         isActive: data.isActive ?? true,
       },
       include: {
         warehouse: { select: { id: true, name: true, code: true, kind: true } },
       },
     });
+    log.info("bin created", {
+      binId: bin.id,
+      code: bin.code,
+      warehouseId: bin.warehouseId,
+      nonAssemblable: bin.nonAssemblable,
+      isAssemblyArea: bin.isAssemblyArea,
+    });
     return successResponse(bin, 201);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("bin create failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Failed to create bin", 400);
   }
 }

@@ -16,9 +16,21 @@ export async function GET(req: NextRequest) {
     // WALK_IN | REGULAR | DEALER. Not validated against the enum here — an unknown value
     // simply matches nothing, which is the honest answer for a bad query string.
     const type = req.nextUrl.searchParams.get("type") || undefined;
+    // Google sync state (plan 1709, P14c): "synced" | "notSynced" | "failed". Filtering server-
+    // side is what makes "Select all not synced" mean the whole book rather than this page.
+    const google = req.nextUrl.searchParams.get("google") || undefined;
+    const googleWhere =
+      google === "synced"
+        ? { googleContactId: { not: null } }
+        : google === "failed"
+          ? { googleSyncError: { not: null } }
+          : google === "notSynced"
+            ? { googleContactId: null }
+            : {};
 
     const where = {
       ...(type && { type: type as never }),
+      ...googleWhere,
       ...(search && {
         OR: [
           { name: { contains: search, mode: "insensitive" as const } },
@@ -36,6 +48,10 @@ export async function GET(req: NextRequest) {
           // person needs to see next to a phone number.
           whatsapp: true, address: true,
           type: true, isActive: true, createdAt: true,
+          // Google Contacts sync state (plan 1709, R44, P14c). `googleContactId` is the People API
+          // resourceName — its presence IS "synced"; `googleSyncError` is the last failure, and
+          // the list shows the reason rather than a bare cross.
+          googleContactId: true, googleSyncedAt: true, googleSyncError: true,
           _count: { select: { invoices: true, payments: true } },
         },
         orderBy: { name: "asc" },

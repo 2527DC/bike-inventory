@@ -1,18 +1,20 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
-import { Search, Phone, MessageCircle, Users, MapPin, Pencil, IndianRupee } from "lucide-react";
+import {
+  Search, Phone, MessageCircle, Users, MapPin, Pencil, IndianRupee,
+  Contact, CloudUpload, Loader2, CheckCircle2, AlertTriangle,
+} from "lucide-react";
 import { useDebounce } from "@/hooks/use-debounce";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { DesktopTable, type Column } from "@/components/desktop-table";
 import { usePermissions } from "@/lib/use-permissions";
-import { apiFetchEnvelope } from "@/lib/api-client";
+import { apiFetchEnvelope, apiTry } from "@/lib/api-client";
 import { formatINR } from "@/lib/utils";
 import { createLogger } from "@/lib/logger";
 import { CustomerEditSheet, type CustomerDraft } from "./_components/customer-edit-sheet";
@@ -33,8 +35,31 @@ interface CustomerRow {
   createdAt: string;
   /** SUM(amount - paidAmount) over unpaid invoices. Computed server-side in one groupBy. */
   outstanding: number;
+  /**
+   * Google Contacts sync (plan 1709, R44, P14c). `googleContactId` is the People API
+   * resourceName — its presence IS "synced". `googleSyncError` is the last failure; it survives
+   * the toast so the reason is still readable next week.
+   */
+  googleContactId: string | null;
+  googleSyncedAt: string | null;
+  googleSyncError: string | null;
   _count: { invoices: number; payments: number };
 }
+
+interface SyncResultRow {
+  customerId: string;
+  name: string;
+  outcome: "created" | "already" | "failed";
+  reason?: string;
+}
+
+/** The Google filter chips. `notSynced` is the one that matters — it is what a sync run is for. */
+const GOOGLE_FILTERS = [
+  { key: "", label: "All" },
+  { key: "notSynced", label: "Not in Google" },
+  { key: "synced", label: "In Google" },
+  { key: "failed", label: "Sync failed" },
+];
 
 const TYPES = [
   { key: "", label: "All" },
@@ -88,10 +113,34 @@ export default function CustomersPage() {
   const [editing, setEditing] = useState<CustomerDraft | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
 
+  // ─── Google Contacts (plan 1709, R44, P14c) ───────────────────────────────────────────────
+  // The button appears only when the shop's Google account is connected AND the user may edit a
+  // customer. Both are cosmetic — the route re-checks `customers.edit` and the connection.
+  const [google, setGoogle] = useState("");
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [syncing, setSyncing] = useState(false);
+  const [syncResults, setSyncResults] = useState<SyncResultRow[] | null>(null);
+
+  useEffect(() => {
+    if (!mayEdit) return;
+    // apiTry, not fetch().json(): an expired session answers 307 -> /login -> HTML with status
+    // 200, which raw .json() turns into "Unexpected token '<'" (CLAUDE.md).
+    void apiTry<{ connected: boolean }>("/api/customers/google-sync").then((res) => {
+      if (res.error) {
+        // Not fatal — the screen simply does not offer the button.
+        log.warn("google connection unknown", { status: res.status });
+        return;
+      }
+      setGoogleConnected(!!res.data?.connected);
+    });
+  }, [mayEdit]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     const params = new URLSearchParams({ page: String(page), limit: String(PAGE_SIZE) });
+    if (google) params.set("google", google);
     // Search runs server-side: with thousands of customers, filtering a single page in the
     // browser would search only what happens to be loaded and quietly miss the rest.
     if (debouncedSearch) params.set("search", debouncedSearch);
@@ -114,11 +163,58 @@ export default function CustomersPage() {
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, type, page]);
+  }, [debouncedSearch, type, page, google]);
 
   useEffect(() => { load(); }, [load]);
   // Any filter change invalidates the current page number.
-  useEffect(() => { setPage(1); }, [debouncedSearch, type]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, type, google]);
+  // …and any reload invalidates the selection: ticked ids that are no longer on screen would
+  // otherwise be synced invisibly.
+  useEffect(() => { setSelected(new Set()); }, [debouncedSearch, type, google, page]);
+
+  const notSyncedIds = useMemo(
+    () => rows.filter((r) => !r.googleContactId).map((r) => r.id),
+    [rows]
+  );
+
+  function toggleOne(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  /**
+   * Sync the ticked customers (P14b, P14c). Scoped to what is ON SCREEN on purpose: "select all"
+   * across thousands of unseen rows is a decision nobody made, and the route caps a call at 200
+   * anyway. Filter to "Not in Google" and page through to cover the whole book.
+   */
+  async function syncToGoogle() {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    setSyncing(true);
+    setSyncResults(null);
+    const res = await apiTry<{ created: number; already: number; failed: number; results: SyncResultRow[] }>(
+      "/api/customers/google-sync",
+      { method: "POST", json: { customerIds: ids } }
+    );
+    setSyncing(false);
+    if (res.error || !res.data) {
+      log.warn("google sync failed", { status: res.status, count: ids.length });
+      setError(res.error || "Google sync failed");
+      return;
+    }
+    const { created, already, failed, results } = res.data;
+    log.info("google sync finished", { requested: ids.length, created, already, failed });
+    setSyncResults(results.filter((r) => r.outcome === "failed"));
+    setFlash(
+      `Google: ${created} added, ${already} already there${failed > 0 ? `, ${failed} failed` : ""}.`
+    );
+    setSelected(new Set());
+    load();
+  }
 
   function openEdit(c: CustomerRow) {
     setEditing({
@@ -149,6 +245,48 @@ export default function CustomersPage() {
     );
   }
 
+  /**
+   * Google state in one cell (P14c): in Google, not in Google, or failed with the reason. The
+   * reason is the `title`, so a long People API message does not wreck the column width but is
+   * still one hover away — and it is stored on the row, not only in a toast.
+   */
+  function GoogleCell({ c }: { c: CustomerRow }) {
+    if (c.googleContactId) {
+      return (
+        <span
+          className="inline-flex items-center gap-1 text-xs text-green-700"
+          title={c.googleSyncedAt ? `Synced ${new Date(c.googleSyncedAt).toLocaleString("en-IN")}` : "In Google"}
+        >
+          <CheckCircle2 className="h-3.5 w-3.5" /> In Google
+        </span>
+      );
+    }
+    if (c.googleSyncError) {
+      return (
+        <span className="inline-flex items-center gap-1 text-xs text-red-600" title={c.googleSyncError}>
+          <AlertTriangle className="h-3.5 w-3.5" />
+          <span className="truncate max-w-[10rem]">Failed</span>
+        </span>
+      );
+    }
+    return <span className="text-xs text-slate-400">Not in Google</span>;
+  }
+
+  /** The row tick, on the table and the cards. Hidden entirely when Google is not connected. */
+  function RowTick({ c }: { c: CustomerRow }) {
+    if (!showGoogle) return null;
+    return (
+      <input
+        type="checkbox"
+        checked={selected.has(c.id)}
+        onChange={() => toggleOne(c.id)}
+        onClick={(e) => e.stopPropagation()}
+        aria-label={`Select ${c.name}`}
+        className="h-4 w-4 rounded border-slate-300 accent-slate-900 focus-ring"
+      />
+    );
+  }
+
   /** Edit + receivables, shared by the table and the cards so they cannot drift apart. */
   function RowActions({ c }: { c: CustomerRow }) {
     return (
@@ -176,7 +314,19 @@ export default function CustomersPage() {
     );
   }
 
+  // The Google column, the ticks and the Sync button all hang off this one condition.
+  const showGoogle = mayEdit && googleConnected;
+
   const columns: Column<CustomerRow>[] = [
+    ...(showGoogle
+      ? [
+          {
+            header: "",
+            className: "w-8",
+            cell: (c: CustomerRow) => <RowTick c={c} />,
+          } satisfies Column<CustomerRow>,
+        ]
+      : []),
     {
       header: "Customer",
       cell: (c) => (
@@ -215,6 +365,15 @@ export default function CustomersPage() {
       className: "hidden xl:table-cell text-slate-500",
       cell: (c) => <span className="truncate block max-w-[14rem]">{c.email || "—"}</span>,
     },
+    ...(showGoogle
+      ? [
+          {
+            header: "Google",
+            className: "hidden xl:table-cell",
+            cell: (c: CustomerRow) => <GoogleCell c={c} />,
+          } satisfies Column<CustomerRow>,
+        ]
+      : []),
     {
       header: "Invoices",
       className: "text-right tabular-nums text-slate-500",
@@ -278,7 +437,7 @@ export default function CustomersPage() {
         />
       </div>
 
-      <div className="flex gap-1.5 mb-3 flex-wrap">
+      <div className="flex gap-1.5 mb-2 flex-wrap">
         {TYPES.map((t) => (
           <button
             key={t.key}
@@ -291,6 +450,66 @@ export default function CustomersPage() {
           </button>
         ))}
       </div>
+
+      {/* Google Contacts (plan 1709, R44, P14c). Filtering to "Not in Google" and paging through
+          is how the whole book is covered — the sync itself is capped at 200 a call. */}
+      {showGoogle && (
+        <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-2.5 space-y-2">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <Contact className="h-4 w-4 text-slate-500 shrink-0" />
+            {GOOGLE_FILTERS.map((g) => (
+              <button
+                key={g.key}
+                onClick={() => setGoogle(g.key)}
+                className={`min-h-[32px] px-2.5 rounded-full text-[11px] font-medium transition-colors focus-ring ${
+                  google === g.key ? "bg-slate-900 text-white" : "bg-white text-slate-600 border border-slate-200"
+                }`}
+              >
+                {g.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setSelected(new Set(notSyncedIds))}
+              disabled={notSyncedIds.length === 0}
+              className="min-h-[36px] px-3 rounded-lg text-xs font-medium bg-white border border-slate-200 text-slate-700 disabled:opacity-40 focus-ring"
+            >
+              Select all not synced ({notSyncedIds.length})
+            </button>
+            {selected.size > 0 && (
+              <button
+                onClick={() => setSelected(new Set())}
+                className="min-h-[36px] px-3 rounded-lg text-xs font-medium text-slate-500 focus-ring"
+              >
+                Clear
+              </button>
+            )}
+            <button
+              onClick={syncToGoogle}
+              disabled={syncing || selected.size === 0}
+              className="min-h-[36px] px-3 rounded-lg text-xs font-semibold bg-slate-900 text-white flex items-center gap-1.5 disabled:opacity-40 focus-ring"
+            >
+              {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CloudUpload className="h-3.5 w-3.5" />}
+              {syncing ? "Syncing…" : `Sync to Google (${selected.size})`}
+            </button>
+            <span className="text-[11px] text-slate-500">
+              Saves into the shop&apos;s Google account, so every signed-in phone sees them.
+            </span>
+          </div>
+
+          {syncResults && syncResults.length > 0 && (
+            <ul className="space-y-1">
+              {syncResults.map((r) => (
+                <li key={r.customerId} className="text-[11px] text-red-700 bg-white border border-red-200 rounded-md px-2 py-1">
+                  <span className="font-medium">{r.name}</span>: {r.reason}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <SkeletonList />
@@ -316,6 +535,11 @@ export default function CustomersPage() {
               <Card key={c.id} className={c.isActive ? "" : "opacity-60"}>
                 <CardContent className="p-3">
                   <div className="flex items-start gap-3">
+                    {showGoogle && (
+                      <div className="pt-1 shrink-0">
+                        <RowTick c={c} />
+                      </div>
+                    )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <p className="text-sm font-semibold text-slate-900 break-words">{c.name}</p>
@@ -354,6 +578,12 @@ export default function CustomersPage() {
                         {" · "}
                         {c._count.payments} payment{c._count.payments === 1 ? "" : "s"}
                       </p>
+
+                      {showGoogle && (
+                        <p className="mt-1">
+                          <GoogleCell c={c} />
+                        </p>
+                      )}
                     </div>
 
                     <div className="text-right shrink-0">

@@ -72,6 +72,19 @@ export interface DeliveryData {
    * snapshot from import, else null ("Payment: not available").
    */
   payment: DeliveryPaymentData | null;
+
+  // ─── Plan 1709 (R16, R19–R21, R26a) ──────────────────────────────────────────────────────
+  /** ★ set = starred. Its cycles are built and moved first; units in the godown are held for it. */
+  priorityAt: string | null;
+  priorityById: string | null;
+  /** Outbound approval. `approved` is SERVER-DERIVED — a return after an approval revokes it. */
+  approvalRequestedAt: string | null;
+  approvalRequestedById: string | null;
+  approvedAt: string | null;
+  approvedById: string | null;
+  approvalReturnedAt: string | null;
+  approvalNote: string | null;
+  approved: boolean;
 }
 
 export interface DeliveryPaymentData {
@@ -92,12 +105,39 @@ export function isOutstationDelivery(d: Pick<DeliveryData, "deliveryZone" | "isO
   return d.deliveryZone === "OUTSTATION" || d.isOutstation;
 }
 
-/** One line the floor warehouse cannot hold or hand over (plan 1609 §1.3). */
+/** Where a short product actually is — the same store's godowns (plan 1709, R12, R13). */
+export interface StockElsewhere {
+  warehouseId: string;
+  warehouseName: string;
+  kind: "FLOOR" | "GODOWN";
+  quantity: number;
+}
+
+/** One line the floor warehouse cannot hold or hand over (plan 1609 §1.3, plan 1709 R13). */
 export interface StockShortLine {
   name: string;
   sku: string;
   available: number;
   needed: number;
+  /** The godown quantities the warning names. Absent on a response from before plan 1709. */
+  elsewhere?: StockElsewhere[];
+  productId?: string;
+}
+
+/** Statuses at which the outbound approval is required (plan 1709, R26a). Walk-out needs none. */
+export const APPROVAL_GATED_STATUSES = ["OUT_FOR_DELIVERY", "SHIPPED"];
+
+/**
+ * Where the approval stands, for the banner and the buttons. Derived from the row so the detail
+ * screen, the walk-out screen and the dispatch buttons cannot tell three different stories.
+ */
+export function approvalState(
+  d: Pick<DeliveryData, "approved" | "approvalRequestedAt" | "approvalReturnedAt">
+): "approved" | "returned" | "requested" | "none" {
+  if (d.approved) return "approved";
+  if (d.approvalReturnedAt) return "returned";
+  if (d.approvalRequestedAt) return "requested";
+  return "none";
 }
 
 /** Statuses in which a delivery's stock is expected to be held on the floor (T5). */

@@ -15,9 +15,18 @@ import {
   holdDeliveryStock,
   releaseDeliveryStock,
   deductDeliveryFromFloor,
+  floorShortForDispatch,
+  shortRefusalMessage,
+  FloorShortError,
   isDummy,
   type ShortLine,
 } from "@/lib/deliveries/floor-stock";
+import { notifyTransferNeeded } from "@/lib/deliveries/transfer-needed";
+import {
+  APPROVAL_GATED_STATUSES,
+  approvalRefusal,
+  isDeliveryApproved,
+} from "@/lib/approvals/actions/delivery";
 import {
   slotRefusal,
   SLOT_REFUSAL_MESSAGE,
@@ -125,6 +134,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       ...delivery,
       zohoBalance: decimalToNumber(delivery.zohoBalance),
       isDummy: isDummy(delivery),
+      // Plan 1709, R26a: derived, never stored. A return after an approval revokes it, so the
+      // screen must not read `approvedAt` on its own — the comparison lives in one place.
+      approved: isDeliveryApproved(delivery),
       paymentStatus,
       payment,
     });
@@ -143,8 +155,17 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let deliveryId: string | undefined;
+
+  // Plan 1709, R14: a shortage tells every holder of `transfers.create`. These three live OUTSIDE
+  // the try because a REFUSED handover or dispatch rolls the transaction back and is reported
+  // from the catch — and the shortage is a real fact whether the status change stood or not.
+  let notifyShort: ShortLine[] = [];
+  let userId: string | undefined;
+  const deliveryRef = { id: "", invoiceNo: "", warehouse: null as { name: string } | null };
+
   try {
     const user = await requireFeature("deliveries", "edit");
+    userId = user.id;
     const { id } = await params;
     deliveryId = id;
     const body = await req.json();
@@ -160,6 +181,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     // Lines a SCHEDULED / PACKED move could not hold (A26, A37). The move is still accepted.
     let stockShort: ShortLine[] = [];
+    deliveryRef.id = id;
 
     // Set when a staff phone edit dropped the saved customer; logged once the write commits.
     let unlinkedCustomerId: string | null = null;
@@ -171,6 +193,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         include: { warehouse: { select: { name: true } } },
       });
       if (!existing) throw new DeliveryActionError("Delivery not found", 404);
+      deliveryRef.invoiceNo = existing.invoiceNo;
+      deliveryRef.warehouse = existing.warehouse;
 
       // A Dummy (no floor warehouse matched the invoice prefix) takes no action at all (A41b,
       // A41c, T2). DELETE is the only exception and lives in its own handler.
@@ -227,6 +251,34 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         const outstation = existing.deliveryZone === "OUTSTATION" || existing.isOutstation;
         if (data.status === "SHIPPED" && outstation && !existing.courierTrackingNo && !data.courierTrackingNo) {
           throw new Error("Tracking number is required for outstation shipments before marking as Shipped");
+        }
+
+        // ─── Plan 1709: the two gates before an outward leaves the building ────────────────
+        //
+        // 1. APPROVAL (R26a, Q16). OUT_FOR_DELIVERY and SHIPPED need an approval that has not
+        //    since been returned. A WALK_OUT needs none — the customer is standing there — and a
+        //    Dummy never reaches here, having been refused above (Q37).
+        if (APPROVAL_GATED_STATUSES.includes(data.status) && !isDeliveryApproved(existing)) {
+          log.warn("dispatch refused: not approved", {
+            deliveryId: existing.id,
+            invoiceNo: existing.invoiceNo,
+            status: data.status,
+          });
+          throw new DeliveryActionError(approvalRefusal(existing), 409);
+        }
+
+        // 2. STOCK (R13). New at OUT_FOR_DELIVERY: held, or the floor's usable quantity covers
+        //    every line. Scheduling is still never blocked (A26/A37) — this is the hard block,
+        //    and it names where the stock actually is.
+        if (data.status === "OUT_FOR_DELIVERY") {
+          const short = await floorShortForDispatch(tx, existing);
+          if (short.length > 0) {
+            notifyShort = short;
+            throw new DeliveryActionError(
+              shortRefusalMessage(short, existing.warehouse?.name ?? "the floor warehouse"),
+              409
+            );
+          }
         }
       }
 
@@ -319,6 +371,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           const hold = await holdDeliveryStock(tx, existing);
           if (!hold.held) {
             stockShort = hold.short;
+            // R14: tell the people who can move stock. Sent after this transaction commits.
+            notifyShort = hold.short;
             log.warn("hold short — status accepted without a hold", {
               deliveryId: existing.id,
               invoiceNo: existing.invoiceNo,
@@ -398,6 +452,13 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     // stock, and nothing is sent if the transaction threw.
     after(() => maybeNotifyBelowReorder(crossings));
 
+    // R14: the floor could not hold this outward, but the status change stood. Everyone holding
+    // `transfers.create` is told, minus the person who just saw it on screen.
+    if (notifyShort.length > 0) {
+      const short = notifyShort;
+      after(() => notifyTransferNeeded({ ...deliveryRef, invoiceNo: result.invoiceNo, warehouse: result.warehouse }, short, user.id));
+    }
+
     if (unlinkedCustomerId) {
       log.warn("customer phone changed — saved customer unlinked", {
         deliveryId: result.id,
@@ -425,6 +486,14 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       payment,
     });
   } catch (error) {
+    // R14: a REFUSED handover or dispatch rolled the transaction back, but the shortage it found
+    // is real — the stock is not on the floor. Raise the transfer push from here, once the
+    // rollback is done. `after()` is safe on the error path too: it runs after the response.
+    const refusalShort = error instanceof FloorShortError ? error.short : notifyShort;
+    if (refusalShort.length > 0 && deliveryRef.invoiceNo) {
+      after(() => notifyTransferNeeded(deliveryRef, refusalShort, userId));
+    }
+
     if (error instanceof AuthError) {
       log.warn("delivery update refused", { deliveryId, status: error.status });
       return errorResponse(error.message, error.status);
@@ -466,11 +535,25 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
 
       // Give back the floor hold, if any. No-op when nothing is held or on a Dummy.
       await releaseDeliveryStock(tx, existing);
+
+      // Plan 1709, R16/R21: and the physical units a ★ held for it. `reservedForDeliveryId` is
+      // SetNull, so the delete would clear the column anyway — but `reservedAt` would be left
+      // behind, and a unit reading "held since Tuesday, for nobody" is a lie the Awaiting list
+      // would show. Clearing both here keeps the pair honest.
+      const { count: unheld } = await tx.inventoryUnit.updateMany({
+        where: { reservedForDeliveryId: id },
+        data: { reservedForDeliveryId: null, reservedAt: null },
+      });
+
       await tx.delivery.delete({ where: { id } });
-      return { invoiceNo: existing.invoiceNo };
+      return { invoiceNo: existing.invoiceNo, unheld };
     });
 
-    log.info("delivery deleted", { deliveryId: id, invoiceNo: deleted.invoiceNo });
+    log.info("delivery deleted", {
+      deliveryId: id,
+      invoiceNo: deleted.invoiceNo,
+      unitsReleased: deleted.unheld,
+    });
     return successResponse({ deleted: true });
   } catch (error) {
     if (error instanceof AuthError) {

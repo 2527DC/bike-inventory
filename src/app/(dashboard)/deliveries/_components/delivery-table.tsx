@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
 import { DesktopTable } from "@/components/desktop-table";
 import { isDummyDelivery, ZoneBadge, type DeliveryItem } from "./delivery-card";
+import { PriorityStar } from "../[id]/_components/priority-star";
 
 interface DeliveryTableProps {
   deliveries: DeliveryItem[];
@@ -19,11 +20,14 @@ interface DeliveryTableProps {
   onDelete: (id: string) => void;
   onPrebook: (delivery: DeliveryItem) => void;
   onMarkReady: (id: string) => void;
+  /** `delivery_priority.edit` (plan 1709, R19, Q21). Cosmetic — the route re-checks. */
+  canStar?: boolean;
+  onStarChanged?: () => void;
 }
 
 const inr = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
 
-export function DeliveryTable({ deliveries, isAdmin, deleting, prebooking, onDelete, onPrebook, onMarkReady }: DeliveryTableProps) {
+export function DeliveryTable({ deliveries, isAdmin, deleting, prebooking, onDelete, onPrebook, onMarkReady, canStar = false, onStarChanged }: DeliveryTableProps) {
   return (
     <DesktopTable
       className="hidden lg:block"
@@ -32,6 +36,23 @@ export function DeliveryTable({ deliveries, isAdmin, deleting, prebooking, onDel
       rowHref={(d) => `/deliveries/${d.id}`}
       emptyText="No deliveries found"
       columns={[
+        // ★ in its own narrow column, so the eye finds the priority jobs down one line.
+        ...(canStar || deliveries.some((d) => d.priorityAt)
+          ? [
+              {
+                header: "",
+                className: "w-10",
+                cell: (d: DeliveryItem) => (
+                  <PriorityStar
+                    deliveryId={d.id}
+                    priorityAt={d.priorityAt ?? null}
+                    canEdit={canStar && !isDummyDelivery(d)}
+                    onChanged={() => onStarChanged?.()}
+                  />
+                ),
+              },
+            ]
+          : []),
         { header: "Invoice", cell: (d) => (
           <div>
             <div className="flex items-center gap-1.5">

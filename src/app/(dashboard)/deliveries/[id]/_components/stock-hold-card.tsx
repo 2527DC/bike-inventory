@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 import { DeliveryData, StockShortLine, isStockNotReserved } from "./types";
+import { FindStockPanel } from "./find-stock-panel";
 
 const log = createLogger("deliveries:stock-hold");
 
@@ -80,9 +81,18 @@ export function StockHoldCard({ data, deliveryId, knownShort, onReserved }: Stoc
                   <p className="text-xs font-medium text-slate-900 truncate" title={l.name}>{l.name}</p>
                   <p className="text-[11px] text-slate-500 truncate">{l.sku}</p>
                 </div>
-                <p className="text-xs font-semibold text-red-700 tabular-nums shrink-0">
-                  {l.available} / {l.needed}
-                </p>
+                <div className="text-right shrink-0">
+                  <p className="text-xs font-semibold text-red-700 tabular-nums">
+                    {l.available} / {l.needed}
+                  </p>
+                  {/* Plan 1709, R13: the warning names the GODOWN quantity, so the answer
+                      ("transfer it from there") is on the screen and not only in someone's head. */}
+                  {l.elsewhere && l.elsewhere.length > 0 && (
+                    <p className="text-[10px] text-slate-500 tabular-nums">
+                      {l.elsewhere.map((e) => `${e.quantity} in ${e.warehouseName}`).join(" · ")}
+                    </p>
+                  )}
+                </div>
               </li>
             ))}
             <li className="text-[11px] text-red-600">available / needed on {floorName}</li>
@@ -99,6 +109,10 @@ export function StockHoldCard({ data, deliveryId, knownShort, onReserved }: Stoc
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
           {loading ? "Reserving..." : "Reserve stock now"}
         </button>
+
+        {/* R45: when the floor and its godown cannot cover it, look further — every store's
+            floors and godowns — and raise the transfer from what is found. */}
+        <FindStockPanel deliveryId={deliveryId} onRaised={onReserved} />
       </CardContent>
     </Card>
   );

@@ -1,5 +1,19 @@
-// Copy the Zoho integration credentials from one LOCAL database into another, so a
+// Copy the integration credentials from one LOCAL database into another, so a
 // `prisma migrate reset` does not cost you a re-connect through Settings > Integrations.
+//
+// EVERY row of `integration_config` is copied, not only the Zoho family: since 18 Sep 2026 that
+// also means `google_contacts` (plan 1709, R44, P14a), whose row holds a Google OAuth client
+// secret and refresh token. The script is provider-agnostic on purpose — a new integration must
+// not need a code change here — but the consequence is worth stating: what this moves is a live
+// Google grant on the shop's contacts, and the localhost guard below is the only thing between
+// that grant and a cloud database.
+//
+// ⚠ NOT the "restore from a production snapshot" path. CLAUDE.md migrations rule 10 describes an
+// `npm run db:restore:local` that NULLS the stored Zoho, storage and SMTP credentials and deletes
+// push devices. That script does not exist in this repository yet. When it is written it must
+// null `google_contacts`.`clientSecret`, `refreshToken` and `accessToken` and set `isConnected`
+// false alongside the others — a restored snapshot otherwise carries a working write grant on the
+// shop's Google contacts onto a developer's machine.
 //
 // Why this is a script and not a seed: a seed file lives in git. `integration_config` holds
 // clientSecret, refreshToken and accessToken in PLAINTEXT (schema.prisma:988-1003), and a

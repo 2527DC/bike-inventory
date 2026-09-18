@@ -3,10 +3,14 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { requireAuth, requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
+import { z } from "zod";
 import { computeActions } from "@/lib/transfers/actions";
 import { EWAY_BILL_THRESHOLD } from "@/lib/transfers/policy";
+import { transferItemSchema, validateTransferItems, isRefusal } from "@/lib/transfers/items";
+import { warehouseById } from "@/lib/warehouses";
+import { logActivity } from "@/lib/activity-log";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("transfer-orders:detail");
@@ -72,10 +76,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
     if (!order) return errorResponse("Transfer order not found", 404);
 
-    const [canApprove, canEdit, canDelete, canSeeCost] = await Promise.all([
+    const [canApprove, canEdit, canDelete, canCreate, canSeeCost] = await Promise.all([
       userCan(user.id, "transfers", "approve"),
       userCan(user.id, "transfers", "edit"),
       userCan(user.id, "transfers", "delete"),
+      userCan(user.id, "transfers", "create"),
       userCan(user.id, "cost_price", "view"),
     ]);
 
@@ -110,6 +115,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         canApprove,
         canEdit,
         canDelete,
+        canCreate,
       },
     });
 
@@ -142,5 +148,155 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const message = error instanceof Error ? error.message : "Failed to load this transfer";
     log.error("transfer detail failed", { message });
     return errorResponse(message, 500);
+  }
+}
+
+const patchSchema = z.object({
+  items: z.array(transferItemSchema).min(1, "At least one item is required"),
+  notes: z.string().max(1000).optional(),
+});
+
+/**
+ * PATCH: fix a RETURNED transfer and leave it ready to resubmit (R25, Q36).
+ *
+ * ─── WHY THERE WAS NO EDIT ROUTE BEFORE, AND WHY THIS ONE IS SAFE ─────────────────────────
+ *
+ * A transfer order has never been editable after create. That was right while Reject was
+ * terminal: the only way back was a NEW order, and an order whose lines could change under an
+ * approver would make approval meaningless. R25 replaces Reject with RETURNED — the creator
+ * fixes the SAME record — so exactly one status accepts an edit, and it is the one status in
+ * which nobody has agreed to anything and no stock has moved.
+ *
+ * `status: "RETURNED"` is therefore in the WHERE of every write below, not only in an `if`
+ * above them. An order approved a moment ago by somebody else cannot have its lines rewritten
+ * by a PATCH that read the row a second earlier.
+ *
+ * The lines are REPLACED, not merged. A returned order is being re-stated, and merging would
+ * leave a line the creator deleted on a record they believe they corrected. The same four
+ * checks `POST /api/transfer-orders` applies run first (`src/lib/transfers/items.ts`).
+ *
+ * The lane (`mode`, the two warehouses, `requiredDocType`) is NOT editable. Changing it would
+ * change which document the transfer needs and which building the stock leaves, which is a
+ * different transfer — cancel this one and raise that.
+ */
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  try {
+    // Not `requireFeature`: the two people who may do this are the creator — who needs no
+    // further grant to correct their own returned request — and anyone holding
+    // `transfers.create`, so a colleague can fix it while the creator is off the floor.
+    const user = await requireAuth();
+    const body = await req.json();
+    const data = patchSchema.parse(body);
+
+    const order = await prisma.transferOrder.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        orderNo: true,
+        status: true,
+        createdById: true,
+        fromWarehouseId: true,
+        toWarehouseId: true,
+      },
+    });
+    if (!order) return errorResponse("Transfer order not found", 404);
+
+    const canCreate = await userCan(user.id, "transfers", "create");
+    if (!canCreate && order.createdById !== user.id) {
+      return errorResponse("You can only edit a transfer you raised.", 403);
+    }
+
+    if (order.status !== "RETURNED") {
+      log.warn("transfer edit refused by status", { orderId: id, status: order.status, userId: user.id });
+      return errorResponse(
+        `This transfer is ${order.status.toLowerCase().replace(/_/g, " ")}. Only a returned transfer can be edited.`,
+        409
+      );
+    }
+
+    if (!order.fromWarehouseId || !order.toWarehouseId) {
+      return errorResponse(
+        "This transfer has no route recorded, so its lines cannot be edited. Cancel it and raise it again from /transfers/new.",
+        400
+      );
+    }
+    const [fromWh, toWh] = await Promise.all([
+      warehouseById(order.fromWarehouseId),
+      warehouseById(order.toWarehouseId),
+    ]);
+    if (!fromWh || !toWh) {
+      return errorResponse("This transfer's route is no longer an active warehouse pair.", 400);
+    }
+
+    const lineCheck = await validateTransferItems({
+      items: data.items,
+      fromWh,
+      toWh,
+      context: { orderId: order.id, orderNo: order.orderNo },
+    });
+    if (isRefusal(lineCheck)) return errorResponse(lineCheck.error, lineCheck.status);
+    const { binTrackingEnabled } = lineCheck;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      // The claim is what makes the status check real — see the header.
+      const claim = await tx.transferOrder.updateMany({
+        where: { id, status: "RETURNED" },
+        data: { notes: data.notes ?? undefined },
+      });
+      if (claim.count !== 1) return null;
+
+      await tx.transferOrderItem.deleteMany({ where: { transferOrderId: id } });
+      await tx.transferOrderItem.createMany({
+        data: data.items.map((item) => ({
+          transferOrderId: id,
+          productId: item.productId,
+          quantity: item.quantity,
+          fromBinId: binTrackingEnabled ? item.fromBinId ?? null : null,
+          toBinId: binTrackingEnabled ? item.toBinId ?? null : null,
+          // Mirrored from the header, as at create.
+          fromWarehouseId: fromWh.id,
+          toWarehouseId: toWh.id,
+        })),
+      });
+
+      await logActivity(tx, {
+        module: "transfers",
+        action: "edited",
+        entityType: "TransferOrder",
+        entityId: order.id,
+        entityRef: order.orderNo,
+        fromValue: "RETURNED",
+        toValue: "RETURNED",
+        details: `${data.items.length} line${data.items.length === 1 ? "" : "s"} after a return`,
+        userId: user.id,
+        userName: user.name,
+      });
+
+      return tx.transferOrder.findUnique({
+        where: { id },
+        select: { id: true, orderNo: true, status: true },
+      });
+    });
+
+    if (!updated) {
+      return errorResponse("This transfer is no longer returned, so it cannot be edited.", 409);
+    }
+
+    log.info("returned transfer edited", {
+      orderId: order.id,
+      orderNo: order.orderNo,
+      lines: data.items.length,
+      userId: user.id,
+    });
+    return successResponse({ message: "Transfer updated. Resubmit it when you are ready.", ...updated });
+  } catch (error) {
+    if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof z.ZodError) {
+      return errorResponse(error.issues[0]?.message ?? "Invalid transfer order", 400);
+    }
+    const message = error instanceof Error ? error.message : "Failed to update this transfer";
+    log.error("transfer edit failed", { orderId: id, message });
+    return errorResponse(message, 400);
   }
 }

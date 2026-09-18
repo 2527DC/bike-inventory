@@ -15,6 +15,7 @@ import {
   getStoreQtyMap,
 } from "@/lib/stock-location";
 import { logActivity } from "@/lib/activity-log";
+import { recordApprovalEvent } from "@/lib/approvals/events";
 import { syncWarehouseUnits, adjustWarehouseUnits } from "@/lib/units";
 import { createLogger } from "@/lib/logger";
 
@@ -178,10 +179,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       if (!canApprove) {
         return errorResponse("You do not have permission to approve or reject stock counts", 403);
       }
-      // Separation of duties: counting your own work and signing it off are two jobs.
-      if (isAssignee) {
-        return errorResponse("You cannot approve or reject your own stock count", 403);
-      }
+      // ─── THE SELF-APPROVAL BLOCK IS GONE (plan 1709, R23, Q15) ────────────────────────
+      //
+      // It used to refuse here: "You cannot approve or reject your own stock count."
+      // Separation of duties is a good instinct and the wrong rule for this shop. The owner's
+      // answer to Q15 is that ANYONE whose role holds `approve` may approve, INCLUDING their
+      // own record — a store with two people on shift cannot wait for a third to sign off a
+      // count that is already done, and the practical effect of the block was audits sitting
+      // COMPLETED for days, which is worse evidence than one signed by its counter.
+      //
+      // What did NOT change: `approve` is still a grant an admin decides who holds, applying
+      // the counts to live stock still needs `stock_correction.approve` below, and every
+      // approval writes an ApprovalEvent naming the approver — so a person signing off their
+      // own work is recorded as having done exactly that, and the approver-error rate (R26)
+      // counts corrections against them like anybody else's.
     } else if (!isAssignee) {
       // Starting, counting and completing belong to the person doing the counting — an
       // approver reaching in would overwrite the counter's numbers under their name.
@@ -461,6 +472,34 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           summary.changed += 1;
           summary.netUnits += delta;
 
+          // ── EVERY CORRECTION IS EVIDENCE (plan 1709, R26) ──────────────────────────────
+          //
+          // One CORRECTED event per line the count actually moved. This is the raw material of
+          // the approver-error rate: `api/approvals/error-rate` matches each of these back to
+          // the most recent APPROVED inbound or transfer for the same product (and place, when
+          // one is recorded) inside the rule's window, and counts it against THAT approver.
+          //
+          // `approverId` is deliberately NULL here. The person to blame is not known at this
+          // moment and must not be guessed at — it is certainly not the auditor, who found the
+          // mistake. Leaving the match to read time is also what makes `windowDays` a setting
+          // that can be changed and re-applied to history; had it been resolved here, changing
+          // 7 days to 1 would only affect corrections made after the change.
+          //
+          // `warehouseId` is null on a WHOLE-STORE audit: a store-wide shortage is taken from
+          // several warehouses in picker order, so no single place is the honest answer.
+          await recordApprovalEvent(tx, {
+            activity: "STOCK_AUDIT",
+            event: "CORRECTED",
+            recordId: id,
+            recordRef: existing.countNo ?? existing.title,
+            actorId: user.id,
+            approverId: null,
+            productId: product.id,
+            warehouseId: target.scope === "warehouse" ? target.warehouseId : null,
+            quantity: delta,
+            note: `counted ${counted}, system held ${live}`,
+          });
+
           const label = `${product.name} (${product.sku})`;
           const recordUnits = (r: { created: number; retired: Array<{ unitCode: string }> }) => {
             summary.units.created += r.created;
@@ -570,6 +609,27 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           data.status === "APPROVED" ? "approved"
           : data.status === "REJECTED" ? "rejected"
           : "status_changed";
+
+        // The approval itself, as an event (R22, R26). `approverId` is the actor on APPROVED —
+        // this is the row a later correction of THIS audit's own numbers would be counted
+        // against — and null on REJECTED, where nothing was approved (see events.ts).
+        if (data.status === "APPROVED" || data.status === "REJECTED") {
+          await recordApprovalEvent(tx, {
+            activity: "STOCK_AUDIT",
+            event: data.status === "APPROVED" ? "APPROVED" : "REJECTED",
+            recordId: id,
+            recordRef: existing.countNo ?? existing.title,
+            actorId: user.id,
+            approverId: data.status === "APPROVED" ? user.id : null,
+            warehouseId: existing.warehouseId,
+            note:
+              data.status === "REJECTED"
+                ? data.rejectionReason || null
+                : correctionTarget
+                  ? `applied to stock at ${correctionTarget.name}`
+                  : "verify only",
+          });
+        }
         await logActivity(tx, {
           module: "stock_audit",
           action,

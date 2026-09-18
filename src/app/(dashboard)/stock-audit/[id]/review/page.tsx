@@ -177,10 +177,10 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
 
   const isAssignee = currentUserId !== undefined && data.assignedToId === currentUserId;
   const isWholeStore = Boolean(data.storeId) && !data.warehouseId;
-  // Not until the session has resolved: before that `isAssignee` is false for everyone, and
-  // the assignee would see the approve card flash for a moment. The API refuses them anyway.
-  const mayApproveHere =
-    currentUserId !== undefined && data.status === "COMPLETED" && canApprove && !isAssignee;
+  // `!isAssignee` dropped (plan 1709, R23, Q15): holding `approve` is what decides this, and it
+  // now includes your own audit — the API's self-block went with it. `currentUserId` is still
+  // waited for, because the "you counted this" note below reads it.
+  const mayApproveHere = data.status === "COMPLETED" && canApprove;
 
   // What stock in the scope is NOW, per line. The items route sends `liveQty`; a response
   // without it (an older server) falls back to the snapshot so nothing renders undefined.
@@ -369,7 +369,8 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
       {/* The approver's choice, then Approve / Reject */}
       {data.status === "COMPLETED" && canApprove && isAssignee && (
         <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-2.5 mb-3">
-          You counted this audit. Someone else must approve it.
+          You counted this audit. You may approve it yourself — your name is recorded as both
+          counter and approver.
         </p>
       )}
       {mayApproveHere && (

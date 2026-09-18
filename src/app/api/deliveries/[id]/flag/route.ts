@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { isDummy } from "@/lib/deliveries/floor-stock";
+import { recordApprovalEvent } from "@/lib/approvals/events";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("deliveries:api");
@@ -12,7 +13,7 @@ const log = createLogger("deliveries:api");
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let deliveryId: string | undefined;
   try {
-    await requireFeature("deliveries", "create");
+    const user = await requireFeature("deliveries", "create");
     const { id } = await params;
     deliveryId = id;
     const body = await req.json();
@@ -33,13 +34,30 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return errorResponse("Can only flag PENDING deliveries", 400);
     }
 
-    const updated = await prisma.delivery.update({
-      where: { id },
-      data: {
-        status: "FLAGGED",
-        flagReason: reason,
-        flaggedAt: new Date(),
-      },
+    // Plan 1709, R26: a flag on an APPROVED outward is evidence against the approval, so the
+    // flag and its event commit together (approvals/events.ts) — if the event cannot be written
+    // the flag does not happen either. `approverId` is the person who approved it, not the
+    // person raising the flag, because that is whose judgement the error rate counts.
+    const updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.delivery.update({
+        where: { id },
+        data: {
+          status: "FLAGGED",
+          flagReason: reason,
+          flaggedAt: new Date(),
+        },
+      });
+      await recordApprovalEvent(tx, {
+        activity: "OUTBOUND",
+        event: "FLAGGED",
+        recordId: id,
+        recordRef: row.invoiceNo,
+        actorId: user.id,
+        approverId: row.approvedById,
+        warehouseId: row.warehouseId,
+        note: reason,
+      });
+      return row;
     });
 
     // Get alert config for WhatsApp numbers

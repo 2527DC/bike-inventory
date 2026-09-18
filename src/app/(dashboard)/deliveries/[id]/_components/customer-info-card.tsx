@@ -8,6 +8,7 @@
 // as written (A3), so the length hint warns but never blocks.
 
 import { useState } from "react";
+import Link from "next/link";
 import { Phone, MapPin, CheckCircle2, Loader2, UserPlus } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -110,10 +111,22 @@ export function CustomerInfoCard({ data, onSaved }: CustomerInfoCardProps) {
             </p>
           )}
           {saved && (
-            <p className="flex items-center gap-1.5 text-xs font-medium text-green-700">
-              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-              <span className="min-w-0 break-words">{savedText}</span>
-            </p>
+            <>
+              <p className="flex items-center gap-1.5 text-xs font-medium text-green-700">
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 break-words">{savedText}</span>
+              </p>
+              {/* Plan 1709, R44, P14c/P14d: Save Customer stays APP-ONLY. Google is never called
+                  from the counter, so it can never slow down or block a sale — the phone book is
+                  filled from /customers, deliberately and in batches. One hint line, no button. */}
+              <p className="text-[11px] text-slate-500">
+                To put this number on the shop phones, tick it on{" "}
+                <Link href="/customers" className="underline">
+                  Customers
+                </Link>{" "}
+                and press Sync to Google.
+              </p>
+            </>
           )}
         </CardContent>
       </Card>

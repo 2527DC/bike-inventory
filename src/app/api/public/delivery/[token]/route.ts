@@ -1,13 +1,19 @@
 export const dynamic = "force-dynamic";
 
-import { NextRequest } from "next/server";
+export const runtime = "nodejs";
+// nodejs, explicitly: a short self-fill submit raises `stock.transfer_needed` through notify(),
+// which reaches SMTP (a raw socket on 587) and the FCM JWT signer (node crypto). Neither works on
+// the edge runtime, and the failure there is not self-explanatory.
+
+import { NextRequest, after } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { createLogger } from "@/lib/logger";
 import { toPlus91, isValidMobile, samePhone } from "@/lib/phone";
 import { slotRefusal, SLOT_REFUSAL_MESSAGE, istDayBounds, isDateString } from "@/lib/deliveries/slots";
-import { holdDeliveryStock, isDummy } from "@/lib/deliveries/floor-stock";
+import { holdDeliveryStock, isDummy, type ShortLine } from "@/lib/deliveries/floor-stock";
+import { notifyTransferNeeded } from "@/lib/deliveries/transfer-needed";
 import { zoneColumns, zoneFromOutstation } from "@/lib/deliveries/zone";
 
 /**
@@ -233,19 +239,34 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ toke
           stockReservedAt: true,
           scheduledDate: true,
           isOutstation: true,
+          warehouse: { select: { name: true } },
         },
       });
 
       // Never fails on a shortage (A26); the outcome is for staff screens, not the customer.
       const hold = await holdDeliveryStock(tx, updated);
-      return { updated, held: hold.held, shortLines: hold.short.length };
+      return { updated, held: hold.held, short: hold.short };
     });
+
+    // Plan 1709, R14: the customer scheduled themselves and the floor could not cover it. The
+    // people who can move stock are told; the customer sees nothing but a confirmation. No actor
+    // to exclude — nobody signed in — and STILL no permission check on this route, which is
+    // public by design (CLAUDE.md "Routes that must stay public").
+    if (result.short.length > 0) {
+      const short: ShortLine[] = result.short;
+      const ref = {
+        id: result.updated.id,
+        invoiceNo: result.updated.invoiceNo,
+        warehouse: result.updated.warehouse,
+      };
+      after(() => notifyTransferNeeded(ref, short));
+    }
 
     log.info("self-fill submitted: scheduled", {
       deliveryId: result.updated.id,
       outstation: result.updated.isOutstation,
       stockHeld: result.held,
-      shortLines: result.shortLines,
+      shortLines: result.short.length,
     });
     return successResponse({ saved: true, scheduledDate: result.updated.scheduledDate });
   } catch (error) {

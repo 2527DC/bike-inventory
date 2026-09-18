@@ -13,7 +13,9 @@ import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
 import { resolveWarehouse, primaryFloorWarehouse } from "@/lib/warehouses";
 import { adjustWarehouseQty, deductAnywhere } from "@/lib/stock-location";
 import { inboundReceiveLineSchema, inboundCategorySchema } from "@/lib/validations";
-import { createUnits, retireUnits } from "@/lib/units";
+import { BinMoveRefused, createUnits, placeUnitsInBin, retireUnits } from "@/lib/units";
+import { matchHomeBin } from "@/lib/bins/rule-match";
+import { recordApprovalEvent } from "@/lib/approvals/events";
 import { logActivity } from "@/lib/activity-log";
 import { finaliseDelivered, scheduleDeliveredSideEffects } from "@/lib/inbound/complete-shipment";
 import { createLogger } from "@/lib/logger";
@@ -234,6 +236,10 @@ export async function PUT(
         }
       }
 
+      // Set inside the transaction when the home-bin rules placed the units (P4); read after it
+      // for the log line and the response, so the screen can say where they went.
+      let ruleBinCode: string | null = null;
+
       const outcome = await prisma.$transaction(async (tx) => {
         // ── THE IDEMPOTENT CLAIM ──
         //
@@ -297,7 +303,7 @@ export async function PUT(
           // non-assemblable when the bin is (P6b) — and the bin's stock is recounted from its
           // units (P11); without one they are RECEIVED and wait in "Unmatched Inbound".
           // `sourceTransactionId` ties them to this INWARD row so a cleanup can find them (P4).
-          await createUnits(tx, {
+          const newUnitIds = await createUnits(tx, {
             productId: matchedProduct.id,
             warehouseId: warehouse.id,
             qty,
@@ -318,6 +324,36 @@ export async function PUT(
                 movedById: user.id,
               },
             });
+          } else if (binTrackingEnabled && newUnitIds.length > 0) {
+            // ── RULE-BASED INWARD (plan 1709, P4 (2)) ──
+            //
+            // Nobody picked a bin, so the home-bin rules decide: brand · category · subcategory
+            // for this warehouse. The point is R42 — an item whose rule bin needs no assembly is
+            // non-assemblable FROM THE MOMENT IT ARRIVES, because `placeUnitsInBin` stamps it.
+            // A hand-picked bin always wins; this branch only runs when there was none.
+            //
+            // Only while bin tracking is on. With it off the building holds stock per warehouse
+            // and the line is meant to wait in "Unmatched Inbound" for a person to place it.
+            const match = await matchHomeBin(tx, {
+              productId: matchedProduct.id,
+              warehouseId: warehouse.id,
+            });
+            if (match) {
+              await placeUnitsInBin(tx, newUnitIds, match.bin.id);
+              await tx.product.update({ where: { id: matchedProduct.id }, data: { binId: match.bin.id } });
+              await tx.binMovementLog.create({
+                data: {
+                  warehouseId: warehouse.id,
+                  productId: matchedProduct.id,
+                  quantity: qty,
+                  fromBinId: null,
+                  toBinId: match.bin.id,
+                  reason: `Inbound receiving — home bin rule (${match.label})`,
+                  movedById: user.id,
+                },
+              });
+              ruleBinCode = match.bin.code;
+            }
           }
 
           // Auto-create delivery for pre-booked items so outwards clerk can see it
@@ -434,6 +470,7 @@ export async function PUT(
         qty,
         warehouseId: warehouse.id,
         binId,
+        ruleBinCode,
         unitsCreated: outcome.updated ? qty : 0,
         alreadyReceived: outcome.alreadyReceived,
         shipmentDelivered: outcome.shipmentDelivered,
@@ -443,6 +480,7 @@ export async function PUT(
         updated: outcome.updated,
         alreadyReceived: outcome.alreadyReceived,
         shipmentDelivered: outcome.shipmentDelivered,
+        ruleBinCode,
       });
     }
 
@@ -467,6 +505,13 @@ export async function PUT(
     return errorResponse("No valid update fields", 400);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof BinMoveRefused) {
+      log.warn("receive refused by the bin rules", { shipmentId: (await params).id, message: error.message });
+      return errorResponse(error.message, 409);
+    }
+    log.error("shipment update failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
     return errorResponse(error instanceof Error ? error.message : "Failed", 400);
   }
 }
@@ -477,7 +522,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireFeature("inbound", "delete");
+    const user = await requireFeature("inbound", "delete");
     const { id } = await params;
 
     const shipment = await prisma.inboundShipment.findUnique({
@@ -487,6 +532,26 @@ export async function DELETE(
     if (!shipment) return errorResponse("Not found", 404);
 
     const retired = await prisma.$transaction(async (tx) => {
+      // ── DELETING AN APPROVED SHIPMENT IS AN APPROVAL BEING UNDONE (R26) ──
+      //
+      // Written FIRST, while the row still exists, and against the person who APPROVED it, not
+      // the person deleting it: that is what the approver-error rate counts. An unapproved
+      // shipment being deleted is ordinary tidying and records nothing.
+      //
+      // `recordApprovalEvent` throws on failure, so a shipment is never deleted with its
+      // evidence missing. `recordId` outlives the row it names — the trail is the point.
+      if (shipment.approvedAt && shipment.approvedById) {
+        await recordApprovalEvent(tx, {
+          activity: "INBOUND",
+          event: "REVERSED",
+          recordId: id,
+          recordRef: shipment.shipmentNo,
+          actorId: user.id,
+          approverId: shipment.approvedById,
+          note: "Shipment deleted; received stock reversed",
+        });
+      }
+
       // ── THE SHIPMENT'S UNITS GO WITH IT (plan 1709, P2) ──
       //
       // The stock is reversed below; its unit records used to stay behind, "unassembled" on

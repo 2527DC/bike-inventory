@@ -7,6 +7,8 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { nextSequence } from "@/lib/sequence";
 import { ibSeedSql } from "@/lib/inbound/sequence";
 import { inboundShipmentSchema } from "@/lib/validations";
+import { recordApprovalEvent } from "@/lib/approvals/events";
+import { notifyInboundApprovalRequested } from "@/lib/approvals/actions/inbound";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("inbound");
@@ -204,49 +206,79 @@ export async function POST(req: NextRequest) {
       where: { status: "WAITING" },
     });
 
-    const shipment = await prisma.inboundShipment.create({
-      data: {
-        shipmentNo,
-        brandId: data.brandId,
-        billNo: data.billNo,
-        billImageUrl: data.billImageUrl || "",
-        billPdfUrl: data.billPdfUrl || null,
-        billDate,
-        expectedDeliveryDate,
-        totalAmount,
-        totalItems: data.lineItems.length,
-        notes: data.notes,
-        createdById: user.id,
-        lineItems: {
-          create: matchedItems.map((li) => {
-            // Check for pre-booking match
-            const preBookMatch = waitingPreBookings.find((pb) =>
-              li.productName.toLowerCase().includes(pb.productName.toLowerCase().substring(0, 15))
-              || pb.productName.toLowerCase().includes(li.productName.toLowerCase().substring(0, 15))
-            );
+    // The shipment and its REQUESTED approval event commit together (plan 1709, R22, R26). The
+    // event is what puts the shipment on the Requests page (`/approvals`) and what its age is
+    // measured from, so a shipment created without one would be waiting for an approval nobody
+    // can see. Everything after this — pre-bookings, the Zoho draft — is best effort and stays
+    // outside.
+    const shipment = await prisma.$transaction(async (tx) => {
+      const created = await tx.inboundShipment.create({
+        data: {
+          shipmentNo,
+          brandId: data.brandId,
+          billNo: data.billNo,
+          billImageUrl: data.billImageUrl || "",
+          billPdfUrl: data.billPdfUrl || null,
+          billDate,
+          expectedDeliveryDate,
+          totalAmount,
+          totalItems: data.lineItems.length,
+          notes: data.notes,
+          createdById: user.id,
+          lineItems: {
+            create: matchedItems.map((li) => {
+              // Check for pre-booking match
+              const preBookMatch = waitingPreBookings.find((pb) =>
+                li.productName.toLowerCase().includes(pb.productName.toLowerCase().substring(0, 15))
+                || pb.productName.toLowerCase().includes(li.productName.toLowerCase().substring(0, 15))
+              );
 
-            return {
-              productName: li.productName,
-              productId: li.productId || null,
-              sku: li.sku || null,
-              quantity: li.quantity,
-              rate: li.rate,
-              gstPercent: li.gstPercent || 0,
-              gstAmount: li.gstAmount || 0,
-              amount: li.amount,
-              hsn: li.hsn || null,
-              preBookedCustomerName: preBookMatch?.customerName || null,
-              preBookedCustomerPhone: preBookMatch?.customerPhone || null,
-              preBookedInvoiceNo: preBookMatch?.zohoInvoiceNo || null,
-            };
-          }),
+              return {
+                productName: li.productName,
+                productId: li.productId || null,
+                sku: li.sku || null,
+                quantity: li.quantity,
+                rate: li.rate,
+                gstPercent: li.gstPercent || 0,
+                gstAmount: li.gstAmount || 0,
+                amount: li.amount,
+                hsn: li.hsn || null,
+                preBookedCustomerName: preBookMatch?.customerName || null,
+                preBookedCustomerPhone: preBookMatch?.customerPhone || null,
+                preBookedInvoiceNo: preBookMatch?.zohoInvoiceNo || null,
+              };
+            }),
+          },
         },
-      },
-      include: {
-        brand: { select: { name: true } },
-        lineItems: true,
-        createdBy: { select: { name: true } },
-      },
+        include: {
+          brand: { select: { name: true } },
+          lineItems: true,
+          createdBy: { select: { name: true } },
+        },
+      });
+
+      await recordApprovalEvent(tx, {
+        activity: "INBOUND",
+        event: "REQUESTED",
+        recordId: created.id,
+        recordRef: created.shipmentNo,
+        actorId: user.id,
+        // Nobody has approved anything yet.
+        approverId: null,
+      });
+
+      return created;
+    });
+
+    // Whoever holds `inbound.approve`, minus the person who raised it (R24). After the commit,
+    // never inside it — notify() does FCM network I/O (notify/index.ts §F.0).
+    notifyInboundApprovalRequested({
+      shipmentId: shipment.id,
+      shipmentNo: shipment.shipmentNo,
+      actorId: user.id,
+      actorName: user.name,
+      summary: `${shipment.brand.name} — bill ${shipment.billNo}, ${shipment.totalItems} item(s)`,
+      resubmitted: false,
     });
 
     // Update matched pre-bookings
