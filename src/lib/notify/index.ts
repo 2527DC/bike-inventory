@@ -34,7 +34,7 @@ import {
 import { sendEmail, maskEmail } from "./email";
 import { sendPush, tokenTail } from "./push";
 
-export type { NotifyInput, NotifyOutcome } from "./types";
+export type { NotifyInput, NotifyOutcome, PushAction } from "./types";
 export { NOTIFICATION_EVENTS, EVENT_KEYS, type EventKey } from "./events";
 
 const log = createLogger("notify");
@@ -159,6 +159,9 @@ export async function notify(eventKey: EventKey, input: NotifyInput): Promise<No
               body: input.body,
               link: input.link,
               data: { ...(input.data ?? {}), ...(refId ? { refId } : {}), eventKey },
+              // Buttons, when the caller asked for them (plan 1709 §3.8). Every existing caller
+              // omits this and gets byte-for-byte the payload it got before.
+              actions: input.actions,
             }
           );
           if (!result.ok && result.deadToken) deadDeviceIds.push(d.id);

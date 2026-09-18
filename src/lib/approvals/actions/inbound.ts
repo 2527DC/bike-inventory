@@ -4,6 +4,7 @@ import { userCan, usersWithPermission } from "@/lib/rbac";
 import { recordApprovalEvent } from "@/lib/approvals/events";
 import { logActivity } from "@/lib/activity-log";
 import { notify } from "@/lib/notify";
+import { APPROVAL_NOTIFICATION_ACTIONS } from "@/lib/approvals/notify-actions";
 import { createLogger } from "@/lib/logger";
 import type { ApprovalActionResult, ApprovalActor } from "./transfer";
 
@@ -227,6 +228,11 @@ export function notifyInboundApprovalRequested(input: {
         refId: input.shipmentId,
         link: `/inbound/${input.shipmentId}`,
         data: { activity: "INBOUND", recordId: input.shipmentId },
+        // One-tap Approve / Open on the notification itself (plan 1709 §3.8, R24). The action
+        // ids are what `POST /api/approvals/quick` dispatches on; a browser with no button
+        // support ignores this and the body tap still opens `link`. Only `approval.requested`
+        // gets them — a RETURNED notification goes to the creator, who has to fix it.
+        actions: APPROVAL_NOTIFICATION_ACTIONS,
       });
     } catch (error) {
       log.error("approval.requested notification failed", {

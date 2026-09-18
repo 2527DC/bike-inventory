@@ -13,15 +13,20 @@ import { createLogger } from "@/lib/logger";
 const log = createLogger("settings:approvals");
 
 /**
- * Settings → Approvals (plan 1709-priority-build-and-stock-flow, R26, Q18).
+ * Settings → Approvals (plan 1709-priority-build-and-stock-flow, R26, Q18; R35–R37, Q30).
  *
- * Two halves of one question: what counts as an approver's mistake, and who is making them.
- * The rule is editable with `settings.edit`; the table needs `reports.view` and is simply
- * absent without it — the server refuses either way, these checks only decide what is drawn.
+ * Three things, one screen: what counts as an approver's mistake, who is making them, and when
+ * the dashboard starts calling something stuck. The two rules are editable with `settings.edit`;
+ * the table needs `reports.view` and is simply absent without it — the server refuses either way,
+ * these checks only decide what is drawn.
  *
  * The rate is NOT a score to manage people by and the copy says so. It is here to find a
  * pattern — one approver whose shipments are corrected every week is usually a training or a
  * paperwork problem, not a dishonest person.
+ *
+ * The stuck hours are saved SEPARATELY, to `/api/settings/stuck-hours`, not folded into the
+ * approval rule: both PUTs take a whole object, so one Save carrying both would let a stale half
+ * of this form quietly revert the other.
  */
 
 interface ApprovalRules {
@@ -73,15 +78,42 @@ const TOGGLES: Array<{ key: keyof ApprovalRules; label: string; help: string }> 
 
 const WINDOWS = [1, 3, 7, 14, 30];
 
+/** The dashboard's "Stuck" row (R35–R37, Q30). A short outward has no threshold: it is stuck at once. */
+interface StuckHours {
+  approvals: number;
+  inbound: number;
+  holds: number;
+}
+
+const STUCK_FIELDS: Array<{ key: keyof StuckHours; label: string; help: string }> = [
+  {
+    key: "approvals",
+    label: "Approvals waiting",
+    help: "A request nobody has approved or sent back after this many hours",
+  },
+  {
+    key: "inbound",
+    label: "Inbound not received",
+    help: "A shipment raised this many hours ago that has still not reached the shelf",
+  },
+  {
+    key: "holds",
+    label: "Builds on hold",
+    help: "A build paused this many hours ago, whether the issue is the cycle or the workfloor",
+  },
+];
+
 export default function ApprovalSettingsPage() {
   const { can, loading: permsLoading } = usePermissions();
   const canEdit = can("settings", "edit");
   const canSeeReport = can("reports", "view");
 
   const [rules, setRules] = useState<ApprovalRules | null>(null);
+  const [stuck, setStuck] = useState<StuckHours | null>(null);
   const [report, setReport] = useState<ErrorRateResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingStuck, setSavingStuck] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
 
@@ -98,13 +130,23 @@ export default function ApprovalSettingsPage() {
     if (permsLoading) return;
     let cancelled = false;
     (async () => {
-      const { data, error: err } = await apiTry<ApprovalRules>("/api/approvals/rules");
+      const [rulesRes, stuckRes] = await Promise.all([
+        apiTry<ApprovalRules>("/api/approvals/rules"),
+        apiTry<StuckHours>("/api/settings/stuck-hours"),
+      ]);
       if (!cancelled) {
-        if (err) {
-          log.warn("approval rules failed", { message: err });
-          setError(err);
+        if (rulesRes.error) {
+          log.warn("approval rules failed", { message: rulesRes.error });
+          setError(rulesRes.error);
         } else {
-          setRules(data);
+          setRules(rulesRes.data);
+        }
+        if (stuckRes.error) {
+          // A missing threshold is not worth blocking the rule editor — the dashboard falls back
+          // to its own defaults, so the only loss is that this half of the form is absent.
+          log.warn("stuck hours failed", { message: stuckRes.error });
+        } else {
+          setStuck(stuckRes.data);
         }
       }
       if (canSeeReport) await loadReport();
@@ -131,6 +173,24 @@ export default function ApprovalSettingsPage() {
     setBanner("Rule saved — the table below is recalculated from it");
     // The rule changes what counts, so the numbers must be read again, not patched.
     if (canSeeReport) await loadReport();
+  }
+
+  async function saveStuck() {
+    if (!stuck) return;
+    setSavingStuck(true);
+    setError(null);
+    const { data, error: err } = await apiTry<StuckHours>("/api/settings/stuck-hours", {
+      method: "PUT",
+      json: stuck,
+    });
+    setSavingStuck(false);
+    if (err || !data) {
+      log.warn("stuck hours save failed", { message: err });
+      setError(err ?? "Could not save the thresholds");
+      return;
+    }
+    setStuck(data);
+    setBanner("Thresholds saved — the dashboard uses them on its next load");
   }
 
   if (loading) {
@@ -226,6 +286,62 @@ export default function ApprovalSettingsPage() {
             {!canEdit && (
               <p className="mt-3 text-[11px] text-slate-400">
                 You can read this rule but not change it — that needs the settings edit permission.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {stuck && (
+        <Card className="mb-4">
+          <CardContent className="p-4">
+            <p className="text-sm font-semibold text-slate-900 mb-1">When the dashboard calls it stuck</p>
+            <p className="text-[11px] text-slate-500 mb-3">
+              The Stuck row on the home screen counts what has been waiting longer than these. An
+              outward whose floor is short is stuck from the moment it is scheduled — that one is
+              not a matter of hours, so it has no setting here.
+            </p>
+
+            <div className="space-y-2">
+              {STUCK_FIELDS.map((f) => (
+                <div key={f.key} className="flex items-start gap-3 rounded-lg border border-slate-200 p-2.5">
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm text-slate-900">{f.label}</span>
+                    <span className="block text-[11px] text-slate-500">{f.help}</span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1.5">
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={1}
+                      max={720}
+                      disabled={!canEdit}
+                      value={stuck[f.key]}
+                      aria-label={`${f.label} — hours`}
+                      onChange={(e) => {
+                        // Clamped to the same 1–720 the schema enforces, so the form cannot offer
+                        // a value the server will reject. An empty box keeps the last number
+                        // rather than becoming NaN mid-typing.
+                        const n = parseInt(e.target.value, 10);
+                        if (Number.isNaN(n)) return;
+                        setStuck({ ...stuck, [f.key]: Math.min(720, Math.max(1, n)) });
+                      }}
+                      className="w-20 min-h-[40px] rounded-lg border border-slate-200 px-2 text-right text-sm tabular-nums focus-ring disabled:opacity-60"
+                    />
+                    <span className="text-xs text-slate-400">h</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {canEdit && (
+              <Button onClick={saveStuck} disabled={savingStuck} className="mt-4 min-h-[44px] w-full">
+                {savingStuck ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="h-4 w-4 mr-1.5" /> Save thresholds</>}
+              </Button>
+            )}
+            {!canEdit && (
+              <p className="mt-3 text-[11px] text-slate-400">
+                You can read these but not change them — that needs the settings edit permission.
               </p>
             )}
           </CardContent>

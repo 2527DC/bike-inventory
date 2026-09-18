@@ -7,6 +7,7 @@ import { assertTransition, TransitionError } from "@/lib/transfers/transitions";
 import { recordApprovalEvent } from "@/lib/approvals/events";
 import { logActivity } from "@/lib/activity-log";
 import { notify } from "@/lib/notify";
+import { APPROVAL_NOTIFICATION_ACTIONS } from "@/lib/approvals/notify-actions";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("approvals:transfer");
@@ -290,6 +291,12 @@ export function notifyTransferApprovalRequested(input: {
         refId: input.orderId,
         link: `/transfers/${input.orderId}`,
         data: { activity: "TRANSFER", recordId: input.orderId },
+        // One-tap Approve / Open on the notification itself (plan 1709 §3.8, R24). The action
+        // ids are what `POST /api/approvals/quick` dispatches on; a browser with no button
+        // support ignores this and the body tap still opens `link`. Only `approval.requested`
+        // gets them — a RETURNED notification goes to the creator, who has to fix it, not
+        // approve it.
+        actions: APPROVAL_NOTIFICATION_ACTIONS,
       });
     } catch (error) {
       log.error("approval.requested notification failed", {

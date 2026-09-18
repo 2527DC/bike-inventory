@@ -11,6 +11,7 @@ import { clearPermissionCache } from "@/lib/use-permissions";
 import { moduleIcon } from "@/lib/module-icons";
 import { useScrollShadows } from "@/lib/use-scroll-shadows";
 import { buildNavTree, showDividerBefore } from "@/lib/nav-tree";
+import { ApprovalsNavLink } from "@/components/approvals-badge";
 
 interface AppSidebarProps {
   className?: string;
@@ -188,6 +189,12 @@ export function AppSidebar({ className }: AppSidebarProps) {
             No modules assigned. Ask an admin to grant your role access.
           </p>
         )}
+
+        {/* Requests — above the module tree because it is the one row that says somebody is
+            waiting on you. Not a module (see ApprovalsNavLink); renders nothing at zero, so it
+            never adds a line for a person who approves nothing. The mobile badge in the header
+            is the same count in the other shape. */}
+        {!loading && <ApprovalsNavLink className="mb-1" />}
 
         {groups.map((group) => (
           <div key={group.title} className="mt-4 first:mt-0">

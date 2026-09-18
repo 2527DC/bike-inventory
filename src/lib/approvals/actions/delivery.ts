@@ -24,6 +24,7 @@ import { recordApprovalEvent } from "@/lib/approvals/events";
 import { logActivity } from "@/lib/activity-log";
 import { usersWithPermission } from "@/lib/rbac";
 import { notify } from "@/lib/notify";
+import { APPROVAL_NOTIFICATION_ACTIONS } from "@/lib/approvals/notify-actions";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("approvals:delivery");
@@ -340,7 +341,12 @@ export async function sendDeliveryApprovalNotice(notice: DeliveryApprovalNotice 
       body: notice.body,
       refId: notice.refId,
       link: notice.link,
-      data: notice.data,
+      // `recordId` is what public/sw.js posts to /api/approvals/quick; `deliveryId` and
+      // `invoiceNo` stay for the screens and the logs (plan 1709 §3.8, R24).
+      data: { ...notice.data, recordId: notice.refId },
+      // Buttons only on the ASK. `approval.returned` goes to the person who must fix the
+      // outward — an Approve button there would offer them the one thing they cannot do.
+      actions: notice.eventKey === "approval.requested" ? APPROVAL_NOTIFICATION_ACTIONS : undefined,
     });
     log.debug("approval notice sent", {
       eventKey: notice.eventKey,
