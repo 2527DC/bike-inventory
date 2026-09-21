@@ -7,6 +7,7 @@ import { stockCountSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { getBinQtyMap } from "@/lib/units/bin-qty";
+import { productIdsForBinRules } from "@/lib/bins/rule-products";
 import { nextSequence } from "@/lib/sequence";
 import { logActivity } from "@/lib/activity-log";
 import { createLogger } from "@/lib/logger";
@@ -168,15 +169,21 @@ export async function POST(req: NextRequest) {
     // approval, so the counter was shown one number and the approval applied another.
     const binQtyMap = await getBinQtyMap(scopedBin.id);
 
-    // Which products the count starts with (Q26):
-    //   - the caller's list (a brand count sends its brand's products), or
-    //   - every product recorded in this bin (a BinStock row or a live unit), or
-    //   - NOTHING, for an empty bin. The counter adds what they find by search
+    // Which products the count starts with:
+    //   - the caller's list (a brand count sends its brand's products, Q5), or
+    //   - every active product matching BOTH the brand and the category of one of this bin's
+    //     home-bin rules (plan 2109-bin-audit-lists-rule-products, R1, R2), on every count, or
+    //   - NOTHING, for a bin with no such rules. The counter adds what they find by search
     //     (POST /api/stock-counts/[id]/items).
-    // Removed in plan 2109 (Q26): the fallbacks to products whose `Product.binId` is this bin
-    // and then to EVERY active product (~5,745 lines at system 0) for a bin that held nothing.
+    // A rule product the bin does not hold starts at system 0 (`binQtyMap` below). An item the
+    // bin holds that no rule covers is not listed; the owner's answer (Q2). An unlisted line is
+    // never changed by the approval.
+    // Replaced here: "every product recorded in this bin" (plan 2109 Q26), and before that the
+    // fallback to EVERY active product (~5,745 lines).
+    let fromRules = false;
     if (!productIds || productIds.length === 0) {
-      productIds = Array.from(binQtyMap.keys());
+      productIds = await productIdsForBinRules(scopedBin.id);
+      fromRules = true;
     }
 
     const products = productIds.length
@@ -250,6 +257,7 @@ export async function POST(req: NextRequest) {
       warehouseId: scopedWarehouse.id,
       binId: scopedBin.id,
       items: products.length,
+      fromRules,
       assignedToId: stockCount.assignedToId,
     });
 

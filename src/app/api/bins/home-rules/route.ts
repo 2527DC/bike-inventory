@@ -75,6 +75,9 @@ export async function GET(req: NextRequest) {
       rules.map((rule) => ({
         ...rule,
         categoryPath: rule.categoryId ? paths.get(rule.categoryId) ?? null : null,
+        // Plan 2109-bin-audit-lists-rule-products (R5): a rule must name both a brand and a
+        // category. One saved before that rule lists nothing in its bin's audit; flag it to fix.
+        incomplete: !rule.brandId || !rule.categoryId || !!rule.productId,
       }))
     );
   } catch (error) {
@@ -90,7 +93,7 @@ export async function POST(req: NextRequest) {
   try {
     await requireFeature("bins", "edit");
     const body = await req.json();
-    const { warehouseId, brandId, productId, binId } = body;
+    const { warehouseId, brandId, binId } = body;
     // R39, P13: the form sends a root category and — when that root has children — the
     // subcategory under it. The SUBCATEGORY is what the rule stores; `categoryId` is only how
     // the user got there.
@@ -103,8 +106,15 @@ export async function POST(req: NextRequest) {
       return errorResponse("warehouseId and binId are required", 400);
     }
 
-    if (!brandId && !chosenCategoryId && !productId) {
-      return errorResponse("Rule must specify at least brand, category, or product", 400);
+    // ── A RULE IS ALWAYS BRAND + CATEGORY (plan 2109-bin-audit-lists-rule-products, R5) ──
+    //
+    // A bin's audit lists the products matching BOTH the brand and the category of its rules
+    // (R1). A brand-only, category-only or single-product rule would still place items at
+    // inbound but list nothing, so those items would never be on a count list. The owner chose
+    // to require both (Q6a). Old rules of other kinds are flagged by GET (`incomplete`).
+    if (!brandId || !chosenCategoryId) {
+      log.warn("home bin rule refused", { reason: "brand and category required", warehouseId, binId });
+      return errorResponse("Choose a brand and a category", 400);
     }
 
     // ── A RULE ALWAYS NAMES A LEAF (P13) ──
@@ -163,7 +173,7 @@ export async function POST(req: NextRequest) {
         warehouseId,
         brandId: brandId || null,
         categoryId: chosenCategoryId,
-        productId: productId || null,
+        productId: null,
       },
     });
 
@@ -174,7 +184,7 @@ export async function POST(req: NextRequest) {
             warehouseId,
             brandId: brandId || null,
             categoryId: chosenCategoryId,
-            productId: productId || null,
+            productId: null,
             binId,
           },
           include,
@@ -185,7 +195,7 @@ export async function POST(req: NextRequest) {
       warehouseId,
       brandId: brandId || null,
       categoryId: chosenCategoryId,
-      productId: productId || null,
+      productId: null,
       binId,
     });
 
