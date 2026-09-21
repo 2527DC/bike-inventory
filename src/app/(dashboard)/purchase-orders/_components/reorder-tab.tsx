@@ -1,10 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import {
   Search, AlertTriangle, Package, ChevronDown, ChevronUp,
-  Save, ShoppingCart, Share2, MessageSquare, SlidersHorizontal,
+  Save, SlidersHorizontal,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -13,7 +12,7 @@ import { SkeletonList } from "@/components/ui/skeleton";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { FilterSheet } from "@/components/filter-sheet";
 import { useDebounce } from "@/hooks/use-debounce";
-import { isLowStock, suggestedOrderQty } from "@/lib/reorder";
+import { isLowStock } from "@/lib/reorder";
 import { usePermissions } from "@/lib/use-permissions";
 import { apiFetch, apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
@@ -67,10 +66,13 @@ interface Summary {
  *   (CLAUDE.md non-negotiables), and logs.
  *
  * Unchanged: `GET /api/reorder`, `PUT /api/reorder/update-levels`, grouping, the vendor shown on
- * each row, tick → Create PO (Q14) and WhatsApp.
+ * each row.
+ *
+ * Removed 21 Sep 2026 (owner): the tick boxes, "Select all low-stock", **Create PO** and the
+ * **WhatsApp** shares. This tab only SHOWS what needs reordering and lets its levels be set; a PO
+ * is raised from **New PO**, whose "Add reorder items" lists the vendor's reorder products.
  */
 export function ReorderTab() {
-  const router = useRouter();
   const [groups, setGroups] = useState<ProductGroup[]>([]);
   const [summary, setSummary] = useState<Summary>({ totalProducts: 0, lowStockCount: 0, zeroStockCount: 0 });
   const [search, setSearch] = useState("");
@@ -88,11 +90,9 @@ export function ReorderTab() {
 
   // This screen had no permission checks whatsoever before P10 — every action was shown to
   // anyone holding reorder.view. Both routes behind these buttons demand more than that.
-  const { canCreate, canEdit } = usePermissions();
-  const mayCreatePo = canCreate("purchase_orders");
+  const { canEdit } = usePermissions();
   const mayEditReorder = canEdit("reorder");
   const [reorderTarget, setReorderTarget] = useState<ReorderTarget | null>(null);
-  const [selectedForPO, setSelectedForPO] = useState<Set<string>>(new Set());
 
   // `loading` is DERIVED from the request key (the purchase-orders list's pattern) rather than
   // set synchronously at the top of an effect.
@@ -164,120 +164,10 @@ export function ReorderTab() {
     }
   };
 
-  const toggleSelectForPO = (productId: string) => {
-    setSelectedForPO((prev) => {
-      const next = new Set(prev);
-      if (next.has(productId)) next.delete(productId); else next.add(productId);
-      return next;
-    });
-  };
-
-  const selectAllLowStock = () => {
-    const lowStockIds = groups.flatMap((g) =>
-      g.products.filter(isLowStock).map((p) => p.id)
-    );
-    setSelectedForPO(new Set(lowStockIds));
-  };
-
-  const getSelectedProducts = () => {
-    return groups.flatMap((g) => g.products.filter((p) => selectedForPO.has(p.id)));
-  };
-
-  /** Selected products with no vendor. The PO screen cannot group these, so they block it. */
-  const unresolvedSelected = getSelectedProducts().filter((p) => !p.vendor);
-
-  const createPOFromSelected = () => {
-    const selected = getSelectedProducts();
-    if (selected.length === 0) return;
-
-    // Refused here rather than at the PO screen, because at that point the person has already
-    // navigated away from the rows they would need to fix.
-    if (unresolvedSelected.length > 0) {
-      setActionError(
-        `${unresolvedSelected.length} selected ${unresolvedSelected.length === 1 ? "product has" : "products have"} no vendor: ` +
-          unresolvedSelected.slice(0, 4).map((p) => p.name).join(", ") +
-          (unresolvedSelected.length > 4 ? ` and ${unresolvedSelected.length - 4} more` : "") +
-          ". Set a reorder vendor on them, or link the brand to a vendor on the vendor's page."
-      );
-      return;
-    }
-    setActionError("");
-
-    // Store in sessionStorage for the PO creation page to pick up
-    // v2: ids and quantities, nothing else.
-    //
-    // v1 carried name, sku, unitPrice and brandName. Three of those were wrong or unused:
-    // `brandName` was never read, `unitPrice` came from a costPrice the API withholds without
-    // cost_price.view (so it arrived undefined and rendered ₹NaN), and the consumer hardcoded
-    // `gstRate: 0` — which means every PO raised from this screen so far has carried 0% GST.
-    // POST /api/purchase-orders/prepare now supplies price, GST and vendor server-side, under
-    // the caller's own permissions.
-    const payload = {
-      v: 2 as const,
-      items: selected.map((p) => ({ productId: p.id, quantity: suggestedOrderQty(p) })),
-    };
-    sessionStorage.setItem("reorder-po-items", JSON.stringify(payload));
-    log.info("reorder selection handed to new PO", { products: selected.length });
-    router.push("/purchase-orders/new");
-  };
-
-  const shareOnWhatsApp = () => {
-    const selected = getSelectedProducts();
-    if (selected.length === 0) return;
-
-    // Group by brand for WhatsApp message
-    const brandGroups: Record<string, ReorderProduct[]> = {};
-    for (const p of selected) {
-      if (!brandGroups[p.brand.name]) brandGroups[p.brand.name] = [];
-      brandGroups[p.brand.name].push(p);
-    }
-
-    let message = "*Bharath Cycle Hub - Reorder List*\n";
-    message += `Date: ${new Date().toLocaleDateString("en-IN")}\n\n`;
-
-    for (const [brand, products] of Object.entries(brandGroups)) {
-      message += `*${brand}*\n`;
-      products.forEach((p, i) => {
-        const qty = suggestedOrderQty(p);
-        message += `${i + 1}. ${p.name} (${p.sku}) - Qty: ${qty}\n`;
-      });
-      message += "\n";
-    }
-
-    message += `Total Items: ${selected.length}\n`;
-    message += `---\nGenerated from Inventory App`;
-
-    const url = `https://wa.me/?text=${encodeURIComponent(message)}`;
-    window.open(url, "_blank");
-  };
-
-  const shareGroupOnWhatsApp = (group: ProductGroup) => {
-    const lowItems = group.products.filter(isLowStock);
-    const items = lowItems.length > 0 ? lowItems : group.products;
-    let message = `*Bharath Cycle Hub - Reorder*\n`;
-    message += `*${group.name}*\nDate: ${new Date().toLocaleDateString("en-IN")}\n\n`;
-    items.forEach((p, i) => {
-      const qty = suggestedOrderQty(p);
-      message += `${i + 1}. ${p.name} (${p.sku}) - Qty: ${qty}\n`;
-    });
-    message += `\nTotal: ${items.length} items\n---\nBharath Cycle Hub`;
-    const phone = group.whatsappNumber || group.phone || "";
-    const url = phone
-      ? `https://api.whatsapp.com/send?phone=91${phone.replace(/\D/g, "").slice(-10)}&text=${encodeURIComponent(message)}`
-      : `https://wa.me/?text=${encodeURIComponent(message)}`;
-    window.open(url, "_blank");
-  };
-
   const unsavedCount = Object.keys(reorderLevels).filter((k) => reorderLevels[k] !== "").length;
 
   return (
     <div>
-      {selectedForPO.size > 0 && (
-        <div className="flex justify-end mb-2">
-          <Badge variant="info">{selectedForPO.size} selected</Badge>
-        </div>
-      )}
-
       <ReorderSheet
         open={reorderTarget !== null}
         product={reorderTarget}
@@ -368,7 +258,7 @@ export function ReorderTab() {
       </div>
 
       {/* Action Bar */}
-      {(unsavedCount > 0 || selectedForPO.size > 0) && (
+      {unsavedCount > 0 && (
         <div className="flex gap-2 mb-3">
           {unsavedCount > 0 && (
             <button onClick={handleSaveLevels} disabled={saving}
@@ -377,34 +267,7 @@ export function ReorderTab() {
               {saving ? "Saving..." : savedMsg || `Save Levels (${unsavedCount})`}
             </button>
           )}
-          {selectedForPO.size > 0 && (
-            <>
-              {/* Gated on purchase_orders.create — this screen had NO permission checks at all
-                  before P10, so anyone who could open it saw every action. */}
-              {mayCreatePo && (
-                <button onClick={createPOFromSelected}
-                  className={`flex-1 flex items-center justify-center gap-1.5 text-white py-2 rounded-lg text-xs font-medium ${
-                    unresolvedSelected.length > 0 ? "bg-slate-500" : "bg-blue-600"
-                  }`}>
-                  <ShoppingCart className="h-3.5 w-3.5" />
-                  {unresolvedSelected.length > 0 ? `${unresolvedSelected.length} without a vendor` : "Create PO"}
-                </button>
-              )}
-              <button onClick={shareOnWhatsApp}
-                className="flex items-center justify-center gap-1.5 bg-green-600 text-white px-3 py-2 rounded-lg text-xs font-medium">
-                <Share2 className="h-3.5 w-3.5" /> WhatsApp
-              </button>
-            </>
-          )}
         </div>
-      )}
-
-      {/* Select All Low Stock */}
-      {filter === "low" && summary.lowStockCount > 0 && (
-        <button onClick={selectAllLowStock}
-          className="w-full text-xs text-blue-600 font-medium py-1.5 mb-2 hover:underline">
-          Select all {summary.lowStockCount} low-stock items for PO
-        </button>
       )}
 
       {!loading && loadError && (
@@ -421,11 +284,10 @@ export function ReorderTab() {
             const zeroCount = group.products.filter((p) => p.currentStock === 0).length;
             return (
             <Card key={group.id}>
-              {/* The header row is a DIV, not a button. The WhatsApp share inside it is its own
-                  <button>, and a <button> inside a <button> is invalid HTML — React's
-                  validateDOMNesting warned on every render of this list. So the expand/collapse
-                  toggle is an absolutely-positioned overlay covering the row, and the share button
-                  sits above it on z-10. Both stay real buttons; neither contains the other. */}
+              {/* The header row is a DIV with the expand/collapse toggle as an absolutely-positioned
+                  overlay. It once held a WhatsApp share button (removed 21 Sep 2026), and a
+                  <button> inside a <button> is invalid HTML; the overlay keeps it safe for anything
+                  added to the row later. */}
               <div className="relative w-full flex items-center justify-between p-3 rounded-xl focus-within:ring-2 focus-within:ring-slate-900">
                 <button onClick={() => toggleGroup(group.id)}
                   aria-label={group.name}
@@ -441,12 +303,6 @@ export function ReorderTab() {
                     {zeroCount > 0 && <span className="text-red-500 ml-1">({zeroCount} at zero)</span>}
                   </p>
                 </div>
-                {groupBy === "vendor" && group.id !== "unassigned" && (
-                  <button onClick={() => shareGroupOnWhatsApp(group)}
-                    className="relative z-10 p-1.5 bg-green-100 rounded-lg mr-1">
-                    <MessageSquare className="h-3.5 w-3.5 text-green-600" />
-                  </button>
-                )}
                 {expandedGroups.has(group.id) ? (
                   <ChevronUp className="h-4 w-4 text-slate-400" />
                 ) : (
@@ -459,24 +315,19 @@ export function ReorderTab() {
                   {group.products.map((product) => {
                     const isLow = isLowStock(product);
                     const isZero = product.currentStock === 0;
-                    const isSelected = selectedForPO.has(product.id);
                     const editedLevel = reorderLevels[product.id];
 
                     return (
                       <div key={product.id}
                         className={`p-2.5 rounded-lg border transition-colors ${
-                          isSelected ? "border-blue-300 bg-blue-50" :
                           isZero ? "border-red-200 bg-red-50" :
                           isLow ? "border-amber-200 bg-amber-50" :
                           "border-slate-100"
                         }`}>
                         <div className="flex items-start justify-between mb-1.5">
                           <div className="flex-1 min-w-0 mr-2">
-                            <button onClick={() => toggleSelectForPO(product.id)}
-                              className="text-left">
-                              <p className="text-sm font-medium text-slate-900">{product.name}</p>
-                              <p className="text-[11px] text-slate-500 tabular-nums">{product.sku}</p>
-                            </button>
+                            <p className="text-sm font-medium text-slate-900">{product.name}</p>
+                            <p className="text-[11px] text-slate-500 tabular-nums">{product.sku}</p>
                             {/* The resolved vendor, on every row and in every grouping mode.
                                 Before P10 the vendor was fetched on every request and rendered
                                 only as a group header under groupBy=vendor — invisible the rest
@@ -539,15 +390,6 @@ export function ReorderTab() {
                               </button>
                             </div>
                           )}
-                          <div className="shrink-0">
-                            <label className="text-[11px] text-slate-400 block">Select</label>
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => toggleSelectForPO(product.id)}
-                              className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                            />
-                          </div>
                         </div>
                       </div>
                     );
