@@ -103,6 +103,8 @@ interface HomeRule {
   /** "Cycles › Kids › 16 inch" — the rule names a leaf, so the leaf's name alone is ambiguous. */
   categoryPath?: string | null;
   bin: { id: string; code: string; name: string; directions?: string | null; nonAssemblable?: boolean };
+  /** Saved before rules had to name a brand AND a category (plan 2109-bin-audit-lists-rule-products, R5). */
+  incomplete?: boolean;
 }
 
 /** The flat rows `/api/categories` returns, as much of them as the tree picker needs. */
@@ -423,8 +425,10 @@ export function BinsManager() {
     e.preventDefault();
     setRuleError("");
     if (!ruleBinId) return;
-    if (!ruleBrandId && !ruleCategoryId) {
-      setRuleError("Choose at least a brand or a category");
+    // Plan 2109-bin-audit-lists-rule-products (R5): a rule names BOTH a brand and a category,
+    // because a bin's audit lists the products matching both. The server refuses it too.
+    if (!ruleBrandId || !ruleCategoryId) {
+      setRuleError("Choose a brand and a category");
       return;
     }
     // P13: a rule always names a leaf. While the chosen category still has active children,
@@ -1785,13 +1789,13 @@ export function BinsManager() {
 
                 <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                   <div>
-                    <label className="text-[11px] font-medium text-slate-600 dark:text-slate-400">Brand</label>
+                    <label className="text-[11px] font-medium text-slate-600 dark:text-slate-400">Brand *</label>
                     <select
                       value={ruleBrandId}
                       onChange={(e) => setRuleBrandId(e.target.value)}
                       className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-900 dark:border-slate-800 dark:bg-slate-800 dark:text-white"
                     >
-                      <option value="">(Any Brand)</option>
+                      <option value="">Choose a brand</option>
                       {brands.map((b) => (
                         <option key={b.id} value={b.id}>
                           {b.name}
@@ -1803,7 +1807,7 @@ export function BinsManager() {
                   {/* R39, P13: category, then subcategory. The picker shows the top level only —
                       choosing a parent is never a rule on its own while it has children. */}
                   <div>
-                    <label className="text-[11px] font-medium text-slate-600 dark:text-slate-400">Category</label>
+                    <label className="text-[11px] font-medium text-slate-600 dark:text-slate-400">Category *</label>
                     <CategoryTreeSelect
                       categories={categories}
                       mode="roots"
@@ -1813,7 +1817,7 @@ export function BinsManager() {
                         setRuleSubcategoryId(null);
                         setRuleError("");
                       }}
-                      placeholder="(Any category)"
+                      placeholder="Choose a category"
                       className="mt-1"
                     />
                   </div>
@@ -1886,8 +1890,13 @@ export function BinsManager() {
                 ) : (
                   <div className="mt-2 divide-y divide-slate-100 rounded-xl border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
                     {homeRules.map((r) => (
-                      <div key={r.id} className="flex items-center justify-between p-3">
+                      <div key={r.id} className={`flex items-center justify-between p-3 ${r.incomplete ? "bg-amber-50 dark:bg-amber-950/30" : ""}`}>
                         <div>
+                          {r.incomplete && (
+                            <div className="mb-1 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                              Needs a brand and a category — delete it and add it again. Until then it lists nothing in this bin&apos;s audit.
+                            </div>
+                          )}
                           <div className="flex items-center gap-2">
                             <span className="font-semibold text-slate-800 dark:text-slate-200">
                               {r.brand ? r.brand.name : "All Brands"}
