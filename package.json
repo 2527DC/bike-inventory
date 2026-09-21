@@ -21,6 +21,7 @@
     "db:snapshot": "node scripts/db/snapshot.mjs",
     "db:wipe:deliveries": "node scripts/db/wipe-deliveries.mjs",
     "db:wipe:categories": "node scripts/db/wipe-categories.mjs",
+    "db:wipe:catalog": "node scripts/db/wipe-catalog-and-stock.mjs",
     "db:migrate:status": "prisma migrate status"
   },
   "prisma": {

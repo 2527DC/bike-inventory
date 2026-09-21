@@ -6,7 +6,7 @@ implementation plan. Nothing here has been built. It has seven parts:
 1. **The requirements** — the owner's words, verbatim, then each one restated as `R1…Rn`.
 2. **The decisions already taken** — `D1…D3`, settled by the owner on 16 Sep 2026.
 3. **The action flow** — who does what, step by step, with a worked example.
-4. **The questions** — `Q1…Q14`, the doubts this document raised. Six of them block a plan.
+4. **The questions** — `Q1…Q19`, the doubts this document raised. Eight of them block a plan.
 5. **Facts verified against the code** — file:line, so a plan starts from the code as it is.
 6. **The permission map** — data for the RBAC catalog, never code.
 7. **Out of scope** and the **work record**.
@@ -95,9 +95,12 @@ issue, not a smaller receipt (the existing rule at `api/inbound/[id]/route.ts:17
 
 ## 4. The questions
 
-**Blocking — a plan cannot be written without these: Q1, Q2, Q5, Q6, Q10, Q12.**
+**Blocking — a plan cannot be written without these: Q1, Q2, Q5, Q6, Q10, Q12, Q15, Q16.**
 
-- **Q1 (blocking)** — **How do vendors get a Zoho contact id?** `Vendor` has no Zoho column and
+- **Q1 (blocking)** — **How do vendors get a Zoho contact id?** *(18 Sep: this is no longer
+  optional — Zoho's `POST /bills` documents **`vendor_id` as mandatory** and `vendor_name` as a
+  **response-only** field, so `books.ts:186` cannot work as written and sending the name is not
+  an available choice. The only open part is WHEN the ids are obtained.)* `Vendor` has no Zoho column and
   all 83 vendors are reconciled by name today. Options: a one-time bulk match against
   `listAllContacts` with a manual picker for misses; or map on demand the first time a vendor's
   bill is pushed. *Recommended:* bulk match once, picker for the remainder.
@@ -105,7 +108,9 @@ issue, not a smaller receipt (the existing rule at `api/inbound/[id]/route.ts:17
   and whether GST must be sent as `tax_id` (a Zoho tax record) rather than the `tax_percentage`
   the code sends today. Also: **which store's GSTIN is the bill raised against?** Every store has
   its own GSTIN and a PO's header is the primary store. This needs one live test call to answer
-  properly.
+  properly. *(18 Sep, from Zoho's docs: `place_of_supply` is **optional** — it defaults to the
+  vendor contact's location. The `tax_id` vs `tax_percentage` question and the GSTIN question
+  still stand.)*
 - **Q3** — An invoice line that is **not on the PO** at all (vendor shipped an extra item):
   block, or allow it through with a flag on the review?
 - **Q4** — Invoice quantity **greater** than the PO quantity: block, warn, or accept?
@@ -137,6 +142,47 @@ issue, not a smaller receipt (the existing rule at `api/inbound/[id]/route.ts:17
   stored `costPrice`? There is a `/api/stock/price-check` route that already reasons about this.
 - **Q14** — Who may do what — see §6. Is the split below right?
 
+### 4.1 Raised 18 Sep 2026, after re-verifying against the code
+
+The 1709 priority build (commits `d479e27…01b120f`, 17–18 Sep) landed after this document was
+written. Everything in §5 still holds in substance; the inbound line numbers have shifted. These
+five doubts are new, and two of them block.
+
+- **Q15 (blocking)** — **The bill comes back attached to a BRAND, not to the vendor.**
+  `InboundShipment.brandId` is **non-null** (`schema.prisma`, model `InboundShipment`), and the
+  importer resolves it by matching the Zoho bill's *vendor name* against `Brand.name`
+  (`api/zoho/pull-review/approve/route.ts:245-267`); on a miss it files the shipment under the
+  placeholder brand **"Unbranded"** (`:37`, `:52-73`). Almost every product is "Unbranded" today
+  and `brand_vendors` is empty, so a bill this feature creates for, say, Hero Cycles will very
+  likely come back as an *Unbranded* shipment — the worked example in §3 claims otherwise.
+  Should the accept step require a `Brand` whose name matches the vendor (create or pick one),
+  or is landing under "Unbranded" acceptable?
+- **Q16 (blocking)** — **A PO line may carry no product at all.** `PurchaseOrderItem.productId`
+  is nullable and sheet-built lines are a **name and a quantity only**
+  (`schema.prisma`, `src/lib/purchase-orders/create.ts:228`; plan 1509-po-product-and-quantity-only).
+  So the review's "compare against the PO's own lines" (§3 step 6) cannot lean on the PO's
+  product link, and neither can matching. Confirm: the invoice line is matched to a `Product`
+  **directly** (Q5), and the PO comparison is by name + quantity only, best-effort.
+- **Q17** — **An imported shipment now needs a category before anything can be received.**
+  `InboundShipment.categoryId` (Cycles / Spares / Accessories) decides how lines are received,
+  and it is locked once anything has been received (`api/inbound/[id]/route.ts:105-112`). A bill
+  arriving from Zoho carries no category, so a person must set it on `/inbound`. Confirm this is
+  a manual step that stays as it is (R6) and nothing is built for it.
+- **Q18** — **The invoice total will not always equal Zoho's computed total.** Zoho recomputes a
+  bill from its lines, so freight, insurance, discount and round-off (Q11) make the created bill's
+  amount differ from the paper the vendor sent. Should accept **block** when the difference exceeds
+  a tolerance, or record the difference and carry on?
+- **Q19** — **Recovery when Zoho succeeded but we did not.** If `POST /bills` returns a `bill_id`
+  and the transaction that stores it then fails, Zoho holds a bill this app has no record of, and
+  a retry hits Zoho's duplicate-bill-number rule. Q9 covers a Zoho *rejection*; this is the
+  opposite. Also: may a PO have a second AI run while an earlier one is `DONE` but not accepted?
+
+**Confirmed, not a question:** D2 is doubly right. The bill importer matches a line to a product
+by **`zohoItemId` first**, then SKU, then a `contains` on the first 20 characters of the name
+(`api/zoho/pull-review/approve/route.ts:310-323`), and **auto-creates a product** when all three
+miss (`:405-420`). Sending `item_id` is therefore not only about Zoho's stock ledger — it is what
+stops our own bill round-tripping into duplicate product rows.
+
 ---
 
 ## 5. Facts verified against the code (16 Sep 2026)
@@ -151,7 +197,9 @@ issue, not a smaller receipt (the existing rule at `api/inbound/[id]/route.ts:17
   a `vendor_id`. `Vendor` (`schema.prisma:1000`) carries no Zoho column (Q1).
 - Auth, refresh, org id and 401/429 retry all work — `src/lib/integrations/base.ts:153-330`.
   Credentials live in `IntegrationConfig` (`schema.prisma:1369`), not env. India DC.
-- ⚠ **`createBill` has probably never succeeded.** Its own caller's comment
+- ⚠ **`createBill` cannot succeed as written** (verified 18 Sep against Zoho's API docs for
+  `POST /bills`: **`vendor_id` is mandatory**, `vendor_name` is response-only). It has also
+  probably never even reached Zoho: Its own caller's comment
   (`src/lib/inbound/complete-shipment.ts:181-183`) records that it used to run without `init()`,
   threw every time, and was swallowed by a best-effort catch. It is wired correctly now but is
   untested against live Zoho. **Step one of any build is proving it with one real bill.**
@@ -236,7 +284,10 @@ migration. No role name appears anywhere in this design.
 - *16 Sep 2026* — Requirement given by the owner. Existing code analysed across the Zoho
   integration, the PO and inbound flows, and the AI and upload layers. Feasibility confirmed.
   D1, D2 and D3 settled by the owner. Q1–Q14 raised; six of them block.
-- **Waiting on:** the owner's answers to the six blocking questions, and one live Zoho test
-  call to settle Q2.
+- *18 Sep 2026* — Re-verified against the code after the 1709 priority build. §5 still holds;
+  inbound line numbers shifted. **Q15–Q19 added (§4.1); Q15 and Q16 block.** Still nothing built,
+  and none of Q1–Q14 has been answered.
+- **Waiting on:** the owner's answers to the eight blocking questions (Q1, Q2, Q5, Q6, Q10, Q12,
+  Q15, Q16), and one live Zoho test call to settle Q2.
 - **Next:** once the doubts are closed, a `*-plan.md` that opens with the requirement.
 - **Nothing has been built.**

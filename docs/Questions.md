@@ -9,10 +9,67 @@ If it is marked as Pre-booked, what should happen next? What actions can be take
 Doubt: the map link pasted in the fill form does not seem to be used for anything, not even in batching. I need to understand how routing is done in the batching module.
 
 # 18-9-20 (  updates  on the implmentation plan if @1709-priority-build-and-stock-flow-plan.md)
--> one in the inbound if teh line items mathc the bin rule then it must not be able to override it like Apply same bin to all items if chnage it it must effect only the item which are not automatched  this must be implmented 
--- the category and the bran are not seen in the sidebar need to bring it 
---> And as i apply the bin the  bin ruke where in that bin rule i need selection of category like where i can select category like parent or child catgory so if teh category has any child catgory i need to selct the  child category  which is ng but the cateory and after applyung it i need make sure that all the existing product must be assgned with that bin where for example the brand is accessory and the  category is also Accessory when i set it then it must apply the abin for all those procusts 
---> the bins must show the total product it holds like assemble and unassembled
--->  NOn assemble bin dont have the cycles 
---> when the items were assigned to the bin from the umatched  its not showing the poroduct in the bin it only showing the log 
---> what is this inthe request list i am getting the inbound shipment list of approve and reject how is those create from whcih table of data i am getting it 
+# Inbound, Bin Management & Navigation Updates
+*Reference: Updates and clarifications for implementation plan `1709-priority-build-and-stock-flow-plan.md`*
+
+---
+
+## 1. Inbound & Bin Assignment Rules
+
+### 1.1 Preserve Auto-Matched Bins During Bulk Assignment
+- **Current Issue**: Using the "Apply same bin to all items" option in Inbound overrides all line items indiscriminately.
+- **Required Behavior**: 
+  - Line items that are automatically matched to a bin via automated Home-Bin rules must be protected/locked from bulk overrides.
+  - Selecting "Apply same bin to all items" must **only** apply to unmatched line items (items that did not have an automated rule match).
+
+### 1.2 Hierarchical Category Selection in Home-Bin Rules & Retroactive Assignment
+- **Category Hierarchy Selection**:
+  - When configuring a Home-Bin rule (Warehouse + Brand + Category), the user must be able to navigate and select parent categories or specific child/sub-categories (e.g., as structured in Zoho).
+  - If a selected parent category has child categories, the user must be able to select the specific leaf child category.
+- **Immediate Retroactive Application to Existing Products**:
+  - Upon saving or applying the bin rule (e.g., Brand = `Accessory`, Category = `Accessory`), the system must immediately assign this bin to **all existing matching products** in the database/inventory, rather than applying solely to future inbound shipments.
+
+---
+
+## 2. Navigation & Sidebar Updates
+
+### 2.1 Restore Categories & Brands to Sidebar Navigation
+- **Current Issue**: Categories and Brands were removed from the main sidebar navigation and relocated inside chips on the Stock & Inventory page.
+- **Required Behavior**: Restore **Categories** and **Brands** as accessible, standalone links within the sidebar navigation menu.
+
+---
+
+## 3. Bin Inventory & Capacity Breakdown
+
+### 3.1 Display Assembled vs. Unassembled Stock Counts per Bin
+- In the Bins overview and Bin card/details screens, each bin must display the total product quantity it currently holds, broken down by:
+  - **Total Items**
+  - **Assembled Count**
+  - **Unassembled Count**
+
+### 3.2 Non-Assemblable Bins Must Exclude Cycles
+- Bins designated as **Non-Assemblable** are strictly intended for spare parts, accessories, and non-build items.
+- Bicycles/cycles must **never** be stored in, assigned to, or categorized under non-assemblable bins.
+
+---
+
+## 4. Bug Fixes
+
+### 4.1 Fix Product Visibility in Bins for Manually Assigned Unmatched Items
+- **Current Issue**: When items are assigned to a bin from the unmatched list, the bin detail drawer only displays an entry in the **Movement Log**, but reports `0` products and does not list the products inside the bin.
+- **Required Fix**: Ensure that when unmatched items are assigned to a bin, their inventory records (both tracked unit items and quantity stock) properly link to the bin so they are visible under "Items in this bin" in addition to logging the movement.
+
+---
+
+## 5. Inbound Requests & Approvals Workflow
+
+### 5.1 Explanation: Source of Inbound Shipment Approval Requests
+- **Data Table**: Inbound approval records originate from the Prisma database table **`InboundShipment`** (`prisma.inboundShipment`).
+- **Trigger Logic**: Any inbound shipment where `approvedAt: null`, `rejectedAt: null`, and `status != "DELIVERED"` is picked up by `listPendingApprovals()` (`src/lib/approvals/pending.ts`).
+- **User Visibility**: Users holding the `inbound.approve` RBAC permission see these records listed under the **Requests** tab (`/approvals`) with options to **Approve** or **Reject** (send back with a note).
+
+### 5.2 Workflow Decision: Remove Inbound Approvals
+- **Decision**: Remove the requirement for inbound shipments to undergo an approval process.
+- **Proposed Change**: 
+  - Bypass the approve/reject stage for inbound shipments so stock can be received and put away directly.
+  - Remove inbound shipment rows from the `/approvals` (Requests) queue.

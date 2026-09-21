@@ -176,13 +176,6 @@ export interface OutwardFormInput {
   serialCodes?: string[];
 }
 
-export type FilterChip =
-  | "ALL"
-  | "BICYCLES"
-  | "SPARES"
-  | "ACCESSORIES"
-  | "LOW_STOCK";
-
 export type POStatus = "DRAFT" | "PENDING_APPROVAL" | "APPROVED" | "SENT_TO_VENDOR" | "PARTIALLY_RECEIVED" | "RECEIVED" | "CANCELLED";
 export type BillStatus = "PENDING" | "PARTIALLY_PAID" | "PAID" | "OVERDUE" | "DISPUTED";
 export type PaymentMode = "CASH" | "CHEQUE" | "NEFT" | "RTGS" | "UPI" | "CREDIT_ADJUSTMENT";
