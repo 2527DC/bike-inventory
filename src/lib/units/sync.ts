@@ -11,11 +11,30 @@ const logDelta = createLogger("units:adjustWarehouseUnits");
 export interface WarehouseUnitsSyncResult {
   createdAssembled: number;
   createdUnassembled: number;
+  /** The units this sync created, in code order — the receipt prints labels for exactly these (R31). */
+  createdUnitIds: string[];
   /** Retired as LOST — listed with their codes, because those labels are on real items (P9). */
   retired: Array<{ id: string; unitCode: string }>;
   markedAssembled: number;
   markedUnassembled: number;
 }
+
+/**
+ * What the count says the place holds:
+ *   - `assembled` + `unassembled` — the condition split the counter entered;
+ *   - `total` — a count with no split (a non-split line in an assemblable bin). Existing
+ *     conditions are kept: built units stay built up to the total, the rest are unassembled.
+ */
+export type WarehouseUnitsSyncInput = {
+  productId: string;
+  warehouseId: string;
+  /**
+   * The bin that was counted. When set, ONLY that bin's units are loaded, retired, created and
+   * re-marked (plan 2109, R33) — a count of bin A never touches bin B. Null / omitted keeps
+   * the older whole-warehouse behaviour, which no new audit reaches (R36).
+   */
+  binId?: string | null;
+} & ({ assembled: number; unassembled: number } | { total: number });
 
 type Unit = {
   id: string;
@@ -39,35 +58,39 @@ const yieldOrder = (a: Unit, b: Unit) =>
   b.createdAt.getTime() - a.createdAt.getTime();
 
 /**
- * Make one product in one warehouse hold exactly `assembled` + `unassembled` live units — the
- * unit-level audit (R11, Q42) — while KEEPING existing codes, whose labels are already pasted
- * on the items (R46, P9).
+ * Make one product in one bin (or, for an old audit, one warehouse) hold exactly the counted
+ * live units — the unit-level audit (R11, Q42) — while KEEPING existing codes, whose labels are
+ * already pasted on the items (R46, P9).
  *
  *   1. total too high → retire the surplus as LOST, from whichever condition is over its
  *      count, unreserved / not on a bench / newest first; their codes are returned;
- *   2. total too low  → create the missing units in the condition that is short;
+ *   2. total too low  → create the missing units in the condition that is short, in the bin —
+ *      this is where items that predate the app get their `U-` codes (R31);
  *   3. re-mark condition on existing units until both counts match (set or clear assembledAt).
  *
  * Doing the count first and the re-mark last means a unit is never re-marked and then retired.
- * `binId` (a bin-scoped audit) is where created units go.
  */
-export async function syncWarehouseUnits(
-  tx: Tx,
-  input: { productId: string; warehouseId: string; assembled: number; unassembled: number; binId?: string | null }
-): Promise<WarehouseUnitsSyncResult> {
-  const targetA = Math.max(0, input.assembled);
-  const targetU = Math.max(0, input.unassembled);
+export async function syncWarehouseUnits(tx: Tx, input: WarehouseUnitsSyncInput): Promise<WarehouseUnitsSyncResult> {
   const result: WarehouseUnitsSyncResult = {
     createdAssembled: 0,
     createdUnassembled: 0,
+    createdUnitIds: [],
     retired: [],
     markedAssembled: 0,
     markedUnassembled: 0,
   };
+  const binId = input.binId ?? null;
 
+  // R33: a bin count sees that bin's units only. Before plan 2109 this `where` had no bin
+  // filter, so counting bin A retired bin B's units as LOST.
   const load = () =>
     tx.inventoryUnit.findMany({
-      where: { productId: input.productId, warehouseId: input.warehouseId, status: { in: LIVE_UNIT_STATUSES } },
+      where: {
+        productId: input.productId,
+        warehouseId: input.warehouseId,
+        status: { in: LIVE_UNIT_STATUSES },
+        ...(binId ? { binId } : {}),
+      },
       select: {
         id: true,
         unitCode: true,
@@ -82,6 +105,12 @@ export async function syncWarehouseUnits(
   let units: Unit[] = await load();
   const built = units.filter((u) => u.assembledAt !== null);
   const unbuilt = units.filter((u) => u.assembledAt === null);
+
+  // A count with no split keeps what is built, up to the total.
+  const targetA =
+    "total" in input ? Math.min(built.length, Math.max(0, input.total)) : Math.max(0, input.assembled);
+  const targetU =
+    "total" in input ? Math.max(0, input.total) - targetA : Math.max(0, input.unassembled);
   const diff = targetA + targetU - units.length;
 
   if (diff < 0) {
@@ -94,9 +123,9 @@ export async function syncWarehouseUnits(
   } else if (diff > 0) {
     const createA = Math.min(Math.max(0, targetA - built.length), diff);
     const createU = diff - createA;
-    const common = { productId: input.productId, warehouseId: input.warehouseId, binId: input.binId ?? null };
-    if (createA > 0) await createUnits(tx, { ...common, qty: createA, assembled: true });
-    if (createU > 0) await createUnits(tx, { ...common, qty: createU, assembled: false });
+    const common = { productId: input.productId, warehouseId: input.warehouseId, binId };
+    if (createA > 0) result.createdUnitIds.push(...(await createUnits(tx, { ...common, qty: createA, assembled: true })));
+    if (createU > 0) result.createdUnitIds.push(...(await createUnits(tx, { ...common, qty: createU, assembled: false })));
     result.createdAssembled = createA;
     result.createdUnassembled = createU;
   }
@@ -135,14 +164,16 @@ export async function syncWarehouseUnits(
     log.warn("condition could not be fully re-marked (units reserved, damaged or returned)", {
       productId: input.productId,
       warehouseId: input.warehouseId,
+      binId,
       wanted: wantedRemark,
       marked: result.markedAssembled + result.markedUnassembled,
     });
   }
 
-  log.info("warehouse units synced to audit", {
+  log.info("units synced to audit", {
     productId: input.productId,
     warehouseId: input.warehouseId,
+    binId,
     assembled: targetA,
     unassembled: targetU,
     createdAssembled: result.createdAssembled,
@@ -158,6 +189,11 @@ export async function syncWarehouseUnits(
  * A count change with no condition split (older clients, whole-store audits): a surplus
  * becomes new unassembled units; a shortage retires units as LOST — unassembled and newest
  * first. Tolerant: a shortage on stock with fewer unit records retires only what exists.
+ *
+ * Not bin-aware on a shortage: it may retire units from any bin of the warehouse. Since plan
+ * 2109 (R33, R36) the stock count applies only bin audits and uses `syncWarehouseUnits` with a
+ * `binId` for every line, so nothing calls this today; kept for a caller that genuinely means
+ * "anywhere in the warehouse".
  */
 export async function adjustWarehouseUnits(
   tx: Tx,

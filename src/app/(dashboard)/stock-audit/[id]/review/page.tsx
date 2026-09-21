@@ -5,7 +5,7 @@ import { useSession } from "next-auth/react";
 import { usePermissions } from "@/lib/use-permissions";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Loader2, Download, ShieldCheck, XCircle, X, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Loader2, Download, ShieldCheck, XCircle, X, AlertTriangle, Printer } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -50,9 +50,9 @@ interface StockCountData {
   storeId: string | null;
   warehouseId: string | null;
   scopeLabel: string;
+  /** True only for a bin audit (plan 2109, R36). */
   canCorrectStock: boolean;
-  correctionWarehouses: Array<{ id: string; name: string }>;
-  bin: { id: string; code: string; name: string; location: string | null; directions: string | null; floor: string | null; zone: string | null } | null;
+  bin: { id: string; code: string; name: string; location: string | null; directions: string | null; floor: string | null; zone: string | null; nonAssemblable?: boolean } | null;
   totalItems: number;
   countedItems: number;
   totalVariance: number;
@@ -67,8 +67,21 @@ interface AppliedSummary {
   zeroLines: number;
   writtenOff: number;
   warehouse: string;
-  scope: "warehouse" | "store";
+  scope: "bin";
+  bin: string;
+  binId: string;
+  units: {
+    created: number;
+    /** Exactly the units this approval coded — what "Print labels" prints (R31). */
+    createdUnitIds: string[];
+    markedAssembled: number;
+    markedUnassembled: number;
+    retiredCodes: string[];
+  };
 }
+
+/** `/api/units/labels` prints at most this many per sheet. */
+const MAX_LABELS_PER_SHEET = 500;
 
 type ApproveMode = "verify" | "apply";
 
@@ -120,7 +133,6 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
   // "apply" sets system stock to the counted quantities. Approve always goes through the
   // confirm sheet — nothing that overwrites stock fires on a single tap.
   const [mode, setMode] = useState<ApproveMode>("verify");
-  const [correctionWarehouseId, setCorrectionWarehouseId] = useState("");
   const [showApproveSheet, setShowApproveSheet] = useState(false);
   const [approved, setApproved] = useState<{ mode: ApproveMode; applied: AppliedSummary | null } | null>(null);
 
@@ -176,7 +188,9 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
   }
 
   const isAssignee = currentUserId !== undefined && data.assignedToId === currentUserId;
-  const isWholeStore = Boolean(data.storeId) && !data.warehouseId;
+  // Where "set system stock" writes: the bin, and the warehouse by its difference (plan 2109,
+  // R33). The whole-store choice of a surplus warehouse went with the whole-store apply (R36).
+  const binScopeLabel = data.bin ? `bin ${data.bin.code} at ${data.scopeLabel}` : data.scopeLabel;
   // `!isAssignee` dropped (plan 1709, R23, Q15): holding `approve` is what decides this, and it
   // now includes your own audit — the API's self-block went with it. `currentUserId` is still
   // waited for, because the "you counted this" note below reads it.
@@ -214,19 +228,13 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
     bin: i.product.bin?.code || "—",
   }));
 
-  const applyReady = mode === "verify" || (data.canCorrectStock && (!isWholeStore || correctionWarehouseId !== ""));
-  const chosenWarehouseName = isWholeStore
-    ? data.correctionWarehouses.find((w) => w.id === correctionWarehouseId)?.name ?? ""
-    : data.scopeLabel;
+  const applyReady = mode === "verify" || data.canCorrectStock;
 
   const handleApprove = async () => {
     setActionLoading(true);
     setActionError("");
     const body: Record<string, unknown> = { status: "APPROVED" };
-    if (mode === "apply") {
-      body.applyToStock = true;
-      if (isWholeStore) body.correctionWarehouseId = correctionWarehouseId;
-    }
+    if (mode === "apply") body.applyToStock = true;
     const { data: res, error } = await apiTry<{ applied: AppliedSummary | null }>(`/api/stock-counts/${id}`, {
       method: "PUT",
       json: body,
@@ -241,7 +249,12 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
       setActionError(error);
       return;
     }
-    log.info("stock count approved", { countId: id, mode, changed: res?.applied?.changed ?? 0 });
+    log.info("stock count approved", {
+      countId: id,
+      mode,
+      changed: res?.applied?.changed ?? 0,
+      unitsCreated: res?.applied?.units?.created ?? 0,
+    });
     setApproved({ mode, applied: res?.applied ?? null });
   };
 
@@ -392,22 +405,8 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
                     <span className="flex-1 min-w-0">
                       <span className="block text-sm font-medium text-slate-900">Set system stock to the counts</span>
                       <span className="block text-[11px] text-slate-500">
-                        {isWholeStore
-                          ? "Every counted line becomes the store's stock. A surplus is booked to the warehouse you choose; a shortage is taken from the store's warehouses in picker order. An adjustment entry is written for each line that changes."
-                          : `Every counted line becomes the stock at ${data.scopeLabel}. An adjustment entry is written for each line that changes.`}
+                        {`Every counted line becomes what ${binScopeLabel} holds. Other bins are not touched; the warehouse total moves by this bin's difference. Items without a code get one in this bin. An adjustment entry is written for each line that changes.`}
                       </span>
-                      {isWholeStore && mode === "apply" && (
-                        <select
-                          value={correctionWarehouseId}
-                          onChange={(e) => setCorrectionWarehouseId(e.target.value)}
-                          className="mt-2 w-full h-9 rounded-lg border border-slate-200 px-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-400"
-                        >
-                          <option value="">Choose the warehouse that receives a surplus…</option>
-                          {data.correctionWarehouses.map((w) => (
-                            <option key={w.id} value={w.id}>{w.name}</option>
-                          ))}
-                        </select>
-                      )}
                     </span>
                   </label>
                 ) : (
@@ -420,9 +419,9 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
                 )
               ) : (
                 <p className="text-[11px] text-slate-500 rounded-lg border border-dashed border-slate-200 p-2.5">
-                  {isWholeStore
-                    ? "This store has no active warehouse to receive a correction, so its counts cannot be applied to stock. It can only be approved as a record of the differences."
-                    : "This audit has no recorded location, so its counts cannot be applied to stock. It can only be approved as a record of the differences."}
+                  This audit was saved without a bin, so it cannot say which bin a difference belongs
+                  to. It can only be approved as a record of the differences — count each bin to
+                  correct stock.
                 </p>
               )}
             </div>
@@ -525,7 +524,7 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
               {mode === "apply" ? (
                 <p className="text-red-700 font-medium flex items-start gap-1 pt-1">
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                  This overwrites stock at {chosenWarehouseName || data.scopeLabel}. There is no undo except another audit.
+                  This overwrites stock in {binScopeLabel}. There is no undo except another audit.
                 </p>
               ) : (
                 <p className="pt-1">System stock stays as it is. The differences remain on this audit for reference.</p>
@@ -558,12 +557,17 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
           items={
             approved.applied
               ? [
-                  { label: "Where", value: approved.applied.scope === "store" ? `${data.scopeLabel} · surplus to ${approved.applied.warehouse}` : approved.applied.warehouse },
+                  { label: "Where", value: `Bin ${approved.applied.bin} · ${approved.applied.warehouse}` },
                   { label: "Lines applied", value: `${approved.applied.lines}` },
                   { label: "Lines changed", value: `${approved.applied.changed}` },
                   { label: "Net units", value: signed(approved.applied.netUnits) },
                   ...(approved.applied.zeroLines > 0
                     ? [{ label: "Written off", value: `${approved.applied.writtenOff} units across ${approved.applied.zeroLines} line${approved.applied.zeroLines === 1 ? "" : "s"}` }]
+                    : []),
+                  // R31: the codes this count created — stick their labels on before leaving.
+                  { label: "Codes created", value: `${approved.applied.units.created} in bin ${approved.applied.bin}` },
+                  ...(approved.applied.units.retiredCodes.length > 0
+                    ? [{ label: "Codes written off (LOST)", value: approved.applied.units.retiredCodes.join(", ") }]
                     : []),
                 ]
               : [
@@ -572,7 +576,28 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
                   { label: "Net units", value: signed(netUnits) },
                 ]
           }
-        />
+        >
+          {/* Print labels for EXACTLY the units this approval coded — the existing sheet
+              (`/units/labels?unitIds=…`), not a new printer. Over the sheet's limit, the whole
+              bin is offered instead, which includes them. */}
+          {approved.applied && approved.applied.units.createdUnitIds.length > 0 && (
+            approved.applied.units.createdUnitIds.length <= MAX_LABELS_PER_SHEET ? (
+              <Link
+                href={`/units/labels?unitIds=${approved.applied.units.createdUnitIds.join(",")}`}
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 py-2.5 text-sm font-medium text-white"
+              >
+                <Printer className="h-4 w-4" /> Print {approved.applied.units.createdUnitIds.length} label{approved.applied.units.createdUnitIds.length === 1 ? "" : "s"}
+              </Link>
+            ) : (
+              <Link
+                href={`/units/labels?binId=${approved.applied.binId}`}
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 py-2.5 text-sm font-medium text-white"
+              >
+                <Printer className="h-4 w-4" /> Print labels for bin {approved.applied.bin}
+              </Link>
+            )
+          )}
+        </ActionConfirmation>
       )}
 
       {/* Rejection Bottom Sheet Modal */}

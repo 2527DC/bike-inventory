@@ -56,7 +56,8 @@ interface StockCountSummary {
   notes: string | null;
   assignedTo: { name: string };
   assignedToId: string;
-  bin: { id: string; code: string; name: string; location: string | null; directions: string | null; floor: string | null; zone: string | null } | null;
+  /** `nonAssemblable` decides how a line is counted (plan 2109, R32). */
+  bin: { id: string; code: string; name: string; location: string | null; directions: string | null; floor: string | null; zone: string | null; nonAssemblable?: boolean } | null;
   // Scope (R2). scopeLabel is built by the API so every screen words it identically;
   // canCorrectStock is false for a whole-store or legacy audit — see section 5.1.
   scopeLabel: string;
@@ -70,6 +71,15 @@ interface StockCountSummary {
 interface Split {
   assembled: number;
   unassembled: number;
+}
+
+/** A row of `/api/products/search` — the "add a product to this count" typeahead (Q26). */
+interface ProductHit {
+  id: string;
+  sku: string;
+  name: string;
+  brand: { name: string } | null;
+  category: { name: string } | null;
 }
 
 /**
@@ -168,6 +178,13 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
   // "Record 0 for all uncounted" (R4) — the sheet and its in-flight flag.
   const [showZeroSheet, setShowZeroSheet] = useState(false);
   const [zeroing, setZeroing] = useState(false);
+  // "Add a product" (plan 2109, Q26): an empty bin's audit starts with no lines, and anything
+  // found that is not listed is searched and added here.
+  const [addQuery, setAddQuery] = useState("");
+  const debouncedAddQuery = useDebounce(addQuery);
+  const [addHits, setAddHits] = useState<ProductHit[]>([]);
+  const [addSearching, setAddSearching] = useState(false);
+  const [adding, setAdding] = useState<string | null>(null);
   const itemRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dirtyRef = useRef<Set<string>>(new Set());
@@ -286,6 +303,57 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
     return () => { cancelled = true; };
   }, [id]);
 
+  // "Add a product" typeahead (Q26). Hits and the spinner are cleared in the input's onChange,
+  // so this effect only sets state after its await (react-hooks/set-state-in-effect).
+  useEffect(() => {
+    const q = debouncedAddQuery.trim();
+    if (q.length < 2) return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await apiTry<ProductHit[]>(`/api/products/search?q=${encodeURIComponent(q)}`);
+      if (cancelled) return;
+      setAddSearching(false);
+      if (error) {
+        log.warn("product search failed", { countId: id, message: error });
+        setAddHits([]);
+        return;
+      }
+      setAddHits(data ?? []);
+    })();
+    return () => { cancelled = true; };
+  }, [debouncedAddQuery, id]);
+
+  const handleAddProduct = async (hit: ProductHit) => {
+    setAdding(hit.id);
+    setActionError("");
+    const { error } = await apiTry(`/api/stock-counts/${id}/items`, {
+      method: "POST",
+      json: { productId: hit.id },
+    });
+    setAdding(null);
+    if (error) {
+      // The API's sentence verbatim — "already on this count", "not active", and so on.
+      log.warn("add product failed", { countId: id, productId: hit.id, message: error });
+      setActionError(error);
+      return;
+    }
+    log.info("product added to count", { countId: id, productId: hit.id });
+    setAddQuery("");
+    setAddHits([]);
+    // Land on the new line: it is uncounted, and searching its SKU shows exactly it.
+    setTab("uncounted");
+    setSearch(hit.sku);
+    fetchSummary();
+  };
+
+  // R32: a non-assemblable bin is counted as one number — no condition is sent, and the
+  // approval books it all as unassembled. An assemblable bin sends the two halves.
+  const nonAssemblableBin = summary?.bin?.nonAssemblable === true;
+  const splitFields = (itemId: string) =>
+    !nonAssemblableBin && splits[itemId]
+      ? { assembledQty: splits[itemId].assembled, unassembledQty: splits[itemId].unassembled }
+      : {};
+
   // Auto-save: whenever counts change, debounce 2s then save
   useEffect(() => {
     if (dirtyRef.current.size === 0) return;
@@ -305,7 +373,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
       .map((itemId) => ({
         id: itemId,
         countedQty: counts[itemId]!,
-        ...(splits[itemId] ? { assembledQty: splits[itemId].assembled, unassembledQty: splits[itemId].unassembled } : {}),
+        ...splitFields(itemId),
         ...(brands[itemId] ? { suggestedBrand: brands[itemId] } : {}),
       }));
 
@@ -339,7 +407,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
       .map(([itemId, val]) => ({
         id: itemId,
         countedQty: val!,
-        ...(splits[itemId] ? { assembledQty: splits[itemId].assembled, unassembledQty: splits[itemId].unassembled } : {}),
+        ...splitFields(itemId),
         ...(brands[itemId] ? { suggestedBrand: brands[itemId] } : {}),
       }));
 
@@ -572,6 +640,9 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
             <Info className="h-4 w-4 shrink-0 text-slate-500" />
             <p className="text-xs text-slate-600">
               Audit count — stock does not change until the approver applies the counts.
+              {nonAssemblableBin
+                ? " This is a non-assemblable bin: just count each item."
+                : " Count each item as Assembled or Unassembled."}
             </p>
           </CardContent>
         </Card>
@@ -838,15 +909,23 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                     )}
                   </div>
                   <div className="space-y-1">
-                    <SplitStepper compact label="Assembled" value={qSplit.assembled}
-                      onChange={(n) => setSplit(item.id, { ...qSplit, assembled: n })} />
-                    <SplitStepper compact label="Unassembled" value={qSplit.unassembled}
-                      onChange={(n) => setSplit(item.id, { ...qSplit, unassembled: n })} />
+                    {nonAssemblableBin ? (
+                      // R32: a non-assemblable bin has no condition to record — one number.
+                      <SplitStepper compact label="Count" value={displayVal ?? 0}
+                        onChange={(n) => setCount(item.id, n)} />
+                    ) : (
+                      <>
+                        <SplitStepper compact label="Assembled" value={qSplit.assembled}
+                          onChange={(n) => setSplit(item.id, { ...qSplit, assembled: n })} />
+                        <SplitStepper compact label="Unassembled" value={qSplit.unassembled}
+                          onChange={(n) => setSplit(item.id, { ...qSplit, unassembled: n })} />
+                      </>
+                    )}
                     {/* EXPLICIT ZERO: "I looked and there are none" — both halves 0, and the
                         line counts as counted. The steppers alone cannot say it. */}
                     {!isCounted && (
                       <button
-                        onClick={() => setSplit(item.id, { assembled: 0, unassembled: 0 })}
+                        onClick={() => nonAssemblableBin ? setCount(item.id, 0) : setSplit(item.id, { assembled: 0, unassembled: 0 })}
                         title="Record zero — none found"
                         className="w-full h-9 flex items-center justify-center rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-600 active:bg-slate-100"
                       >
@@ -888,17 +967,26 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                         const cSplit = splitOf(item);
                         return (
                           <div className="space-y-1.5">
-                            <SplitStepper label="Assembled" value={cSplit.assembled}
-                              onChange={(n) => setSplit(item.id, { ...cSplit, assembled: n })} />
-                            <SplitStepper label="Unassembled" value={cSplit.unassembled}
-                              onChange={(n) => setSplit(item.id, { ...cSplit, unassembled: n })} />
+                            {nonAssemblableBin ? (
+                              // R32: a non-assemblable bin — no Assembled / Unassembled, just
+                              // the count. Its items are non-assembly because the bin is.
+                              <SplitStepper label="Count" value={displayVal ?? 0}
+                                onChange={(n) => setCount(item.id, n)} />
+                            ) : (
+                              <>
+                                <SplitStepper label="Assembled" value={cSplit.assembled}
+                                  onChange={(n) => setSplit(item.id, { ...cSplit, assembled: n })} />
+                                <SplitStepper label="Unassembled" value={cSplit.unassembled}
+                                  onChange={(n) => setSplit(item.id, { ...cSplit, unassembled: n })} />
+                              </>
+                            )}
                             <div className="flex items-center gap-2">
                               {/* EXPLICIT ZERO. Complete needs every line counted, and "counted"
                                   means countedQty is not null — the steppers cannot say "I looked
                                   and there are none". */}
                               {!isCounted ? (
                                 <button
-                                  onClick={() => setSplit(item.id, { assembled: 0, unassembled: 0 })}
+                                  onClick={() => nonAssemblableBin ? setCount(item.id, 0) : setSplit(item.id, { assembled: 0, unassembled: 0 })}
                                   title="Record zero — none found"
                                   className="h-10 flex-1 flex items-center justify-center rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-600 active:bg-slate-100"
                                 >
@@ -944,7 +1032,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                   ) : item.countedQty !== null ? (
                     <div className="flex items-center gap-2 mt-2 text-xs tabular-nums">
                       <span className="text-slate-700">Counted <span className="font-semibold">{item.countedQty}</span></span>
-                      {item.assembledQty !== null && item.unassembledQty !== null && (
+                      {!nonAssemblableBin && item.assembledQty !== null && item.unassembledQty !== null && (
                         <span className="text-slate-500">({item.assembledQty} assembled · {item.unassembledQty} unassembled)</span>
                       )}
                       {item.variance === 0 ? (
@@ -964,7 +1052,11 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
 
           {items.length === 0 && !loadingItems && (
             <p className="text-sm text-slate-400 text-center py-8">
-              {search ? "No items match — try a different spelling" : tab === "counted" ? "No items counted yet — tap + on items you find" : tab === "uncounted" ? "All items have been counted!" : "No items in this count"}
+              {search
+                ? "No items match — try a different spelling"
+                : tabCounts.total === 0 && summary.bin
+                  ? `Nothing is recorded in bin ${summary.bin.code} yet. Add what you find below.`
+                  : tab === "counted" ? "No items counted yet — tap + on items you find" : tab === "uncounted" ? "All items have been counted!" : "No items in this count"}
             </p>
           )}
 
@@ -974,6 +1066,66 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
             </p>
           )}
         </div>
+      )}
+
+      {/* ADD A PRODUCT (plan 2109, Q26). A bin audit lists only what the bin is recorded to
+          hold — nothing, for an empty bin — so anything found that is not listed is searched
+          and added here. It starts at what the bin holds of it (0 when new to the bin). */}
+      {summary.status === "IN_PROGRESS" && isAssignee && summary.bin && (
+        <Card className="mt-4">
+          <CardContent className="p-3">
+            <p className="text-xs font-semibold text-slate-800 mb-0.5">Found something not in this list?</p>
+            <p className="text-[11px] text-slate-500 mb-2">
+              Search any product and add it to this count of bin {summary.bin.code}.
+            </p>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+              <Input
+                placeholder="Search name or SKU to add..."
+                value={addQuery}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setAddQuery(v);
+                  if (v.trim().length < 2) {
+                    setAddHits([]);
+                    setAddSearching(false);
+                  } else {
+                    setAddSearching(true);
+                  }
+                }}
+                className="pl-9"
+              />
+            </div>
+            {addSearching && <p className="text-[11px] text-slate-400 mt-2">Searching…</p>}
+            {!addSearching && addQuery.trim().length >= 2 && addHits.length === 0 && (
+              <p className="text-[11px] text-slate-400 mt-2">No product matches &quot;{addQuery}&quot;.</p>
+            )}
+            {addHits.length > 0 && (
+              <div className="mt-2 space-y-1.5 max-h-60 overflow-y-auto">
+                {addHits.map((hit) => (
+                  <button
+                    key={hit.id}
+                    onClick={() => void handleAddProduct(hit)}
+                    disabled={adding !== null}
+                    className="w-full min-h-[44px] text-left p-2.5 border border-slate-200 rounded-lg bg-white hover:border-blue-400 active:bg-blue-50 disabled:opacity-50 focus-ring"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium text-slate-900 truncate">{hit.name}</p>
+                        <p className="text-[11px] text-slate-400 truncate">
+                          {hit.sku} · {hit.brand?.name || "No brand"} · {hit.category?.name || "No category"}
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-[11px] font-medium text-blue-600">
+                        {adding === hit.id ? "Adding…" : "+ Add"}
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
 
 

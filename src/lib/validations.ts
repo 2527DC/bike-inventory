@@ -201,8 +201,12 @@ export const stockCountSchema = z.object({
    * audits saved before then still exist and still approve; they just cannot be created.
    */
   warehouseId: z.string({ error: "Choose a warehouse" }).min(1, "Choose a warehouse"),
-  /** Optional. Must be a bin inside `warehouseId` — the route checks. */
-  binId: z.string().min(1).optional(),
+  /**
+   * Required since plan 2109 (R36): every new audit is for exactly one bin inside `warehouseId`
+   * (the route checks). It was optional from 1509, and a bin-less count could not say which
+   * bin a difference belonged to. Audits saved without one still open and approve, verify-only.
+   */
+  binId: z.string({ error: "Choose a bin" }).min(1, "Choose a bin"),
 });
 
 export const stockCountUpdateSchema = z.object({
@@ -211,11 +215,10 @@ export const stockCountUpdateSchema = z.object({
   rejectionReason: z.string().optional(),
   // Approver's choice: when approving, also set system stock to the counted quantities.
   // Default (absent/false) = verify-only — records the count/variance without changing stock.
-  // A warehouse-scoped audit writes its own warehouse. A whole-store audit needs
-  // `correctionWarehouseId` as well — the warehouse that receives any surplus; a shortage is
-  // taken from the store's warehouses in picker order, the way a sale is.
+  // Only a bin audit can be applied: it corrects that bin, and the warehouse by its difference
+  // (plan 2109, R33, R36). `correctionWarehouseId` — the surplus warehouse of a whole-store
+  // audit — was removed with the whole-store apply path; an old client sending it is ignored.
   applyToStock: z.boolean().optional(),
-  correctionWarehouseId: z.string().min(1).optional(),
   items: z
     .array(
       z.object({
@@ -416,6 +419,10 @@ export const vendorSchema = z.object({
   phone: z.string().optional(),
   email: z.string().email().optional().or(z.literal("")),
   whatsappNumber: z.string().optional(),
+  // The vendor's one contact person (plan 2109 R28, Q17a) — replaces the VendorContact list.
+  // Nullable so the vendor screen can clear them; the route stores "" as null.
+  contactPerson: z.string().max(120).nullable().optional(),
+  contactDesignation: z.string().max(120).nullable().optional(),
   waGroupName: z.string().optional(),
   waGroupCode: z.string().optional(),
   paymentTermDays: z.number().int().min(0).optional(),
