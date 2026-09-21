@@ -1,6 +1,6 @@
 # Priority build & stock flow — units in sync, outward guard, ★ priority, approvals, hold, sidebar, dashboard
 
-Status: pending — written 17 Sep 2026. **Every planning question P1–P19 (with P6a, P6b, P12a, P14a–P14d) answered by the owner on 17 Sep 2026; waiting only for the owner's go-ahead to start Wave 0.**
+Status: completed — 21 Sep 2026, all four phases (units in sync, outward guard, ★ priority, approvals, hold, sidebar, dashboard, bins, categories, Google Contacts) merged to main in PR #52; parts later superseded by plan 2109 (Generate codes, Unmatched tab and per-rule Apply removed; inbound left /approvals); the browser walk and Google Cloud setup are still the owner's.
 Branch: **`feat/1709-priority-build-stock-flow`**, off `main` `861a237`. Requirements committed there
 as `dcdb594`.
 

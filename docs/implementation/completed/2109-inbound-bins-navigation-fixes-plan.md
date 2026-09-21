@@ -1,6 +1,6 @@
 # Inbound, bins and navigation: fixes and updates to the 1709 build, and the `problems.md` workflow sorted into built / fix / new
 
-Status: pending — **BUILT 21 Sep 2026 on `feat/2109-inbound-bins-audit-fixes`, uncommitted; `npm run build` PASSED and production smoke test passed (see §6). Owner owes browser walk, migrate deploy + backfill + seed-rbac on other databases.** Written 21 Sep 2026.
+Status: completed — 21 Sep 2026, built and pushed on `feat/2109-inbound-bins-audit-fixes` (tip `1c63d83`): inbound bin mandatory with rule bin locked, inbound off /approvals + quick filters, bin-scoped audits create U- codes, bin-count fix, bins always on, permission gaps, vendor contact on Vendor; `npm run build` passed + production smoke test (§6); owner owes browser walk, and migrate deploy + backfill + seed-rbac on other databases.
 Branch: to be decided when the build is approved (the 1709 work sits on
 `feat/1709-priority-build-stock-flow`, tip `e16d51f`, not pushed — ask before branching).
 

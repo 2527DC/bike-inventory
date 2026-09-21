@@ -1,6 +1,6 @@
 # Deliveries: the floor warehouse sells, the customer is saved, the customer schedules, and one detail screen shows what was paid
 
-Status: pending — written 16 Sep 2026. **Phase 1 built** on `feat/1609-deliveries-p1-floor-warehouse` and **Phase 2 built** on `feat/1609-deliveries-p2-contact-self-fill` and **Phase 3 built** on `feat/1609-deliveries-p3-detail-zones-payment`, all 16 Sep 2026 (§6). All three phases built; `npm run build` and the browser walk (§4) outstanding.
+Status: completed — 21 Sep 2026, all three phases (floor warehouse sells, customer saved + self-fill scheduling, one detail screen with zones and payment) merged to main in PR #50; `npm run build` passed 16 Sep; the §4 browser walk is still the owner's.
 Branch: Phase 1 on `feat/1609-deliveries-p1-floor-warehouse` (off `376fa13`, Q0); Phase 2 on
 `feat/1609-deliveries-p2-contact-self-fill` (off Phase 1 `9974e9a`, owner); Phase 3 on `feat/1609-deliveries-p3-detail-zones-payment` (off Phase 2 `d3dd3d0`, owner).
 
