@@ -10,7 +10,7 @@ const log = createLogger("settings:approval-rules");
  * An approver error is an `ApprovalEvent` that judges an earlier APPROVED inbound or transfer:
  * a correction within `windowDays`, a short receive, or a reversal. Customer flags are recorded
  * but not counted unless `countFlag` is on. The rule and N are settings, stored as JSON in
- * AppSetting — no migration to change them. Pattern copied from `bin-tracking.ts`.
+ * AppSetting — no migration to change them. Pattern copied from `bin-tracking.ts` (removed in plan 2109, Q27).
  */
 export const APPROVAL_RULES_SETTING_KEY = "approver_error_rule";
 

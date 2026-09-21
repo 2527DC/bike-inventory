@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
 import { getWarehouseBreakdown } from "@/lib/stock-location";
 import type { WarehouseRef } from "@/lib/warehouses";
 import { createLogger } from "@/lib/logger";
@@ -38,8 +37,11 @@ export const transferItemSchema = z.object({
 export type TransferItemInput = z.infer<typeof transferItemSchema>;
 
 export interface ValidatedTransferItems {
-  /** Bin tracking was on, so `fromBinId` / `toBinId` are present on every line. */
-  binTrackingEnabled: boolean;
+  /**
+   * Always `true`: bins are always on (plan 2109, Q27), so `fromBinId` / `toBinId` are present
+   * on every line. No caller reads it any more; kept so the success and refusal shapes stay distinct.
+   */
+  binTrackingEnabled: true;
 }
 
 export interface TransferItemsRefusal {
@@ -119,14 +121,13 @@ export async function validateTransferItems(params: {
     }
   }
 
-  const binTrackingEnabled = await isBinTrackingEnabled();
-  if (binTrackingEnabled) {
-    for (const item of items) {
-      if (!item.fromBinId || !item.toBinId) {
-        return { error: "Source and destination bins are required", status: 400 };
-      }
+  // Bins are always on (plan 2109, Q27): every line names both bins.
+  for (const item of items) {
+    if (!item.fromBinId || !item.toBinId) {
+      log.warn("transfer lines refused: bin missing", { ...context, productId: item.productId });
+      return { error: "Source and destination bins are required", status: 400 };
     }
   }
 
-  return { binTrackingEnabled };
+  return { binTrackingEnabled: true };
 }

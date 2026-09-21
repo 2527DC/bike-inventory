@@ -19,7 +19,6 @@ import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { apiFetch, apiFetchEnvelope, apiTry } from "@/lib/api-client";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
-import { useBinTracking } from "@/hooks/use-bin-tracking";
 import { isPlaceholderBrand, isPlaceholderCategory } from "@/lib/import-placeholders";
 import { isLowStock } from "@/lib/reorder";
 import { ReorderSheet, type ReorderTarget, type ReorderSaved } from "@/components/reorder-sheet";
@@ -180,7 +179,6 @@ function StockScreen() {
 
   const [dataError, setDataError] = useState<string | null>(null);
   const [products, setProducts] = useState<ProductItem[]>([]);
-  const { isBinTrackingEnabled: BIN_TRACKING_ENABLED } = useBinTracking();
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [search, setSearch] = useState(() => searchParams.get("search") ?? "");
@@ -216,7 +214,7 @@ function StockScreen() {
   const [bulkCategoryId, setBulkCategoryId] = useState("");
   // The shelf. Unlike brand and category this is not something an import got wrong — it is
   // something no import could ever know, so bulk assign is the ONLY way it gets filled for a
-  // freshly imported batch. Behind BIN_TRACKING_ENABLED with the rest of the bin UI.
+  // freshly imported batch. Bins are always on (plan 2109, Q27).
   const [bulkBinId, setBulkBinId] = useState("");
   const [categories, setCategories] = useState<CategoryItem[]>([]);
 
@@ -482,7 +480,7 @@ function StockScreen() {
               href="/stock/by-bin"
               className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100"
             >
-              <MapPin className="h-3.5 w-3.5" /> {BIN_TRACKING_ENABLED ? "By Bin" : "By Location"}
+              <MapPin className="h-3.5 w-3.5" /> By Location
             </Link>
           )}
           {!selectMode && (
@@ -676,21 +674,19 @@ function StockScreen() {
                 )}
               </div>
 
-              {BIN_TRACKING_ENABLED && (
-                <div>
-                  <label className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Bin / Location</label>
-                  <select
-                    value={selectedBin}
-                    onChange={(e) => setSelectedBin(e.target.value)}
-                    className="mt-0.5 flex h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
-                  >
-                    <option value="">All Bins ({bins.length})</option>
-                    {bins.map((b) => (
-                      <option key={b.id} value={b.id}>{b.name} ({b._count.products})</option>
-                    ))}
-                  </select>
-                </div>
-              )}
+              <div>
+                <label className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Bin / Location</label>
+                <select
+                  value={selectedBin}
+                  onChange={(e) => setSelectedBin(e.target.value)}
+                  className="mt-0.5 flex h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
+                >
+                  <option value="">All Bins ({bins.length})</option>
+                  {bins.map((b) => (
+                    <option key={b.id} value={b.id}>{b.name} ({b._count.products})</option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {activeFilterCount > 0 && (
@@ -1017,19 +1013,15 @@ function StockScreen() {
               >
                 Brand
               </button>
-              {/* Bin is the detail no import can supply — see the plan's Part E. Hidden with
-                  the rest of the bin UI while bin tracking is dormant; the server refuses a
-                  binId in that state too, so this is not the only gate. */}
-              {BIN_TRACKING_ENABLED && (
-                <button
-                  onClick={() => setBulkAction("bin")}
-                  className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${
-                    bulkAction === "bin" ? "bg-blue-600 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"
-                  }`}
-                >
-                  Bin
-                </button>
-              )}
+              {/* Bin is the detail no import can supply — see the plan's Part E. */}
+              <button
+                onClick={() => setBulkAction("bin")}
+                className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${
+                  bulkAction === "bin" ? "bg-blue-600 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                }`}
+              >
+                Bin
+              </button>
               <button
                 onClick={() => setBulkAction("status")}
                 className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${
@@ -1135,7 +1127,7 @@ function StockScreen() {
               </div>
             )}
 
-            {BIN_TRACKING_ENABLED && bulkAction === "bin" && (
+            {bulkAction === "bin" && (
               <div className="flex gap-2">
                 <select
                   value={bulkBinId}

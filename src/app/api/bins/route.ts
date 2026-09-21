@@ -6,6 +6,7 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { binSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { createLogger } from "@/lib/logger";
+import { getBinUnitCounts, EMPTY_BIN_COUNTS } from "@/lib/bins/unit-counts";
 
 const log = createLogger("bins:crud");
 
@@ -28,7 +29,11 @@ export async function GET(req: NextRequest) {
       },
       orderBy: [{ warehouse: { name: "asc" } }, { code: "asc" }],
     });
-    return successResponse(bins);
+    // R5: Total · Assembled · Unassembled per bin, live units only — one groupBy for all bins.
+    const counts = await getBinUnitCounts(bins.map((b) => b.id));
+    return successResponse(
+      bins.map((b) => ({ ...b, unitCounts: counts.get(b.id) ?? EMPTY_BIN_COUNTS }))
+    );
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
     log.error("bins fetch failed", { message: error instanceof Error ? error.message : String(error) });

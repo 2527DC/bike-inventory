@@ -1,12 +1,6 @@
-// Bin configuration — dynamic setting backed by PostgreSQL `AppSetting` and fallback `process.env.BIN_TRACKING_ENABLED`.
-//
-// For Server / API routes: import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
-// For Client components:  import { useBinTracking } from "@/hooks/use-bin-tracking";
-//
-// Environment fallback:
-export const BIN_TRACKING_ENABLED =
-  process.env.BIN_TRACKING_ENABLED === "true" ||
-  process.env.BIN_TRACKING_ENABLED === "1";
+// Bin tracking is ALWAYS ON (plan 2109, Q27). The unused `BIN_TRACKING_ENABLED` constant that
+// lived here, the `AppSetting` switch (`src/lib/settings/bin-tracking.ts`), `useBinTracking()`
+// and `/api/settings/bin-tracking` were all removed: a bin is mandatory wherever stock lands.
 
 // ─── What used to live here ──────────────────────────────────────────────────
 //
