@@ -4,7 +4,7 @@ import { useState, useEffect, use } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Phone, CheckCircle2, Calendar, MapPin, Save, Trash2, ShieldCheck, AlertTriangle, Sparkles, Info, Undo2, QrCode } from "lucide-react";
+import { ArrowLeft, Phone, CheckCircle2, Calendar, MapPin, Trash2, ShieldCheck, AlertTriangle, Info, Lock, Undo2, QrCode } from "lucide-react";
 import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -12,7 +12,6 @@ import { Badge } from "@/components/ui/badge";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { usePermissions } from "@/lib/use-permissions";
-import { useBinTracking } from "@/hooks/use-bin-tracking";
 import { useWarehouses } from "@/hooks/use-sites";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
@@ -50,6 +49,14 @@ interface Bin {
   code: string;
   name: string;
   location: string;
+}
+
+/** What `GET /api/inbound/[id]/putaway` says about one line's bin. */
+interface PutawayItemInfo {
+  suggestedBin?: Bin | null;
+  matchedRule?: { type: string; label: string } | null;
+  /** A home-bin RULE matched (not the product-default fallback): the line is locked (R34). */
+  ruleLocked?: boolean;
 }
 
 interface Shipment {
@@ -104,14 +111,12 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
   const isAdmin = canView("cost_price");
   const canDeliver = canEditCheck("inbound");
   const canApprove = canApproveCheck("inbound");
-  const { isBinTrackingEnabled: BIN_TRACKING_ENABLED } = useBinTracking();
 
   const [shipment, setShipment] = useState<Shipment | null>(null);
   const [bins, setBins] = useState<Bin[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [itemLoading, setItemLoading] = useState<string | null>(null);
-  const [putawayLoading, setPutawayLoading] = useState(false);
   const [approveLoading, setApproveLoading] = useState(false);
   // Reject asks for a note before anything is sent (R25).
   const [showReject, setShowReject] = useState(false);
@@ -134,44 +139,32 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
     details?: string;
   } | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  // Which line is mid-receive, so only THAT row shows a spinner rather than the whole page
-  // freezing — receiving is now one tap per line and several happen in quick succession.
-  const [receivingLineId, setReceivingLineId] = useState<string | null>(null);
-  // The line awaiting confirmation. Receiving adds stock, so it asks first.
-  const [confirmReceive, setConfirmReceive] = useState<LineItem | null>(null);
+  // "Applied to N · M kept by rule" after the bulk bin action (R1).
+  const [bulkMessage, setBulkMessage] = useState("");
 
   // Per-LINE bin selection: lineItemId → binId. One bin per line (plan
   // 1509-assembly-queue-single-bin-and-product-assembly-level, D2) — it used to be one bin per
   // unit, but the server only ever honoured the first, so a split line put everything there.
   const [binSelections, setBinSelections] = useState<Record<string, string>>({});
   // Putaway matched rule metadata per line item: lineItemId → { suggestedBin, matchedRule }
-  const [putawayItems, setPutawayItems] = useState<
-    Record<string, { suggestedBin?: Bin | null; matchedRule?: { type: string; label: string } | null }>
-  >({});
-  // Location mode (bins dormant): where this shipment's stock is received
-  // Was DEFAULT_STOCK_LOCATION. There is no default warehouse any more — the API rejects a
-  // missing one with a 400 rather than guessing, because putting stock in the wrong building
-  // reports nothing anywhere. Set to the first warehouse once the list loads, so a normal
-  // receive still carries one without the user having to think about it.
-  const [receiveLocation, setReceiveLocation] = useState<string>("");
+  const [putawayItems, setPutawayItems] = useState<Record<string, PutawayItemInfo>>({});
+  // The warehouse sent with a receive: the route's schema requires one, and the server then
+  // replaces it with the chosen BIN's own warehouse (D2). Was DEFAULT_STOCK_LOCATION; there is
+  // no default warehouse any more — the API rejects a missing one rather than guessing.
+  //
+  // The first GODOWN (plan 0909-stock-store-and-warehouse-scoping, D5), else the first
+  // warehouse of any kind. DERIVED, not state: the "Receive into" picker that let a person
+  // change it went with the bin switch (plan 2109, Q27), so there is no choice left to keep —
+  // and the effect that copied it into state was a set-state-in-effect.
+  const receiveLocation = (warehouses.find((w) => w.kind === "GODOWN") ?? warehouses[0])?.id ?? "";
 
-  // Pre-select the first GODOWN once the list arrives, so a normal receive carries one
-  // without the user choosing: goods arrive at the back, not on the shop floor (plan
-  // 0909-stock-store-and-warehouse-scoping, D5). The list is already in picker order, so the
-  // first godown is the primary store's. Falls back to the first warehouse of any kind when
-  // no godown exists. Only when nothing is selected — never clobber a deliberate choice.
-  useEffect(() => {
-    if (receiveLocation || warehouses.length === 0) return;
-    const godown = warehouses.find((w) => w.kind === "GODOWN") ?? warehouses[0];
-    setReceiveLocation(godown.id);
-  }, [warehouses, receiveLocation]);
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const [shipRes, binRes, putawayRes] = await Promise.all([
         apiTry<Shipment>(`/api/inbound/${id}`),
         apiTry<Bin[]>("/api/bins"),
-        apiTry<{ items: Array<{ id: string; suggestedBin?: Bin | null; matchedRule?: { type: string; label: string } | null }> }>(`/api/inbound/${id}/putaway`),
+        apiTry<{ items: Array<{ id: string } & PutawayItemInfo> }>(`/api/inbound/${id}/putaway`),
       ]);
       if (cancelled) return;
       if (shipRes.error) {
@@ -180,16 +173,22 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
       } else if (shipRes.data) {
         setShipment(shipRes.data);
       }
+      if (binRes.error) log.warn("could not load bins", { shipmentId: id, message: binRes.error });
       if (binRes.data) setBins(binRes.data);
+      if (putawayRes.error) {
+        log.warn("could not load home bin suggestions", { shipmentId: id, message: putawayRes.error });
+      }
       if (putawayRes.data?.items) {
         const initialBins: Record<string, string> = {};
-        const suggestionsMap: Record<string, { suggestedBin?: Bin | null; matchedRule?: { type: string; label: string } | null }> = {};
+        const suggestionsMap: Record<string, PutawayItemInfo> = {};
         for (const it of putawayRes.data.items) {
           suggestionsMap[it.id] = {
             suggestedBin: it.suggestedBin,
             matchedRule: it.matchedRule,
+            ruleLocked: it.ruleLocked,
           };
-          // The home-bin rule's suggestion is the line's pre-selected bin.
+          // The suggestion is the line's pre-selected bin. For a rule-matched line it is also
+          // the ONLY bin (R34) — `binForLine` reads the rule's bin, not this selection.
           if (it.suggestedBin?.id) initialBins[it.id] = it.suggestedBin.id;
         }
         setPutawayItems(suggestionsMap);
@@ -198,7 +197,7 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [id, BIN_TRACKING_ENABLED]);
+  }, [id]);
 
   const refreshShipment = async () => {
     const { data, error } = await apiTry<Shipment>(`/api/inbound/${id}`);
@@ -210,7 +209,15 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
     }
   };
 
+  // A home-bin RULE matched this line (R34): its bin is locked to the rule's.
+  const isRuleLocked = (lineItemId: string) =>
+    Boolean(putawayItems[lineItemId]?.ruleLocked && putawayItems[lineItemId]?.suggestedBin?.id);
 
+  // The bin a line will be received into: the rule's when locked, otherwise the selection.
+  const binForLine = (lineItemId: string): string =>
+    isRuleLocked(lineItemId)
+      ? putawayItems[lineItemId].suggestedBin?.id ?? ""
+      : binSelections[lineItemId] || "";
 
   // The whole line goes into this one bin (D2).
   const setBinForLine = (lineItemId: string, binId: string) => {
@@ -287,37 +294,11 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
     await refreshShipment();
   };
 
-  // ONE line at a time. Mark All / Partial / Undo are gone: the shipment finishes itself
-  // when the last outstanding line is received, and the old buttons wrote a STATUS directly
-  // (via api/inbound/[id]/status, now deleted) without touching the lines they claimed to
-  // cover — so a shipment could read DELIVERED with every line still unreceived.
-  const handleReceiveLine = async (li: LineItem) => {
-    if (!receiveLocation) { setActionError("Choose where the stock is going first"); return; }
-    setReceivingLineId(li.id);
-    setActionError("");
-    const { data, error } = await apiTry<{ updated: boolean; alreadyReceived: boolean; shipmentDelivered: boolean }>(
-      `/api/inbound/${id}`,
-      {
-        method: "PUT",
-        json: { lineItemId: li.id, deliveredQty: li.quantity, warehouseId: receiveLocation },
-        timeoutMs: 30_000,
-      }
-    );
-    if (error) {
-      log.error("receive line failed", { shipmentId: id, lineItemId: li.id, message: error });
-      setActionError(error);
-    } else {
-      await refreshShipment();
-      // The server tells us whether THAT receipt was the one that finished the shipment, so
-      // the confirmation cannot fire twice when two people receive the last two lines.
-      if (data?.shipmentDelivered) {
-        setSuccessMsg({ shipmentNo: shipment?.shipmentNo || "", deliveredCount: shipment?.lineItems.length || 0 });
-      }
-    }
-    setReceivingLineId(null);
-    setConfirmReceive(null);
-  };
-
+  // `handleReceiveLine` — the "dormant bins" receive with no bin, behind a confirmation — is
+  // GONE (plan 2109-inbound-bins-navigation-fixes, R34 + Q27). Bin tracking is always on, every
+  // line is received into a bin, and `handleMarkItemDelivered` below is the one receive path.
+  // Mark All / Partial / Undo were already gone: the shipment finishes itself when the last
+  // outstanding line is received.
 
   const handleWhatsApp = async (li: LineItem) => {
     if (!li.preBookedCustomerPhone) return;
@@ -326,16 +307,18 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
     const message = `Hello ${li.preBookedCustomerName}, great news! Your ${li.productName} has been dispatched from the brand and is expected to arrive at our store by ${expectedDate}. We'll notify you once it's ready for pickup/delivery. - Bharath Cycle Hub`;
     window.open(`https://wa.me/91${phone}?text=${encodeURIComponent(message)}`, "_blank");
 
-    await fetch(`/api/inbound/${id}`, {
+    const { error } = await apiTry<{ updated: boolean }>(`/api/inbound/${id}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ lineItemId: li.id, whatsAppSent: true }),
+      json: { lineItemId: li.id, whatsAppSent: true },
     });
+    if (error) log.warn("could not mark WhatsApp sent", { shipmentId: id, lineItemId: li.id, message: error });
   };
 
+  // ONE line at a time, always into a bin (R34). A rule-matched line sends the rule's bin —
+  // never a stale selection — because the server refuses any other with a 409.
   const handleMarkItemDelivered = async (li: LineItem) => {
-    const binId = binSelections[li.id] || "";
-    if (BIN_TRACKING_ENABLED && !binId) {
+    const binId = binForLine(li.id);
+    if (!binId) {
       setConfirmation({
         type: "error",
         title: "Bin Assignment Required",
@@ -344,72 +327,56 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
           { label: "Product", value: li.productName },
           { label: "Units", value: `${li.quantity}` },
         ],
-        details: "Select the bin this line goes into before marking it delivered.",
+        details: "Select the bin this line goes into before receiving it.",
       });
       return;
     }
+    if (!receiveLocation) {
+      log.warn("receive blocked: warehouses not loaded", { shipmentId: id, lineItemId: li.id });
+      setActionError("Warehouses are still loading — try again in a moment.");
+      return;
+    }
     setItemLoading(li.id);
-    // `warehouseId` on BOTH branches — the route's schema requires it. With a bin, the server
-    // records the stock in the bin's own warehouse (D2), so a Floor bin is not booked into
-    // the default godown.
-    const { error } = await apiTry<{ updated: boolean; alreadyReceived: boolean; shipmentDelivered: boolean }>(
+    // `warehouseId` because the route's schema requires it; the server records the stock in
+    // the BIN's own warehouse (D2), so a Floor bin is not booked into the default godown.
+    const { data, error } = await apiTry<{ updated: boolean; alreadyReceived: boolean; shipmentDelivered: boolean }>(
       `/api/inbound/${id}`,
       {
         method: "PUT",
-        json: BIN_TRACKING_ENABLED
-          ? { lineItemId: li.id, deliveredQty: li.quantity, warehouseId: receiveLocation, binId }
-          : { lineItemId: li.id, deliveredQty: li.quantity, warehouseId: receiveLocation },
+        json: { lineItemId: li.id, deliveredQty: li.quantity, warehouseId: receiveLocation, binId },
         timeoutMs: 30_000,
       }
     );
     if (error) {
-      log.error("mark delivered failed", { shipmentId: id, lineItemId: li.id, binId: binId || null, message: error });
+      log.error("mark delivered failed", { shipmentId: id, lineItemId: li.id, binId, message: error });
       setActionError(error);
     } else {
       setActionError("");
       setBinSelections((prev) => { const n = { ...prev }; delete n[li.id]; return n; });
       await refreshShipment();
-      setConfirmation({
-        type: "success",
-        title: BIN_TRACKING_ENABLED ? "Item Received & Binned" : "Item Received",
-        referenceId: shipment?.shipmentNo || "",
-        items: [
-          { label: "Product", value: li.productName },
-          { label: "Quantity", value: `${li.quantity} units` },
-          BIN_TRACKING_ENABLED
-            ? { label: "Bin", value: bins.find((b) => b.id === binId)?.code || "Assigned" }
-            : { label: "Location", value: warehouses.find((w) => w.id === receiveLocation)?.name ?? "—" },
-        ],
-        details: `Bill: ${shipment?.billNo}`,
-      });
+      // The server says whether THAT receipt finished the shipment, so the completion message
+      // cannot fire twice when two people receive the last two lines.
+      if (data?.shipmentDelivered) {
+        setSuccessMsg({ shipmentNo: shipment?.shipmentNo || "", deliveredCount: shipment?.lineItems.length || 0 });
+      } else {
+        setConfirmation({
+          type: "success",
+          title: "Item Received & Binned",
+          referenceId: shipment?.shipmentNo || "",
+          items: [
+            { label: "Product", value: li.productName },
+            { label: "Quantity", value: `${li.quantity} units` },
+            { label: "Bin", value: bins.find((b) => b.id === binId)?.code || "Assigned" },
+          ],
+          details: `Bill: ${shipment?.billNo}`,
+        });
+      }
     }
     setItemLoading(null);
   };
 
-  const handlePutaway = async () => {
-    const items = Object.entries(binSelections)
-      .filter(([lineItemId, binId]) => {
-        const li = shipment?.lineItems.find((l) => l.id === lineItemId);
-        return Boolean(binId) && li?.isDelivered && !li.binId;
-      })
-      .map(([lineItemId, binId]) => ({ lineItemId, binId }));
-
-    if (items.length === 0) return;
-    setPutawayLoading(true);
-    const { error } = await apiTry<{ updated: number; round: number }>(`/api/inbound/${id}/putaway`, {
-      method: "POST",
-      json: { items },
-    });
-    if (error) {
-      log.error("putaway failed", { shipmentId: id, lines: items.length, message: error });
-      setActionError(error);
-    } else {
-      setActionError("");
-      setBinSelections({});
-      await refreshShipment();
-    }
-    setPutawayLoading(false);
-  };
+  // `handlePutaway` (the after-delivery "Save Bin Assignment") is GONE — plan 2109, R34: no
+  // line can be received without a bin, so there is nothing left to put away afterwards.
 
   // `handleRevert` is GONE with the Undo button and api/inbound/[id]/status.
   //
@@ -423,20 +390,21 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
   const handleDelete = async () => {
     setShowDeleteConfirm(false);
     setActionLoading(true);
-    try {
-      const res = await fetch(`/api/inbound/${id}`, { method: "DELETE" }).then((r) => r.json());
-      if (res.success) {
-        router.push("/inbound");
-      } else {
-        setConfirmation({
-          type: "error",
-          title: "Cannot Delete",
-          referenceId: shipment?.shipmentNo || "",
-          details: res.error || "Cannot delete shipment",
-        });
-      }
-    } catch (e) { setActionError(e instanceof Error ? e.message : "Delete failed"); }
-    finally { setActionLoading(false); }
+    // `apiTry`, not `fetch().then(r => r.json())` — an expired session answers with HTML and
+    // the raw `.json()` threw "Unexpected token <" (CLAUDE.md).
+    const { data, error } = await apiTry<{ deleted: boolean }>(`/api/inbound/${id}`, { method: "DELETE" });
+    setActionLoading(false);
+    if (data) {
+      router.push("/inbound");
+    } else {
+      log.warn("shipment delete failed", { shipmentId: id, message: error });
+      setConfirmation({
+        type: "error",
+        title: "Cannot Delete",
+        referenceId: shipment?.shipmentNo || "",
+        details: error || "Cannot delete shipment",
+      });
+    }
   };
 
   // Reports to the NEW inbound-scoped route, which fixes all three reasons this never worked:
@@ -490,10 +458,8 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
 
   // ONE bin selector per line (D2). The per-unit selectors let a line be split across bins,
   // which the server never honoured beyond the first.
-  const renderBinSelectors = (li: LineItem, variant: "default" | "amber" = "default") => {
-    const borderClass = variant === "amber" ? "border-amber-200" : "border-slate-200";
-    const bgClass = variant === "amber" ? "bg-amber-50" : "bg-white";
-
+  // Only for a line NO rule matched — a rule-matched line shows its bin locked instead (R34).
+  const renderBinSelectors = (li: LineItem) => {
     if (bins.length === 0) {
       return (
         <div className="mt-2 p-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
@@ -507,7 +473,7 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
         value={binSelections[li.id] || ""}
         onChange={(e) => setBinForLine(li.id, e.target.value)}
         aria-label={`Bin for ${li.productName}`}
-        className={`mt-2 w-full min-h-[44px] text-xs border ${borderClass} rounded-lg px-2 py-1.5 ${bgClass} text-slate-700`}
+        className="mt-2 w-full min-h-[44px] text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700"
       >
         <option value="">{li.quantity > 1 ? `Select bin for all ${li.quantity} units *` : "Select bin *"}</option>
         {bins.map((b) => (
@@ -541,10 +507,8 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
     label: shipment.status === "PARTIALLY_DELIVERED" ? "Partial" : getStatusLabel(shipment.status),
   };
 
-  const putawayReady = Object.entries(binSelections).filter(([liId, binId]) => {
-    const li = shipment.lineItems.find((l) => l.id === liId);
-    return Boolean(binId) && li?.isDelivered && !li.binId;
-  }).length;
+  // Lines still to receive that have no bin yet — the "Choose a bin for N lines" prompt (R34).
+  const linesWithoutBin = shipment.lineItems.filter((li) => !li.isDelivered && !binForLine(li.id)).length;
 
   return (
     <div className="pb-4">
@@ -594,9 +558,11 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
             <span className="text-xs text-slate-500">Items</span>
             <span className="text-sm font-semibold text-slate-700 tabular-nums">{deliveredCount}/{shipment.totalItems} delivered</span>
           </div>
-          {BIN_TRACKING_ENABLED && needsBinCount > 0 && (
+          {/* Only an OLD line can be here — received while the bin switch was off. Nothing on
+              this screen places it any more (plan 2109, R34); the R37 check finds them. */}
+          {needsBinCount > 0 && (
             <div className="flex justify-between items-center">
-              <span className="text-xs text-slate-500">Needs Bin</span>
+              <span className="text-xs text-slate-500">Received with no bin</span>
               <Badge variant="warning" className="text-xs">{needsBinCount} item{needsBinCount > 1 ? "s" : ""}</Badge>
             </div>
           )}
@@ -728,29 +694,9 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
         </div>
       )}
 
-      {/* Location selector (bins dormant) — where this shipment is received */}
-      {!BIN_TRACKING_ENABLED && canDeliver && isApproved && (shipment.status === "IN_TRANSIT" || shipment.status === "PARTIALLY_DELIVERED") && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-3">
-          <p className="text-xs font-medium text-blue-800 mb-1.5 flex items-center gap-1.5">
-            <MapPin className="h-3.5 w-3.5" /> Receive into
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            {warehouses.map((loc) => (
-              <button
-                key={loc.id}
-                onClick={() => setReceiveLocation(loc.id)}
-                className={`py-2.5 rounded-lg text-sm font-semibold border transition-colors ${
-                  receiveLocation === loc.id
-                    ? "bg-blue-600 text-white border-blue-600"
-                    : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
-                }`}
-              >
-                {loc.name}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* The "Receive into" warehouse picker (bins dormant) is GONE — plan
+          2109-inbound-bins-navigation-fixes, Q27: bin tracking is always on, and the chosen
+          bin decides the warehouse on the server. */}
 
       {/* Mark All Delivered / Partial / Undo are GONE (R3, D6).
           They wrote a shipment STATUS directly through api/inbound/[id]/status without
@@ -759,22 +705,9 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
           shipment finishes itself when the last outstanding line is received — the state is
           derived from the lines rather than asserted over them. */}
 
-      {/* Post-delivery Putaway */}
-      {BIN_TRACKING_ENABLED && canDeliver && isApproved && needsBinCount > 0 && shipment.status === "DELIVERED" && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3">
-          <p className="text-xs text-amber-800 font-medium mb-1 flex items-center gap-1.5">
-            <MapPin className="h-3.5 w-3.5" /> {needsBinCount} item{needsBinCount > 1 ? "s" : ""} need bin assignment
-          </p>
-          <p className="text-xs text-amber-600 mb-2">Select bins below, then save.</p>
-          {putawayReady > 0 && (
-            <Button onClick={handlePutaway} disabled={putawayLoading} size="sm"
-              className="w-full bg-amber-600 hover:bg-amber-700">
-              <Save className="h-3.5 w-3.5 mr-1.5" />
-              {putawayLoading ? "Saving..." : `Save Bin Assignment (${putawayReady})`}
-            </Button>
-          )}
-        </div>
-      )}
+      {/* The after-delivery "N items need bin assignment / Save Bin Assignment" panel is GONE
+          (plan 2109-inbound-bins-navigation-fixes, R34): a bin is required on every line before
+          it is received, so no line reaches DELIVERED without one. */}
 
       {/* Success message after delivery */}
       <ActionConfirmation
@@ -791,29 +724,47 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
         details="All items received and stock updated"
       />
 
-      {/* Select All — apply one bin to ALL undelivered items */}
-      {BIN_TRACKING_ENABLED && canDeliver && isApproved && (shipment.status === "IN_TRANSIT" || shipment.status === "PARTIALLY_DELIVERED") && bins.length > 0 && (
+      {/* "Apply to all unmatched lines" (plan 2109-inbound-bins-navigation-fixes, R1). It was
+          "Apply same bin to all items" and overwrote every undelivered line, rule-matched ones
+          included, so the rule's bin was lost. It now fills only lines no home-bin rule
+          matched; a rule-matched line is locked (R34) and is reported as kept. */}
+      {canDeliver && isApproved && (shipment.status === "IN_TRANSIT" || shipment.status === "PARTIALLY_DELIVERED") && bins.length > 0 && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-3">
-          <p className="text-xs font-medium text-blue-800 mb-1.5">Apply same bin to all items</p>
+          <p className="text-xs font-medium text-blue-800 mb-1.5">Apply to all unmatched lines</p>
           <select
+            aria-label="Bin for all unmatched lines"
             onChange={(e) => {
               if (!e.target.value) return;
               const binId = e.target.value;
               const undelivered = shipment.lineItems.filter((li) => !li.isDelivered);
+              const unmatched = undelivered.filter((li) => !isRuleLocked(li.id));
               const newSelections = { ...binSelections };
-              for (const li of undelivered) {
+              for (const li of unmatched) {
                 newSelections[li.id] = binId;
               }
               setBinSelections(newSelections);
+              setBulkMessage(`Applied to ${unmatched.length} · ${undelivered.length - unmatched.length} kept by rule`);
+              log.debug("bulk bin applied", {
+                shipmentId: id,
+                binId,
+                applied: unmatched.length,
+                keptByRule: undelivered.length - unmatched.length,
+              });
               e.target.value = "";
             }}
-            className="w-full text-xs border border-blue-200 rounded-lg px-2 py-1.5 bg-white text-slate-700"
+            className="w-full min-h-[44px] text-xs border border-blue-200 rounded-lg px-2 py-1.5 bg-white text-slate-700"
           >
-            <option value="">Select bin for all items...</option>
+            <option value="">Select a bin for every unmatched line...</option>
             {bins.map((b) => (
-              <option key={b.id} value={b.id}>{b.code} — {b.name} ({b.location})</option>
+              <option key={b.id} value={b.id}>{b.code} — {b.name}{b.location ? ` (${b.location})` : ""}</option>
             ))}
           </select>
+          {bulkMessage && <p className="text-xs text-blue-700 mt-1.5 tabular-nums">{bulkMessage}</p>}
+          {linesWithoutBin > 0 && (
+            <p className="text-xs text-amber-700 mt-1.5 tabular-nums">
+              Choose a bin for {linesWithoutBin} line{linesWithoutBin > 1 ? "s" : ""}
+            </p>
+          )}
         </div>
       )}
 
@@ -853,66 +804,68 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
               </div>
 
               {/* Current bin assignment */}
-              {BIN_TRACKING_ENABLED && li.bin && (
+              {li.bin && (
                 <div className="flex items-center gap-1.5 mt-1.5 text-xs text-indigo-600">
                   <MapPin className="h-3 w-3" /> {li.bin.code} — {li.bin.name} ({li.bin.location})
                 </div>
               )}
 
-              {/* Home Bin Rule Match Info */}
-              {BIN_TRACKING_ENABLED && putawayItems[li.id] && (
-                putawayItems[li.id].suggestedBin ? (
-                  <div className="flex items-center gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300">
-                    <Sparkles className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
-                    <span>
-                      Auto-matched Home Bin ({putawayItems[li.id].matchedRule?.label || "Rule"}): <strong>{putawayItems[li.id].suggestedBin?.code}</strong> — {putawayItems[li.id].suggestedBin?.name}
-                    </span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-500 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400">
-                    <Info className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-                    <span>No Home Bin Rule matched — select a destination bin below</span>
-                  </div>
-                )
-              )}
-
-              {/* Bin mode: selectors and Mark Delivered for undelivered items (IN_TRANSIT or PARTIALLY_DELIVERED) */}
-              {BIN_TRACKING_ENABLED && canDeliver && isApproved && (shipment.status === "IN_TRANSIT" || shipment.status === "PARTIALLY_DELIVERED") && !li.isDelivered && (
+              {/* The bin, before receiving (plan 2109-inbound-bins-navigation-fixes, R1 + R34).
+                  A line a home-bin rule matched shows the rule's bin LOCKED — no select, and the
+                  bulk action skips it; the server refuses any other bin with a 409. Every other
+                  line gets a required select. Bin tracking is always on (Q27), so the "dormant"
+                  Receive button, its confirmation and the warehouse picker are gone. */}
+              {canDeliver && isApproved && (shipment.status === "IN_TRANSIT" || shipment.status === "PARTIALLY_DELIVERED") && !li.isDelivered && (
                 <div>
-                  {renderBinSelectors(li)}
+                  {isRuleLocked(li.id) ? (
+                    <div className="mt-2 flex items-center gap-2 min-h-[44px] rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs text-emerald-800">
+                      <Lock className="h-3.5 w-3.5 text-emerald-600 shrink-0" aria-hidden />
+                      <span className="flex-1 min-w-0 truncate">
+                        <strong>{putawayItems[li.id].suggestedBin?.code}</strong> — {putawayItems[li.id].suggestedBin?.name}
+                      </span>
+                      <Badge variant="success" className="text-[11px] shrink-0">
+                        Rule: {putawayItems[li.id].matchedRule?.label || "Home bin"}
+                      </Badge>
+                    </div>
+                  ) : (
+                    <>
+                      {putawayItems[li.id]?.suggestedBin ? (
+                        <div className="flex items-center gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600">
+                          <Info className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                          <span>No home bin rule matched — pre-filled with the product&apos;s current bin, {putawayItems[li.id].suggestedBin?.code}. Change it if needed.</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-500">
+                          <Info className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                          <span>No home bin rule matched — choose a bin</span>
+                        </div>
+                      )}
+                      {renderBinSelectors(li)}
+                    </>
+                  )}
                   <button
                     onClick={() => handleMarkItemDelivered(li)}
-                    disabled={itemLoading === li.id || bins.length === 0}
-                    className="mt-2 w-full py-2.5 h-10 rounded-lg bg-green-50 text-green-700 text-xs font-medium border border-green-200 hover:bg-green-100 disabled:opacity-50"
+                    disabled={itemLoading === li.id || !binForLine(li.id)}
+                    className="mt-2 w-full min-h-[44px] rounded-lg bg-green-50 text-green-700 text-xs font-medium border border-green-200 hover:bg-green-100 disabled:opacity-50"
                   >
-                    {itemLoading === li.id ? "Marking..." : `Mark Delivered (Qty: ${li.quantity})`}
+                    {itemLoading === li.id
+                      ? "Receiving…"
+                      : binForLine(li.id)
+                        ? `Receive ×${li.quantity}`
+                        : "Choose a bin first"}
                   </button>
                 </div>
               )}
 
-              {/* RECEIVE THIS LINE (when bin tracking is dormant) */}
-              {!BIN_TRACKING_ENABLED && canDeliver && isApproved
-                && shipment.status !== "DELIVERED" && !li.isDelivered && (
-                <button
-                  onClick={() => setConfirmReceive(li)}
-                  disabled={receivingLineId === li.id}
-                  className="mt-2 w-full min-h-[44px] rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 focus-ring"
-                >
-                  {receivingLineId === li.id ? "Receiving…" : `Receive ×${li.quantity}`}
-                </button>
-              )}
-
-              {/* Received (when bin tracking is dormant) */}
-              {!BIN_TRACKING_ENABLED && li.isDelivered && (
+              {li.isDelivered && (
                 <div className="mt-2 w-full min-h-[44px] flex items-center justify-center rounded-lg bg-green-50 text-green-700 text-sm font-semibold border border-green-200">
                   Received ×{li.deliveredQty ?? li.quantity} ✓
                 </div>
               )}
 
-              {/* Bin mode: post-delivery bin assignment (delivered but no bin) */}
-              {BIN_TRACKING_ENABLED && canDeliver && li.isDelivered && !li.binId && bins.length > 0 && (
-                renderBinSelectors(li, "amber")
-              )}
+              {/* The post-delivery bin picker for a received line with no bin is GONE (plan 2109,
+                  R34): no line can be received without a bin any more. An old line received while
+                  the switch was off still shows its "No Bin" badge above; R37 checks for them. */}
 
               {/* Report Issue button */}
               {canDeliver && shipment.status !== "DELIVERED" && (
@@ -963,46 +916,6 @@ export default function InboundDetailPage({ params }: { params: Promise<{ id: st
           <Trash2 className="h-3.5 w-3.5" />
           {deliveredCount > 0 ? "Delete & Reverse Stock" : "Delete Shipment"}
         </button>
-      )}
-
-      {/* RECEIVE CONFIRMATION.
-          Receiving adds stock to a warehouse, and the goods desk is a phone in someone's hand
-          — a mis-tap should not silently move inventory. It names the product, the quantity
-          and the destination, because "into which building" is the part that is easy to get
-          wrong and impossible to see afterwards. */}
-      {confirmReceive && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
-          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4">
-            <h3 className="text-base font-bold text-slate-900">Receive this item?</h3>
-            <p className="text-sm text-slate-600">
-              {confirmReceive.productName} — <span className="font-semibold tabular-nums">×{confirmReceive.quantity}</span>
-              {" into "}
-              <span className="font-semibold">
-                {warehouses.find((w) => w.id === receiveLocation)?.name ?? "the selected warehouse"}
-              </span>
-              .
-            </p>
-            <p className="text-[11px] text-slate-500">
-              Short or damaged? Cancel and use Report Issue instead — receiving records the full
-              billed quantity.
-            </p>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setConfirmReceive(null)}
-                className="flex-1 min-h-[48px] rounded-lg border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => handleReceiveLine(confirmReceive)}
-                disabled={receivingLineId === confirmReceive.id}
-                className="flex-1 min-h-[48px] rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-              >
-                {receivingLineId === confirmReceive.id ? "Receiving…" : "Receive"}
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* Delete Confirmation */}

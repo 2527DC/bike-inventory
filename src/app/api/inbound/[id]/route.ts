@@ -9,12 +9,11 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
 import { resolveWarehouse, primaryFloorWarehouse } from "@/lib/warehouses";
 import { adjustWarehouseQty, deductAnywhere } from "@/lib/stock-location";
 import { inboundReceiveLineSchema, inboundCategorySchema } from "@/lib/validations";
-import { BinMoveRefused, createUnits, placeUnitsInBin, retireUnits } from "@/lib/units";
-import { matchHomeBin } from "@/lib/bins/rule-match";
+import { BinMoveRefused, createUnits, retireUnits } from "@/lib/units";
+import { assertRuleBin, RuleBinLocked } from "@/lib/inbound/rule-bin";
 import { recordApprovalEvent } from "@/lib/approvals/events";
 import { logActivity } from "@/lib/activity-log";
 import { finaliseDelivered, scheduleDeliveredSideEffects } from "@/lib/inbound/complete-shipment";
@@ -195,20 +194,23 @@ export async function PUT(
       // InventoryTransaction and nothing on the shelf. A line now names exactly one bin.
       //
       // Read off the raw body because `inboundReceiveLineSchema` (validations.ts) carries no
-      // bin field; the string check below is its validation. Ignored when bin tracking is off,
-      // where stock is held per warehouse only and the line lands in "Unmatched Inbound".
-      const binTrackingEnabled = await isBinTrackingEnabled();
-      const binId =
-        binTrackingEnabled && typeof body.binId === "string" && body.binId.trim() ? body.binId.trim() : null;
-      if (binTrackingEnabled && !binId) {
+      // bin field; the string check below is its validation.
+      //
+      // ALWAYS required (plan 2109-inbound-bins-navigation-fixes, R34 + Q27). It used to be
+      // required only while the bin-tracking switch was on; with it off the bin was ignored and
+      // the line landed in "Unmatched Inbound" with no bin. The switch is gone and so is that
+      // state: no inbound line is received without a bin.
+      const binId = typeof body.binId === "string" && body.binId.trim() ? body.binId.trim() : null;
+      if (!binId) {
+        log.warn("receive refused: no bin", { shipmentId: id, lineItemId, binId: null });
         return errorResponse("Choose the bin this line goes into", 400);
       }
 
-      // The bin decides the building. With bin tracking on the screen has no warehouse picker
-      // and sends the default godown, so a Floor bin would otherwise leave its units recorded
-      // in a warehouse that is not the one they are shelved in.
+      // The bin decides the building. The screen has no warehouse picker and sends the default
+      // godown, so a Floor bin would otherwise leave its units recorded in a warehouse that is
+      // not the one they are shelved in.
       let warehouse: { id: string; name: string } = resolved.warehouse;
-      if (binId) {
+      {
         const bin = await prisma.bin.findUnique({
           where: { id: binId },
           select: {
@@ -236,8 +238,8 @@ export async function PUT(
         }
       }
 
-      // Set inside the transaction when the home-bin rules placed the units (P4); read after it
-      // for the log line and the response, so the screen can say where they went.
+      // Set inside the transaction when a home-bin rule decided the bin (R34); read after it for
+      // the log line and the response.
       let ruleBinCode: string | null = null;
 
       const outcome = await prisma.$transaction(async (tx) => {
@@ -249,7 +251,7 @@ export async function PUT(
         // that impossible: exactly one caller gets count === 1.
         const claim = await tx.inboundLineItem.updateMany({
           where: { id: lineItemId, isDelivered: false },
-          data: { isDelivered: true, deliveredQty: qty, ...(binId ? { binId } : {}) },
+          data: { isDelivered: true, deliveredQty: qty, binId },
         });
         if (claim.count === 0) {
           return { updated: false, alreadyReceived: true, shipmentDelivered: false, snapshot: null };
@@ -267,6 +269,22 @@ export async function PUT(
             throw new Error(`Product not found for "${lineItem.productName}" — import it from Zoho Items first`);
           }
 
+          // ── THE RULE LOCK (plan 2109-inbound-bins-navigation-fixes, R34) ──
+          //
+          // A product a home-bin rule matches goes into the rule's bin in this warehouse, and
+          // nowhere else. The screen shows that bin locked; this is the lock itself, so a stale
+          // screen or a hand-made request cannot put it elsewhere. Thrown inside the transaction
+          // so the claim above rolls back; the catch below answers 409.
+          const ruleMatch = await assertRuleBin(tx, {
+            productId: matchedProduct.id,
+            warehouseId: warehouse.id,
+            shipmentBrandId: lineItem.shipment.brandId,
+            shipmentCategoryId: lineItem.shipment.categoryId,
+            lineItemId,
+            binId,
+          });
+          if (ruleMatch) ruleBinCode = ruleMatch.bin.code;
+
           // ── THE QUANTITY, IN BOTH MODES (plan 1709, P1) ──
           //
           // Bin mode used to write `Product.currentStock` and `BinStock` only, never a
@@ -276,10 +294,8 @@ export async function PUT(
           // Exactly one `adjustWarehouseQty` per line in either mode, so nothing is counted twice.
           const previousStock = matchedProduct.currentStock;
           const newStock = await adjustWarehouseQty(tx, matchedProduct.id, warehouse.id, qty);
-          if (binId) {
-            // One line, one bin (D2): the bin also becomes the product's home bin.
-            await tx.product.update({ where: { id: matchedProduct.id }, data: { binId } });
-          }
+          // One line, one bin (D2): the bin also becomes the product's home bin.
+          await tx.product.update({ where: { id: matchedProduct.id }, data: { binId } });
           const inward = await tx.inventoryTransaction.create({
             data: {
               type: "INWARD",
@@ -288,9 +304,7 @@ export async function PUT(
               previousStock,
               newStock,
               referenceNo: lineItem.shipment.shipmentNo,
-              notes: binId
-                ? `[INBOUND] Brand: ${lineItem.shipment.brand.name} | Bill: ${lineItem.shipment.billNo} | ${lineItem.productName} x${qty} → Bin: ${binId.slice(-6)}`
-                : `[INBOUND] Brand: ${lineItem.shipment.brand.name} | Bill: ${lineItem.shipment.billNo} | ${lineItem.productName} x${qty} → ${warehouse.name}`,
+              notes: `[INBOUND] Brand: ${lineItem.shipment.brand.name} | Bill: ${lineItem.shipment.billNo} | ${lineItem.productName} x${qty} → Bin: ${binId.slice(-6)}`,
               userId: user.id,
             },
             select: { id: true },
@@ -299,11 +313,11 @@ export async function PUT(
           // ── One unit per item, each its own code — for EVERY received product (R2, R6, R19) ──
           //
           // Everything this business inbounds is a bicycle (plan 1509-assembly-queue…, D1).
-          // Unassembled, as every inward (P4). With a bin they are PUT_AWAY there — stamped
+          // Unassembled, as every inward (P4). They are PUT_AWAY in the line's bin — stamped
           // non-assemblable when the bin is (P6b) — and the bin's stock is recounted from its
-          // units (P11); without one they are RECEIVED and wait in "Unmatched Inbound".
+          // units (P11). There is no "Unmatched Inbound" any more: every line has a bin (R34).
           // `sourceTransactionId` ties them to this INWARD row so a cleanup can find them (P4).
-          const newUnitIds = await createUnits(tx, {
+          await createUnits(tx, {
             productId: matchedProduct.id,
             warehouseId: warehouse.id,
             qty,
@@ -312,49 +326,24 @@ export async function PUT(
             sourceTransactionId: inward.id,
           });
 
-          if (binId) {
-            await tx.binMovementLog.create({
-              data: {
-                warehouseId: warehouse.id,
-                productId: matchedProduct.id,
-                quantity: qty,
-                fromBinId: null,
-                toBinId: binId,
-                reason: "Inbound receiving put-away",
-                movedById: user.id,
-              },
-            });
-          } else if (binTrackingEnabled && newUnitIds.length > 0) {
-            // ── RULE-BASED INWARD (plan 1709, P4 (2)) ──
-            //
-            // Nobody picked a bin, so the home-bin rules decide: brand · category · subcategory
-            // for this warehouse. The point is R42 — an item whose rule bin needs no assembly is
-            // non-assemblable FROM THE MOMENT IT ARRIVES, because `placeUnitsInBin` stamps it.
-            // A hand-picked bin always wins; this branch only runs when there was none.
-            //
-            // Only while bin tracking is on. With it off the building holds stock per warehouse
-            // and the line is meant to wait in "Unmatched Inbound" for a person to place it.
-            const match = await matchHomeBin(tx, {
-              productId: matchedProduct.id,
+          await tx.binMovementLog.create({
+            data: {
               warehouseId: warehouse.id,
-            });
-            if (match) {
-              await placeUnitsInBin(tx, newUnitIds, match.bin.id);
-              await tx.product.update({ where: { id: matchedProduct.id }, data: { binId: match.bin.id } });
-              await tx.binMovementLog.create({
-                data: {
-                  warehouseId: warehouse.id,
-                  productId: matchedProduct.id,
-                  quantity: qty,
-                  fromBinId: null,
-                  toBinId: match.bin.id,
-                  reason: `Inbound receiving — home bin rule (${match.label})`,
-                  movedById: user.id,
-                },
-              });
-              ruleBinCode = match.bin.code;
-            }
-          }
+              productId: matchedProduct.id,
+              quantity: qty,
+              fromBinId: null,
+              toBinId: binId,
+              reason: ruleMatch
+                ? `Inbound receiving — home bin rule (${ruleMatch.label})`
+                : "Inbound receiving put-away",
+              movedById: user.id,
+            },
+          });
+          // The RULE-BASED INWARD branch that stood here (plan 1709, P4 (2)) is GONE — plan
+          // 2109-inbound-bins-navigation-fixes, R34. It placed units by rule only when no bin was
+          // sent, which the required-bin check above already made unreachable. The rule now acts
+          // through the lock: the bin sent must BE the rule's bin, and `createUnits` stamps the
+          // units non-assemblable from that bin exactly as `placeUnitsInBin` did (R42).
 
           // Auto-create delivery for pre-booked items so outwards clerk can see it
           if (lineItem.preBookedCustomerName) {
@@ -505,6 +494,16 @@ export async function PUT(
     return errorResponse("No valid update fields", 400);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof RuleBinLocked) {
+      log.warn("receive refused: bin is set by rule", {
+        shipmentId: (await params).id,
+        lineItemId: error.context.lineItemId,
+        binId: error.context.binId,
+        ruleBinId: error.context.ruleBinId,
+        ruleId: error.context.ruleId,
+      });
+      return errorResponse(error.message, 409);
+    }
     if (error instanceof BinMoveRefused) {
       log.warn("receive refused by the bin rules", { shipmentId: (await params).id, message: error.message });
       return errorResponse(error.message, 409);

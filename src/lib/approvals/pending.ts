@@ -64,8 +64,7 @@ function ageHours(at: Date): number {
 
 /** Everything `userId` may approve, oldest first. Never throws on an empty grant — it returns []. */
 export async function listPendingApprovals(userId: string): Promise<PendingApprovals> {
-  const [canInbound, canOutbound, canTransfer, canAudit] = await Promise.all([
-    userCan(userId, "inbound", "approve"),
+  const [canOutbound, canTransfer, canAudit] = await Promise.all([
     userCan(userId, "deliveries", "approve"),
     userCan(userId, "transfers", "approve"),
     userCan(userId, "stock_audit", "approve"),
@@ -73,43 +72,18 @@ export async function listPendingApprovals(userId: string): Promise<PendingAppro
 
   const requests: PendingRequest[] = [];
 
-  // ── Inbound: raised, not approved, not sent back ────────────────────────────────────
-  // A returned shipment is the creator's, not the approver's, so it is NOT waiting here — it
-  // comes back when they resubmit, which clears `rejectedAt`. DELIVERED is excluded because a
-  // shipment that somehow reached the shelf is no longer an approval question.
-  if (canInbound) {
-    const shipments = await prisma.inboundShipment.findMany({
-      where: { approvedAt: null, rejectedAt: null, status: { not: "DELIVERED" } },
-      select: {
-        id: true,
-        shipmentNo: true,
-        billNo: true,
-        totalItems: true,
-        createdAt: true,
-        resubmittedAt: true,
-        brand: { select: { name: true } },
-        createdBy: { select: { name: true } },
-      },
-      orderBy: { createdAt: "asc" },
-      take: 200,
-    });
-    for (const s of shipments) {
-      const at = s.resubmittedAt ?? s.createdAt;
-      requests.push({
-        type: "INBOUND",
-        activity: "INBOUND",
-        id: s.id,
-        ref: s.shipmentNo,
-        summary: `${s.brand.name} — bill ${s.billNo}, ${s.totalItems} item${s.totalItems === 1 ? "" : "s"}`,
-        requestedByName: s.createdBy.name,
-        requestedAt: at.toISOString(),
-        ageHours: ageHours(at),
-        link: `/inbound/${s.id}`,
-        quickActions: true,
-        resubmitted: s.resubmittedAt !== null,
-      });
-    }
-  }
+  // ── Inbound: DELIBERATELY NOT LISTED (plan 2109-inbound-bins-navigation-fixes, R8, Q14) ──
+  //
+  // Do not restore this section. The owner's decision of 21 Sep 2026: inbound KEEPS its approval
+  // step — approve, return with a note, resubmit, the receive gate in `api/inbound/[id]` — but
+  // shipments no longer appear on the `/approvals` (Requests) screen or in its header badge.
+  // Approvers find them on `/inbound` under the "Not approved" chip
+  // (`src/lib/inbound/filters.ts`, the same `where` this section used), and the dashboard counts
+  // them on a card of their own (`api/dashboard/overview`, Q15a). The approver push still goes
+  // out and opens `/inbound/[id]` (`notifyInboundApprovalRequested`).
+  //
+  // The `inbound.approve` grant is therefore no longer read here, and the INBOUND section
+  // reports false: there is nothing of it on this screen to show.
 
   // ── Outbound: approval asked for and not yet given ──────────────────────────────────
   // `approvalReturnedAt` after the request means it was sent back and the creator has not
@@ -240,13 +214,13 @@ export async function listPendingApprovals(userId: string): Promise<PendingAppro
   log.debug("pending approvals resolved", {
     userId,
     total: requests.length,
-    sections: { canInbound, canOutbound, canTransfer, canAudit },
+    sections: { canOutbound, canTransfer, canAudit },
   });
 
   return {
     total: requests.length,
     sections: {
-      INBOUND: canInbound,
+      INBOUND: false, // plan 2109, R8 — see the tombstone above
       OUTBOUND: canOutbound,
       TRANSFER: canTransfer,
       STOCK_AUDIT: canAudit,
