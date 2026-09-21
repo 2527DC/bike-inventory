@@ -15,19 +15,11 @@ import {
   Sparkles,
   Info,
   X,
-  CheckCircle2,
   Trash2,
   History,
-  ShieldAlert,
   Pencil,
   Building2,
-  Inbox,
-  CheckSquare,
-  Square,
-  RefreshCw,
-  Check,
   ShieldOff,
-  Tags,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,8 +27,6 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { CategoryTreeSelect } from "@/components/category-tree-select";
 import { UnitLabelSheet } from "@/components/units/unit-label-sheet";
-import { useBinTracking } from "@/hooks/use-bin-tracking";
-import { formatDateTime } from "@/lib/utils";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 
@@ -71,6 +61,8 @@ interface BinSummary {
     binStocks: number;
     units: number;
   };
+  /** R5 / Q9: live units only, split on `assembledAt` — from one groupBy in `GET /api/bins`. */
+  unitCounts?: { total: number; assembled: number; unassembled: number };
 }
 
 interface InventoryUnitDetail {
@@ -121,64 +113,9 @@ interface CategoryRow {
   isActive?: boolean;
 }
 
-/** `GET /api/bins/home-rules/[id]/apply` — what applying a rule to existing stock would move. */
-interface ApplyDryRun {
-  rule: {
-    id: string;
-    warehouse: { id: string; name: string };
-    bin: { id: string; code: string; name: string; nonAssemblable: boolean };
-  };
-  movingTotal: number;
-  skippedTotal: number;
-  moving: Array<{ productName: string; sku: string; fromBinCode: string | null; quantity: number }>;
-  skipped: Array<{ productName: string; sku: string; fromBinCode: string | null; quantity: number }>;
-}
-
-/** `GET /api/bins/generate-unit-codes` — how many codes existing stock is missing. */
-interface GenerateDryRun {
-  warehouse: { id: string; name: string };
-  binId: string | null;
-  totalCodes: number;
-  products: number;
-  withoutBin: number;
-  noAssembly: number;
-  maxPerRun: number;
-  truncated: boolean;
-  rows: Array<{
-    productId: string;
-    productName: string;
-    sku: string;
-    missing: number;
-    stockQty: number;
-    liveUnits: number;
-    binCode: string | null;
-    binNonAssemblable: boolean;
-  }>;
-}
-
-interface UnmatchedItem {
-  id: string;
-  productName: string;
-  quantity: number;
-  deliveredQty: number | null;
-  productId: string | null;
-  product: {
-    id: string;
-    sku: string;
-    name: string;
-    brand?: { id: string; name: string } | null;
-    category?: { id: string; name: string } | null;
-  } | null;
-  shipment: {
-    id: string;
-    shipmentNo: string;
-    billNo: string;
-    deliveredAt: string | null;
-  };
-}
-
 /**
- * Warehouse bins — directory, unmatched items, home-bin rules and the bin-tracking switch.
+ * Warehouse bins — directory and home-bin rules. Bins are always on (plan 2109, Q27); the
+ * Unmatched tab, the per-rule Apply button and both Generate-codes buttons were removed (R29, Q21, Q24).
  *
  * Extracted verbatim from src/app/(dashboard)/bins/page.tsx (plan 1709-priority-build-and-stock-
  * flow, Part F, R32) with no behaviour change, so it can render both at /bins and as the Bins tab
@@ -196,25 +133,8 @@ export function BinsManager() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterAssemblyOnly, setFilterAssemblyOnly] = useState(false);
 
-  // Top tab navigation: "directory" vs "unmatched"
-  const [activeTab, setActiveTab] = useState<"directory" | "unmatched">("directory");
-
-  // Unmatched Inbound Items state
-  const [unmatchedItems, setUnmatchedItems] = useState<UnmatchedItem[]>([]);
-  const [unmatchedCount, setUnmatchedCount] = useState<number>(0);
-  const [unmatchedLoading, setUnmatchedLoading] = useState<boolean>(false);
-  const [unmatchedSearch, setUnmatchedSearch] = useState<string>("");
-  const [selectedUnmatchedIds, setSelectedUnmatchedIds] = useState<Set<string>>(new Set());
-  const [bulkBinId, setBulkBinId] = useState<string>("");
-  const [singleBinSelections, setSingleBinSelections] = useState<Record<string, string>>({});
-  const [assignLoadingId, setAssignLoadingId] = useState<string | null>(null);
-  const [bulkAssignLoading, setBulkAssignLoading] = useState<boolean>(false);
-  const [assignSuccessMsg, setAssignSuccessMsg] = useState<string>("");
-  const [assignError, setAssignError] = useState<string>("");
-
-  // Dynamic Bin Tracking State
-  const { isBinTrackingEnabled, toggleBinTracking } = useBinTracking();
-  const [togglingTracking, setTogglingTracking] = useState(false);
+  // The "directory" / "Unmatched Inbound" tabs and the bin-tracking switch were removed (plan
+  // 2109: R29 dropped, R34 makes a bin mandatory at receive, Q27 bins always on).
 
   // Modals
   const [showAddModal, setShowAddModal] = useState(false);
@@ -252,6 +172,8 @@ export function BinsManager() {
   const [binDetailsLoading, setBinDetailsLoading] = useState(false);
   const [detailedUnits, setDetailedUnits] = useState<InventoryUnitDetail[]>([]);
   const [detailedMovements, setDetailedMovements] = useState<MovementLog[]>([]);
+  // R5: the drawer's Total · Assembled · Unassembled, from the same helper as the card.
+  const [detailCounts, setDetailCounts] = useState<{ total: number; assembled: number; unassembled: number } | null>(null);
 
   // Move Modal State
   const [moveUnitId, setMoveUnitId] = useState("");
@@ -277,20 +199,8 @@ export function BinsManager() {
   const [ruleSaving, setRuleSaving] = useState(false);
   const [ruleError, setRuleError] = useState("");
 
-  // R40, P10 (b): after a rule is saved, offer to move the stock that is already here.
-  const [applyRuleId, setApplyRuleId] = useState<string | null>(null);
-  const [applyDryRun, setApplyDryRun] = useState<ApplyDryRun | null>(null);
-  const [applyLoading, setApplyLoading] = useState(false);
-  const [applyRunning, setApplyRunning] = useState(false);
-  const [applyMessage, setApplyMessage] = useState("");
-  const [applyError, setApplyError] = useState("");
-
-  // R41, R46, P8: give existing stock unit codes, then print their labels.
-  const [genScope, setGenScope] = useState<{ warehouseId: string; binId: string | null; label: string } | null>(null);
-  const [genDryRun, setGenDryRun] = useState<GenerateDryRun | null>(null);
-  const [genLoading, setGenLoading] = useState(false);
-  const [genRunning, setGenRunning] = useState(false);
-  const [genError, setGenError] = useState("");
+  // The per-rule "Apply to existing stock" (R40) and "Generate unit codes" (R41) state were
+  // removed with their buttons (plan 2109, Q21, Q24): codes now come from the bin audit (R31).
 
   // The printable sheet (R46), opened with the new codes, a whole bin, or one item.
   const [labelSheet, setLabelSheet] = useState<{ unitIds?: string[]; binId?: string; heading: string } | null>(null);
@@ -301,28 +211,15 @@ export function BinsManager() {
   const [markSaving, setMarkSaving] = useState(false);
   const [markError, setMarkError] = useState("");
 
-  // Toggle Bin Tracking Setting
-  async function handleToggleTracking() {
-    setTogglingTracking(true);
-    try {
-      await toggleBinTracking(!isBinTrackingEnabled);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to toggle bin tracking");
-    } finally {
-      setTogglingTracking(false);
-    }
-  }
-
   // 1. Initial Load: Fetch Warehouses & All Bins
   useEffect(() => {
     async function loadInitialData() {
       setLoading(true);
       // `apiTry`, never `fetch().then(r => r.json())`: an expired session answers 307 → /login
       // → HTML with status 200, which `res.ok` does not catch and `.json()` dies on (CLAUDE.md).
-      const [wh, binList, unmatched] = await Promise.all([
+      const [wh, binList] = await Promise.all([
         apiTry<Warehouse[]>("/api/warehouses"),
         apiTry<BinSummary[]>("/api/bins"),
-        apiTry<{ total: number }>("/api/bins/unmatched-items"),
       ]);
       if (wh.error) log.error("warehouse load failed", { message: wh.error });
       else if (Array.isArray(wh.data)) {
@@ -334,8 +231,6 @@ export function BinsManager() {
       }
       if (binList.error) log.error("bin load failed", { message: binList.error });
       else if (Array.isArray(binList.data)) setBins(binList.data);
-      if (unmatched.error) log.warn("unmatched count unavailable", { message: unmatched.error });
-      else if (unmatched.data) setUnmatchedCount(unmatched.data.total || 0);
       setLoading(false);
     }
     loadInitialData();
@@ -350,135 +245,6 @@ export function BinsManager() {
     if (error) log.error("bin load failed", { warehouseId: wId, message: error });
     else if (data) setBins(data);
     setLoading(false);
-  }
-
-  // 3. Fetch Unmatched Inbound Items
-  async function fetchUnmatchedItems() {
-    setUnmatchedLoading(true);
-    const { data, error } = await apiTry<{ items: UnmatchedItem[]; total: number }>(
-      "/api/bins/unmatched-items"
-    );
-    if (error) log.error("unmatched items load failed", { message: error });
-    else if (data) {
-      setUnmatchedItems(data.items || []);
-      setUnmatchedCount(data.total || 0);
-    }
-    setUnmatchedLoading(false);
-  }
-
-  async function handleAssignSingle(lineItemId: string) {
-    const binId = singleBinSelections[lineItemId];
-    if (!binId) {
-      setAssignError("Please choose a bin for this item before assigning.");
-      return;
-    }
-    setAssignLoadingId(lineItemId);
-    setAssignError("");
-    setAssignSuccessMsg("");
-    const { error } = await apiTry("/api/bins/assign", {
-      method: "POST",
-      json: { items: [{ lineItemId, binId }] },
-    });
-    if (error) {
-      log.error("bin assignment failed", { lineItemId, binId, message: error });
-      setAssignError(error);
-    } else {
-      setAssignSuccessMsg("Item successfully assigned to bin!");
-      setSelectedUnmatchedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(lineItemId);
-        return next;
-      });
-      await fetchUnmatchedItems();
-      fetchBins();
-    }
-    setAssignLoadingId(null);
-  }
-
-  async function handleAssignBulk() {
-    if (selectedUnmatchedIds.size === 0) {
-      setAssignError("Please select at least one item to assign.");
-      return;
-    }
-    if (!bulkBinId) {
-      setAssignError("Please select a target bin for the selected items.");
-      return;
-    }
-    setBulkAssignLoading(true);
-    setAssignError("");
-    setAssignSuccessMsg("");
-    const items = Array.from(selectedUnmatchedIds).map((lineItemId) => ({
-      lineItemId,
-      binId: bulkBinId,
-    }));
-    const { error } = await apiTry("/api/bins/assign", { method: "POST", json: { items } });
-    if (error) {
-      log.error("bulk bin assignment failed", { count: items.length, binId: bulkBinId, message: error });
-      setAssignError(error);
-    } else {
-      setAssignSuccessMsg(`Successfully assigned ${items.length} item(s) to bin!`);
-      setSelectedUnmatchedIds(new Set());
-      setBulkBinId("");
-      await fetchUnmatchedItems();
-      fetchBins();
-    }
-    setBulkAssignLoading(false);
-  }
-
-  const binsByWarehouse = useMemo(() => {
-    const map = new Map<string, { warehouseName: string; bins: BinSummary[] }>();
-    for (const b of bins) {
-      if (!b.isActive) continue;
-      const whId = b.warehouseId || b.warehouse?.id || "other";
-      const whName = b.warehouse?.name || "Warehouse";
-      if (!map.has(whId)) {
-        map.set(whId, { warehouseName: whName, bins: [] });
-      }
-      map.get(whId)!.bins.push(b);
-    }
-    return Array.from(map.values());
-  }, [bins]);
-
-  const filteredUnmatched = useMemo(() => {
-    if (!unmatchedSearch.trim()) return unmatchedItems;
-    const q = unmatchedSearch.toLowerCase();
-    return unmatchedItems.filter((it) => {
-      const name = (it.productName || it.product?.name || "").toLowerCase();
-      const sku = (it.product?.sku || "").toLowerCase();
-      const brand = (it.product?.brand?.name || "").toLowerCase();
-      const category = (it.product?.category?.name || "").toLowerCase();
-      const shipmentNo = (it.shipment?.shipmentNo || "").toLowerCase();
-      const billNo = (it.shipment?.billNo || "").toLowerCase();
-      return (
-        name.includes(q) ||
-        sku.includes(q) ||
-        brand.includes(q) ||
-        category.includes(q) ||
-        shipmentNo.includes(q) ||
-        billNo.includes(q)
-      );
-    });
-  }, [unmatchedItems, unmatchedSearch]);
-
-  const allFilteredSelected =
-    filteredUnmatched.length > 0 &&
-    filteredUnmatched.every((it) => selectedUnmatchedIds.has(it.id));
-
-  function toggleSelectAll() {
-    if (allFilteredSelected) {
-      setSelectedUnmatchedIds(new Set());
-    } else {
-      setSelectedUnmatchedIds(new Set(filteredUnmatched.map((it) => it.id)));
-    }
-  }
-
-  function toggleSelectItem(id: string) {
-    setSelectedUnmatchedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
   }
 
   // Pre-select warehouse for new bin modal or rules modal
@@ -521,14 +287,6 @@ export function BinsManager() {
     };
   }, [showRulesModal, rulesWarehouseId]);
 
-  // Changing the warehouse scope abandons any half-built rule and its apply panel.
-  useEffect(() => {
-    setApplyRuleId(null);
-    setApplyDryRun(null);
-    setApplyMessage("");
-    setApplyError("");
-  }, [rulesWarehouseId]);
-
   /** Active children of the chosen category: while there are any, a subcategory is required (P13). */
   const ruleSubcategories = useMemo(
     () => (ruleCategoryId ? categories.filter((c) => c.parentId === ruleCategoryId) : []),
@@ -538,6 +296,7 @@ export function BinsManager() {
   // Load Bin Detailed Inventory
   async function openBinDetail(bin: BinSummary) {
     setSelectedBinForDetail(bin);
+    setDetailCounts(bin.unitCounts ?? null);
     setBinDetailsLoading(true);
     // The route still returns `binStocks`; the drawer no longer shows them as "loose parts"
     // (plan 1509-assembly-queue-single-bin-and-product-assembly-level, R4). Every received
@@ -545,12 +304,14 @@ export function BinsManager() {
     const { data, error } = await apiTry<{
       units: InventoryUnitDetail[];
       recentMovements: MovementLog[];
+      unitCounts?: { total: number; assembled: number; unassembled: number };
     }>(`/api/bins/${bin.id}/inventory`);
     if (error) {
       log.error("bin inventory load failed", { binId: bin.id, message: error });
     } else if (data) {
       setDetailedUnits(data.units || []);
       setDetailedMovements(data.recentMovements || []);
+      if (data.unitCounts) setDetailCounts(data.unitCounts);
     }
     setBinDetailsLoading(false);
   }
@@ -706,8 +467,6 @@ export function BinsManager() {
       );
       if (refreshed.error) log.error("home rules refresh failed", { message: refreshed.error });
       else if (refreshed.data) setHomeRules(refreshed.data);
-      // R40: the rule is saved; now offer to move what is already on the shelves.
-      if (data?.id) openApplyPanel(data.id);
     }
     setRuleSaving(false);
   }
@@ -721,111 +480,9 @@ export function BinsManager() {
       return;
     }
     setHomeRules((prev) => prev.filter((r) => r.id !== id));
-    if (applyRuleId === id) {
-      setApplyRuleId(null);
-      setApplyDryRun(null);
-    }
   }
 
-  // ── APPLY A RULE TO EXISTING STOCK (R40, P10 (b)) ──
-  //
-  // The dry run first, always: option (b) moves everything the rule matches, including items
-  // somebody deliberately put somewhere else, so the person sees the list before confirming.
-  async function openApplyPanel(ruleId: string) {
-    setApplyRuleId(ruleId);
-    setApplyDryRun(null);
-    setApplyMessage("");
-    setApplyError("");
-    setApplyLoading(true);
-    const { data, error } = await apiTry<ApplyDryRun>(`/api/bins/home-rules/${ruleId}/apply`);
-    if (error) {
-      log.error("apply dry run failed", { ruleId, message: error });
-      setApplyError(error);
-    } else if (data) {
-      setApplyDryRun(data);
-      log.info("apply dry run", { ruleId, moving: data.movingTotal, skipped: data.skippedTotal });
-    }
-    setApplyLoading(false);
-  }
-
-  async function confirmApply() {
-    if (!applyRuleId) return;
-    setApplyRunning(true);
-    setApplyError("");
-    const { data, error } = await apiTry<{ moved: number; remaining: number; binCode: string }>(
-      `/api/bins/home-rules/${applyRuleId}/apply`,
-      { method: "POST", timeoutMs: 180_000 }
-    );
-    if (error) {
-      log.error("apply rule failed", { ruleId: applyRuleId, message: error });
-      setApplyError(error);
-    } else if (data) {
-      log.info("rule applied to existing stock", {
-        ruleId: applyRuleId,
-        moved: data.moved,
-        remaining: data.remaining,
-      });
-      setApplyMessage(
-        `${data.moved} item(s) moved into ${data.binCode}.` +
-          (data.remaining > 0 ? ` ${data.remaining} still to go — press again.` : "")
-      );
-      await openApplyPanelRefresh(applyRuleId);
-      fetchBins();
-    }
-    setApplyRunning(false);
-  }
-
-  /** Re-read the dry run after a move, keeping the success message on screen. */
-  async function openApplyPanelRefresh(ruleId: string) {
-    const { data, error } = await apiTry<ApplyDryRun>(`/api/bins/home-rules/${ruleId}/apply`);
-    if (error) log.warn("apply dry run refresh failed", { ruleId, message: error });
-    else if (data) setApplyDryRun(data);
-  }
-
-  // ── GENERATE UNIT CODES FOR EXISTING STOCK (R41, R46, P8) ──
-  async function openGenerate(warehouseId: string, binId: string | null, label: string) {
-    setGenScope({ warehouseId, binId, label });
-    setGenDryRun(null);
-    setGenError("");
-    setGenLoading(true);
-    const query = `warehouseId=${encodeURIComponent(warehouseId)}${binId ? `&binId=${encodeURIComponent(binId)}` : ""}`;
-    const { data, error } = await apiTry<GenerateDryRun>(`/api/bins/generate-unit-codes?${query}`);
-    if (error) {
-      log.error("generate codes dry run failed", { warehouseId, binId, message: error });
-      setGenError(error);
-    } else if (data) {
-      setGenDryRun(data);
-      log.info("generate codes dry run", { warehouseId, binId, total: data.totalCodes, products: data.products });
-    }
-    setGenLoading(false);
-  }
-
-  async function confirmGenerate() {
-    if (!genScope) return;
-    setGenRunning(true);
-    setGenError("");
-    const query = `warehouseId=${encodeURIComponent(genScope.warehouseId)}${genScope.binId ? `&binId=${encodeURIComponent(genScope.binId)}` : ""}`;
-    const { data, error } = await apiTry<{ created: number; remaining: number; unitIds: string[] }>(
-      `/api/bins/generate-unit-codes?${query}`,
-      { method: "POST", timeoutMs: 240_000 }
-    );
-    if (error) {
-      log.error("generate codes failed", { ...genScope, message: error });
-      setGenError(error);
-    } else if (data) {
-      log.info("unit codes generated", { ...genScope, created: data.created, remaining: data.remaining });
-      const heading = `${data.created} new code${data.created === 1 ? "" : "s"} · ${genScope.label}${
-        data.remaining > 0 ? ` · ${data.remaining} still without a code` : ""
-      }`;
-      setGenScope(null);
-      setGenDryRun(null);
-      fetchBins();
-      if (selectedBinForDetail) openBinDetail(selectedBinForDetail);
-      // R46: straight to the labels, which is the whole point of the codes.
-      if (data.created > 0) setLabelSheet({ unitIds: data.unitIds, heading });
-    }
-    setGenRunning(false);
-  }
+  // Apply-rule-to-existing-stock and Generate-unit-codes handlers removed (plan 2109, Q21, Q24).
 
   // ── P6b: this item does need assembly after all ──
   async function confirmMarkAssemblable() {
@@ -969,7 +626,7 @@ export function BinsManager() {
   const selectedWarehouse = warehouses.find((w) => w.id === selectedWarehouseId);
 
   // Compute aggregate stats from filtered bins
-  const totalUnits = filteredBins.reduce((acc, b) => acc + (b._count.units || 0), 0);
+  const totalUnits = filteredBins.reduce((acc, b) => acc + (b.unitCounts?.total ?? 0), 0);
   const assemblyBinsCount = filteredBins.filter((b) => b.isAssemblyArea).length;
 
   // The bin drawer lists its bicycles grouped by product, with a count per product — the
@@ -985,7 +642,10 @@ export function BinsManager() {
   }, [detailedUnits]);
 
   function renderBinCard(bin: BinSummary) {
-    const hasCycles = (bin._count.units || 0) > 0;
+    const counts = bin.unitCounts ?? { total: 0, assembled: 0, unassembled: 0 };
+    const hasCycles = counts.total > 0;
+    // Q7: capacity warns, never blocks.
+    const overCapacity = bin.capacity != null && bin.capacity > 0 && counts.total > bin.capacity;
 
     return (
       <Card
@@ -1040,14 +700,30 @@ export function BinsManager() {
 
           {/* Inventory Overview */}
           <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 dark:border-slate-800/80">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1 text-xs">
+            {/* R5 / Q9: Total · Assembled · Unassembled, live items only. A no-assembly bin shows Total only. */}
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
                 <Bike className={`h-4 w-4 ${hasCycles ? "text-emerald-600" : "text-slate-300"}`} />
                 <span className={`font-semibold ${hasCycles ? "text-emerald-700 dark:text-emerald-400" : "text-slate-400"}`}>
-                  {bin._count.units || 0}
+                  {counts.total}
                 </span>
-                <span className="text-[10px] text-slate-400">Cycles</span>
+                <span className="text-[10px] text-slate-400">Total</span>
+                {!bin.nonAssemblable && (
+                  <>
+                    <span className="text-slate-300">·</span>
+                    <span className="font-semibold text-slate-700 dark:text-slate-300">{counts.assembled}</span>
+                    <span className="text-[10px] text-slate-400">Assembled</span>
+                    <span className="text-slate-300">·</span>
+                    <span className="font-semibold text-slate-700 dark:text-slate-300">{counts.unassembled}</span>
+                    <span className="text-[10px] text-slate-400">Unassembled</span>
+                  </>
+                )}
               </div>
+              {overCapacity && (
+                <span className="text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                  {counts.total} / {bin.capacity} — over capacity
+                </span>
+              )}
             </div>
 
             <div className="flex items-center gap-1.5">
@@ -1095,34 +771,7 @@ export function BinsManager() {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          {/* Dynamic Bin Tracking Toggle Switch */}
-          <div className="flex items-center gap-2.5 rounded-xl border border-slate-200/80 bg-white px-3.5 py-1.5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex flex-col">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                Bin Tracking
-              </span>
-              <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                {isBinTrackingEnabled ? "Active & Enforced" : "Disabled (Off)"}
-              </span>
-            </div>
-            {canEdit("bins") && (
-              <button
-                type="button"
-                role="switch"
-                aria-checked={isBinTrackingEnabled}
-                disabled={togglingTracking}
-                onClick={handleToggleTracking}
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${isBinTrackingEnabled ? "bg-indigo-600" : "bg-slate-300 dark:bg-slate-700"
-                  } ${togglingTracking ? "opacity-50 cursor-not-allowed" : ""}`}
-                title={isBinTrackingEnabled ? "Click to Disable Bin Tracking" : "Click to Enable Bin Tracking"}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${isBinTrackingEnabled ? "translate-x-5" : "translate-x-0"
-                    }`}
-                />
-              </button>
-            )}
-          </div>
+          {/* The "Bin Tracking" on/off switch was removed: bins are always on (plan 2109, Q27). */}
 
           {canEdit("bins") && (
             <Button
@@ -1135,27 +784,8 @@ export function BinsManager() {
             </Button>
           )}
 
-          {/* R41, R46: stock that was here before unit codes existed. One warehouse at a time,
-              because the count comes from that warehouse's StockLevel rows (P8). */}
-          {canEdit("bins") && (
-            <Button
-              variant="outline"
-              disabled={selectedWarehouseId === "ALL"}
-              title={
-                selectedWarehouseId === "ALL"
-                  ? "Choose one warehouse first"
-                  : "Give existing stock unit codes and print their labels"
-              }
-              onClick={() => {
-                const wh = warehouses.find((w) => w.id === selectedWarehouseId);
-                if (wh) openGenerate(wh.id, null, wh.name);
-              }}
-              className="gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-900 dark:text-emerald-300 dark:hover:bg-emerald-950/40"
-            >
-              <Tags className="h-4 w-4" />
-              Generate unit codes
-            </Button>
-          )}
+          {/* The warehouse "Generate unit codes" button was removed (plan 2109, Q24): existing
+              items get their U- codes from the bin audit (R31). */}
 
           {canCreate("bins") && (
             <Button
@@ -1176,49 +806,8 @@ export function BinsManager() {
         </div>
       </div>
 
-      {/* Top-Level Navigation Tabs */}
-      <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-2">
-        <button
-          onClick={() => setActiveTab("directory")}
-          className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all ${
-            activeTab === "directory"
-              ? "bg-indigo-600 text-white shadow-sm"
-              : "text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
-          }`}
-        >
-          <Boxes className="h-4 w-4" />
-          <span>Warehouse Directory</span>
-        </button>
-
-        <button
-          onClick={() => {
-            setActiveTab("unmatched");
-            fetchUnmatchedItems();
-          }}
-          className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all ${
-            activeTab === "unmatched"
-              ? "bg-indigo-600 text-white shadow-sm"
-              : "text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
-          }`}
-        >
-          <Inbox className="h-4 w-4" />
-          <span>Unmatched Inbound</span>
-          {unmatchedCount > 0 && (
-            <span
-              className={`rounded-full px-2 py-0.5 text-xs font-bold ${
-                activeTab === "unmatched"
-                  ? "bg-white text-indigo-700"
-                  : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-              }`}
-            >
-              {unmatchedCount}
-            </span>
-          )}
-        </button>
-      </div>
-
-      {activeTab === "directory" ? (
-        <>
+      {/* The "Warehouse Directory" / "Unmatched Inbound" tabs were removed (plan 2109, R29
+          dropped): every inbound line now needs a bin before it is received (R34). */}
           {/* Search & Filter Bar: Store, Kind, Warehouse & Quick Search */}
       <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         {/* Store Filter */}
@@ -1475,284 +1064,6 @@ export function BinsManager() {
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
               {filteredBins.map(renderBinCard)}
-            </div>
-          )}
-        </div>
-      )}
-        </>
-      ) : (
-        /* UNMATCHED INBOUND ITEMS TAB */
-        <div className="space-y-4">
-          {/* Notifications */}
-          {assignSuccessMsg && (
-            <div className="flex items-center justify-between rounded-xl border border-green-200 bg-green-50 p-3 text-xs font-medium text-green-800 dark:border-green-900/40 dark:bg-green-950/20 dark:text-green-300">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-green-600" />
-                <span>{assignSuccessMsg}</span>
-              </div>
-              <button
-                onClick={() => setAssignSuccessMsg("")}
-                className="text-green-700 hover:underline"
-              >
-                Dismiss
-              </button>
-            </div>
-          )}
-
-          {assignError && (
-            <div className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-medium text-red-800 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
-              <div className="flex items-center gap-2">
-                <ShieldAlert className="h-4 w-4 text-red-600" />
-                <span>{assignError}</span>
-              </div>
-              <button
-                onClick={() => setAssignError("")}
-                className="text-red-700 hover:underline"
-              >
-                Dismiss
-              </button>
-            </div>
-          )}
-
-          {/* Subheader & Search / Filter Controls */}
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex items-center gap-3 flex-1 min-w-[240px]">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder="Search delivered items, SKU, shipment, brand, category..."
-                  value={unmatchedSearch}
-                  onChange={(e) => setUnmatchedSearch(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 py-2 text-xs text-slate-800 focus:border-indigo-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                />
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={fetchUnmatchedItems}
-                disabled={unmatchedLoading}
-                className="gap-1.5 h-9 text-xs border-slate-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${unmatchedLoading ? "animate-spin" : ""}`} />
-                <span>Refresh</span>
-              </Button>
-            </div>
-
-            <div className="text-xs text-slate-500">
-              Showing <span className="font-bold text-slate-800 dark:text-slate-200">{filteredUnmatched.length}</span> of {unmatchedCount} unassigned item{unmatchedCount !== 1 ? "s" : ""}
-            </div>
-          </div>
-
-          {/* Bulk Action Bar */}
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4 dark:border-indigo-950/60 dark:bg-indigo-950/20">
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={toggleSelectAll}
-                className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:text-indigo-600"
-              >
-                {allFilteredSelected ? (
-                  <CheckSquare className="h-4 w-4 text-indigo-600" />
-                ) : (
-                  <Square className="h-4 w-4 text-slate-400" />
-                )}
-                <span>Select All Visible</span>
-              </button>
-              {selectedUnmatchedIds.size > 0 && (
-                <Badge variant="info" className="text-xs">
-                  {selectedUnmatchedIds.size} selected
-                </Badge>
-              )}
-            </div>
-
-            <div className="flex items-center gap-2 flex-wrap">
-              <select
-                value={bulkBinId}
-                onChange={(e) => setBulkBinId(e.target.value)}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 max-w-xs"
-              >
-                <option value="">Choose Destination Bin...</option>
-                {binsByWarehouse.map((group) => (
-                  <optgroup key={group.warehouseName} label={group.warehouseName}>
-                    {group.bins.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.code} — {b.name} {b.directions ? `(${b.directions})` : ""}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-
-              <Button
-                size="sm"
-                disabled={selectedUnmatchedIds.size === 0 || !bulkBinId || bulkAssignLoading || !canEdit("bins")}
-                onClick={handleAssignBulk}
-                className="h-8 gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700 text-xs"
-              >
-                {bulkAssignLoading ? (
-                  <>
-                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                    <span>Assigning...</span>
-                  </>
-                ) : (
-                  <>
-                    <Check className="h-3.5 w-3.5" />
-                    <span>Assign Selected ({selectedUnmatchedIds.size})</span>
-                  </>
-                )}
-              </Button>
-            </div>
-          </div>
-
-          {/* Items Listing */}
-          {unmatchedLoading ? (
-            <div className="space-y-3">
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="h-28 animate-pulse rounded-2xl border border-slate-200 bg-slate-100/70 dark:border-slate-800 dark:bg-slate-800/40" />
-              ))}
-            </div>
-          ) : filteredUnmatched.length === 0 ? (
-            <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 p-12 text-center dark:border-slate-800 dark:bg-slate-900/20">
-              <CheckCircle2 className="h-12 w-12 text-emerald-500" />
-              <h3 className="mt-3 text-base font-bold text-slate-800 dark:text-slate-200">
-                {unmatchedItems.length === 0
-                  ? "All Delivered Items Assigned!"
-                  : "No items match your search"}
-              </h3>
-              <p className="mt-1 text-xs text-slate-500 max-w-sm">
-                {unmatchedItems.length === 0
-                  ? "Every delivered inbound line item has been placed into a designated warehouse bin."
-                  : "Try clearing your search query to see all unmatched inbound items."}
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {filteredUnmatched.map((it) => {
-                const isSelected = selectedUnmatchedIds.has(it.id);
-                const currentBinChoice = singleBinSelections[it.id] || "";
-                const isSaving = assignLoadingId === it.id;
-                const brandName = it.product?.brand?.name;
-                const catName = it.product?.category?.name;
-                const qty = it.deliveredQty || it.quantity;
-
-                return (
-                  <div
-                    key={it.id}
-                    className={`rounded-2xl border p-4 transition-all ${
-                      isSelected
-                        ? "border-indigo-400 bg-indigo-50/30 shadow-sm dark:border-indigo-700 dark:bg-indigo-950/20"
-                        : "border-slate-200/80 bg-white hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900"
-                    }`}
-                  >
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                      {/* Left: Checkbox + Product & Shipment Info */}
-                      <div className="flex items-start gap-3 flex-1 min-w-0">
-                        <button
-                          type="button"
-                          onClick={() => toggleSelectItem(it.id)}
-                          className="mt-0.5 text-slate-400 hover:text-indigo-600 shrink-0"
-                        >
-                          {isSelected ? (
-                            <CheckSquare className="h-5 w-5 text-indigo-600" />
-                          ) : (
-                            <Square className="h-5 w-5 text-slate-300" />
-                          )}
-                        </button>
-
-                        <div className="space-y-1.5 min-w-0 flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-sm font-bold text-slate-900 dark:text-white truncate">
-                              {it.productName || it.product?.name}
-                            </span>
-                            {it.product?.sku && (
-                              <span className="font-mono text-[11px] bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded text-slate-600 dark:text-slate-300">
-                                {it.product.sku}
-                              </span>
-                            )}
-                            <Badge variant="warning" className="text-[10px]">
-                              Qty: {qty}
-                            </Badge>
-                          </div>
-
-                          <div className="flex items-center gap-2 flex-wrap text-xs">
-                            {brandName && (
-                              <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                                Brand: {brandName}
-                              </span>
-                            )}
-                            {catName && (
-                              <span className="inline-flex items-center rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
-                                Category: {catName}
-                              </span>
-                            )}
-                            <span className="text-slate-400">•</span>
-                            <span className="text-slate-600 dark:text-slate-400">
-                              Shipment: <strong className="text-slate-800 dark:text-slate-200">{it.shipment?.shipmentNo}</strong>
-                            </span>
-                            <span className="text-slate-400">•</span>
-                            <span className="text-slate-600 dark:text-slate-400">
-                              Bill: <strong className="text-slate-800 dark:text-slate-200">{it.shipment?.billNo}</strong>
-                            </span>
-                            {it.shipment?.deliveredAt && (
-                              <>
-                                <span className="text-slate-400">•</span>
-                                <span className="text-slate-500">
-                                  Delivered: {formatDateTime(it.shipment.deliveredAt)}
-                                </span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Right: Destination Bin Selection & Assign Button */}
-                      <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
-                        <select
-                          value={currentBinChoice}
-                          onChange={(e) =>
-                            setSingleBinSelections((prev) => ({
-                              ...prev,
-                              [it.id]: e.target.value,
-                            }))
-                          }
-                          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 max-w-[220px]"
-                        >
-                          <option value="">Select destination bin...</option>
-                          {binsByWarehouse.map((group) => (
-                            <optgroup key={group.warehouseName} label={group.warehouseName}>
-                              {group.bins.map((b) => (
-                                <option key={b.id} value={b.id}>
-                                  {b.code} — {b.name}
-                                </option>
-                              ))}
-                            </optgroup>
-                          ))}
-                        </select>
-
-                        <Button
-                          size="sm"
-                          disabled={!currentBinChoice || isSaving || !canEdit("bins")}
-                          onClick={() => handleAssignSingle(it.id)}
-                          className="h-8 gap-1 bg-indigo-600 text-white hover:bg-indigo-700 text-xs"
-                        >
-                          {isSaving ? (
-                            <>
-                              <RefreshCw className="h-3 w-3 animate-spin" />
-                              <span>Saving...</span>
-                            </>
-                          ) : (
-                            <>
-                              <MapPin className="h-3 w-3" />
-                              <span>Assign</span>
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
             </div>
           )}
         </div>
@@ -2111,6 +1422,25 @@ export function BinsManager() {
                     <MapPin className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                     <span>{selectedBinForDetail.directions || "No physical directions specified"}</span>
                   </p>
+                  {/* R5 / Q9: live items only; a no-assembly bin shows Total only. */}
+                  {detailCounts && (
+                    <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                      <strong>{detailCounts.total}</strong> Total
+                      {!selectedBinForDetail.nonAssemblable && (
+                        <>
+                          {" · "}<strong>{detailCounts.assembled}</strong> Assembled
+                          {" · "}<strong>{detailCounts.unassembled}</strong> Unassembled
+                        </>
+                      )}
+                      {selectedBinForDetail.capacity != null &&
+                        selectedBinForDetail.capacity > 0 &&
+                        detailCounts.total > selectedBinForDetail.capacity && (
+                          <span className="ml-2 font-semibold text-amber-600 dark:text-amber-400">
+                            {detailCounts.total} / {selectedBinForDetail.capacity} — over capacity
+                          </span>
+                        )}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -2154,23 +1484,7 @@ export function BinsManager() {
                   <Printer className="h-3.5 w-3.5 text-indigo-500" /> Print labels
                 </Button>
 
-                {/* R41: the same button, scoped to this bin alone. */}
-                {canEdit("bins") && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() =>
-                      openGenerate(
-                        selectedBinForDetail.warehouseId,
-                        selectedBinForDetail.id,
-                        `Bin ${selectedBinForDetail.code}`
-                      )
-                    }
-                    className="h-8 gap-1.5 border-emerald-200 text-xs text-emerald-700 hover:bg-emerald-50 dark:border-emerald-900 dark:text-emerald-300"
-                  >
-                    <Tags className="h-3.5 w-3.5" /> Generate codes
-                  </Button>
-                )}
+                {/* The bin-level "Generate codes" button was removed (plan 2109, Q24, R31). */}
 
                 <button
                   onClick={() => setSelectedBinForDetail(null)}
@@ -2554,122 +1868,8 @@ export function BinsManager() {
                 </div>
               </form>
 
-              {/* ── APPLY TO EXISTING STOCK (R40, P10 (b)) ── */}
-              {applyRuleId && (
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 dark:border-emerald-900 dark:bg-emerald-950/20">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="font-semibold text-emerald-900 dark:text-emerald-200">
-                        Apply to existing stock
-                      </div>
-                      <p className="mt-0.5 text-[11px] text-emerald-800/80 dark:text-emerald-300/80">
-                        A rule only places what arrives next. This moves what is already here into{" "}
-                        {applyDryRun ? <strong>{applyDryRun.rule.bin.code}</strong> : "the rule's bin"} —
-                        including items currently in another bin.
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => {
-                        setApplyRuleId(null);
-                        setApplyDryRun(null);
-                      }}
-                      aria-label="Close"
-                      className="rounded-lg p-1 text-emerald-700/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-
-                  {applyError && (
-                    <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2.5 text-[11px] font-medium text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
-                      {applyError}
-                    </div>
-                  )}
-                  {applyMessage && (
-                    <div className="mt-2 rounded-lg border border-emerald-300 bg-white p-2.5 text-[11px] font-medium text-emerald-800 dark:border-emerald-800 dark:bg-slate-900 dark:text-emerald-300">
-                      {applyMessage}
-                    </div>
-                  )}
-
-                  {applyLoading ? (
-                    <div className="py-4 text-center text-[11px] text-emerald-800/70">Working out what would move…</div>
-                  ) : applyDryRun ? (
-                    <div className="mt-3 space-y-3">
-                      <div className="flex flex-wrap gap-4 text-[11px]">
-                        <span className="font-semibold text-emerald-900 dark:text-emerald-200">
-                          Moving {applyDryRun.movingTotal} item(s)
-                        </span>
-                        {applyDryRun.skippedTotal > 0 && (
-                          <span className="font-semibold text-amber-700 dark:text-amber-400">
-                            Skipped {applyDryRun.skippedTotal} — no-assembly items cannot go into a bin
-                            that holds items needing assembly
-                          </span>
-                        )}
-                      </div>
-
-                      {applyDryRun.moving.length > 0 && (
-                        <div className="max-h-40 overflow-y-auto rounded-lg border border-emerald-200 bg-white dark:border-emerald-900 dark:bg-slate-900">
-                          {applyDryRun.moving.map((row, i) => (
-                            <div
-                              key={`${row.sku}-${row.fromBinCode ?? "none"}-${i}`}
-                              className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-1.5 text-[11px] last:border-0 dark:border-slate-800"
-                            >
-                              <span className="truncate text-slate-700 dark:text-slate-300">
-                                {row.productName} <span className="font-mono text-slate-400">{row.sku}</span>
-                              </span>
-                              <span className="shrink-0 text-slate-500">
-                                ×{row.quantity} from {row.fromBinCode || "no bin"}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {applyDryRun.skipped.length > 0 && (
-                        <div className="max-h-28 overflow-y-auto rounded-lg border border-amber-200 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20">
-                          {applyDryRun.skipped.map((row, i) => (
-                            <div
-                              key={`skip-${row.sku}-${row.fromBinCode ?? "none"}-${i}`}
-                              className="flex items-center justify-between gap-2 border-b border-amber-100 px-3 py-1.5 text-[11px] last:border-0 dark:border-amber-900"
-                            >
-                              <span className="truncate text-amber-900 dark:text-amber-300">
-                                {row.productName} <span className="font-mono opacity-60">{row.sku}</span>
-                              </span>
-                              <span className="shrink-0 text-amber-700 dark:text-amber-400">
-                                ×{row.quantity} stays in {row.fromBinCode || "no bin"}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => openApplyPanel(applyRuleId)}
-                          disabled={applyRunning}
-                          className="h-8 gap-1.5 text-xs"
-                        >
-                          <RefreshCw className={`h-3.5 w-3.5 ${applyLoading ? "animate-spin" : ""}`} /> Recheck
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          onClick={confirmApply}
-                          disabled={applyRunning || applyDryRun.movingTotal === 0}
-                          className="h-8 bg-emerald-600 text-xs text-white hover:bg-emerald-700"
-                        >
-                          {applyRunning
-                            ? "Moving…"
-                            : `Move ${applyDryRun.movingTotal} item(s) into ${applyDryRun.rule.bin.code}`}
-                        </Button>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              )}
+              {/* The "Apply to existing stock" panel was removed (plan 2109, Q21): rules act only
+                  when an inbound line is received. */}
 
               {/* Existing Rules List */}
               <div>
@@ -2715,15 +1915,7 @@ export function BinsManager() {
                         </div>
 
                         <div className="flex shrink-0 items-center gap-1">
-                          {/* R40: the same panel the save flow opens, for a rule saved earlier. */}
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => openApplyPanel(r.id)}
-                            className="h-7 text-xs text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400"
-                          >
-                            Apply to existing stock
-                          </Button>
+                          {/* Per-rule "Apply to existing stock" removed (plan 2109, Q21). */}
                           <Button
                             size="sm"
                             variant="ghost"
@@ -2743,128 +1935,8 @@ export function BinsManager() {
         </div>
       )}
 
-      {/* ── MODAL 5: GENERATE UNIT CODES FOR EXISTING STOCK (R41, R46, P8) ── */}
-      {genScope && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center sm:p-4">
-          <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl duration-200 animate-in slide-in-from-bottom-5 sm:rounded-2xl sm:zoom-in-95 dark:bg-slate-900">
-            <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3 dark:border-slate-800">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Tags className="h-5 w-5 text-emerald-600" />
-                  <h2 className="text-base font-bold text-slate-900 dark:text-white">Generate unit codes</h2>
-                </div>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  {genScope.label} — one code per physical item, so every one can carry its own label.
-                </p>
-              </div>
-              <button
-                onClick={() => {
-                  setGenScope(null);
-                  setGenDryRun(null);
-                }}
-                aria-label="Close"
-                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="mt-4 space-y-3 text-xs">
-              {genError && (
-                <div className="rounded-lg border border-red-200 bg-red-50 p-3 font-medium text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
-                  {genError}
-                </div>
-              )}
-
-              {genLoading ? (
-                <div className="py-8 text-center text-slate-400">Counting what is missing a code…</div>
-              ) : genDryRun ? (
-                <>
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                    <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
-                      <div className="text-lg font-bold text-slate-900 dark:text-white">{genDryRun.totalCodes}</div>
-                      <div className="text-[11px] text-slate-500">codes to create</div>
-                    </div>
-                    <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
-                      <div className="text-lg font-bold text-slate-900 dark:text-white">{genDryRun.products}</div>
-                      <div className="text-[11px] text-slate-500">products</div>
-                    </div>
-                    <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
-                      <div className="text-lg font-bold text-slate-900 dark:text-white">{genDryRun.withoutBin}</div>
-                      <div className="text-[11px] text-slate-500">with no bin yet</div>
-                    </div>
-                    <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
-                      <div className="text-lg font-bold text-slate-900 dark:text-white">{genDryRun.noAssembly}</div>
-                      <div className="text-[11px] text-slate-500">into no-assembly bins</div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg bg-blue-50 p-3 text-[11px] leading-relaxed text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
-                    Every item gets a code, whatever condition it is in — the codes are created{" "}
-                    <strong>unassembled</strong>, exactly as an inward creates them. Cycles that are
-                    already built are corrected by the unit-level stock count, not here.
-                    {genDryRun.totalCodes > genDryRun.maxPerRun && (
-                      <>
-                        {" "}
-                        At most <strong>{genDryRun.maxPerRun}</strong> are created per press; run it again
-                        for the rest.
-                      </>
-                    )}
-                  </div>
-
-                  {genDryRun.rows.length > 0 && (
-                    <div className="max-h-56 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-800">
-                      {genDryRun.rows.map((row) => (
-                        <div
-                          key={row.productId}
-                          className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-1.5 last:border-0 dark:border-slate-800"
-                        >
-                          <span className="truncate text-slate-700 dark:text-slate-300">
-                            {row.productName} <span className="font-mono text-slate-400">{row.sku}</span>
-                          </span>
-                          <span className="shrink-0 text-[11px] text-slate-500">
-                            +{row.missing} → {row.binCode || "no bin"}
-                            {row.binNonAssemblable ? " (no assembly)" : ""}
-                          </span>
-                        </div>
-                      ))}
-                      {genDryRun.truncated && (
-                        <div className="px-3 py-1.5 text-[11px] italic text-slate-400">
-                          …and more; the totals above cover everything.
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="flex justify-end gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => {
-                        setGenScope(null);
-                        setGenDryRun(null);
-                      }}
-                      className="h-9 text-xs"
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      type="button"
-                      onClick={confirmGenerate}
-                      disabled={genRunning || genDryRun.totalCodes === 0}
-                      className="h-9 bg-emerald-600 text-xs text-white hover:bg-emerald-700"
-                    >
-                      {genRunning
-                        ? "Creating codes…"
-                        : `Create ${Math.min(genDryRun.totalCodes, genDryRun.maxPerRun)} code(s)`}
-                    </Button>
-                  </div>
-                </>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* MODAL 5 (Generate unit codes for existing stock) was removed (plan 2109, Q24): codes
+          come from the bin audit (R31). */}
 
       {/* ── MODAL 6: THIS ITEM DOES NEED ASSEMBLY AFTER ALL (P6b) ── */}
       {markUnit && (

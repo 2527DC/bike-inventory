@@ -67,13 +67,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       include: {
         vendor: {
           select: {
-            id: true, name: true, code: true, whatsappNumber: true, phone: true,
-            contacts: {
-              where: { OR: [{ whatsapp: { not: null } }, { phone: { not: null } }] },
-              orderBy: { isPrimary: "desc" },
-              take: 1,
-              select: { name: true, phone: true, whatsapp: true },
-            },
+            // The contact person lives on Vendor since plan 2109 (R28); VendorContact is no longer read.
+            id: true, name: true, code: true, whatsappNumber: true, phone: true, contactPerson: true,
           },
         },
         bill: { select: { id: true, billNo: true, amount: true } },

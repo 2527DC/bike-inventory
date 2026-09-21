@@ -6,7 +6,6 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { validateReorderVendor } from "@/lib/vendors/validate";
-import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
 import { isAssemblyLevel } from "@/lib/assembly-level";
 import { createLogger } from "@/lib/logger";
 
@@ -107,17 +106,9 @@ export async function POST(req: NextRequest) {
 
     // Bins are the one detail no import can ever supply — a bin is a physical shelf in this
     // warehouse and Zoho has never heard of one. Walking a freshly imported batch to a shelf
-    // in a single action is the whole reason this field is here.
-    //
-    // Refused outright while bin tracking is dormant, rather than quietly accepted: with
-    // BIN_TRACKING_ENABLED false the rest of the app works on warehouses and hides every bin
-    // control, so a binId written now would be invisible in the UI that is supposed to show
-    // it. Better a 400 that names the reason than a silent write nobody can see or undo.
+    // in a single action is the whole reason this field is here. Bins are always on (plan
+    // 2109, Q27), so there is no "tracking disabled" refusal any more.
     if (binId) {
-      const binTrackingEnabled = await isBinTrackingEnabled();
-      if (!binTrackingEnabled) {
-        return errorResponse("Bin tracking is disabled — bins cannot be assigned", 400);
-      }
       const bin = await prisma.bin.findUnique({ where: { id: binId } });
       if (!bin) return errorResponse("Bin not found", 404);
     }

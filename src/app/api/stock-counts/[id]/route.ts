@@ -7,16 +7,11 @@ import { stockCountUpdateSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { isPlaceholderBrand } from "@/lib/import-placeholders";
-import {
-  setWarehouseQty,
-  adjustWarehouseQty,
-  deductFromStore,
-  getWarehouseQtyMap,
-  getStoreQtyMap,
-} from "@/lib/stock-location";
 import { logActivity } from "@/lib/activity-log";
 import { recordApprovalEvent } from "@/lib/approvals/events";
-import { syncWarehouseUnits, adjustWarehouseUnits } from "@/lib/units";
+import { syncBinStock } from "@/lib/units";
+import { getBinQtyMap } from "@/lib/units/bin-qty";
+import { applyBinCountLine } from "../_lib/apply-bin-line";
 import { createLogger } from "@/lib/logger";
 
 // This route applies a counter's numbers — and used to apply their spelling of a brand name
@@ -24,21 +19,26 @@ import { createLogger } from "@/lib/logger";
 const log = createLogger("stock-counts");
 
 /**
- * Where an approved count's numbers go when the approver chooses "set system stock".
+ * Where an approved count's numbers go when the approver chooses "set system stock": ONE bin
+ * of one warehouse (plan 2109, R33, R36).
  *
- * `warehouse` — the audit covered ONE warehouse, so each counted quantity becomes that
- * warehouse's quantity outright (`setWarehouseQty`).
+ * Each counted quantity becomes what THAT BIN holds. The warehouse total moves by the bin's
+ * difference (`adjustWarehouseQty`) — never set to the bin's count, which is what used to wipe
+ * every other bin of the warehouse.
  *
- * `store` — the audit covered the WHOLE store, one number per product across every active
- * warehouse. The approver names the warehouse that receives a surplus (`warehouseId`); a
- * shortage is taken from the store's warehouses in picker order, the same rule a sale
- * follows (`deductFromStore`). Until 8 Sep 2026 a whole-store audit could not be applied at
- * all — the 4 Sep §5.1 rule — because nobody had said where the difference belongs. Now the
- * approver says, per approval, and nothing is invented.
+ * Removed in plan 2109 (R36): the `warehouse` scope (a count of a whole warehouse, applied with
+ * `setWarehouseQty`) and the `store` scope (a whole-store count, surplus booked to a warehouse
+ * the approver named, shortage via `deductFromStore`). Neither can say which bin a difference
+ * belongs to; such audits still approve as verify-only.
  */
-type CorrectionTarget =
-  | { scope: "warehouse"; warehouseId: string; name: string }
-  | { scope: "store"; storeId: string; storeName: string; warehouseId: string; name: string };
+type CorrectionTarget = {
+  warehouseId: string;
+  name: string;
+  binId: string;
+  binCode: string;
+  /** R32: a non-assemblable bin's count has no condition; everything in it is unassembled. */
+  nonAssemblable: boolean;
+};
 
 /** What "set system stock" actually did, returned to the screen so the receipt can say it. */
 interface AppliedSummary {
@@ -48,10 +48,15 @@ interface AppliedSummary {
   zeroLines: number;
   writtenOff: number;
   warehouse: string;
-  scope: "warehouse" | "store";
+  scope: "bin";
+  /** The bin corrected, by code. */
+  bin: string;
+  binId: string;
   /** Unit records brought in line with the counts (plan 1709, Part B, Q42). */
   units: {
     created: number;
+    /** The units created by this approval — "Print labels" on the receipt prints exactly these (R31). */
+    createdUnitIds: string[];
     markedAssembled: number;
     markedUnassembled: number;
     /** Codes retired as LOST — their labels are on real items, so they are listed (P9). */
@@ -78,7 +83,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         approvedBy: { select: { name: true } },
         store: { select: { id: true, name: true } },
         warehouse: { select: { id: true, name: true } },
-        bin: { select: { id: true, code: true, name: true, location: true, directions: true, floor: true, zone: true } },
+        // `nonAssemblable` decides the count screen (R32): Assembled / Unassembled in an
+        // assemblable bin, a single count in a non-assemblable one.
+        bin: { select: { id: true, code: true, name: true, location: true, directions: true, floor: true, zone: true, nonAssemblable: true } },
         items: {
           include: {
             product: {
@@ -96,29 +103,17 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const totalVariance = stockCount.items.reduce((sum, i) => sum + (i.variance || 0), 0);
     const itemsWithVariance = stockCount.items.filter((i) => i.variance !== null && i.variance !== 0).length;
 
-    // A whole-store audit can be applied only if the approver names a warehouse to receive
-    // any surplus. The store's active warehouses ride along in picker order so the review
-    // screen has the list without a second round trip. Empty for a warehouse-scoped audit
-    // (the target is the audit's own warehouse) and for a legacy audit (nothing to choose).
-    const correctionWarehouses =
-      stockCount.storeId && !stockCount.warehouseId
-        ? await prisma.warehouse.findMany({
-            where: { storeId: stockCount.storeId, isActive: true },
-            select: { id: true, name: true },
-            orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-          })
-        : [];
-
+    // `correctionWarehouses` (the list a whole-store audit's approver picked a surplus warehouse
+    // from) was removed in plan 2109 (R36): only a bin audit can be applied to stock now.
     return successResponse({
       ...stockCount,
       // The scope in one string, so every screen renders it the same way (§5.1 three states).
       scopeLabel:
         stockCount.warehouse?.name ??
         (stockCount.store ? `${stockCount.store.name} — whole store` : "Legacy audit — no location"),
-      // A warehouse audit corrects its own warehouse; a whole-store audit corrects the store
-      // once a receiving warehouse is named (see CorrectionTarget). A legacy audit never can.
-      canCorrectStock: Boolean(stockCount.warehouseId) || correctionWarehouses.length > 0,
-      correctionWarehouses,
+      // Only a bin audit corrects stock (plan 2109, R33, R36): it knows which bin a difference
+      // belongs to. Audits saved without a bin approve as verify-only.
+      canCorrectStock: Boolean(stockCount.binId && stockCount.warehouseId),
       countedItems,
       totalItems: stockCount.items.length,
       totalVariance,
@@ -257,50 +252,49 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     // the state the old code fell into and resolved by writing globally. Non-null here means
     // "apply the counts, HERE", and nothing else can.
     //
-    // A whole-store audit is applied only when the approver names the warehouse that
-    // receives a surplus (`correctionWarehouseId`). The split is theirs, not the system's.
+    // Only a BIN audit is applied (plan 2109, R33, R36). The whole-warehouse branch
+    // (`setWarehouseQty`) and the whole-store branch (`correctionWarehouseId` + `deductFromStore`)
+    // were removed: neither can say which bin a difference belongs to, and the warehouse one
+    // overwrote every other bin's stock with this bin's count.
     let correctionTarget: CorrectionTarget | null = null;
     if (applyToStock) {
-      if (existing.warehouseId) {
-        const w = await prisma.warehouse.findUnique({
-          where: { id: existing.warehouseId },
-          select: { id: true, name: true, isActive: true },
-        });
-        if (!w) return errorResponse("The warehouse this audit covers no longer exists", 400);
-        if (!w.isActive) {
-          return errorResponse(`${w.name} is no longer active — stock cannot be corrected there`, 400);
-        }
-        correctionTarget = { scope: "warehouse", warehouseId: w.id, name: w.name };
-      } else if (existing.storeId) {
-        if (!data.correctionWarehouseId) {
-          return errorResponse(
-            "This audit covers the whole store. Choose the warehouse that receives any surplus before applying the counts, or approve as verify-only.",
-            400
-          );
-        }
-        const w = await prisma.warehouse.findUnique({
-          where: { id: data.correctionWarehouseId },
-          select: { id: true, name: true, isActive: true, storeId: true, store: { select: { name: true } } },
-        });
-        if (!w || w.storeId !== existing.storeId) {
-          return errorResponse("Choose a warehouse that belongs to the store this audit covers", 400);
-        }
-        if (!w.isActive) {
-          return errorResponse(`${w.name} is no longer active — a surplus cannot be booked there`, 400);
-        }
-        correctionTarget = {
-          scope: "store",
+      if (!existing.binId || !existing.warehouseId) {
+        log.warn("apply to stock refused: audit has no bin", {
+          stockCountId: id,
+          warehouseId: existing.warehouseId,
           storeId: existing.storeId,
-          storeName: w.store.name,
-          warehouseId: w.id,
-          name: w.name,
-        };
-      } else {
+        });
         return errorResponse(
-          "This audit has no recorded location, so its counts cannot be applied to stock. Approve as verify-only.",
+          "This audit was saved without a bin, so it cannot say which bin a difference belongs to. Approve it as verify-only, then count each bin.",
           400
         );
       }
+      const w = await prisma.warehouse.findUnique({
+        where: { id: existing.warehouseId },
+        select: { id: true, name: true, isActive: true },
+      });
+      if (!w) return errorResponse("The warehouse this audit covers no longer exists", 400);
+      if (!w.isActive) {
+        return errorResponse(`${w.name} is no longer active — stock cannot be corrected there`, 400);
+      }
+      const bin = await prisma.bin.findUnique({
+        where: { id: existing.binId },
+        select: { id: true, code: true, warehouseId: true, isActive: true, nonAssemblable: true },
+      });
+      if (!bin || bin.warehouseId !== w.id) {
+        log.warn("apply to stock refused: bin missing or moved", { stockCountId: id, binId: existing.binId });
+        return errorResponse("The bin this audit counted no longer exists in its warehouse. Approve it as verify-only.", 400);
+      }
+      if (!bin.isActive) {
+        return errorResponse(`Bin ${bin.code} is no longer active — stock cannot be corrected there. Approve as verify-only.`, 400);
+      }
+      correctionTarget = {
+        warehouseId: w.id,
+        name: w.name,
+        binId: bin.id,
+        binCode: bin.code,
+        nonAssemblable: bin.nonAssemblable,
+      };
     }
 
     // Filled inside the transaction when `correctionTarget` is set; null for verify-only.
@@ -381,16 +375,17 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         // what the books held at the moment they were corrected, or it lies. The snapshot
         // still decides `StockCountItem.variance` (what the counter saw), and a line whose
         // two figures differ is warned about below so the drift is visible in the log.
+        //
+        // R33: "live" is what THIS BIN holds — the same figure the counter was shown when the
+        // audit was raised. It used to be the whole warehouse's quantity, so a bin holding 5 of
+        // a warehouse's 9, counted as 5, applied as −4 and wrote off another bin's stock.
         const productIds = countedItems.map((i) => i.productId);
-        const liveMap =
-          target.scope === "warehouse"
-            ? await getWarehouseQtyMap(productIds, target.warehouseId, tx)
-            : await getStoreQtyMap(productIds, target.storeId, tx);
+        const liveMap = await getBinQtyMap(target.binId, productIds, tx);
 
         const summary: AppliedSummary = {
           lines: 0, changed: 0, netUnits: 0, zeroLines: 0, writtenOff: 0,
-          warehouse: target.name, scope: target.scope,
-          units: { created: 0, markedAssembled: 0, markedUnassembled: 0, retiredCodes: [] },
+          warehouse: target.name, scope: "bin", bin: target.binCode, binId: target.binId,
+          units: { created: 0, createdUnitIds: [], markedAssembled: 0, markedUnassembled: 0, retiredCodes: [] },
         };
 
         for (const item of countedItems) {
@@ -445,28 +440,37 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
               stockCountId: id, productId: product.id, snapshot: item.systemQty, live, counted,
             });
           }
-          // ── UNITS FOLLOW THE COUNT (plan 1709, Part B, R7, R11, Q42) ──
+          // ── UNITS AND STOCK FOLLOW THE COUNT (plan 1709, Part B, R7, R11, Q42; plan 2109,
+          //    R31–R33) — `applyBinCountLine` ──
           //
-          // A line counted with the condition split (assembled + unassembled) makes the
-          // warehouse hold exactly those units, keeping existing codes (P9) — and it runs even
-          // when the TOTAL matches, because the condition may not. A line without the split
-          // (older clients, whole-store audits) moves units by the delta only. Both are tolerant
-          // of stock that has fewer unit records than its count.
-          const hasSplit = item.assembledQty !== null && item.unassembledQty !== null;
-          const unitBin = existing.binId ?? null;
-          if (target.scope === "warehouse" && hasSplit) {
-            const synced = await syncWarehouseUnits(tx, {
-              productId: product.id,
-              warehouseId: target.warehouseId,
-              assembled: item.assembledQty!,
-              unassembled: item.unassembledQty!,
-              binId: unitBin,
-            });
-            summary.units.created += synced.createdAssembled + synced.createdUnassembled;
-            summary.units.markedAssembled += synced.markedAssembled;
-            summary.units.markedUnassembled += synced.markedUnassembled;
-            summary.units.retiredCodes.push(...synced.retired.map((r) => r.unitCode));
-          }
+          // Every counted line makes THIS BIN hold exactly the counted units, keeping existing
+          // codes (P9) and creating `U-` codes in the bin for items that have none (R31). It
+          // runs even when the total matches, because the condition may not.
+          //   - non-assemblable bin (R32): no condition is counted — all of it is unassembled,
+          //     and `createUnits` stamps new units non-assemblable from the bin;
+          //   - assemblable bin with the split: exactly the counter's two numbers;
+          //   - assemblable bin without the split (an older client): the total, keeping what
+          //     is already built.
+          // The warehouse then moves by the bin's difference. Before plan 2109 the sync ran over
+          // the whole warehouse, a line without the split retired a shortage from ANY bin
+          // (`adjustWarehouseUnits`), and `setWarehouseQty(counted)` set the whole warehouse to
+          // one bin's count — R33.
+          const lineResult = await applyBinCountLine(tx, {
+            productId: product.id,
+            warehouseId: target.warehouseId,
+            binId: target.binId,
+            nonAssemblable: target.nonAssemblable,
+            counted,
+            live,
+            assembledQty: item.assembledQty,
+            unassembledQty: item.unassembledQty,
+          });
+          const { synced, warehouseBefore, warehouseAfter } = lineResult;
+          summary.units.created += synced.createdAssembled + synced.createdUnassembled;
+          summary.units.createdUnitIds.push(...synced.createdUnitIds);
+          summary.units.markedAssembled += synced.markedAssembled;
+          summary.units.markedUnassembled += synced.markedUnassembled;
+          summary.units.retiredCodes.push(...synced.retired.map((r) => r.unitCode));
 
           if (delta === 0) continue;
           summary.changed += 1;
@@ -484,9 +488,6 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           // mistake. Leaving the match to read time is also what makes `windowDays` a setting
           // that can be changed and re-applied to history; had it been resolved here, changing
           // 7 days to 1 would only affect corrections made after the change.
-          //
-          // `warehouseId` is null on a WHOLE-STORE audit: a store-wide shortage is taken from
-          // several warehouses in picker order, so no single place is the honest answer.
           await recordApprovalEvent(tx, {
             activity: "STOCK_AUDIT",
             event: "CORRECTED",
@@ -495,100 +496,48 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
             actorId: user.id,
             approverId: null,
             productId: product.id,
-            warehouseId: target.scope === "warehouse" ? target.warehouseId : null,
+            warehouseId: target.warehouseId,
             quantity: delta,
-            note: `counted ${counted}, system held ${live}`,
+            note: `counted ${counted} in bin ${target.binCode}, bin held ${live}`,
           });
 
-          const label = `${product.name} (${product.sku})`;
-          const recordUnits = (r: { created: number; retired: Array<{ unitCode: string }> }) => {
-            summary.units.created += r.created;
-            summary.units.retiredCodes.push(...r.retired.map((u) => u.unitCode));
-          };
-          if (target.scope === "warehouse") {
-            // One warehouse: the counted number IS that warehouse's quantity.
-            await setWarehouseQty(tx, product.id, target.warehouseId, counted);
-            if (!hasSplit) {
-              recordUnits(
-                await adjustWarehouseUnits(tx, { productId: product.id, warehouseId: target.warehouseId, delta, binId: unitBin })
-              );
-            }
-          } else if (delta > 0) {
-            // Whole store, surplus: booked to the warehouse the approver named.
-            await adjustWarehouseQty(tx, product.id, target.warehouseId, delta);
-            recordUnits(await adjustWarehouseUnits(tx, { productId: product.id, warehouseId: target.warehouseId, delta }));
-          } else {
-            // Whole store, shortage: taken from the store's active warehouses in picker
-            // order — the rule a sale follows. `live` was summed over the same active
-            // warehouses inside this transaction, so the amount never exceeds what is held
-            // and `deductFromStore`'s insufficiency refusal cannot fire here.
-            const deduction = await deductFromStore(tx, product.id, target.storeId, -delta, label);
-            for (const part of deduction.taken) {
-              recordUnits(
-                await adjustWarehouseUnits(tx, { productId: product.id, warehouseId: part.warehouseId, delta: -part.qty })
-              );
-            }
-          }
-
-          // If this audit was scoped to a bin, sync the BinStock record and log movement
-          if (existing.binId) {
-            await tx.binStock.upsert({
-              where: {
-                binId_productId: {
-                  binId: existing.binId,
-                  productId: product.id,
-                },
-              },
-              create: {
-                binId: existing.binId,
-                productId: product.id,
-                quantity: counted,
-              },
-              update: {
-                quantity: counted,
-              },
-            });
-
-            if (delta !== 0 && existing.warehouseId) {
-              await tx.binMovementLog.create({
-                data: {
-                  warehouseId: existing.warehouseId,
-                  productId: product.id,
-                  quantity: Math.abs(delta),
-                  fromBinId: delta < 0 ? existing.binId : null,
-                  toBinId: delta > 0 ? existing.binId : null,
-                  reason: `Stock Count Audit Correction (${existing.countNo || existing.title})`,
-                  movedById: user.id,
-                },
-              });
-            }
-          }
+          await tx.binMovementLog.create({
+            data: {
+              warehouseId: target.warehouseId,
+              productId: product.id,
+              quantity: Math.abs(delta),
+              fromBinId: delta < 0 ? target.binId : null,
+              toBinId: delta > 0 ? target.binId : null,
+              reason: `Stock Count Audit Correction (${existing.countNo || existing.title})`,
+              movedById: user.id,
+            },
+          });
 
           // Keep the `[STOCK_COUNT]` prefix: DELETE of a completed count reverses by it.
-          const where =
-            target.scope === "warehouse"
-              ? `at ${target.name}`
-              : delta > 0
-                ? `booked to ${target.name}`
-                : `taken from ${target.storeName} in picker order`;
+          // previous/new are the WAREHOUSE's figures; the bin's are in the note.
           await tx.inventoryTransaction.create({
             data: {
               type: "ADJUSTMENT",
               productId: product.id,
               quantity: Math.abs(delta),
-              previousStock: live,
-              newStock: counted,
+              previousStock: warehouseBefore,
+              newStock: warehouseAfter,
               referenceNo: existing.title,
-              notes: `[STOCK_COUNT] [VERIFICATION] ${delta > 0 ? "Surplus" : "Shortage"} of ${Math.abs(delta)} (snapshot ${item.systemQty}, live ${live}, counted ${counted}) ${where} during "${existing.title}"`,
+              notes: `[STOCK_COUNT] [VERIFICATION] ${delta > 0 ? "Surplus" : "Shortage"} of ${Math.abs(delta)} (snapshot ${item.systemQty}, bin held ${live}, counted ${counted}) in bin ${target.binCode} at ${target.name} during "${existing.title}"`,
               userId: user.id,
             },
           });
         }
 
+        // One recount of the bin from its units at the end (P11), so a line whose total matched
+        // but whose BinStock row had drifted is left consistent too.
+        await syncBinStock(tx, [target.binId]);
+
         applied = summary;
         log.info("stock corrected", {
           stockCountId: id,
           scope: summary.scope,
+          binId: summary.binId,
           lines: summary.lines,
           changed: summary.changed,
           netUnits: summary.netUnits,
@@ -626,7 +575,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
               data.status === "REJECTED"
                 ? data.rejectionReason || null
                 : correctionTarget
-                  ? `applied to stock at ${correctionTarget.name}`
+                  ? `applied to stock in bin ${correctionTarget.binCode} at ${correctionTarget.name}`
                   : "verify only",
           });
         }
@@ -641,9 +590,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           details:
             data.status === "APPROVED"
               ? correctionTarget
-                ? correctionTarget.scope === "warehouse"
-                  ? `stock corrected at ${correctionTarget.name}`
-                  : `stock corrected across ${correctionTarget.storeName}, surplus to ${correctionTarget.name}`
+                ? `stock corrected in bin ${correctionTarget.binCode} at ${correctionTarget.name}`
                 : "verify only"
               : data.status === "REJECTED"
                 ? (data.rejectionReason || "no reason given")

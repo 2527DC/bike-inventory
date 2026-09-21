@@ -3,16 +3,21 @@ export const revalidate = 60; // cache 1 minute
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
-import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
+import { createLogger } from "@/lib/logger";
 import { listWarehouses } from "@/lib/warehouses";
+
+const log = createLogger("stock:by-bin");
 
 export async function GET() {
   try {
     await requireFeature("stock", "view");
 
-    // ── Location mode (bins dormant): per-location summary across locations ──
-    const binTrackingEnabled = await isBinTrackingEnabled();
-    if (!binTrackingEnabled) {
+    // Per-warehouse summary. This used to branch on the bin-tracking switch: with it ON the
+    // route returned a legacy per-bin summary (`Product.binId` / `currentStock`) as `{ bins }`,
+    // which /stock/by-bin — its only reader — never rendered, so the page showed "No stock
+    // data". Bins are always on now (plan 2109, Q27) and the switch is gone; the per-bin view
+    // lives on /bins, from units. This route answers per warehouse, always.
+    {
       const rows = await prisma.$queryRaw<Array<{ warehouse_id: string; total_stock: number; total_value: number; product_count: number }>>`
         SELECT
           sl."warehouseId" as warehouse_id,
@@ -59,63 +64,12 @@ export async function GET() {
         };
       });
 
+      log.debug("stock by warehouse", { warehouses: locations.length });
       return successResponse({ mode: "location", locations });
     }
-
-    // ── Bin mode (dormant) ──
-    const [bins, binStats] = await Promise.all([
-      prisma.bin.findMany({
-        where: { isActive: true },
-        orderBy: { code: "asc" },
-        select: {
-          id: true,
-          code: true,
-          name: true,
-          location: true,
-          zone: true,
-          _count: { select: { products: { where: { status: "ACTIVE" } } } },
-        },
-      }),
-      prisma.$queryRaw<Array<{
-        binId: string;
-        total_stock: number;
-        low_stock: number;
-        out_of_stock: number;
-        total_value: number;
-      }>>`
-        SELECT
-          "binId",
-          COALESCE(SUM("currentStock"), 0)::int as total_stock,
-          COUNT(*) FILTER (WHERE "reorderLevel" > 0 AND "currentStock" <= "reorderLevel")::int as low_stock,
-          COUNT(*) FILTER (WHERE "currentStock" <= 0)::int as out_of_stock,
-          COALESCE(SUM("currentStock" * "sellingPrice"), 0)::float as total_value
-        FROM "Product"
-        WHERE status = 'ACTIVE' AND "binId" IS NOT NULL
-        GROUP BY "binId"
-      `,
-    ]);
-
-    const statsMap = new Map(binStats.map((s) => [s.binId, s]));
-
-    const data = bins.map((b) => {
-      const stats = statsMap.get(b.id);
-      return {
-        id: b.id,
-        code: b.code,
-        name: b.name,
-        location: b.location,
-        zone: b.zone,
-        productCount: b._count.products,
-        totalStock: stats?.total_stock || 0,
-        lowStockCount: stats?.low_stock || 0,
-        outOfStockCount: stats?.out_of_stock || 0,
-        totalValue: stats?.total_value || 0,
-      };
-    });
-
-    return successResponse({ mode: "bin", bins: data });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("stock by warehouse failed", { error: error instanceof Error ? error.message : String(error) });
     return errorResponse(
       error instanceof Error ? error.message : "Failed to fetch stock by location",
       500

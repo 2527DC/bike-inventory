@@ -44,14 +44,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
           select: {
             name: true, code: true, addressLine1: true, addressLine2: true, city: true, state: true,
             pincode: true, gstin: true, phone: true,
-            // The primary contact is a nicety on the document ("Attn: …"). Sorted rather than
-            // filtered because nothing in the database guarantees a primary exists — the rule
-            // is application-enforced in api/vendors/[id]/contacts.
-            contacts: {
-              select: { name: true, isPrimary: true },
-              orderBy: { isPrimary: "desc" },
-              take: 1,
-            },
+            // The contact person is a nicety on the document ("Attn: …"). It lives on Vendor
+            // since plan 2109 (R28); VendorContact is no longer read.
+            contactPerson: true,
           },
         },
         items: {
@@ -94,7 +89,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
           pincode: po.vendor.pincode,
           gstin: po.vendor.gstin,
           phone: po.vendor.phone,
-          contactName: po.vendor.contacts[0]?.name ?? null,
+          contactName: po.vendor.contactPerson ?? null,
         },
         items,
       },

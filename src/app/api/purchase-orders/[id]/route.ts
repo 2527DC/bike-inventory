@@ -18,18 +18,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const po = await prisma.purchaseOrder.findUnique({
       where: { id },
       include: {
-        // `vendor: true` already returns `email`, which is what the send sheet prefills with.
-        // Contacts are a separate relation and were not included — without them the fallback
-        // "the vendor has no address of its own, use the primary contact's" cannot happen on
-        // the client. Sorted, not filtered: nothing guarantees a primary exists.
-        vendor: {
-          include: {
-            contacts: {
-              select: { name: true, email: true, isPrimary: true },
-              orderBy: { isPrimary: "desc" },
-            },
-          },
-        },
+        // `vendor: true` returns `email`, which is what the send sheet prefills with. The
+        // contacts include went with plan 2109 (R28): the contact lives on Vendor now.
+        vendor: true,
         // Every scalar of the line comes back, `name` included — the description as ordered.
         // `product` is null for a line raised from the vendor's sheet (plan 0909, D2); the
         // screen shows currentStock only when it is present.

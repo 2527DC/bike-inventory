@@ -178,21 +178,5 @@ export async function matchHomeBin(
   return match;
 }
 
-/**
- * The `where` that selects the products one rule covers, for "apply to existing stock" (R40).
- *
- * The mirror image of `pickHomeBin`: instead of "which rule wins for this product", it asks
- * "which products does this rule name". A product rule names one product; a brand+category
- * rule names the products with both; and so on. Exact category, as above.
- */
-export function ruleProductWhere(rule: {
-  brandId: string | null;
-  categoryId: string | null;
-  productId: string | null;
-}): Prisma.ProductWhereInput {
-  if (rule.productId) return { id: rule.productId };
-  const where: Prisma.ProductWhereInput = {};
-  if (rule.brandId) where.brandId = rule.brandId;
-  if (rule.categoryId) where.categoryId = rule.categoryId;
-  return where;
-}
+// `ruleProductWhere` (the "apply rule to existing stock" query, 1709 R40) was removed with the
+// per-rule Apply button and `api/bins/home-rules/[id]/apply` — plan 2109, Q21.

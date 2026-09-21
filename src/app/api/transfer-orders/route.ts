@@ -301,7 +301,6 @@ export async function POST(req: NextRequest) {
       context: {},
     });
     if (isRefusal(lineCheck)) return errorResponse(lineCheck.error, lineCheck.status);
-    const { binTrackingEnabled } = lineCheck;
 
     // ── The document ─────────────────────────────────────────────────────────────────────
     // OPTIONAL since P16 — see `documentSchema`. When one IS supplied, `document.url` is a
@@ -383,8 +382,9 @@ export async function POST(req: NextRequest) {
             create: data.items.map((item) => ({
               productId: item.productId,
               quantity: item.quantity,
-              fromBinId: binTrackingEnabled ? item.fromBinId : null,
-              toBinId: binTrackingEnabled ? item.toBinId : null,
+              // Bins are always on (plan 2109, Q27): both bins are required and validated above.
+              fromBinId: item.fromBinId,
+              toBinId: item.toBinId,
               // Mirrored from the header. Kept so the item columns stay readable this release
               // and so anything still reading the item lane sees the same answer.
               fromWarehouseId: fromWh.id,

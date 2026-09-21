@@ -2,7 +2,6 @@
 
 import { use, useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { useBinTracking } from "@/hooks/use-bin-tracking";
 import { isLowStock } from "@/lib/reorder";
 import { apiFetch, apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
@@ -139,7 +138,6 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
   // stock.edit (plan 1509-reorder-inside-purchase-orders, Q13 a).
   const mayReorder = canEditCheck("reorder");
   const [reorderTarget, setReorderTarget] = useState<ReorderTarget | null>(null);
-  const { isBinTrackingEnabled: BIN_TRACKING_ENABLED } = useBinTracking();
   // Gates the Pricing card (Cost / Selling / MRP) and nothing else on this page.
   const isAdmin = canView("cost_price");
   const canEdit = canEditCheck("stock");
@@ -161,9 +159,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
     void Promise.all([
       apiTry<{ id: string; name: string }[]>("/api/brands"),
       apiTry<RawCategory[]>("/api/categories"),
-      BIN_TRACKING_ENABLED
-        ? apiTry<{ id: string; code: string; name: string; location: string }[]>("/api/bins")
-        : Promise.resolve({ data: null, error: null }),
+      apiTry<{ id: string; code: string; name: string; location: string }[]>("/api/bins"),
     ]).then(([bRes, cRes, binRes]) => {
       if (bRes.data) setBrands(bRes.data);
       else if (bRes.error) log.error("could not load brands", { productId: id, message: bRes.error });
@@ -172,7 +168,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
       if (binRes.data) setBins(binRes.data);
       else if (binRes.error) log.error("could not load bins", { productId: id, message: binRes.error });
     });
-  }, [id, BIN_TRACKING_ENABLED]);
+  }, [id]);
 
   // Loaded when the form opens rather than with the product: most visits to this page are
   // to read it, and the vendor list is only needed by the one select in the edit form.
@@ -349,16 +345,14 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
                     {brandOptions.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                   </select>
                 </div>
-                {BIN_TRACKING_ENABLED && (
-                  <div>
-                    <label className="text-[11px] text-slate-500">Bin / Location</label>
-                    <select value={editData.binId as string} onChange={(e) => setEditData({ ...editData, binId: e.target.value })}
-                      className="w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-                      <option value="">No bin</option>
-                      {bins.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name} ({b.location})</option>)}
-                    </select>
-                  </div>
-                )}
+                <div>
+                  <label className="text-[11px] text-slate-500">Bin / Location</label>
+                  <select value={editData.binId as string} onChange={(e) => setEditData({ ...editData, binId: e.target.value })}
+                    className="w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="">No bin</option>
+                    {bins.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name} ({b.location})</option>)}
+                  </select>
+                </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="text-[11px] text-slate-500">Category</label>
@@ -504,7 +498,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
               <p className="text-xs text-slate-500">Max Stock</p>
             </div>
           </div>
-          {BIN_TRACKING_ENABLED && (product.bin ? (
+          {product.bin ? (
             <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
               <MapPin className="h-4 w-4 text-blue-500" />
               <div>
@@ -519,7 +513,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
               <MapPin className="h-4 w-4 text-slate-300" />
               <p className="text-xs text-slate-400">No bin assigned</p>
             </div>
-          ))}
+          )}
         </CardContent>
       </Card>
 

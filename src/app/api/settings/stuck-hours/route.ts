@@ -22,7 +22,7 @@ const log = createLogger("settings:stuck-hours");
  * approver-error rule and vice versa, and a stale form on one half silently reverts the other.
  * They are also different settings with different readers: the rule is read by
  * `api/approvals/error-rate`, these hours by `api/dashboard/overview`. So it lives beside
- * `api/settings/bin-tracking`, which is this exact shape already.
+ * `api/settings/bin-tracking` (removed in plan 2109, Q27), which had this exact shape.
  *
  * GET is `requireAuth`: the dashboard's own card labels print the numbers ("Approvals waiting >
  * 24 h") for everyone, so the values are not a secret and gating them would make the settings

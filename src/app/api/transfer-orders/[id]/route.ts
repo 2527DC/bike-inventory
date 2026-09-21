@@ -236,7 +236,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       context: { orderId: order.id, orderNo: order.orderNo },
     });
     if (isRefusal(lineCheck)) return errorResponse(lineCheck.error, lineCheck.status);
-    const { binTrackingEnabled } = lineCheck;
 
     const updated = await prisma.$transaction(async (tx) => {
       // The claim is what makes the status check real — see the header.
@@ -252,8 +251,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           transferOrderId: id,
           productId: item.productId,
           quantity: item.quantity,
-          fromBinId: binTrackingEnabled ? item.fromBinId ?? null : null,
-          toBinId: binTrackingEnabled ? item.toBinId ?? null : null,
+          // Bins are always on (plan 2109, Q27): both bins are required and validated above.
+          fromBinId: item.fromBinId ?? null,
+          toBinId: item.toBinId ?? null,
           // Mirrored from the header, as at create.
           fromWarehouseId: fromWh.id,
           toWarehouseId: toWh.id,

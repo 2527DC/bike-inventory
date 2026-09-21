@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Search, Truck, Loader2, Calendar, Cloud, Download } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,6 +15,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { apiFetch, apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
+import { isInboundQuickFilter, type InboundQuickFilter } from "@/lib/inbound/filters";
 
 const log = createLogger("inbound");
 
@@ -54,7 +56,7 @@ interface ZohoBillPreview {
   };
 }
 
-type StatusFilter = "ALL" | "IN_TRANSIT" | "PARTIALLY_DELIVERED" | "arriving_this_week" | "DELIVERED" | "LEGACY";
+type StatusFilter = "ALL" | "IN_TRANSIT" | "LEGACY";
 
 interface LegacyInward {
   id: string;
@@ -84,30 +86,75 @@ function daysUntil(d: string) {
 
 const STATUS_BADGE: Record<string, { variant: "success" | "warning" | "info" | "default"; label: string }> = {
   IN_TRANSIT: { variant: "warning", label: "In Transit" },
-  DELIVERED: { variant: "success", label: "Delivered" },
+  // "Completed", not "Delivered" (plan 2109-inbound-bins-navigation-fixes, R30): a shipment
+  // whose every line is received. "Delivered" read like an outward to a customer.
+  DELIVERED: { variant: "success", label: "Completed" },
   PARTIALLY_DELIVERED: { variant: "info", label: "Partial" },
 };
 
+// The filter SHEET keeps what the chips do not cover: In Transit and the Pre-Merge history,
+// beside the date range. Partial / This week / Completed moved to the chip row (R30).
 const STATUS_OPTIONS: { key: StatusFilter; label: string }[] = [
   { key: "ALL", label: "All" },
   { key: "IN_TRANSIT", label: "In Transit" },
-  { key: "PARTIALLY_DELIVERED", label: "Partial" },
-  { key: "arriving_this_week", label: "This Week" },
-  { key: "DELIVERED", label: "Delivered" },
   { key: "LEGACY", label: "Pre-Merge" },
 ];
 
+// ── Quick filter chips (plan 2109-inbound-bins-navigation-fixes, R30, Q22a / Q23a) ──
+//
+// One tap each, kept in the URL as `?filter=` so a link can open a chip — the dashboard's
+// inbound-approvals card opens `/inbound?filter=not_approved`. The server owns what each chip
+// means (`src/lib/inbound/filters.ts`) and returns every chip's count in the list response.
+type QuickChip = "all" | InboundQuickFilter;
+
+const QUICK_CHIPS: { key: QuickChip; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "not_approved", label: "Not approved" },
+  { key: "returned", label: "Returned" },
+  { key: "approved_not_received", label: "Approved, not received" },
+  { key: "partial", label: "Partial" },
+  { key: "completed", label: "Completed" },
+  { key: "this_week", label: "This week" },
+];
 
 export default function InboundPage() {
+  return (
+    <Suspense fallback={<SkeletonList count={6} type="card" />}>
+      <InboundScreen />
+    </Suspense>
+  );
+}
+
+// `useSearchParams` in a Client Component must sit under a Suspense boundary, or the production
+// build fails prerendering this page (node_modules/next/dist/docs … use-search-params.md,
+// "Prerendering") — the same shape as `purchase-orders/page.tsx`.
+function InboundScreen() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const rawChip = searchParams.get("filter");
+  const chip: QuickChip = isInboundQuickFilter(rawChip) ? rawChip : "all";
+
   const { canFetch } = usePermissions();
   const canFetchBills = canFetch("zoho");
 
   const [shipments, setShipments] = useState<InboundShipment[]>([]);
+  const [counts, setCounts] = useState<Partial<Record<QuickChip, number>>>({});
   const [legacyInwards, setLegacyInwards] = useState<LegacyInward[]>([]);
   const [isLegacy, setIsLegacy] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<StatusFilter>("ALL");
+  // A chip and a sheet status are one choice, never both: the server lets `filter` win, so a
+  // leftover sheet status would silently do nothing. Choosing one clears the other.
+  // `replace`, not `push`: flicking between chips should not fill the back button.
+  const selectChip = (next: QuickChip) => {
+    setFilter("ALL");
+    router.replace(next === "all" ? "/inbound" : `/inbound?filter=${next}`, { scroll: false });
+  };
+  const selectStatus = (next: StatusFilter) => {
+    setFilter(next);
+    if (chip !== "all") router.replace("/inbound", { scroll: false });
+  };
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search);
   const [showSearch, setShowSearch] = useState(false);
@@ -140,28 +187,35 @@ export default function InboundPage() {
     setLoading(true);
     setListError("");
     const params = new URLSearchParams({ limit: "50" });
-    if (filter !== "ALL") params.set("status", filter);
+    if (chip !== "all") params.set("filter", chip);
+    else if (filter !== "ALL") params.set("status", filter);
     if (debouncedSearch.length >= 2) params.set("search", debouncedSearch);
     if (dateFrom) params.set("dateFrom", dateFrom);
     if (dateTo) params.set("dateTo", dateTo);
 
+    // `apiFetch`, not `fetch().then(r => r.json())` (CLAUDE.md): an expired session answers
+    // with the login page's HTML and the raw `.json()` threw "Unexpected token <".
     Promise.all([
-      fetch(`/api/inbound?${params}`).then((r) => r.json()),
-      fetch("/api/inbound/stats").then((r) => r.json()),
+      apiFetch<{
+        shipments: InboundShipment[] | LegacyInward[];
+        isLegacy?: boolean;
+        counts?: Partial<Record<QuickChip, number>>;
+      }>(`/api/inbound?${params}`),
+      apiFetch<Stats>("/api/inbound/stats"),
     ])
-      .then(([listRes, statsRes]) => {
-        if (listRes.success) {
-          if (listRes.data.isLegacy) {
-            setLegacyInwards(listRes.data.shipments || []);
-            setShipments([]);
-            setIsLegacy(true);
-          } else {
-            setShipments(listRes.data.shipments || []);
-            setLegacyInwards([]);
-            setIsLegacy(false);
-          }
+      .then(([list, statsData]) => {
+        if (list.isLegacy) {
+          setLegacyInwards((list.shipments as LegacyInward[]) || []);
+          setShipments([]);
+          setIsLegacy(true);
+        } else {
+          setShipments((list.shipments as InboundShipment[]) || []);
+          setLegacyInwards([]);
+          setIsLegacy(false);
+          // The Pre-Merge list has no chips of its own, so it leaves the last counts in place.
+          if (list.counts) setCounts(list.counts);
         }
-        if (statsRes.success) setStats(statsRes.data);
+        setStats(statsData);
       })
       .catch((e) => {
         // listError, NOT fetchError. Failing to LOAD the shipment list is a different
@@ -175,7 +229,7 @@ export default function InboundPage() {
         }
       })
       .finally(() => setLoading(false));
-  }, [filter, debouncedSearch, dateFrom, dateTo]);
+  }, [chip, filter, debouncedSearch, dateFrom, dateTo]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -271,6 +325,7 @@ export default function InboundPage() {
         if (mode === "search") setBillSearchNo("");
       }
     } catch (e) {
+      log.error("bill fetch failed", { mode, message: e instanceof Error ? e.message : String(e) });
       setFetchError(e instanceof Error ? e.message : "Fetch failed");
       setFetchStep("idle");
     } finally {
@@ -281,7 +336,8 @@ export default function InboundPage() {
   const toggleBill = (id: string) => {
     setSelectedBills(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -290,17 +346,17 @@ export default function InboundPage() {
     if (selectedBills.size === 0) return;
     setFetchStep("importing");
     try {
-      const res = await fetch("/api/zoho/pull-review/approve", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      // `apiFetch` throws with the server's message on failure, and never parses HTML as JSON.
+      const res = await apiFetch<{ bills?: number; errors?: string[] }>("/api/zoho/pull-review/approve", {
+        method: "POST",
+        json: {
           pullId: fetchPullId, action: "approve",
           entityType: "bill", previewIds: Array.from(selectedBills),
           source: "inventory",
-        }),
-      }).then(r => r.json());
-      if (!res.success) throw new Error(res.error || "Import failed");
-      const imported = res.data?.bills || 0;
-      const errors = res.data?.errors || [];
+        },
+      });
+      const imported = res?.bills || 0;
+      const errors = res?.errors || [];
       setFetchStep("idle");
       setBillPreviews([]);
       setSelectedBills(new Set());
@@ -312,6 +368,11 @@ export default function InboundPage() {
         setFetchError(msgs.join("\n"));
       }
     } catch (e) {
+      log.error("bill import failed", {
+        pullId: fetchPullId,
+        bills: selectedBills.size,
+        message: e instanceof Error ? e.message : String(e),
+      });
       setFetchError(e instanceof Error ? e.message : "Import failed");
       setFetchStep("selecting");
     }
@@ -550,8 +611,8 @@ export default function InboundPage() {
         <div className="grid grid-cols-4 gap-2 mb-3">
           <button
             type="button"
-            onClick={() => setFilter(filter === "IN_TRANSIT" ? "ALL" : "IN_TRANSIT")}
-            className={`rounded-xl border p-2.5 text-center transition-colors min-h-[44px] ${filter === "IN_TRANSIT" ? "border-amber-400 bg-amber-50 ring-1 ring-amber-300" : "border-slate-200 bg-white hover:border-amber-300"}`}
+            onClick={() => selectStatus(filter === "IN_TRANSIT" && chip === "all" ? "ALL" : "IN_TRANSIT")}
+            className={`rounded-xl border p-2.5 text-center transition-colors min-h-[44px] ${filter === "IN_TRANSIT" && chip === "all" ? "border-amber-400 bg-amber-50 ring-1 ring-amber-300" : "border-slate-200 bg-white hover:border-amber-300"}`}
           >
             <p className="text-xl font-bold text-amber-600 tabular-nums leading-none">{stats.inTransit.items}</p>
             <p className="text-[11px] font-medium text-slate-600 mt-1">In Transit</p>
@@ -559,8 +620,8 @@ export default function InboundPage() {
           </button>
           <button
             type="button"
-            onClick={() => setFilter(filter === "arriving_this_week" ? "ALL" : "arriving_this_week")}
-            className={`rounded-xl border p-2.5 text-center transition-colors min-h-[44px] ${filter === "arriving_this_week" ? "border-blue-400 bg-blue-50 ring-1 ring-blue-300" : "border-slate-200 bg-white hover:border-blue-300"}`}
+            onClick={() => selectChip(chip === "this_week" ? "all" : "this_week")}
+            className={`rounded-xl border p-2.5 text-center transition-colors min-h-[44px] ${chip === "this_week" ? "border-blue-400 bg-blue-50 ring-1 ring-blue-300" : "border-slate-200 bg-white hover:border-blue-300"}`}
           >
             <p className="text-xl font-bold text-blue-600 tabular-nums leading-none">{stats.arrivingThisWeek.items}</p>
             <p className="text-[11px] font-medium text-slate-600 mt-1">This Week</p>
@@ -573,11 +634,11 @@ export default function InboundPage() {
           </div>
           <button
             type="button"
-            onClick={() => setFilter(filter === "DELIVERED" ? "ALL" : "DELIVERED")}
-            className={`rounded-xl border p-2.5 text-center transition-colors min-h-[44px] ${filter === "DELIVERED" ? "border-green-400 bg-green-50 ring-1 ring-green-300" : "border-slate-200 bg-white hover:border-green-300"}`}
+            onClick={() => selectChip(chip === "completed" ? "all" : "completed")}
+            className={`rounded-xl border p-2.5 text-center transition-colors min-h-[44px] ${chip === "completed" ? "border-green-400 bg-green-50 ring-1 ring-green-300" : "border-slate-200 bg-white hover:border-green-300"}`}
           >
             <p className="text-xl font-bold text-green-600 tabular-nums leading-none">{stats.deliveredThisMonth}</p>
-            <p className="text-[11px] font-medium text-slate-600 mt-1">Delivered</p>
+            <p className="text-[11px] font-medium text-slate-600 mt-1">Completed</p>
             <p className="text-[10px] text-slate-400">This Month</p>
           </button>
         </div>
@@ -603,12 +664,45 @@ export default function InboundPage() {
         onDateChange={(key, from, to) => { setDateFilter(key); setDateFrom(from); setDateTo(to); }}
         groups={[{
           label: "Status",
-          value: filter,
+          value: chip === "all" ? filter : "ALL",
           defaultValue: "ALL",
           options: STATUS_OPTIONS,
-          onChange: (key) => setFilter(key as StatusFilter),
+          onChange: (key) => selectStatus(key as StatusFilter),
         }]}
       />
+
+      {/* Quick filters (R30). Horizontal, scrolls sideways on a phone rather than wrapping into
+          three rows; the page itself never scrolls horizontally. */}
+      <div
+        role="group"
+        aria-label="Quick filters"
+        className="mb-3 flex gap-2 overflow-x-auto pb-1"
+      >
+        {QUICK_CHIPS.map((c) => {
+          const active = chip === c.key && (c.key !== "all" || filter === "ALL");
+          const n = counts[c.key];
+          // "Not approved · 4" (Q23a) — the approver's to-do number. The other chips show a
+          // count too, but only when the server sent one.
+          return (
+            <button
+              key={c.key}
+              type="button"
+              aria-pressed={active}
+              onClick={() => selectChip(c.key)}
+              className={`shrink-0 min-h-[36px] rounded-full border px-3 text-xs font-medium whitespace-nowrap tabular-nums transition-colors focus-ring ${
+                active
+                  ? "bg-slate-900 text-white border-slate-900"
+                  : c.key === "not_approved" && (n ?? 0) > 0
+                    ? "bg-amber-50 text-amber-800 border-amber-300"
+                    : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
+              }`}
+            >
+              {c.label}
+              {n !== undefined && c.key !== "all" ? ` · ${n}` : ""}
+            </button>
+          );
+        })}
+      </div>
 
       {/* List */}
       {loading ? (

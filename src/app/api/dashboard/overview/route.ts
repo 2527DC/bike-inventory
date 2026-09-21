@@ -6,6 +6,7 @@ import { requireAuth, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { createLogger } from "@/lib/logger";
 import { listPendingApprovals } from "@/lib/approvals/pending";
+import { INBOUND_NOT_APPROVED_WHERE } from "@/lib/inbound/filters";
 import { getStuckHours } from "@/lib/settings/stuck-hours";
 import { istDayBounds } from "@/lib/services/timezone";
 import { LIVE_UNIT_STATUSES } from "@/lib/units/constants";
@@ -94,6 +95,7 @@ export async function GET() {
       canTransfers,
       canAudit,
       canDeliveries,
+      canInboundApprove,
     ] = await Promise.all([
       userCan(user.id, "accounts", "view"),
       userCan(user.id, "stock", "view"),
@@ -104,6 +106,7 @@ export async function GET() {
       userCan(user.id, "transfers", "view"),
       userCan(user.id, "stock_audit", "view"),
       userCan(user.id, "deliveries", "view"),
+      userCan(user.id, "inbound", "approve"),
     ]);
 
     // Stock value is NOT read from `api/dashboard/stats`: that route is gated on `reorder.view`,
@@ -127,6 +130,7 @@ export async function GET() {
       overdueBills,
       stockValueRows,
       pending,
+      inboundApprovals,
       stuckInbound,
       holdRows,
       shortOutwards,
@@ -182,6 +186,30 @@ export async function GET() {
       // gates each of its four sections on that module's `approve` grant, so this card counts
       // only what this viewer could actually act on.
       listPendingApprovals(user.id),
+      // Inbound left `listPendingApprovals` (plan 2109-inbound-bins-navigation-fixes, R8), so its
+      // approvals are counted here on their own, with the SAME `where` as the `/inbound` "Not
+      // approved" chip and the same age rule the Requests page used: from the resubmission when
+      // there was one, else from creation (Q15a).
+      when(
+        canInboundApprove,
+        async () => {
+          const approvalsCutoff = new Date(now - approvalsCutoffHours * HOUR_MS);
+          const [waiting, total] = await Promise.all([
+            prisma.inboundShipment.count({
+              where: {
+                ...INBOUND_NOT_APPROVED_WHERE,
+                OR: [
+                  { resubmittedAt: { lt: approvalsCutoff } },
+                  { resubmittedAt: null, createdAt: { lt: approvalsCutoff } },
+                ],
+              },
+            }),
+            prisma.inboundShipment.count({ where: INBOUND_NOT_APPROVED_WHERE }),
+          ]);
+          return { waiting, total };
+        },
+        { waiting: 0, total: 0 }
+      ),
       when(
         canInbound,
         () =>
@@ -356,6 +384,22 @@ export async function GET() {
         href: "/approvals",
         tone: waitingApprovals > 0 ? "bad" : "good",
         hint: pending.total > waitingApprovals ? `${pending.total} waiting in total` : undefined,
+      });
+    }
+    // Inbound approvals, on their own card since plan 2109 R8 took them off `/approvals`. It
+    // opens `/inbound` on the "Not approved" chip, where the approve / return buttons are.
+    if (canInboundApprove) {
+      stuckCards.push({
+        key: "inboundApprovalsWaiting",
+        label: `Inbound approvals waiting > ${hours.approvals} h`,
+        value: inboundApprovals.waiting,
+        format: "count",
+        href: "/inbound?filter=not_approved",
+        tone: inboundApprovals.waiting > 0 ? "bad" : "good",
+        hint:
+          inboundApprovals.total > inboundApprovals.waiting
+            ? `${inboundApprovals.total} waiting in total`
+            : undefined,
       });
     }
     if (canDeliveries) {

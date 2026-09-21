@@ -6,7 +6,7 @@ import { successResponse, errorResponse, paginatedResponse, parseSearchParams } 
 import { stockCountSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
-import { getWarehouseQtyMap } from "@/lib/stock-location";
+import { getBinQtyMap } from "@/lib/units/bin-qty";
 import { nextSequence } from "@/lib/sequence";
 import { logActivity } from "@/lib/activity-log";
 import { createLogger } from "@/lib/logger";
@@ -120,8 +120,9 @@ export async function POST(req: NextRequest) {
     // Since plan 1509-stock-count-scope-by-warehouse (D1, D2) every new count is ONE warehouse
     // — a Floor or a Godown — of one store. There is no whole-store create any more, and the
     // store is never derived from a bin: the schema requires both ids, so a caller that sends
-    // neither is refused with a sentence instead of guessed at. Whole-store audits already
-    // saved still approve through [id]/route.ts (D3).
+    // neither is refused with a sentence instead of guessed at. Since plan 2109 (R36) a bin is
+    // required as well. Audits saved without one still approve through [id]/route.ts, as
+    // verify-only.
     //
     // The store is loaded WITH its active warehouses so both checks below are one query.
     const store = await prisma.store.findUnique({
@@ -145,101 +146,54 @@ export async function POST(req: NextRequest) {
       return errorResponse(`That warehouse is not an active warehouse of ${store.name}`, 400);
     }
 
-    // Bin scope (R15): optional, and only inside the chosen warehouse. Before 1509 a bin from
-    // another store was accepted and its warehouse written under the wrong store.
-    let scopedBin: { id: string; code: string; name: string; warehouseId: string; directions: string | null; floor: string | null; zone: string | null } | null = null;
-    if (binId) {
-      scopedBin = await prisma.bin.findUnique({
-        where: { id: binId },
-        select: { id: true, code: true, name: true, warehouseId: true, directions: true, floor: true, zone: true },
-      });
-      if (!scopedBin) return errorResponse("Bin not found", 400);
-
-      if (scopedBin.warehouseId !== scopedWarehouse.id) {
-        log.warn("stock count refused", { reason: "bin not in warehouse", binId, warehouseId: scopedWarehouse.id });
-        return errorResponse(`Bin ${scopedBin.code} is not in ${scopedWarehouse.name}`, 400);
-      }
-    }
-
-    const binQtyMap = new Map<string, number>();
-    if (scopedBin) {
-      // 1. BinStock table quantities
-      const binStocks = await prisma.binStock.findMany({
-        where: { binId: scopedBin.id },
-        select: { productId: true, quantity: true },
-      });
-      for (const bs of binStocks) {
-        binQtyMap.set(bs.productId, (binQtyMap.get(bs.productId) ?? 0) + bs.quantity);
-      }
-
-      // 2. InventoryUnit counts (cycles assigned to this bin)
-      const unitsInBin = await prisma.inventoryUnit.groupBy({
-        by: ["productId"],
-        where: { binId: scopedBin.id, status: { notIn: ["SOLD", "TRANSFERRED", "LOST"] } },
-        _count: { id: true },
-      });
-      for (const u of unitsInBin) {
-        const existingQty = binQtyMap.get(u.productId) ?? 0;
-        binQtyMap.set(u.productId, Math.max(existingQty, u._count.id));
-      }
-    }
-
-    let binIds: string[] | undefined;
-    if (!productIds || productIds.length === 0) {
-      if (scopedBin) {
-        // Bin audit mode: include products present in this bin
-        const binProductIds = Array.from(binQtyMap.keys());
-        if (binProductIds.length > 0) {
-          productIds = binProductIds;
-        } else {
-          // If no specific stock rows yet, find products mapped by binId or warehouse
-          const productsInBin = await prisma.product.findMany({
-            where: { status: "ACTIVE", binId: scopedBin.id },
-            select: { id: true },
-          });
-          if (productsInBin.length > 0) {
-            productIds = productsInBin.map((p) => p.id);
-          }
-        }
-      }
-
-      if (!productIds || productIds.length === 0) {
-        // Baseline mode: include ALL active products
-        const allProducts = await prisma.product.findMany({
-          where: {
-            status: "ACTIVE",
-          },
-          select: { id: true },
-        });
-
-        if (allProducts.length === 0) {
-          return errorResponse("No active products found for this filter.", 400);
-        }
-
-        productIds = allProducts.map((p) => p.id);
-      }
-    }
-
-    const products = await prisma.product.findMany({
-      where: { id: { in: productIds } },
-      select: { id: true, currentStock: true, binId: true },
+    // Bin scope: REQUIRED since plan 2109 (R36) — every new audit is one bin — and only inside
+    // the chosen warehouse. Before 1509 a bin from another store was accepted and its warehouse
+    // written under the wrong store.
+    const scopedBin = await prisma.bin.findUnique({
+      where: { id: binId },
+      select: { id: true, code: true, name: true, warehouseId: true, isActive: true },
     });
+    if (!scopedBin) return errorResponse("Bin not found", 400);
+    if (scopedBin.warehouseId !== scopedWarehouse.id) {
+      log.warn("stock count refused", { reason: "bin not in warehouse", binId, warehouseId: scopedWarehouse.id });
+      return errorResponse(`Bin ${scopedBin.code} is not in ${scopedWarehouse.name}`, 400);
+    }
+    if (!scopedBin.isActive) {
+      log.warn("stock count refused", { reason: "bin inactive", binId });
+      return errorResponse(`Bin ${scopedBin.code} is not active — pick a bin that is in use`, 400);
+    }
 
-    const scopeQtyMap = await getWarehouseQtyMap(productIds, scopedWarehouse.id);
+    // What the bin holds, per product — the SAME figure the approval compares against
+    // (`getBinQtyMap`, R33). It used to be max(BinStock, units) here and the warehouse total at
+    // approval, so the counter was shown one number and the approval applied another.
+    const binQtyMap = await getBinQtyMap(scopedBin.id);
+
+    // Which products the count starts with (Q26):
+    //   - the caller's list (a brand count sends its brand's products), or
+    //   - every product recorded in this bin (a BinStock row or a live unit), or
+    //   - NOTHING, for an empty bin. The counter adds what they find by search
+    //     (POST /api/stock-counts/[id]/items).
+    // Removed in plan 2109 (Q26): the fallbacks to products whose `Product.binId` is this bin
+    // and then to EVERY active product (~5,745 lines at system 0) for a bin that held nothing.
+    if (!productIds || productIds.length === 0) {
+      productIds = Array.from(binQtyMap.keys());
+    }
+
+    const products = productIds.length
+      ? await prisma.product.findMany({
+          where: { id: { in: productIds } },
+          select: { id: true },
+        })
+      : [];
 
     const now = new Date();
     const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
 
     // R15: Prepare items and order largest system quantity first
-    const itemsToCreate = products.map((p) => {
-      const qty = scopedBin
-        ? (binQtyMap.get(p.id) ?? 0)
-        : (scopeQtyMap.get(p.id) ?? 0);
-      return {
-        productId: p.id,
-        systemQty: qty,
-      };
-    });
+    const itemsToCreate = products.map((p) => ({
+      productId: p.id,
+      systemQty: binQtyMap.get(p.id) ?? 0,
+    }));
     // Sort descending by system quantity so counter starts from largest stock
     itemsToCreate.sort((a, b) => b.systemQty - a.systemQty);
 
@@ -256,7 +210,7 @@ export async function POST(req: NextRequest) {
           countNo,
           title: data.title,
           assignedToId: data.assignedToId || user.id,
-          binId: scopedBin?.id ?? null,
+          binId: scopedBin.id,
           storeId: store.id,
           warehouseId: scopedWarehouse.id,
           dueDate: new Date(data.dueDate),
@@ -282,9 +236,7 @@ export async function POST(req: NextRequest) {
         entityId: created.id,
         entityRef: created.countNo,
         toValue: "PENDING",
-        details: scopedBin
-          ? `${store.name} · ${scopedWarehouse.name} · Bin ${scopedBin.code} · ${products.length} products`
-          : `${store.name} · ${scopedWarehouse.name} · ${products.length} products`,
+        details: `${store.name} · ${scopedWarehouse.name} · Bin ${scopedBin.code} · ${products.length} products`,
         userId: user.id,
         userName: user.name,
       });
@@ -296,7 +248,7 @@ export async function POST(req: NextRequest) {
       countNo: stockCount.countNo,
       storeId: store.id,
       warehouseId: scopedWarehouse.id,
-      binId: scopedBin?.id ?? null,
+      binId: scopedBin.id,
       items: products.length,
       assignedToId: stockCount.assignedToId,
     });

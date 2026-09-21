@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { ArrowLeft, Save, ShieldCheck, Plus, Trash2, Lock, Search } from "lucide-react";
+import { ArrowLeft, Save, ShieldCheck, Plus, Trash2, Lock, Search, Grid3X3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -82,7 +82,10 @@ export default function PermissionsPage() {
       .then(([m, r]) => {
         setModules(m.modules);
         setRoles(r.roles);
-        const first = r.roles.find((x) => !x.isSystem) || r.roles[0];
+        // `?role=<id>` preselects a role — the Permission gaps matrix (plan 2109 R10) links each
+        // role column here. Read from location, not useSearchParams, so the page needs no Suspense.
+        const wanted = new URLSearchParams(window.location.search).get("role");
+        const first = r.roles.find((x) => x.id === wanted) || r.roles.find((x) => !x.isSystem) || r.roles[0];
         if (first) setSelectedRoleId(first.id);
       })
       .catch((e) => {
@@ -227,11 +230,19 @@ export default function PermissionsPage() {
             </p>
           </div>
         </div>
-        {canCreate("roles") && (
-          <Button variant="outline" onClick={handleCreateRole}>
-            <Plus className="h-4 w-4 mr-1" /> New role
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {/* Read-only modules × roles matrix (plan 2109 R10). Same `roles.view` guard. */}
+          <Link href="/team/permissions/gaps">
+            <Button variant="outline">
+              <Grid3X3 className="h-4 w-4 mr-1" /> Permission gaps
+            </Button>
+          </Link>
+          {canCreate("roles") && (
+            <Button variant="outline" onClick={handleCreateRole}>
+              <Plus className="h-4 w-4 mr-1" /> New role
+            </Button>
+          )}
+        </div>
       </div>
 
       {error && (

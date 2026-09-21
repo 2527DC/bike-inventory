@@ -1,5 +1,11 @@
 export const dynamic = "force-dynamic";
 
+// ─── NO LONGER CALLED (plan 2109 R28, Q17a, 21 Sep 2026) ────────────────────────────────────
+// A vendor now has ONE contact, held on the Vendor row (contactPerson, contactDesignation, phone,
+// email, whatsappNumber) and edited through PUT /api/vendors/[id]. The vendor screen no longer
+// calls this route. It is kept, not deleted, because VendorContact still exists until a later
+// release drops the table (CLAUDE.md migration rule 7); delete this route in that release.
+
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";

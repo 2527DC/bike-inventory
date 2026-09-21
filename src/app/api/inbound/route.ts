@@ -9,6 +9,13 @@ import { ibSeedSql } from "@/lib/inbound/sequence";
 import { inboundShipmentSchema } from "@/lib/validations";
 import { recordApprovalEvent } from "@/lib/approvals/events";
 import { notifyInboundApprovalRequested } from "@/lib/approvals/actions/inbound";
+import {
+  INBOUND_QUICK_FILTERS,
+  inboundQuickFilterWhere,
+  inboundWeekEnd,
+  isInboundQuickFilter,
+  type InboundQuickFilter,
+} from "@/lib/inbound/filters";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("inbound");
@@ -22,18 +29,26 @@ export async function GET(req: NextRequest) {
     const search = searchParams.get("search") || undefined;
     const dateFrom = searchParams.get("dateFrom") || undefined;
     const dateTo = searchParams.get("dateTo") || undefined;
+    // The quick-filter chips (plan 2109-inbound-bins-navigation-fixes, R30). When present it
+    // wins over `status`; `status=` keeps working on its own so existing links do not break.
+    const rawFilter = searchParams.get("filter");
+    const filter = isInboundQuickFilter(rawFilter) ? rawFilter : null;
+    if (rawFilter && !filter && rawFilter !== "all") {
+      log.warn("unknown inbound filter ignored", { filter: rawFilter });
+    }
 
     // "arriving_this_week" is a special filter
     const isArrivingThisWeek = status === "arriving_this_week";
 
     const now = new Date();
-    const weekEnd = new Date(now);
-    weekEnd.setDate(weekEnd.getDate() + (7 - weekEnd.getDay()));
+    const weekEnd = inboundWeekEnd(now);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const where: any = {};
 
-    if (isArrivingThisWeek) {
+    if (filter) {
+      Object.assign(where, inboundQuickFilterWhere(filter, now));
+    } else if (isArrivingThisWeek) {
       where.status = "IN_TRANSIT";
       where.expectedDeliveryDate = { lte: weekEnd };
     } else if (status && status !== "ALL") {
@@ -56,7 +71,7 @@ export async function GET(req: NextRequest) {
     }
 
     // Legacy mode: show old INWARD InventoryTransactions not linked to InboundShipments
-    if (status === "LEGACY") {
+    if (status === "LEGACY" && !filter) {
       const legacyWhere: Record<string, unknown> = {
         type: "INWARD",
         NOT: { referenceNo: { startsWith: "IB-" } },
@@ -116,7 +131,14 @@ export async function GET(req: NextRequest) {
       return successResponse({ shipments: Array.from(grouped.values()), total: legacyTotal, isLegacy: true });
     }
 
-    const [shipments, total] = await Promise.all([
+    // ── ONE COUNT PER CHIP, ONE BATCH (R30, Q23a) ──
+    //
+    // Counted over ALL shipments, deliberately not narrowed by the search box or the date
+    // range: a chip reading "Not approved · 4" is the approver's to-do number, and it must not
+    // drop to 0 because someone typed a bill number. Seven `count`s in the same Promise.all as
+    // the list — never one request per chip.
+    const countFilters = INBOUND_QUICK_FILTERS;
+    const [shipments, total, allCount, ...chipCounts] = await Promise.all([
       prisma.inboundShipment.findMany({
         where,
         include: {
@@ -130,11 +152,20 @@ export async function GET(req: NextRequest) {
         take: limit,
       }),
       prisma.inboundShipment.count({ where }),
+      prisma.inboundShipment.count(),
+      ...countFilters.map((f) => prisma.inboundShipment.count({ where: inboundQuickFilterWhere(f, now) })),
     ]);
 
-    return successResponse({ shipments, total });
+    const counts = Object.fromEntries([
+      ["all", allCount],
+      ...countFilters.map((f, i) => [f, chipCounts[i]] as const),
+    ]) as Record<InboundQuickFilter | "all", number>;
+
+    log.debug("inbound list", { filter, status: status ?? null, total, returned: shipments.length });
+    return successResponse({ shipments, total, counts });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("inbound list failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Failed", 500);
   }
 }
@@ -207,9 +238,9 @@ export async function POST(req: NextRequest) {
     });
 
     // The shipment and its REQUESTED approval event commit together (plan 1709, R22, R26). The
-    // event is what puts the shipment on the Requests page (`/approvals`) and what its age is
-    // measured from, so a shipment created without one would be waiting for an approval nobody
-    // can see. Everything after this — pre-bookings, the Zoho draft — is best effort and stays
+    // event is what its approval age is measured from and what the approver-error rate reads.
+    // (It used to also put the shipment on the Requests page, `/approvals`; plan 2109, R8 took
+    // inbound off that screen — approvers find it under "Not approved" on `/inbound`.) Everything after this — pre-bookings, the Zoho draft — is best effort and stays
     // outside.
     const shipment = await prisma.$transaction(async (tx) => {
       const created = await tx.inboundShipment.create({

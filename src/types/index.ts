@@ -195,6 +195,9 @@ export interface Vendor {
   phone?: string;
   email?: string;
   whatsappNumber?: string;
+  /** The vendor's one contact person (plan 2109 R28). Replaces `contacts` on the vendor screen. */
+  contactPerson?: string | null;
+  contactDesignation?: string | null;
   paymentTermDays: number;
   creditLimit: number;
   cdTermsDays?: number;
@@ -202,6 +205,7 @@ export interface Vendor {
   openingBalance?: number;
   isActive: boolean;
   notes?: string;
+  /** Legacy list, no longer returned by /api/vendors/[id] (plan 2109 R28); the table is dropped later. */
   contacts?: VendorContact[];
   /**
    * The brands this vendor supplies, flattened from BrandVendor. Present on

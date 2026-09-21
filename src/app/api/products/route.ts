@@ -13,7 +13,6 @@ import { productSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { PLACEHOLDER_BRAND_NAMES_LOWER } from "@/lib/import-placeholders";
-import { isBinTrackingEnabled } from "@/lib/settings/bin-tracking";
 import { storeById } from "@/lib/stores";
 import { createLogger } from "@/lib/logger";
 import { categorySubtreeIds } from "@/lib/categories/tree";
@@ -96,15 +95,12 @@ export async function GET(req: NextRequest) {
       // and the filter would stop distinguishing anything.
       //
       // The bin is the other kind of missing detail, and the only one no import could ever
-      // fill: a bin is a physical shelf here and Zoho has never heard of it. Included only
-      // while bin tracking is on — with `BIN_TRACKING_ENABLED` false the bin UI is hidden
-      // everywhere, so counting every product as "needs a bin" would swamp the filter with
-      // rows a person has no screen to fix.
-      const binTrackingEnabled = await isBinTrackingEnabled();
+      // fill: a bin is a physical shelf here and Zoho has never heard of it. Bins are always on
+      // (plan 2109, Q27), so a product with no bin always counts as needing one.
       and.push({
         OR: [
           { brand: { name: { in: PLACEHOLDER_BRAND_NAMES_LOWER, mode: "insensitive" as const } } },
-          ...(binTrackingEnabled ? [{ binId: null }] : []),
+          { binId: null },
         ],
       });
     }

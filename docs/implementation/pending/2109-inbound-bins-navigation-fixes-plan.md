@@ -1,6 +1,6 @@
 # Inbound, bins and navigation: fixes and updates to the 1709 build, and the `problems.md` workflow sorted into built / fix / new
 
-Status: pending — **all §1 questions answered 21 Sep 2026 (Q12 belongs to R21, out of scope); waiting for the owner's go-ahead and base branch. Nothing is built.** Written 21 Sep 2026.
+Status: pending — **BUILT 21 Sep 2026 on `feat/2109-inbound-bins-audit-fixes`, uncommitted; `npm run build` PASSED and production smoke test passed (see §6). Owner owes browser walk, migrate deploy + backfill + seed-rbac on other databases.** Written 21 Sep 2026.
 Branch: to be decided when the build is approved (the 1709 work sits on
 `feat/1709-priority-build-stock-flow`, tip `e16d51f`, not pushed — ask before branching).
 
@@ -920,3 +920,71 @@ and put-away. No schema field identifies a cycle (see Q10).
 - R12 codes for existing stock: delivered by the bin-by-bin count (R31); the R41 Generate button
   is removed, not extended.
 - R21 new products from inbound: waits on Syed (Q12).
+
+---
+
+## 6. Build record — 21 Sep 2026
+
+Built on **`feat/2109-inbound-bins-audit-fixes`** (off `main` `382dc7c`) by four parallel agents
+with disjoint file ownership, then integrated. **Uncommitted** at the time of writing.
+
+| Part | Built | Notes |
+|---|---|---|
+| A — stock audit | R33, R36, Q26, R32, R31 | `applyBinCountLine` (`api/stock-counts/_lib/`) + `getBinQtyMap` (`src/lib/units/bin-qty.ts`); `syncWarehouseUnits` takes `binId`; whole-warehouse and whole-store corrections removed; `POST /api/stock-counts/[id]/items` adds a product to a count; receipt lists codes created with a Print link to `/units/labels`. Brand count could never be completed before (it sent every brand product as lines) — now sends only counted products. |
+| B — inbound | R1 + R34, R8, Q15, R30 | `src/lib/inbound/rule-bin.ts` (`assertRuleBin`, 409 inside the receive transaction; same check in putaway), `src/lib/inbound/filters.ts`; inbound removed from `listPendingApprovals`; new dashboard card "Inbound approvals waiting" → `/inbound?filter=not_approved`; chip row with counts. **Deviation:** the lock uses `pickHomeBin` with the shipment's brand/category fallback (as the screen's suggestion does), not `matchHomeBin`, so the server never refuses the bin the screen locked. |
+| C — bins | Q27, R5, Q7, Q21, R29/R31 removals | Switch, hook, setting route and constant deleted; Unmatched tab, assign, per-rule Apply, generate-unit-codes routes deleted; `src/lib/bins/unit-counts.ts`; bin card/drawer Total · Assembled · Unassembled (Total only when non-assemblable), amber over-capacity. `/api/stock/by-bin` always returns the per-warehouse summary (its bin branch returned a shape the page never rendered). |
+| D — other | R4, R10, R28 step 1, R37 | Catalog routes restored, sortOrder 115/116; `/team/permissions/gaps` (no `/team/roles` screen exists) via `api/roles/permission-gaps`; migration `20260921141632_vendor_contact_fields` (ADD COLUMN ×2, hand-written, applied to `bch_local` only); `db:backfill:vendor-contact`, `db:check:unbinned`. |
+| Integration | — | PO PDF / PO send / PO detail / vendor-issue routes and page switched from `vendor.contacts` to `Vendor.contactPerson` + own phone/WhatsApp/email; dead `binTrackingEnabled` branches removed in both transfer-order routes; bin drawer lists live units only; stale comments. |
+
+**Verification run 21 Sep:**
+- `npx tsc --noEmit`: **0 errors in source**. 5 errors remain in the generated
+  `.next/types/validator.ts`, which still names the deleted routes; the next build regenerates it.
+- ESLint on the 61 changed files: 1 error and 8 warnings, **all present on `main` already**
+  (`bins-manager.tsx` set-state-in-effect is at `main:487`).
+- `node scripts/db/verify-bin-count-r33.mjs` on localhost `bch_local` (rolled back): **all checks
+  pass**, covering the §2.9 examples, day one, a non-assemblable bin, and a recount without the
+  split.
+- bch_local facts:
+  - Bin tracking was ON; 0 bin-less delivered lines; 0 bin-less live units.
+  - Backfill: 18 vendors filled, none with more than one contact; a second run changed nothing.
+  - `db:check:unbinned` lists 11 items / 5 products of quantity with no binned units (local test
+    data).
+- **Not done:** `npm run build`, browser walk.
+
+**Open, found during the build (not decided):**
+1. `src/app/api/inventory/cleanup/route.ts:65` reverses an imported OUTWARD with `addAnywhere`: it
+   adds quantity with **no units and no bin**, and does not un-sell the sold units. That is the
+   one path left that creates un-binned, uncoded stock. It needs a design decision (which bin?).
+2. `(dashboard)/approvals/page.tsx` still has dead INBOUND handling (harmless).
+3. `bch_local` has a `PaymentMode` enum that drifts from the schema. It predates this work.
+
+**Owner owes:**
+- `npm run build` and a browser walk.
+- On each non-local database, before the code goes live:
+  - `npx prisma migrate deploy`, for `20260921141632_vendor_contact_fields`
+  - `npm run db:backfill:vendor-contact`
+  - `npm run db:check:unbinned`
+- `npm run db:seed:rbac` after the deploy (R4 sidebar).
+
+**Build and smoke test, 21 Sep 2026 (later):**
+- `npm run db:seed:rbac` on `bch_local`: 55 modules, 193 permissions, no errors.
+- **`npm run build` PASSED**, 14:57 → 15:44. It wrote `prerender-manifest.json`, removed
+  `.next/lock` and `export-detail.json` on a clean exit, and regenerated the stale validator. The
+  run outlived its session, so the exit code itself was not captured; success was confirmed by
+  starting the output below.
+- `next start` on the production build: "Ready in 6.8s", with no server errors. Logged in as the
+  local seed admin and checked:
+  - Unauthenticated page and API requests redirect to login.
+  - R30: `/api/inbound?filter=not_approved` returns `counts` all 19, not_approved 9, returned 0,
+    approved_not_received 3, partial 1, completed 6, this_week 12.
+  - R5: `/api/bins` returns `unitCounts` per bin, e.g. `BCH_BIN_1` capacity 10 → 1/0/1; the
+    non-assemblable `NOAS` bin → total 1.
+  - R10: `/api/roles/permission-gaps` returns 55 modules × 2 roles.
+  - R8: `/api/approvals/pending` has sections `INBOUND: false`, and no inbound requests appear.
+  - R36: `POST /api/stock-counts` with no bin → 400 "Choose a bin".
+  - R4: modules read `stock_audit /stock-audit 113 · categories /categories 115 · brands
+    /more/brands 116`.
+  - Deleted routes: `/api/settings/bin-tracking` → 404. `/api/bins/unmatched-items`,
+    `generate-unit-codes` and `assign` → 405, because those paths now fall into
+    `/api/bins/[id]`, which has no GET/POST.
+- **Still not done:** a browser walk of the screens.

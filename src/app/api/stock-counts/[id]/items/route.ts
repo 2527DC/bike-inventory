@@ -7,6 +7,8 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
 import { getWarehouseQtyMap, getStoreQtyMap } from "@/lib/stock-location";
+import { getBinQtyMap } from "@/lib/units/bin-qty";
+import { logActivity } from "@/lib/activity-log";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("stock-counts:items");
@@ -44,11 +46,16 @@ const putSchema = z.object({ items: z.array(lineSchema) });
  *
  * `currentStock` survives as the fallback for exactly one case: a legacy audit with neither
  * FK set, whose scope is genuinely unknown.
+ *
+ * A bin audit reads THE BIN's quantity (plan 2109, R33) — the figure it was raised with and the
+ * one its approval applies against. It read the whole warehouse here before, so every line of a
+ * bin audit looked stale whenever another bin of the warehouse held the product.
  */
 async function scopedQtyMap(
-  scope: { storeId: string | null; warehouseId: string | null },
+  scope: { storeId: string | null; warehouseId: string | null; binId: string | null },
   productIds: string[]
 ): Promise<Map<string, number> | null> {
+  if (scope.binId) return getBinQtyMap(scope.binId, productIds);
   if (scope.warehouseId) return getWarehouseQtyMap(productIds, scope.warehouseId);
   if (scope.storeId) return getStoreQtyMap(productIds, scope.storeId);
   return null; // legacy audit — the caller falls back to currentStock
@@ -128,7 +135,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     // Stale = systemQty differs from what is in the SCOPE now, not from the global total.
     const scope = await prisma.stockCount.findUnique({
       where: { id },
-      select: { storeId: true, warehouseId: true },
+      select: { storeId: true, warehouseId: true, binId: true },
     });
     const liveQty = scope ? await scopedQtyMap(scope, items.map((i) => i.productId)) : null;
     // `liveQty` rides on every line (plan §3 C2): the review table shows a "Now" column when
@@ -245,6 +252,107 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 }
 
+const addSchema = z.object({ productId: z.string({ error: "Choose a product" }).min(1, "Choose a product") });
+
+/**
+ * Add a product the counter found in the bin but that is not on the count (plan 2109, Q26).
+ *
+ * An empty bin's audit starts with no lines, so this is how its contents get onto it. The line
+ * starts at what the bin holds of that product — 0 for anything genuinely new to the bin — and
+ * is counted like any other. Approval then creates the `U-` codes for what was counted (R31).
+ *
+ * Same door as saving counts: the assignee, while the audit is IN PROGRESS. Only a bin audit
+ * takes new lines; an old audit saved without a bin cannot be applied to stock anyway (R36).
+ */
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  try {
+    const user = await requireFeature("stock_audit", "edit");
+
+    const sc = await prisma.stockCount.findUnique({
+      where: { id },
+      select: { id: true, countNo: true, assignedToId: true, status: true, binId: true },
+    });
+    if (!sc) return errorResponse("Stock count not found", 404);
+    if (sc.assignedToId !== user.id) {
+      return errorResponse("Only the person this audit is assigned to can start, count or complete it", 403);
+    }
+    if (sc.status !== "IN_PROGRESS") {
+      log.warn("add line refused by status", { stockCountId: id, status: sc.status, userId: user.id });
+      return errorResponse(
+        `This audit is ${sc.status.toLowerCase().replace(/_/g, " ")}; products can only be added while it is in progress`,
+        409
+      );
+    }
+    if (!sc.binId) {
+      log.warn("add line refused: audit has no bin", { stockCountId: id });
+      return errorResponse("Products can only be added to a bin audit", 400);
+    }
+
+    const body = await req.json().catch(() => null);
+    const parsed = addSchema.safeParse(body);
+    if (!parsed.success) {
+      log.warn("add line refused: invalid body", { stockCountId: id, issue: parsed.error.issues[0]?.message });
+      return errorResponse(parsed.error.issues[0]?.message ?? "Choose a product", 400);
+    }
+    const { productId } = parsed.data;
+
+    const product = await prisma.product.findUnique({
+      where: { id: productId },
+      select: { id: true, name: true, sku: true, status: true },
+    });
+    if (!product) return errorResponse("That product does not exist", 400);
+    if (product.status !== "ACTIVE") {
+      return errorResponse(`${product.name} is not active and cannot be counted`, 400);
+    }
+
+    const already = await prisma.stockCountItem.findFirst({
+      where: { stockCountId: id, productId },
+      select: { id: true },
+    });
+    if (already) {
+      log.debug("add line: already on the count", { stockCountId: id, productId });
+      return errorResponse(`${product.name} is already on this count — search for it in the list`, 409);
+    }
+
+    const binQty = (await getBinQtyMap(sc.binId, [productId])).get(productId) ?? 0;
+
+    const created = await prisma.$transaction(async (tx) => {
+      const item = await tx.stockCountItem.create({
+        data: { stockCountId: id, productId, systemQty: binQty },
+        include: {
+          product: {
+            select: {
+              name: true, sku: true, currentStock: true,
+              category: { select: { name: true } },
+              brand: { select: { name: true } },
+              bin: { select: { code: true, location: true } },
+            },
+          },
+        },
+      });
+      await logActivity(tx, {
+        module: "stock_audit",
+        action: "line_added",
+        entityType: "StockCount",
+        entityId: id,
+        entityRef: sc.countNo,
+        details: `${product.name} (${product.sku}) added to the count`,
+        userId: user.id,
+        userName: user.name,
+      });
+      return item;
+    });
+
+    log.info("line added to count", { stockCountId: id, productId, itemId: created.id, systemQty: binQty });
+    return successResponse({ ...created, liveQty: binQty }, 201);
+  } catch (error) {
+    if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("add line failed", { stockCountId: id, message: error instanceof Error ? error.message : String(error) });
+    return errorResponse(error instanceof Error ? error.message : "Failed to add the product", 400);
+  }
+}
+
 // PATCH — Refresh systemQty from current product stock
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -260,7 +368,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     const scope = await prisma.stockCount.findUnique({
       where: { id },
-      select: { storeId: true, warehouseId: true },
+      select: { storeId: true, warehouseId: true, binId: true },
     });
     if (!scope) return errorResponse("Stock count not found", 404);
 

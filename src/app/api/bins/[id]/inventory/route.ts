@@ -5,6 +5,8 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { createLogger } from "@/lib/logger";
+import { LIVE_UNIT_STATUSES } from "@/lib/units";
+import { getBinUnitCounts, EMPTY_BIN_COUNTS } from "@/lib/bins/unit-counts";
 
 const log = createLogger("bins:inventory");
 
@@ -22,9 +24,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
     if (!bin) return errorResponse("Bin not found", 404);
 
-    const [units, binStocks, recentMovements] = await Promise.all([
+    const [units, binStocks, recentMovements, counts] = await Promise.all([
       prisma.inventoryUnit.findMany({
-        where: { binId: id },
+        // Live units only, so "Items in this bin" agrees with the Total above it (plan 2109, R5).
+        // A sold or lost unit can keep its old binId; it is no longer on the shelf.
+        where: { binId: id, status: { in: LIVE_UNIT_STATUSES } },
         include: {
           product: {
             select: {
@@ -68,6 +72,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
           product: { select: { id: true, sku: true, name: true } },
         },
       }),
+      // R5: the same live-unit figures the bins list shows on the card.
+      getBinUnitCounts([id]),
     ]);
 
     return successResponse({
@@ -75,6 +81,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       units,
       binStocks,
       recentMovements,
+      unitCounts: counts.get(id) ?? EMPTY_BIN_COUNTS,
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);

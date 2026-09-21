@@ -6,6 +6,7 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { loadHomeBinRules, pickHomeBin } from "@/lib/bins/rule-match";
 import { BinMoveRefused, placeUnitsInBin } from "@/lib/units";
+import { assertRuleBin, RuleBinLocked } from "@/lib/inbound/rule-bin";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("inbound:putaway");
@@ -82,6 +83,10 @@ export async function GET(
         ...item,
         suggestedBin: finalBin,
         matchedRule,
+        // Plan 2109, R34: TRUE only when a home-bin RULE matched — the screen locks the line to
+        // `suggestedBin` and the receive route refuses any other bin. The "Product Default Bin"
+        // fallback above is a suggestion only and stays editable.
+        ruleLocked: Boolean(match),
       };
     });
 
@@ -133,7 +138,7 @@ export async function POST(
 
     const shipment = await prisma.inboundShipment.findUnique({
       where: { id },
-      select: { id: true, shipmentNo: true },
+      select: { id: true, shipmentNo: true, brandId: true, categoryId: true },
     });
     if (!shipment) return errorResponse("Shipment not found", 404);
 
@@ -157,6 +162,20 @@ export async function POST(
         if (!targetBin) continue;
 
         const effectiveWarehouseId = warehouseId || targetBin.warehouseId;
+
+        // The rule lock, the same one the receive route applies (plan
+        // 2109-inbound-bins-navigation-fixes, R34): a product a home-bin rule matches in this
+        // bin's warehouse can only go into the rule's bin. Throws, so the whole round rolls back.
+        if (lineItem.productId) {
+          await assertRuleBin(tx, {
+            productId: lineItem.productId,
+            warehouseId: targetBin.warehouseId,
+            shipmentBrandId: shipment.brandId,
+            shipmentCategoryId: shipment.categoryId,
+            lineItemId,
+            binId,
+          });
+        }
 
         // Update lineItem bin
         await tx.inboundLineItem.update({
@@ -246,6 +265,16 @@ export async function POST(
     return successResponse({ updated: updatedCount, unitsPutAway, round });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof RuleBinLocked) {
+      log.warn("put-away refused: bin is set by rule", {
+        shipmentId: id,
+        lineItemId: error.context.lineItemId,
+        binId: error.context.binId,
+        ruleBinId: error.context.ruleBinId,
+        ruleId: error.context.ruleId,
+      });
+      return errorResponse(error.message, 409);
+    }
     if (error instanceof BinMoveRefused) {
       log.warn("put-away refused", { shipmentId: id, message: error.message });
       return errorResponse(error.message, 409);

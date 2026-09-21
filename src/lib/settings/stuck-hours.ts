@@ -8,7 +8,7 @@ const log = createLogger("settings:stuck-hours");
  * When the dashboard calls something "stuck" (plan 1709-priority-build-and-stock-flow, R35–R37,
  * Q30): an approval waiting longer than `approvals` hours, an inbound not received after
  * `inbound` hours, a build on hold longer than `holds` hours. Short outwards are stuck at once
- * and have no setting. Stored as JSON in AppSetting — pattern copied from `bin-tracking.ts`.
+ * and have no setting. Stored as JSON in AppSetting — pattern copied from `bin-tracking.ts` (removed in plan 2109, Q27).
  */
 export const STUCK_HOURS_SETTING_KEY = "dashboard_stuck_hours";
 

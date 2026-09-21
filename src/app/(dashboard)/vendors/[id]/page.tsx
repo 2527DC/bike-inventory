@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, use } from "react";
 import Link from "next/link";
-import { ArrowLeft, Phone, MessageSquare, AlertCircle, Check, Loader2, Power, Trash2, BookOpen } from "lucide-react";
+import { ArrowLeft, Phone, MessageSquare, AlertCircle, Check, Loader2, Power, BookOpen } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { usePermissions } from "@/lib/use-permissions";
 import { apiFetch } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 import { VendorBrands } from "./_components/vendor-brands";
+import { VendorContact } from "./_components/vendor-contact";
 
 const log = createLogger("vendors:detail");
 
@@ -41,10 +42,6 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   const [editingBalance, setEditingBalance] = useState(false);
   const [balanceValue, setBalanceValue] = useState("");
   const [savingBalance, setSavingBalance] = useState(false);
-  const [editingEmail, setEditingEmail] = useState(false);
-  const [emailValue, setEmailValue] = useState("");
-  const [savingEmail, setSavingEmail] = useState(false);
-  const [emailError, setEmailError] = useState("");
   const [editingTerms, setEditingTerms] = useState(false);
   const [termsValue, setTermsValue] = useState("");
   const [savingTerms, setSavingTerms] = useState(false);
@@ -54,43 +51,9 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   const [savingCd, setSavingCd] = useState(false);
   const [actionError, setActionError] = useState("");
 
-  // Add-contact form (name + number) for the brand.
-  const [showAddContact, setShowAddContact] = useState(false);
-  const [contactName, setContactName] = useState("");
-  const [contactNumber, setContactNumber] = useState("");
-  const [contactPrimary, setContactPrimary] = useState(true);
-  const [savingContact, setSavingContact] = useState(false);
-
-  async function addContact() {
-    if (!contactName.trim() || !contactNumber.trim()) return;
-    setSavingContact(true);
-    setActionError("");
-    try {
-      const num = contactNumber.trim();
-      await apiFetch(`/api/vendors/${id}/contacts`, {
-        method: "POST",
-        // Save the one number to both fields so it works for WhatsApp (wa.me) and tel: calls.
-        json: { name: contactName.trim(), phone: num, whatsapp: num, isPrimary: contactPrimary },
-      });
-      setContactName(""); setContactNumber(""); setContactPrimary(false); setShowAddContact(false);
-      loadVendor();
-    } catch (e) {
-      log.warn("add contact failed", { vendorId: id, error: e instanceof Error ? e.message : String(e) });
-      setActionError(e instanceof Error ? e.message : "Failed to add contact");
-    }
-    finally { setSavingContact(false); }
-  }
-
-  async function deleteContact(contactId: string) {
-    if (!confirm("Remove this contact?")) return;
-    try {
-      await apiFetch(`/api/vendors/${id}/contacts/${contactId}`, { method: "DELETE" });
-      loadVendor();
-    } catch (e) {
-      log.warn("remove contact failed", { vendorId: id, contactId, error: e instanceof Error ? e.message : String(e) });
-      setActionError(e instanceof Error ? e.message : "Failed to remove contact");
-    }
-  }
+  // The vendor's one contact (person, designation, phone, email, WhatsApp) is edited by
+  // <VendorContact> below and saved on the Vendor row (plan 2109 R28). The VendorContact list
+  // and its add / delete calls to /api/vendors/[id]/contacts were removed.
 
   const loadVendor = useCallback(() => {
     apiFetch<VendorDetail>(`/api/vendors/${id}`)
@@ -337,58 +300,12 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
             </div>
           )}
 
-          {/* Email: the vendor PUT has always accepted it and only /vendors/new had an input,
-              so an address entered at creation could never be corrected. P12 emails the PO
-              here, which makes an uneditable address a real problem rather than a gap. */}
-          <div>
-            <p className="text-xs text-slate-500 mb-0.5">Email</p>
-            {editingEmail ? (
-              <div className="flex gap-2">
-                <input
-                  type="email"
-                  value={emailValue}
-                  onChange={(e) => setEmailValue(e.target.value)}
-                  placeholder="orders@vendor.com"
-                  className="flex-1 min-h-[44px] rounded-lg border border-slate-300 px-3 text-sm"
-                />
-                <Button
-                  onClick={async () => {
-                    setSavingEmail(true);
-                    try {
-                      await apiFetch(`/api/vendors/${id}`, { method: "PUT", json: { email: emailValue.trim() } });
-                      setVendor(vendor ? { ...vendor, email: emailValue.trim() || undefined } : vendor);
-                      setEditingEmail(false);
-                    } catch (e) {
-                      log.warn("save email failed", { vendorId: id, error: e instanceof Error ? e.message : String(e) });
-                      setEmailError(e instanceof Error ? e.message : "Could not save the email");
-                    } finally {
-                      setSavingEmail(false);
-                    }
-                  }}
-                  disabled={savingEmail}
-                  className="min-h-[44px]"
-                >
-                  {savingEmail ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
-                </Button>
-                <Button variant="outline" onClick={() => { setEditingEmail(false); setEmailError(""); }} disabled={savingEmail} className="min-h-[44px]">
-                  Cancel
-                </Button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <p className="text-sm text-slate-700 break-all">{vendor.email || <span className="text-slate-400">Not set</span>}</p>
-                {canEditBalance && (
-                  <button
-                    onClick={() => { setEmailValue(vendor.email || ""); setEditingEmail(true); }}
-                    className="text-xs text-blue-600 min-h-[32px] px-1"
-                  >
-                    Edit
-                  </button>
-                )}
-              </div>
-            )}
-            {emailError && <p className="text-xs text-red-600 mt-1">{emailError}</p>}
-          </div>
+          <VendorContact
+            vendorId={id}
+            contact={vendor}
+            canEdit={canEditBalance}
+            onSaved={(patch) => setVendor(vendor ? { ...vendor, ...patch } : vendor)}
+          />
 
           <VendorBrands
             vendorId={id}
@@ -513,72 +430,6 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                     Edit
                   </button>
                 )}
-              </div>
-            )}
-          </div>
-          {/* Contacts — name + number for the brand. The primary contact is who the issue
-              "Share on WhatsApp" button messages. */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <p className="text-xs text-slate-500">Contacts</p>
-              {canEditBalance && !showAddContact && (
-                <button onClick={() => setShowAddContact(true)} className="text-xs font-medium text-blue-600 hover:underline">
-                  + Add contact
-                </button>
-              )}
-            </div>
-
-            {vendor.contacts && vendor.contacts.length > 0 ? (
-              vendor.contacts.map((c) => {
-                const num = c.whatsapp || c.phone;
-                return (
-                  <div key={c.id} className="flex items-center gap-2 py-1">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-sm text-slate-700">{c.name}</span>
-                        {c.designation && <span className="text-xs text-slate-400">({c.designation})</span>}
-                        {c.isPrimary && <Badge variant="info">Primary</Badge>}
-                      </div>
-                      {num && <span className="text-xs text-slate-500">{num}</span>}
-                    </div>
-                    {num && (
-                      <a href={`https://wa.me/91${num.replace(/\D/g, "").slice(-10)}`} target="_blank" rel="noopener noreferrer"
-                        className="p-1.5 text-green-600 hover:bg-green-50 rounded-full" title="WhatsApp">
-                        <MessageSquare className="h-4 w-4" />
-                      </a>
-                    )}
-                    {canEditBalance && (
-                      <button onClick={() => deleteContact(c.id)} className="p-1.5 text-slate-300 hover:text-red-500 rounded-full" title="Remove">
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    )}
-                  </div>
-                );
-              })
-            ) : (
-              !showAddContact && <p className="text-xs text-slate-400">No contacts yet.</p>
-            )}
-
-            {showAddContact && (
-              <div className="mt-2 space-y-2 bg-slate-50 rounded-lg p-2.5">
-                <input value={contactName} onChange={(e) => setContactName(e.target.value)}
-                  placeholder="Contact person name"
-                  className="flex h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900" />
-                <input value={contactNumber} onChange={(e) => setContactNumber(e.target.value)}
-                  type="tel" inputMode="tel" placeholder="Mobile number (WhatsApp)"
-                  className="flex h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900" />
-                <label className="flex items-center gap-2 text-xs text-slate-600">
-                  <input type="checkbox" checked={contactPrimary} onChange={(e) => setContactPrimary(e.target.checked)} />
-                  Make this the primary contact (messaged from issues)
-                </label>
-                <div className="flex gap-2">
-                  <Button size="sm" onClick={addContact} disabled={savingContact || !contactName.trim() || !contactNumber.trim()} className="flex-1">
-                    {savingContact ? "Saving…" : "Save Contact"}
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => { setShowAddContact(false); setContactName(""); setContactNumber(""); }}>
-                    Cancel
-                  </Button>
-                </div>
               </div>
             )}
           </div>

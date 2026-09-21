@@ -7,7 +7,6 @@ import Link from "next/link";
 import { ArrowLeft, Loader2, Package } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
-import { useBinTracking } from "@/hooks/use-bin-tracking";
 import { useStores } from "@/hooks/use-sites";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
@@ -22,8 +21,9 @@ interface Bin {
   code: string;
   name: string;
   location: string | null;
+  nonAssemblable?: boolean;
   warehouse: { id: string; name: string; kind: "FLOOR" | "GODOWN" };
-  _count: { products: number };
+  _count: { products: number; binStocks?: number; units?: number };
 }
 
 interface User {
@@ -36,7 +36,8 @@ interface User {
 }
 
 export default function NewStockAuditPage() {
-  const { isBinTrackingEnabled: BIN_TRACKING_ENABLED } = useBinTracking();
+  // Bins are always on (plan 2109, Q27): the `useBinTracking()` switch this page read was
+  // removed, and the bin step always shows.
   const { stores, loading: storesLoading } = useStores();
   const router = useRouter();
   const { data: session } = useSession();
@@ -46,8 +47,8 @@ export default function NewStockAuditPage() {
   const [dueDate, setDueDate] = useState("");
   const [notes, setNotes] = useState("");
   // Scope (plan 1509, D1): a store, then exactly ONE of its warehouses — the Floor or a
-  // Godown. There is no whole-store count any more, in either bin mode. The bin is optional:
-  // "" means the whole warehouse (Q2).
+  // Godown — then exactly ONE bin in it (plan 2109, R36). "Whole warehouse" (Q2) is gone:
+  // a count that cannot say which bin a difference belongs to cannot correct stock.
   const [storeId, setStoreId] = useState<string>("");
   const [warehouseId, setWarehouseId] = useState<string>("");
   const [selectedBin, setSelectedBin] = useState("");
@@ -67,18 +68,25 @@ export default function NewStockAuditPage() {
   } | null>(null);
 
   useEffect(() => {
-    if (BIN_TRACKING_ENABLED) {
-      (async () => {
-        const { data, error: err } = await apiTry<Bin[]>("/api/bins");
-        // A person without the `bins` view grant lands here too. The bin step then offers
-        // only "Whole warehouse", which is still a valid count.
-        if (err) log.warn("bins load failed", { message: err });
-        else setBins(data ?? []);
-      })();
-    }
-    // Load team members for assignment
-    fetch("/api/users").then((r) => r.json()).then((res) => { if (res.success) setUsers(res.data); }).catch(() => {});
-  }, [BIN_TRACKING_ENABLED]);
+    let cancelled = false;
+    (async () => {
+      const [binsRes, usersRes] = await Promise.all([
+        apiTry<Bin[]>("/api/bins"),
+        apiTry<User[]>("/api/users"),
+      ]);
+      if (cancelled) return;
+      // A person without the `bins` view grant lands here too, and then has no bin to pick —
+      // so they cannot create an audit (R36). The error line below says why.
+      if (binsRes.error) {
+        log.warn("bins load failed", { message: binsRes.error });
+        setError(`Could not load bins: ${binsRes.error}`);
+      } else setBins(binsRes.data ?? []);
+      // Team members for assignment. Was a raw `fetch().json()` that swallowed every failure.
+      if (usersRes.error) log.warn("users load failed", { message: usersRes.error });
+      else setUsers(usersRes.data ?? []);
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const selectedStore = stores.find((s) => s.id === storeId) ?? null;
   const selectedWarehouse = selectedStore?.warehouses.find((w) => w.id === warehouseId) ?? null;
@@ -109,15 +117,15 @@ export default function NewStockAuditPage() {
     if (w) setTitle(autoTitle(w.name));
   };
 
-  /** `null` = the whole warehouse. */
-  const selectBin = (bin: Bin | null) => {
-    setSelectedBin(bin?.id ?? "");
-    if (selectedWarehouse) setTitle(autoTitle(selectedWarehouse.name, bin?.code));
+  const selectBin = (bin: Bin) => {
+    setSelectedBin(bin.id);
+    if (selectedWarehouse) setTitle(autoTitle(selectedWarehouse.name, bin.code));
   };
 
   const handleSubmit = async () => {
     if (!storeId) { setError("Choose a store"); return; }
     if (!warehouseId) { setError("Choose a warehouse"); return; }
+    if (!pickedBin) { setError("Choose a bin"); return; }
     if (!title || !dueDate) return;
     setSubmitting(true);
     setError("");
@@ -129,8 +137,8 @@ export default function NewStockAuditPage() {
       assignedToId: assignedTo || user?.userId,
       storeId,
       warehouseId,
+      binId: pickedBin.id,
     };
-    if (pickedBin) body.binId = pickedBin.id;
 
     const { data, error: err, status } = await apiTry<{ id: string; countNo?: string }>(
       "/api/stock-counts",
@@ -175,7 +183,7 @@ export default function NewStockAuditPage() {
       </div>
 
       <div className="space-y-3">
-        {/* SCOPE — store, then ONE warehouse inside it, then (bins on) an optional bin.
+        {/* SCOPE — store, then ONE warehouse inside it, then ONE bin (required, plan 2109 R36).
             The same steps whatever bin mode says: the old bin-mode toggle sent no store at
             all, which is the "storeId … received undefined" error plan 1509 fixes. */}
         <div>
@@ -244,22 +252,11 @@ export default function NewStockAuditPage() {
         )}
 
         {/* Bin — only the bins inside the picked warehouse, never a flat list of the whole
-            business. Optional: "Whole warehouse" is the default (Q2). */}
-        {BIN_TRACKING_ENABLED && selectedWarehouse && (
+            business. REQUIRED (plan 2109, R36): the "Whole warehouse" choice was removed. */}
+        {selectedWarehouse && (
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Bin</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Bin *</label>
             <div className="space-y-1.5 max-h-[50vh] overflow-y-auto">
-              <button
-                onClick={() => selectBin(null)}
-                className={`w-full min-h-[44px] text-left px-3 py-2.5 rounded-lg border transition-all ${
-                  selectedBin === ""
-                    ? "border-slate-900 bg-slate-50 ring-1 ring-slate-900"
-                    : "border-slate-200 bg-white"
-                }`}
-              >
-                <span className="text-sm font-medium text-slate-900">Whole warehouse</span>
-                <span className="text-sm text-slate-500"> — {selectedWarehouse.name}</span>
-              </button>
               {warehouseBins.map((b) => {
                 const isSelected = selectedBin === b.id;
                 return (
@@ -273,11 +270,15 @@ export default function NewStockAuditPage() {
                       <div className="min-w-0">
                         <span className="text-sm font-medium text-slate-900">{b.code}</span>
                         <span className="text-sm text-slate-500"> — {b.name}</span>
+                        {b.nonAssemblable && (
+                          <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700">Non-assemblable</span>
+                        )}
                       </div>
+                      {/* Live items in the bin (units), not `Product.binId` home-bin mappings. */}
                       <span className={`shrink-0 ml-2 text-xs px-2 py-0.5 rounded-full ${
-                        b._count.products > 0 ? "bg-blue-50 text-blue-600" : "bg-slate-100 text-slate-400"
+                        (b._count.units ?? 0) > 0 ? "bg-blue-50 text-blue-600" : "bg-slate-100 text-slate-400"
                       }`}>
-                        {b._count.products} items
+                        {b._count.units ?? 0} items
                       </span>
                     </div>
                   </button>
@@ -285,18 +286,26 @@ export default function NewStockAuditPage() {
               })}
             </div>
             {warehouseBins.length === 0 && (
-              <p className="text-[11px] text-slate-500 mt-2">No bins in this warehouse.</p>
+              <p className="text-[11px] text-slate-500 mt-2">
+                No bins in this warehouse. Add one on /bins before counting here.
+              </p>
             )}
           </div>
         )}
 
-        {/* Baseline mode notice — a bin count lists every active product when the bin holds
-            nothing yet, and what is counted is assigned to the bin. */}
+        {/* What the count will list (plan 2109, Q26). "Baseline Mode" — every active product
+            listed for an empty bin — was removed: the count starts with what the bin is
+            recorded to hold, and anything else found is added by search while counting. */}
         {pickedBin && (
-          <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
-            <Package className="h-4 w-4 text-amber-600 shrink-0" />
-            <p className="text-xs text-amber-700">
-              <span className="font-medium">Baseline Mode:</span> All active products will be listed. Count what you physically find — items counted with {'>'} 0 will be assigned to bin {pickedBin.code}.
+          <div className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg">
+            <Package className="h-4 w-4 text-slate-500 shrink-0" />
+            <p className="text-xs text-slate-600">
+              The count lists what bin {pickedBin.code} is recorded to hold
+              {(pickedBin._count.units ?? 0) === 0 ? " — nothing yet, so it starts empty" : ""}. Anything
+              else found in the bin is added by search while counting.
+              {pickedBin.nonAssemblable
+                ? " This bin is non-assemblable: items are counted as one number."
+                : " Each item is counted as Assembled or Unassembled."}
             </p>
           </div>
         )}
@@ -345,6 +354,7 @@ export default function NewStockAuditPage() {
           const missing: string[] = [];
           if (!storeId) missing.push("store");
           if (!warehouseId) missing.push("warehouse");
+          if (!pickedBin) missing.push("bin");
           if (!title) missing.push("title");
           if (!dueDate) missing.push("due date");
           if (!assignedTo) missing.push("assignee");
