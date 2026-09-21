@@ -1104,6 +1104,11 @@ model Vendor {
   phone           String?
   email           String?
   whatsappNumber  String?
+  // The vendor's one contact person (plan 2109 R28, Q17a). Phone / email / WhatsApp above are
+  // that person's. Replaces VendorContact, which is kept (unused by the vendor screen) until a
+  // later release drops it — rule 7. Nullable: many vendors have no named contact.
+  contactPerson      String?
+  contactDesignation String?
   waGroupName     String? // Ops Issues: WhatsApp group this brand's issues are shared to
   waGroupCode     String? // Ops Issues: human routing label for the group (e.g. "#1234")
   paymentTermDays Int      @default(30)

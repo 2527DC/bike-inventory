@@ -105,7 +105,8 @@ export const MODULE_CATALOG: ModuleSeed[] = [
   // Build-line assembly (90) first, then Stock management — which is now EXPAND-ONLY
   // (`route: null`, R28, Q27). Its visible children are Stock & inventory, a divider
   // (`inbound.dividerBefore`), then 1 Inbound · 2 Outbound · 3 Stock transfer · 4 Stock audit.
-  // Categories and Brands left the menu (chips inside Stock & inventory, R33), Bins moved to
+  // Categories and Brands left the menu (chips inside Stock & inventory, R33) — and came BACK
+  // below 4 Stock audit in plan 2109 (R4, 21 Sep 2026; chips kept too). Bins moved to
   // Admin › Settings › Store management (R32), Barcode became the Labels tab on /assembly (R29).
   // /stock-management stays reachable by URL. The phone's bottom bar is per-user pins (R34,
   // Q28), so the routeless parent no longer costs anyone a tab.
@@ -340,10 +341,11 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     label: "Brands",
     description: "Brand master, lead times and stock files",
     icon: "Tag",
-    // Routeless since plan 1709 (R33): Brands left the menu and is a chip inside Stock &
-    // inventory. /more/brands is still served. Nulling the route (rather than renaming it) is
-    // what the navTabs note below warns about: a pinned "/more/brands" tab stops resolving.
-    route: null,
+    // Back in the sidebar (plan 2109, R4, owner 21 Sep 2026), directly below Stock audit. It was
+    // routeless from plan 1709 (R33) to 2109; the /stock chip stays as well. The route is
+    // EXACTLY "/more/brands" again — see the navTabs note below: a pinned tab resolves by this
+    // string, so restoring it also brings back any bottom-bar pin people had on this screen.
+    route: "/more/brands",
     // Moved under Stock Management on 8 Sep 2026 (owner). The brand master is stock master
     // data — it sits beside Categories, which was already a child here — not a purchasing
     // screen. It was in "Purchase" at sortOrder 220, next to purchase orders.
@@ -355,7 +357,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     // is keyed on it.
     parentKey: "stock_management",
     group: "Operations",
-    sortOrder: 108, // routeless since plan 1709, so its place among the children no longer shows
+    sortOrder: 116, // plan 2109 R4: after stock_audit (113) and categories (115); was 108
     // CRUD plus `fetch`, and `fetch` is deliberately NOT `zoho.fetch`.
     //
     // `zoho.fetch` is the grant for pulling BILLS and INVOICES — a routine, high-frequency
@@ -397,17 +399,19 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     // bookmarks were the only thing at stake.
     //
     // Categories is now the only taxonomy a product is filed under — `product_types` was
-    // removed in P3 of the 0409 plan. sortOrder 103 is left as-is rather than renumbered:
-    // the gap at 102 is harmless and renumbering would rewrite rows for nothing.
+    // removed in P3 of the 0409 plan. (Its sortOrder moved 103 -> 115 in plan 2109 R4 — below.)
     key: "categories",
     label: "Categories",
     description: "Product categories — the taxonomy Zoho imports into",
     icon: "Tag",
-    // Routeless since plan 1709 (R33): a chip inside Stock & inventory; /categories still served.
-    route: null,
+    // Back in the sidebar (plan 2109, R4, owner 21 Sep 2026), directly below Stock audit. It was
+    // routeless from plan 1709 (R33) to 2109; the /stock chip stays as well.
+    route: "/categories",
     parentKey: "stock_management",
     group: "Operations", // MUST equal the parent's — the seeder asserts it
-    sortOrder: 103, // 102 is now vacant (product_types removed); nothing renumbered
+    // Plan 2109 R4: 115 puts it directly after stock_audit (113); 114 is the routeless
+    // delivery_priority, which renders nowhere. Was 103.
+    sortOrder: 115,
     // `fetch` here is the same argument as on `brands` above, and it matters more, not less.
     //
     // The Zoho bill import creates a Category from `item.category_name` verbatim and

@@ -97,10 +97,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             name: true, code: true, email: true,
             addressLine1: true, addressLine2: true, city: true, state: true, pincode: true,
             gstin: true, phone: true,
-            contacts: {
-              select: { name: true, email: true, isPrimary: true },
-              orderBy: { isPrimary: "desc" },
-            },
+            // Plan 2109 (R28): the contact lives on Vendor; VendorContact is no longer read.
+            contactPerson: true,
           },
         },
         items: {
@@ -126,14 +124,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return errorResponse("This purchase order must be approved before it can be sent", 409);
     }
 
-    // Recipient: what the sheet typed, else the vendor's billing address, else the primary
-    // contact's. `contacts` is SORTED not filtered — nothing in the database guarantees a
-    // primary exists, so take the first one that actually has an address.
-    const recipient =
-      toOverride ??
-      po.vendor.email ??
-      po.vendor.contacts.find((c) => c.email)?.email ??
-      null;
+    // Recipient: what the sheet typed, else the vendor's own address. The old fallback to a
+    // VendorContact's email went with plan 2109 (R28): the backfill copied any contact email
+    // onto Vendor.email where it was empty.
+    const recipient = toOverride ?? po.vendor.email ?? null;
     if (!recipient) {
       return errorResponse(
         "This vendor has no email address. Enter one below, or add it on the vendor's page.",
@@ -193,7 +187,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             pincode: po.vendor.pincode,
             gstin: po.vendor.gstin,
             phone: po.vendor.phone,
-            contactName: po.vendor.contacts[0]?.name ?? null,
+            contactName: po.vendor.contactPerson ?? null,
           },
           items,
         },

@@ -38,7 +38,6 @@ interface PODetail {
     whatsappNumber?: string;
     phone?: string;
     email?: string | null;
-    contacts?: Array<{ name: string; email: string | null; isPrimary: boolean }>;
   };
   items: Array<{
     id: string;
@@ -119,14 +118,10 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
   }
 
   /**
-   * Who the sheet prefills. The same order the server uses: the vendor's own address, then the
-   * first CONTACT that actually has one. Sorted rather than filtered on isPrimary, because
-   * nothing in the database guarantees a primary contact exists.
+   * Who the sheet prefills: the vendor's own address, as the server uses. The fallback to a
+   * VendorContact went with plan 2109 (R28).
    */
-  const defaultRecipient =
-    po?.vendor.email ??
-    po?.vendor.contacts?.find((c) => c.email)?.email ??
-    null;
+  const defaultRecipient = po?.vendor.email ?? null;
 
   const submitForApproval = () =>
     runAction(() => apiFetch(`/api/purchase-orders/${id}`, { method: "PUT", json: { status: "PENDING_APPROVAL" } }), "Submit");
