@@ -5,9 +5,8 @@ import { useState, useEffect, useCallback, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, Square, X, Package, EyeOff, RotateCcw, Store, Wrench, Tags, Layers, BarChart3 } from "lucide-react";
+import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, X, Package, Store, Tags, Layers, BarChart3 } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { fuzzySearchFields } from "@/lib/utils";
@@ -19,11 +18,16 @@ import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { apiFetch, apiFetchEnvelope, apiTry } from "@/lib/api-client";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
-import { isPlaceholderBrand, isPlaceholderCategory } from "@/lib/import-placeholders";
+import { isPlaceholderBrand } from "@/lib/import-placeholders";
+import {
+  DEFAULT_STOCK_SORT, type StockProduct, type StockRowContext, type StockSort, type StockSortKey,
+} from "./_components/stock-row";
+import { StockTable } from "./_components/stock-table";
+import { StockCard } from "./_components/stock-card";
 import { isLowStock } from "@/lib/reorder";
 import { ReorderSheet, type ReorderTarget, type ReorderSaved } from "@/components/reorder-sheet";
 import { AssemblyLevelSheet, type AssemblyLevelTarget, type AssemblyLevelSaved } from "@/components/assembly-level-sheet";
-import { ASSEMBLY_LEVELS, assemblyLevelLabel, type AssemblyLevelValue } from "@/lib/assembly-level";
+import { ASSEMBLY_LEVELS, type AssemblyLevelValue } from "@/lib/assembly-level";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useStores } from "@/hooks/use-sites";
 import { CategoryTreeSelect } from "@/components/category-tree-select";
@@ -38,34 +42,9 @@ const STOCK_COLUMNS: ExportColumn[] = [
   { header: "Bin", key: "bin.code" },
 ];
 
-interface ProductItem {
-  id: string;
-  sku: string;
-  name: string;
-  status: string;
-  currentStock: number;
-  reorderLevel: number;
-  sellingPrice: number;
-  mrp: number;
-  /** Omitted by the API for anyone without `cost_price.view` — see
-   *  api/products/route.ts:100, where the select reads `costPrice: isAdmin`.
-   *  Optional here because it genuinely is absent, not zero. */
-  costPrice?: number;
-  category: { name: string } | null;
-  brand: { id: string; name: string } | null;
-  bin: { code: string; location: string } | null;
-  reorderQty: number;
-  reorderVendorId: string | null;
-  /** The product's one assembly condition level; null = the next Assign asks (plan 1509, D3). */
-  assemblyLevel: AssemblyLevelValue | null;
-  /**
-   * Live units by condition (plan 1709, R10, P7) — counted from the units, in the scoped store
-   * when there is one. All three are 0 for a product whose stock has no unit codes yet.
-   */
-  assembledUnits: number;
-  unassembledUnits: number;
-  noAssemblyUnits: number;
-}
+// The product row, its colours and its actions live in _components/stock-row.tsx so the PC table
+// and the phone card render the same thing (plan 2109-stock-list-table-and-compact-cards).
+type ProductItem = StockProduct;
 
 interface BrandItem { id: string; name: string; _count: { products: number }; }
 interface BinItem { id: string; code: string; name: string; location: string; _count: { products: number }; }
@@ -94,28 +73,6 @@ const QUICK_KEYS = new Set<string>(QUICK_CHIPS.map((c) => c.key));
 const log = createLogger("stock");
 
 const PAGE_SIZE = 100;
-
-// The out-of-stock branch comes FIRST in all three, so "low" here means low AND still on the
-// shelf. isLowStock alone does not say that — it is true at zero too — which is why the order
-// of these branches is behaviour, not style. The LOW_STOCK filter below deliberately differs.
-function getStockColor(p: ProductItem) {
-  if (p.currentStock <= 0) return "text-red-600";
-  if (isLowStock(p)) return "text-yellow-600";
-  return "text-green-600";
-}
-
-function getStockBadge(p: ProductItem) {
-  if (p.currentStock <= 0) return { variant: "danger" as const, label: "Out" };
-  if (isLowStock(p)) return { variant: "warning" as const, label: "Low" };
-  return { variant: "success" as const, label: "OK" };
-}
-
-function getStockAccent(p: ProductItem) {
-  if (p.status === "INACTIVE") return "border-l-slate-200";
-  if (p.currentStock <= 0) return "border-l-red-500";
-  if (isLowStock(p)) return "border-l-amber-400";
-  return "border-l-green-500";
-}
 
 /**
  * `useSearchParams` must sit under a Suspense boundary or the production build fails
@@ -173,6 +130,35 @@ function StockScreen() {
   const mayAssemblyLevel = canApprove("assembly");
 
   const [rowBusy, setRowBusy] = useState<string | null>(null);
+
+  // Table sort (plan 2109-stock-list-table-and-compact-cards, R4, Q2, Q5). Server-side — the
+  // list is paginated — and kept in the URL (`?sort=&dir=`) so a reload keeps it. Only the four
+  // keys the table offers are accepted; anything else falls back to stock, high to low.
+  const [sort, setSort] = useState<StockSort>(() => {
+    const by = searchParams.get("sort");
+    const dir = searchParams.get("dir");
+    const keys: StockSortKey[] = ["name", "sellingPrice", "costPrice", "currentStock"];
+    return keys.includes(by as StockSortKey)
+      ? { sortBy: by as StockSortKey, sortOrder: dir === "asc" ? "asc" : "desc" }
+      : DEFAULT_STOCK_SORT;
+  });
+
+  function changeSort(key: StockSortKey) {
+    setSort((prev) => {
+      // Same column flips; a new column starts where people expect: names A→Z, numbers high→low.
+      const next: StockSort =
+        prev.sortBy === key
+          ? { sortBy: key, sortOrder: prev.sortOrder === "asc" ? "desc" : "asc" }
+          : { sortBy: key, sortOrder: key === "name" ? "asc" : "desc" };
+      const url = new URL(window.location.href);
+      url.searchParams.set("sort", next.sortBy);
+      url.searchParams.set("dir", next.sortOrder);
+      // replaceState, not push: a sort is not a new page in the back-button history.
+      window.history.replaceState(null, "", url);
+      log.debug("stock sort changed", next);
+      return next;
+    });
+  }
   const [reorderTarget, setReorderTarget] = useState<ReorderTarget | null>(null);
   const [levelTarget, setLevelTarget] = useState<AssemblyLevelTarget | null>(null);
   const [rowOutcome, setRowOutcome] = useState<{ ok: boolean; name: string; message: string } | null>(null);
@@ -285,10 +271,6 @@ function StockScreen() {
     }
   }
 
-  function formatCurrency(amount: number) {
-    return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
-  }
-
   // Fetch brands + categories + bins once. apiTry, not `fetch().json()` (CLAUDE.md): each list
   // failing on its own leaves its picker empty and says why in the log, rather than a parse
   // error from a login page swallowing all three.
@@ -326,7 +308,7 @@ function StockScreen() {
   const activeFilterCount = [selectedBrand, selectedCategory, selectedBin, selectedStore].filter(Boolean).length;
 
   const buildParams = useCallback((pageNum: number) => {
-    const params = new URLSearchParams({ limit: String(PAGE_SIZE), page: String(pageNum), sortBy: "currentStock", sortOrder: "desc" });
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), page: String(pageNum), sortBy: sort.sortBy, sortOrder: sort.sortOrder });
     if (debouncedSearch) params.set("search", debouncedSearch);
     if (quickFilter === "INACTIVE") { params.set("status", "INACTIVE"); }
     else if (quickFilter === "IN_STOCK") { params.set("status", "ACTIVE"); params.set("minStock", "1"); }
@@ -342,7 +324,7 @@ function StockScreen() {
     if (selectedBin) params.set("binId", selectedBin);
     if (selectedStore) params.set("storeId", selectedStore);
     return params;
-  }, [debouncedSearch, quickFilter, selectedBrand, selectedCategory, selectedBin, selectedStore]);
+  }, [debouncedSearch, quickFilter, selectedBrand, selectedCategory, selectedBin, selectedStore, sort]);
 
   const fetchProducts = useCallback((pageNum: number, append = false, silent = false) => {
     if (!silent) { if (append) setLoadingMore(true); else setLoading(true); }
@@ -462,6 +444,24 @@ function StockScreen() {
   // The store the list is scoped to, for the caption under the Store control. Null when the
   // filter is clear or the store set has not arrived yet.
   const scopedStore = selectedStore ? stores.find((s) => s.id === selectedStore) ?? null : null;
+
+  // What the table rows and the cards need from the page. The page owns the state and the sheets;
+  // the layouts only render and call back.
+  const rowCtx: StockRowContext = {
+    showCost,
+    selectMode,
+    selectedIds,
+    onToggleSelect: toggleSelect,
+    hrefFor: (p) => `/stock/${p.id}`,
+    busyId: rowBusy,
+    mayReorder,
+    mayAssemblyLevel,
+    mayDeactivate,
+    onReorder: (p) => setReorderTarget(p),
+    onAssemblyLevel: (p) =>
+      setLevelTarget({ id: p.id, name: p.name, sku: p.sku, assemblyLevel: p.assemblyLevel ?? null }),
+    onSetStatus: (p, status) => { void setProductStatus(p, status); },
+  };
 
   return (
     <div>
@@ -752,199 +752,21 @@ function StockScreen() {
             </div>
           )}
 
-          {filtered.map((p) => {
-            const badge = getStockBadge(p);
-            const isSelected = selectedIds.has(p.id);
-            const content = (
-              <Card className={`border-l-4 ${getStockAccent(p)} transition-colors mb-1.5 ${selectMode && isSelected ? "border-blue-400 bg-blue-50/30" : "active:bg-slate-50 hover:border-slate-300"}`}>
-                <CardContent className="p-3.5">
-                  <div className="flex items-start justify-between">
-                    {selectMode && (
-                      <div className="mr-2.5 pt-0.5 shrink-0">
-                        {isSelected
-                          ? <CheckSquare className="h-5 w-5 text-blue-600" />
-                          : <Square className="h-5 w-5 text-slate-300" />}
-                      </div>
-                    )}
-                    <div className="flex-1 min-w-0 mr-3">
-                      {/* Zoho names run long — "DODGE THUNDER BAY DD NON IBC FRONT SUS CKD"
-                          is typical of the 8,175-item catalog. Unclamped they wrapped to four
-                          lines and pushed the stock figure off the card on a phone.
-                          `break-words` so an unbroken token cannot overflow the row either;
-                          `title` so the full name is still reachable on hover. */}
-                      <p
-                        className="text-sm font-semibold text-slate-900 line-clamp-2 break-words"
-                        title={p.name}
-                      >
-                        {p.name}
-                      </p>
-                      <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                        <span className="text-xs text-slate-400 tabular-nums">{p.sku}</span>
-                        {/* Brand and category are two different KINDS of fact, so they carry
-                            two different colours rather than two greys. Category used to be
-                            `text-slate-400` — the same grey as the SKU sitting beside it AND
-                            the same grey as a placeholder brand. Three meanings in one colour
-                            is what made this row hard to read at a glance.
-
-                            Blue for brand, violet for category. Both are tints (`-50`
-                            background, `-700` text) rather than solid badges, so they read as
-                            labels and do not compete with the stock Badge on the right, which
-                            owns green/amber/red. */}
-
-                        {/* A placeholder is the ABSENCE of a brand, so it must not look like
-                            one — and specifically must not get a pill, because the pill is
-                            what now says "a person filled this in". `Imported` rendered in the
-                            same blue as `Atlas` reads as a brand name to anyone who has not
-                            been told otherwise, which is how 151 undescribed products stayed
-                            invisible. Muted and italic, the style this app uses for missing
-                            data. */}
-                        {p.brand &&
-                          (isPlaceholderBrand(p.brand.name) ? (
-                            <span className="text-xs italic text-slate-400">{p.brand.name}</span>
-                          ) : (
-                            <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[11px] font-medium text-blue-700">
-                              {p.brand.name}
-                            </span>
-                          ))}
-
-                        {/* `Uncategorized` is muted AGAIN. It was un-muted back when every
-                            imported product carried it — a signal that fires always is not a
-                            signal. The catalog import changed that: it writes the real Zoho
-                            category, and only 665 of 5,738 products still land on the
-                            placeholder. It is the exception once more, so it is worth seeing. */}
-                        {p.category &&
-                          (isPlaceholderCategory(p.category.name) ? (
-                            <span className="text-xs italic text-slate-400">{p.category.name}</span>
-                          ) : (
-                            <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-[11px] font-medium text-violet-700">
-                              {p.category.name}
-                            </span>
-                          ))}
-                      </div>
-                      {/* Price. Selling price is safe for everyone — it is what a customer is
-                          quoted. Cost price is NOT: it is gated by the `cost_price` module,
-                          and `api/products/route.ts:100` already omits the field entirely for
-                          anyone without that grant, so this renders nothing rather than
-                          "₹0" for them. Same pattern as stock/[id]. */}
-                      <div className="flex items-baseline gap-2 mt-1">
-                        <span className="text-sm font-semibold text-slate-900 tabular-nums">
-                          {formatCurrency(p.sellingPrice)}
-                        </span>
-                        {p.mrp > 0 && p.mrp !== p.sellingPrice && (
-                          <span className="text-[11px] text-slate-400 line-through tabular-nums">
-                            {formatCurrency(p.mrp)}
-                          </span>
-                        )}
-                        {showCost && (p.costPrice ?? 0) > 0 && (
-                          <span className="text-[11px] text-slate-500 tabular-nums">
-                            cost {formatCurrency(p.costPrice ?? 0)}
-                          </span>
-                        )}
-                      </div>
-                      {p.bin && (
-                        <p className="text-[11px] text-slate-400 mt-1 flex items-center gap-0.5">
-                          <MapPin className="h-3 w-3" />{p.bin.code} — {p.bin.location}
-                        </p>
-                      )}
-                      {/* Shown only when a level is set, because 0 means "no level chosen"
-                          rather than "reorder at zero" — printing "Reorder @ 0" on most of the
-                          catalogue would read as a setting somebody made. */}
-                      {p.reorderLevel > 0 && (
-                        <p className="text-[11px] text-slate-400 mt-1 tabular-nums">
-                          Reorder @ {p.reorderLevel}
-                          {p.reorderQty > 0 ? ` · order ${p.reorderQty}` : ""}
-                        </p>
-                      )}
-                      {/* Assembled / Unassembled / No assembly (R10, P7), from the live units.
-                          Only when the product has any — a row with no unit codes yet would
-                          otherwise print three zeros that read as "none built". */}
-                      {(p.assembledUnits ?? 0) + (p.unassembledUnits ?? 0) + (p.noAssemblyUnits ?? 0) > 0 && (
-                        <p className="text-[11px] mt-1 flex items-center gap-2 flex-wrap tabular-nums">
-                          <span className="text-emerald-700">Assembled {p.assembledUnits}</span>
-                          <span className="text-amber-700">Unassembled {p.unassembledUnits}</span>
-                          {p.noAssemblyUnits > 0 && (
-                            <span className="text-slate-500">No assembly {p.noAssemblyUnits}</span>
-                          )}
-                        </p>
-                      )}
-                      {/* Only when set, like the reorder line above: "Not set" on every row
-                          of a fresh catalogue would be noise, and the wrench button already
-                          says where to set it. */}
-                      {p.assemblyLevel && (
-                        <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
-                          <Wrench className="h-3 w-3" /> Assembly {assemblyLevelLabel(p.assemblyLevel)}
-                        </p>
-                      )}
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className={`text-xl font-bold tabular-nums ${getStockColor(p)}`}>{p.currentStock}</p>
-                      <Badge variant={badge.variant} className="text-[10px]">{badge.label}</Badge>
-
-                      {/* Hidden in select mode: the whole row is a checkbox target there, and
-                          a button inside it would fight the row's click handler. */}
-                      {!selectMode && (mayDeactivate || mayReorder || mayAssemblyLevel) && (
-                        <div className="flex gap-1 justify-end mt-1.5">
-                          {mayReorder && (
-                            <RowBtn
-                              label={`Reorder settings for ${p.name}`}
-                              tone="text-blue-600"
-                              disabled={rowBusy === p.id}
-                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setReorderTarget(p); }}
-                            >
-                              <RefreshCw className="h-3.5 w-3.5" />
-                            </RowBtn>
-                          )}
-                          {mayAssemblyLevel && (
-                            <RowBtn
-                              label={`Assembly level for ${p.name}`}
-                              tone={p.assemblyLevel ? "text-slate-700" : "text-amber-600"}
-                              disabled={rowBusy === p.id}
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setLevelTarget({ id: p.id, name: p.name, sku: p.sku, assemblyLevel: p.assemblyLevel ?? null });
-                              }}
-                            >
-                              <Wrench className="h-3.5 w-3.5" />
-                            </RowBtn>
-                          )}
-                          {mayDeactivate && p.status === "ACTIVE" && (
-                            <RowBtn
-                              label={`Deactivate ${p.name}`}
-                              disabled={rowBusy === p.id}
-                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); void setProductStatus(p, "INACTIVE"); }}
-                            >
-                              <EyeOff className="h-3.5 w-3.5" />
-                            </RowBtn>
-                          )}
-                          {mayDeactivate && p.status === "INACTIVE" && (
-                            <RowBtn
-                              label={`Restore ${p.name}`}
-                              tone="text-green-600"
-                              disabled={rowBusy === p.id}
-                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); void setProductStatus(p, "ACTIVE"); }}
-                            >
-                              <RotateCcw className="h-3.5 w-3.5" />
-                            </RowBtn>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-
-            return selectMode ? (
-              <div key={p.id} onClick={() => toggleSelect(p.id)} className="cursor-pointer">
-                {content}
+          {/* PC: a sortable table. Phone and tablet: compact cards (plan
+              2109-stock-list-table-and-compact-cards, R1, R2, Q4 — the switch is lg, 1024px).
+              One list of data, two layouts; both render from _components/stock-row.tsx. */}
+          {filtered.length > 0 && (
+            <>
+              <div className="hidden lg:block">
+                <StockTable products={filtered} ctx={rowCtx} sort={sort} onSort={changeSort} />
               </div>
-            ) : (
-              <Link key={p.id} href={`/stock/${p.id}`}>
-                {content}
-              </Link>
-            );
-          })}
+              <div className="lg:hidden space-y-1.5">
+                {filtered.map((p) => (
+                  <StockCard key={p.id} product={p} ctx={rowCtx} />
+                ))}
+              </div>
+            </>
+          )}
 
           {hasMore && quickFilter !== "LOW_STOCK" && (
             <Button variant="outline" className="w-full tabular-nums" onClick={loadMore} disabled={loadingMore}>
@@ -1201,31 +1023,5 @@ function StockScreen() {
         </div>
       )}
     </div>
-  );
-}
-
-/**
- * A row action. Takes the click event so the caller can stopPropagation — every row is
- * wrapped in a <Link>, and without that a delete would also navigate to the product.
- */
-function RowBtn({
-  label, onClick, children, tone = "text-slate-600", disabled,
-}: {
-  label: string;
-  onClick: (e: React.MouseEvent) => void;
-  children: React.ReactNode;
-  tone?: string;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={label}
-      className={`min-h-[32px] min-w-[32px] inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 focus-ring ${tone}`}
-    >
-      {children}
-    </button>
   );
 }
