@@ -2,68 +2,23 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Plus, ArrowRightLeft, ArrowRight, CheckCircle2, XCircle, Clock, Loader2, Package, FileCheck, ChevronRight, Truck, Undo2 } from "lucide-react";
+import { Plus, ArrowRightLeft } from "lucide-react";
 // No warehouse lookup needed: the API now returns the warehouse names on each line, so
 // the page renders what it was given instead of translating a code through a table.
-import { getStatusColor, getStatusLabel } from "@/lib/status-colors";
 import { type DateRangeKey } from "@/components/date-filter";
 import { FilterSheet } from "@/components/filter-sheet";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { usePermissions } from "@/lib/use-permissions";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
+import { endpointLabel, type TransferOrder, type TransferRowContext } from "./_components/transfer-row";
+import { TransferTable } from "./_components/transfer-table";
+import { TransferCard } from "./_components/transfer-card";
 
 const log = createLogger("transfers:list");
-
-interface TransferOrderItem {
-  id: string;
-  quantity: number;
-  product: { name: string; sku: string; currentStock: number };
-  fromBin: { code: string; name: string; location: string } | null;
-  toBin: { code: string; name: string; location: string } | null;
-  fromWarehouse: { id: string; code: string; name: string } | null;
-  toWarehouse: { id: string; code: string; name: string } | null;
-}
-
-// Display label for an endpoint: bin code in bin mode, location name in location mode.
-function endpointLabel(bin: { code: string } | null, loc: string | null): string {
-  if (bin) return bin.code;
-  if (loc) return loc;
-  return "—";
-}
-
-interface TransferOrder {
-  id: string;
-  orderNo: string;
-  // IN_TRANSIT and RECEIVED were added to the TransferOrderStatus enum by MIG-1a. No code
-  // writes them until P14, but this union is hand-written over an API response and `tsc`
-  // cannot check it against the enum — so a status it does not list would arrive as a value
-  // TypeScript insists is impossible, and the accent/badge below would fall through to the
-  // "unknown" branch. Listing them now is what makes that impossible.
-  // RETURNED joined them in plan 1709 (R25) and is what Reject writes now; REJECTED stays for
-  // the rows written before it.
-  status: "PENDING" | "APPROVED" | "RETURNED" | "REJECTED" | "CANCELLED" | "IN_TRANSIT" | "RECEIVED";
-  notes: string | null;
-  rejectionNote: string | null;
-  createdAt: string;
-  createdBy: { name: string };
-  reviewedBy: { name: string } | null;
-  reviewedAt: string | null;
-  items: TransferOrderItem[];
-  _count: { items: number };
-  // The lane lives on the HEADER from P14 onward — one route per order, not one per line.
-  // Nullable because an order raised before MIG-2, or one whose items genuinely disagreed
-  // about the lane, has no header route and falls back to its first item.
-  fromWarehouse: { id: string; code: string; name: string; store: { name: string } } | null;
-  toWarehouse: { id: string; code: string; name: string; store: { name: string } } | null;
-  requiredDocType: "DELIVERY_CHALLAN" | "TAX_INVOICE" | null;
-  docUrl: string | null;
-}
 
 type StatusFilter = "all" | "PENDING" | "APPROVED" | "RETURNED" | "IN_TRANSIT" | "RECEIVED" | "REJECTED" | "CANCELLED";
 
@@ -74,7 +29,6 @@ export default function TransfersPage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [approving, setApproving] = useState<string | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [dateFilter, setDateFilter] = useState<DateRangeKey>("all");
   const [dateFrom, setDateFrom] = useState<string | undefined>();
   const [dateTo, setDateTo] = useState<string | undefined>();
@@ -197,22 +151,14 @@ export default function TransfersPage() {
     setApproving(null);
   }
 
-  const statusBadge = (status: string) => {
-    // IN_TRANSIT gets a truck rather than a clock: "waiting for a decision" and "on a van"
-    // are different situations and looked identical before. CANCELLED had no icon at all.
-    // RETURNED gets an arrow: it is not a refusal, it is work coming back to somebody.
-    const icon = status === "APPROVED" || status === "RECEIVED" ? <CheckCircle2 className="h-3 w-3 mr-0.5" />
-      : status === "IN_TRANSIT" ? <Truck className="h-3 w-3 mr-0.5" />
-      : status === "PENDING" ? <Clock className="h-3 w-3 mr-0.5" />
-      : status === "RETURNED" ? <Undo2 className="h-3 w-3 mr-0.5" />
-      : status === "REJECTED" || status === "CANCELLED" ? <XCircle className="h-3 w-3 mr-0.5" />
-      : null;
-    // RETURNED has no entry in the shared colour map (it would be a second opinion about a
-    // status other modules render too), so it is coloured here: orange for "back with you".
-    const cls = status === "RETURNED"
-      ? "bg-orange-100 text-orange-700 border-orange-200"
-      : getStatusColor(status);
-    return <Badge className={`text-xs ${cls}`}>{icon}{getStatusLabel(status)}</Badge>;
+  // What the table and the cards need besides the order itself (plan 2209). The whole row or
+  // card opens the transfer; Approve / Reject call back here and never navigate (R1, R5).
+  const rowCtx: TransferRowContext = {
+    canApprove,
+    approvingId: approving,
+    onApprove: (order) => { void handleAction(order.id, "approve"); },
+    onReject: (order) => { setRejectTarget(order); setRejectNote(""); },
+    hrefFor: (order) => `/transfers/${order.id}`,
   };
 
   return (
@@ -278,122 +224,17 @@ export default function TransfersPage() {
           </Link>
         </div>
       ) : (
-        <div className="space-y-2">
-          {orders.map((order) => {
-            const accent = order.status === "APPROVED" || order.status === "RECEIVED"
-              ? "border-l-green-500"
-              : order.status === "REJECTED"
-              ? "border-l-red-500"
-              : order.status === "RETURNED"
-              ? "border-l-orange-400"
-              : order.status === "PENDING" || order.status === "IN_TRANSIT"
-              ? "border-l-amber-400"
-              : "border-l-slate-200";
-            return (
-            <Card key={order.id} className={`overflow-hidden border-l-4 ${accent}`}>
-              <CardContent className="p-3">
-                {/* Header */}
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex-1 min-w-0 mr-2">
-                    <div className="flex items-center gap-2">
-                      <p className="text-base font-semibold text-slate-900 tabular-nums truncate">{order.orderNo}</p>
-                      {statusBadge(order.status)}
-                      {/* The document is attached. Worth a glance from the list, because it
-                          is what decides whether this order can be dispatched at all. */}
-                      {order.docUrl && (
-                        <FileCheck className="h-4 w-4 text-green-600 shrink-0" aria-label="Document attached" />
-                      )}
-                    </div>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      <span className="tabular-nums">{order._count.items}</span> item{order._count.items !== 1 ? "s" : ""} | By {order.createdBy.name} | <span className="tabular-nums">{new Date(order.createdAt).toLocaleDateString("en-IN")}</span>
-                    </p>
-                    {/* The route, from the HEADER. One line per order rather than one per
-                        item — which is what the lane actually is now. */}
-                    {(order.fromWarehouse || order.toWarehouse) && (
-                      <p className="text-xs text-slate-600 mt-1 flex items-center gap-1 min-w-0">
-                        <span className="truncate">{order.fromWarehouse?.name ?? "—"}</span>
-                        <ArrowRight className="h-3 w-3 text-purple-500 shrink-0" />
-                        <span className="truncate">{order.toWarehouse?.name ?? "—"}</span>
-                      </p>
-                    )}
-                  </div>
-                  <Link
-                    href={`/transfers/${order.id}`}
-                    aria-label={`Open ${order.orderNo}`}
-                    className="min-h-[44px] min-w-[44px] -mr-2 -mt-2 flex items-center justify-center text-slate-300 hover:text-slate-500 focus-ring shrink-0"
-                  >
-                    <ChevronRight className="h-5 w-5" />
-                  </Link>
-                </div>
-
-                {/* Compact item preview (first 2 items) */}
-                <div className="space-y-1 mb-2">
-                  {order.items.slice(0, expandedId === order.id ? undefined : 2).map((item) => (
-                    <div key={item.id} className="bg-slate-50 rounded-lg px-2.5 py-1.5 flex items-center gap-2">
-                      <Package className="h-3 w-3 text-slate-400 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-slate-800 truncate">{item.product.name}</p>
-                        <div className="flex items-center gap-1 text-xs text-slate-500">
-                          <span className="tabular-nums">Qty: {item.quantity}</span>
-                          {!order.fromWarehouse && (
-                            <>
-                              <span>|</span>
-                              <span>{endpointLabel(item.fromBin, item.fromWarehouse?.name ?? null)}</span>
-                              <ArrowRight className="h-2.5 w-2.5 text-purple-500" />
-                              <span>{endpointLabel(item.toBin, item.toWarehouse?.name ?? null)}</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  {order.items.length > 2 && (
-                    <button onClick={() => setExpandedId(expandedId === order.id ? null : order.id)}
-                      className="text-xs text-purple-600 font-medium pl-2">
-                      {expandedId === order.id ? "Show less" : `+${order.items.length - 2} more items`}
-                    </button>
-                  )}
-                </div>
-
-                {/* Notes */}
-                {order.notes && <p className="text-xs text-slate-400 mb-2">{order.notes}</p>}
-                {order.rejectionNote && (
-                  <p className={`text-xs mb-2 ${order.status === "RETURNED" ? "text-orange-600" : "text-red-500"}`}>
-                    {order.status === "RETURNED" ? "Sent back" : "Rejected"}: {order.rejectionNote}
-                  </p>
-                )}
-
-                {/* Actions */}
-                <div className="flex items-center justify-between">
-                  {order.reviewedBy && (
-                    <p className="text-xs text-slate-400">
-                      {order.status === "APPROVED" ? "Approved" : "Reviewed"} by {order.reviewedBy.name}
-                    </p>
-                  )}
-                  {!order.reviewedBy && <div />}
-
-                  {canApprove && order.status === "PENDING" && (
-                    <div className="flex gap-1.5">
-                      <Button size="sm" variant="outline"
-                        className="h-10 px-4 py-2 text-sm text-green-600 border-green-200 hover:bg-green-50"
-                        onClick={() => handleAction(order.id, "approve")}
-                        disabled={approving === order.id}>
-                        {approving === order.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Approve"}
-                      </Button>
-                      <Button size="sm" variant="outline"
-                        className="h-10 px-4 py-2 text-sm text-red-600 border-red-200 hover:bg-red-50"
-                        onClick={() => { setRejectTarget(order); setRejectNote(""); }}
-                        disabled={approving === order.id}>
-                        Reject
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-            );
-          })}
-        </div>
+        <>
+          {/* One list, two layouts (R2/R3): the table from 1024 px, cards below it. */}
+          <div className="hidden lg:block">
+            <TransferTable orders={orders} ctx={rowCtx} />
+          </div>
+          <div className="lg:hidden space-y-2">
+            {orders.map((order) => (
+              <TransferCard key={order.id} order={order} ctx={rowCtx} />
+            ))}
+          </div>
+        </>
       )}
 
       {rejectTarget && (
