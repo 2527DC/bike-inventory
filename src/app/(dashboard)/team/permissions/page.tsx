@@ -10,6 +10,7 @@ import { SkeletonList } from "@/components/ui/skeleton";
 import { usePermissions } from "@/lib/use-permissions";
 import { apiFetch } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
+import { searchModules } from "./_lib/module-search";
 
 interface PermissionRow {
   id: string;
@@ -50,6 +51,9 @@ export default function PermissionsPage() {
   const [roles, setRoles] = useState<RoleRow[]>([]);
   const [selectedRoleId, setSelectedRoleId] = useState<string>("");
   const [roleSearch, setRoleSearch] = useState("");
+  // Module search (plan 2209-permissions-module-search). Kept when switching roles (Q4a) —
+  // comparing one module across roles is the point of searching here.
+  const [moduleSearch, setModuleSearch] = useState("");
   const [granted, setGranted] = useState<Set<string>>(new Set());
 
   const [loading, setLoading] = useState(true);
@@ -205,9 +209,14 @@ export default function PermissionsPage() {
     return [...ordered, ...items.filter((m) => !seen.has(m.id))];
   }
 
-  // Group modules for display.
+  // What the module search shows. It filters what is RENDERED only: `granted` and Save see every
+  // module, so a hidden module keeps its ticks and is saved with the role (R2).
+  const moduleFilter = searchModules(modules, moduleSearch);
+
+  // Group modules for display. A group left with nothing visible is dropped.
   const groups: { title: string; items: ModuleRow[] }[] = [];
   for (const m of modules) {
+    if (moduleFilter.visible && !moduleFilter.visible.has(m.id)) continue;
     const title = m.group || "Other";
     let g = groups.find((x) => x.title === title);
     if (!g) groups.push((g = { title, items: [] }));
@@ -302,6 +311,22 @@ export default function PermissionsPage() {
         </div>
       )}
 
+      {/* Module search (plan 2209, R1). Client-side, like the role search above: every module is
+          already here from /api/modules. */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+        <Input
+          placeholder="Search modules..."
+          value={moduleSearch}
+          onChange={(e) => setModuleSearch(e.target.value)}
+          className="pl-9"
+          aria-label="Search modules by name"
+        />
+      </div>
+      {moduleFilter.visible && moduleFilter.matched === 0 && (
+        <p className="text-xs text-slate-500 py-2">No module matches “{moduleSearch.trim()}”.</p>
+      )}
+
       {/* Permission grid */}
       {groups.map((group) => (
         <div key={group.title} className="space-y-2">
@@ -330,6 +355,10 @@ export default function PermissionsPage() {
                           </span>
                         )}
                         {mod.label}
+                        {/* Shown only because a sub-module matched the search (plan 2209, Q2a). */}
+                        {moduleFilter.contextOnly.has(mod.id) && (
+                          <span className="ml-1.5 text-[11px] font-normal text-slate-400">(parent)</span>
+                        )}
                         {!mod.assignable && (
                           <span
                             title="Only the system role can hold this module's permissions"

@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Lock, ShieldAlert } from "lucide-react";
+import { ArrowLeft, Lock, Search, ShieldAlert } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
+import { searchModules } from "../_lib/module-search";
 
 const log = createLogger("team:permission-gaps");
 
@@ -57,6 +59,8 @@ export default function PermissionGapsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [onlyGaps, setOnlyGaps] = useState(false);
+  // Same module search as the role editor (plan 2209-permissions-module-search, Q5a).
+  const [moduleSearch, setModuleSearch] = useState("");
   const [showSystem, setShowSystem] = useState(false);
 
   useEffect(() => {
@@ -95,6 +99,9 @@ export default function PermissionGapsPage() {
       return { title: g.title, items: [...ordered, ...g.items.filter((m) => !seen.has(m.id))] };
     });
   }, [modules]);
+
+  // Which rows the module search shows (Q5a). Rendering only; the counts above ignore it.
+  const moduleFilter = searchModules(modules, moduleSearch);
 
   const heldBy = (m: ModuleRow) => workingRoles.filter((r) => r.cells[m.id]?.length).length;
   const isGap = (m: ModuleRow, r: RoleRow) =>
@@ -147,6 +154,20 @@ export default function PermissionGapsPage() {
             "Every assignable module is held by at least one active role."
           )}
         </div>
+      )}
+
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+        <Input
+          placeholder="Search modules..."
+          value={moduleSearch}
+          onChange={(e) => setModuleSearch(e.target.value)}
+          className="pl-9"
+          aria-label="Search modules by name"
+        />
+      </div>
+      {moduleFilter.visible && moduleFilter.matched === 0 && (
+        <p className="text-xs text-slate-500">No module matches “{moduleSearch.trim()}”.</p>
       )}
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-600">
@@ -207,7 +228,9 @@ export default function PermissionGapsPage() {
           </thead>
           <tbody>
             {rows.map((g) => {
-              const items = onlyGaps ? g.items.filter(moduleHasGap) : g.items;
+              const items = g.items
+                .filter((m) => !moduleFilter.visible || moduleFilter.visible.has(m.id))
+                .filter((m) => !onlyGaps || moduleHasGap(m));
               if (items.length === 0) return null;
               return [
                 <tr key={`g-${g.title}`}>
@@ -227,6 +250,9 @@ export default function PermissionGapsPage() {
                         <span className={m.parentId ? "pl-3" : undefined}>
                           {m.parentId && <span className="mr-1 text-slate-400" aria-hidden="true">&#8627;</span>}
                           {m.label}
+                          {moduleFilter.contextOnly.has(m.id) && (
+                            <span className="ml-1.5 text-[11px] font-normal text-slate-400">(parent)</span>
+                          )}
                         </span>
                         {!m.assignable && <Lock className="ml-1 inline h-3 w-3 text-slate-400" aria-label="admin only" />}
                       </td>
