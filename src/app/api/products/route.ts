@@ -17,6 +17,7 @@ import { storeById } from "@/lib/stores";
 import { createLogger } from "@/lib/logger";
 import { categorySubtreeIds } from "@/lib/categories/tree";
 import { conditionByProduct, hasNoAssemblyUnitsWhere, ZERO_CONDITION } from "@/lib/stock-condition";
+import { productHasNoBinWhere, productInBinWhere } from "@/lib/products/bin-filter";
 
 const log = createLogger("products:list");
 
@@ -97,19 +98,27 @@ export async function GET(req: NextRequest) {
       // The bin is the other kind of missing detail, and the only one no import could ever
       // fill: a bin is a physical shelf here and Zoho has never heard of it. Bins are always on
       // (plan 2109, Q27), so a product with no bin always counts as needing one.
+      //
+      // "No bin" means no home bin AND no stock in any bin (plan 2209-audit-assigns-product-bin,
+      // R3): a product a bin audit put on a shelf is not missing a bin just because its home bin
+      // field was never written.
       and.push({
         OR: [
           { brand: { name: { in: PLACEHOLDER_BRAND_NAMES_LOWER, mode: "insensitive" as const } } },
-          { binId: null },
+          productHasNoBinWhere(),
         ],
       });
     }
+
+    // The bin filter finds products by where their stock IS — home bin, live units, or bin
+    // quantity (plan 2209, R2, Q2a) — not only by `Product.binId`, which goes stale as units move.
+    // Pushed onto `and` because it is an OR group, for the reason given above the array.
+    if (binId) and.push(productInBinWhere(binId));
 
     const where = {
       ...(and.length > 0 && { AND: and }),
       ...(categoryIds && { categoryId: categoryIds.length === 1 ? categoryIds[0] : { in: categoryIds } }),
       ...(brandId && { brandId }),
-      ...(binId && { binId }),
       ...(status && { status: status as never }),
       ...(minStock !== undefined && maxStock !== undefined
         ? { currentStock: { gte: minStock, lte: maxStock } }
