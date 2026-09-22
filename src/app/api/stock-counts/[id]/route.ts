@@ -12,6 +12,7 @@ import { recordApprovalEvent } from "@/lib/approvals/events";
 import { syncBinStock } from "@/lib/units";
 import { getBinQtyMap } from "@/lib/units/bin-qty";
 import { applyBinCountLine } from "../_lib/apply-bin-line";
+import { assignBinToCountedProducts } from "../_lib/assign-product-bin";
 import { createLogger } from "@/lib/logger";
 
 // This route applies a counter's numbers — and used to apply their spelling of a brand name
@@ -52,6 +53,8 @@ interface AppliedSummary {
   /** The bin corrected, by code. */
   bin: string;
   binId: string;
+  /** Products that had no home bin and were given this bin by the approval (plan 2209, R1). */
+  productsGivenBin: number;
   /** Unit records brought in line with the counts (plan 1709, Part B, Q42). */
   units: {
     created: number;
@@ -385,6 +388,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         const summary: AppliedSummary = {
           lines: 0, changed: 0, netUnits: 0, zeroLines: 0, writtenOff: 0,
           warehouse: target.name, scope: "bin", bin: target.binCode, binId: target.binId,
+          productsGivenBin: 0,
           units: { created: 0, createdUnitIds: [], markedAssembled: 0, markedUnassembled: 0, retiredCodes: [] },
         };
 
@@ -532,6 +536,16 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         // One recount of the bin from its units at the end (P11), so a line whose total matched
         // but whose BinStock row had drifted is left consistent too.
         await syncBinStock(tx, [target.binId]);
+
+        // The counted products get this bin as their home bin when they have none (plan
+        // 2209-audit-assigns-product-bin, Part A). Without it a product that entered the
+        // building through an audit kept `Product.binId = null` for good: invisible to the
+        // /stock bin filter and stuck under "Needs details". Only here — on approval WITH
+        // "apply to stock" — never on Complete, reject or a record-only approval (Q3a).
+        summary.productsGivenBin = await assignBinToCountedProducts(tx, target.binId, countedItems);
+        log.info("audit gave products their bin", {
+          stockCountId: id, binId: target.binId, productsGivenBin: summary.productsGivenBin,
+        });
 
         applied = summary;
         log.info("stock corrected", {
