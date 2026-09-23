@@ -88,7 +88,9 @@ name: Deploy to VPS
 #   VPS_PASSWORD          required   that user's password (sshpass reads it from $SSHPASS)
 #   ENV_FILE              required   the entire .env, pasted in — see the write step
 #   NEXT_PUBLIC_LOG_LEVEL optional   build-time log threshold, defaults to 2 (warn)
-#   NEXTAUTH_URL          optional   only if a build-time read of it is ever added
+#   NEXTAUTH_URL          optional   defaults to http://localhost:3001 — next-auth/react parses it
+#                                    with new URL() at module load, and an UNSET secret renders
+#                                    as '' which throws; the real value comes from ENV_FILE
 #
 # APP_PORT is the single source of truth for the port. It is exported AFTER .env is sourced,
 # so it wins over any PORT line in ENV_FILE, and the health check reads the same variable
@@ -426,7 +428,7 @@ jobs:
         env:
           NEXT_PUBLIC_LOG_LEVEL: ${{ secrets.NEXT_PUBLIC_LOG_LEVEL || '2' }}
           NEXTAUTH_SECRET: build-time-placeholder-not-used-at-runtime
-          NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
+          NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL || 'http://localhost:3001' }}
 
       - name: Check the build produced something
         run: |
