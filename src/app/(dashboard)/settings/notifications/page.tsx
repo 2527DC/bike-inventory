@@ -111,13 +111,13 @@ export default function NotificationSettingsPage() {
         <div>
           <h1 className="text-lg font-bold text-slate-900">Notifications</h1>
           <p className="text-[11px] text-slate-500">
-            Email and push delivery — providers, credentials and per-event switches
+            Push notifications for staff, and the SMTP used to email purchase orders to vendors
           </p>
         </div>
       </div>
 
       <div role="tablist" aria-label="Channel" className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
-        <TabButton active={tab === "EMAIL"} onClick={() => setTab("EMAIL")} icon={Mail} label="Email" />
+        <TabButton active={tab === "EMAIL"} onClick={() => setTab("EMAIL")} icon={Mail} label="Email (PO sending)" />
         <TabButton active={tab === "PUSH"} onClick={() => setTab("PUSH")} icon={Smartphone} label="Push" />
       </div>
 
@@ -171,7 +171,6 @@ interface EmailForm {
   smtpPassword: string; // "" = unchanged — the browser never sees the stored value
   fromName: string;
   fromEmail: string;
-  enabled: boolean;
 }
 
 function emailFormFrom(c: NotificationConfigView): EmailForm {
@@ -184,7 +183,6 @@ function emailFormFrom(c: NotificationConfigView): EmailForm {
     smtpPassword: "",
     fromName: c.email.fromName ?? "",
     fromEmail: c.email.fromEmail ?? "",
-    enabled: c.email.enabled,
   };
 }
 
@@ -225,7 +223,6 @@ function EmailTab({ config, canEdit, onConfigChange, refreshConfig }: TabProps) 
         smtpUser: form.smtpUser.trim(),
         fromName: form.fromName.trim(),
         fromEmail: form.fromEmail.trim(),
-        enabled: form.enabled,
         // Omitted when blank: the stored port stays. Omitted when empty: the stored password stays.
         ...(port !== undefined ? { smtpPort: port } : {}),
         ...(form.smtpPassword ? { smtpPassword: form.smtpPassword } : {}),
@@ -280,15 +277,17 @@ function EmailTab({ config, canEdit, onConfigChange, refreshConfig }: TabProps) 
   return (
     <Card>
       <CardContent className="p-4 space-y-3">
-        <StatusLine connected={e.connected} enabled={e.enabled} lastTestedAt={e.lastTestedAt} lastTestError={e.lastTestError} />
+        <StatusLine connected={e.connected} lastTestedAt={e.lastTestedAt} lastTestError={e.lastTestError} />
 
-        {/* Email Policy Notice */}
+        {/* Plan 2309: SMTP has no on/off switch. It exists only for PO emails to vendors. */}
         <div className="flex items-start gap-2.5 rounded-xl bg-blue-50 border border-blue-200 p-3 text-xs text-blue-900">
           <Info className="h-4 w-4 text-blue-600 shrink-0 mt-0.5" />
           <div>
-            <p className="font-semibold text-blue-900">Email Notification Policy</p>
+            <p className="font-semibold text-blue-900">Used only to send purchase orders to vendors</p>
             <p className="text-blue-700 text-[11px] mt-0.5 leading-relaxed">
-              Email delivery is reserved exclusively for <strong>Purchase Orders (sending PO PDFs to vendors)</strong>. All internal system notifications (stock alerts, inbound shipments, job statuses) are delivered via <strong>Push notifications</strong>.
+              Staff are never notified by email — they get <strong>push notifications</strong> and the
+              in-app <strong>Notifications</strong> list. Fill in the SMTP details below and send a
+              test email; POs can be emailed as soon as it is set up.
             </p>
           </div>
         </div>
@@ -335,14 +334,6 @@ function EmailTab({ config, canEdit, onConfigChange, refreshConfig }: TabProps) 
           <Field label="From name" value={form.fromName} onChange={(v) => set("fromName", v)} placeholder="Bharath Cycle Hub" disabled={!canEdit || busy} autoComplete="off" />
           <Field label="From address" value={form.fromEmail} onChange={(v) => set("fromEmail", v)} placeholder="you@gmail.com" disabled={!canEdit || busy} inputMode="email" autoComplete="off" />
         </div>
-
-        <Toggle
-          label="Email enabled"
-          description="The master switch. Off, and no email (including PO sends) will be dispatched."
-          checked={form.enabled}
-          onChange={(v) => set("enabled", v)}
-          disabled={!canEdit || busy}
-        />
 
         <p className="text-[10px] text-slate-400 leading-relaxed">
           Gmail: turn on 2-Step Verification, then Google Account → Security → App Passwords.
@@ -701,10 +692,8 @@ function EventsTable({
   // The parent re-reads after a save; the draft follows so "(default)" markers stay honest.
   useEffect(() => { setDraft(events); }, [events]);
 
-  function toggle(eventKey: string, channel: "push" | "email") {
-    setDraft((rows) =>
-      rows.map((r) => (r.eventKey === eventKey ? { ...r, [channel]: !r[channel] } : r))
-    );
+  function toggle(eventKey: string) {
+    setDraft((rows) => rows.map((r) => (r.eventKey === eventKey ? { ...r, push: !r.push } : r)));
   }
 
   // Only rows that differ from what was loaded are written. Sending every row would create a
@@ -712,9 +701,9 @@ function EventsTable({
   const changed: EventSettingUpdate[] = draft
     .filter((r) => {
       const orig = events.find((e) => e.eventKey === r.eventKey);
-      return !orig || orig.push !== r.push || orig.email !== false;
+      return !orig || orig.push !== r.push;
     })
-    .map((r) => ({ eventKey: r.eventKey, push: r.push, email: false }));
+    .map((r) => ({ eventKey: r.eventKey, push: r.push }));
 
   async function save() {
     if (changed.length === 0) {
@@ -743,14 +732,14 @@ function EventsTable({
         <div>
           <p className="text-sm font-semibold text-slate-900">Events</p>
           <p className="text-[11px] text-slate-500">
-            Which events trigger Push notifications to staff. Email notifications are reserved exclusively for external Purchase Orders to vendors.
+            Which events notify staff — by push, and in each person&apos;s Notifications list. An event
+            switched off here reaches nobody.
           </p>
         </div>
 
-        <div className="grid grid-cols-[1fr_3.5rem_4.5rem] items-center gap-x-2">
+        <div className="grid grid-cols-[1fr_3.5rem] items-center gap-x-2">
           <span />
           <span className="text-[10px] font-medium text-slate-500 text-center">Push</span>
-          <span className="text-[10px] font-medium text-slate-500 text-center">Email</span>
 
           {draft.map((row) => (
             <div key={row.eventKey} className="contents">
@@ -763,15 +752,10 @@ function EventsTable({
               </div>
               <EventCheckbox
                 checked={row.push}
-                onChange={() => toggle(row.eventKey, "push")}
+                onChange={() => toggle(row.eventKey)}
                 disabled={!canEdit || saving}
                 label={`${row.label} by push`}
               />
-              <div className="flex items-center justify-center min-h-[44px] border-t border-slate-100">
-                <span className="text-[10px] text-slate-400 font-medium px-1.5 py-0.5 rounded bg-slate-100" title="Email is reserved exclusively for Purchase Orders">
-                  PO Only
-                </span>
-              </div>
             </div>
           ))}
         </div>
@@ -818,7 +802,11 @@ function EventCheckbox({
 function StatusLine({
   connected, enabled, lastTestedAt, lastTestError,
 }: {
-  connected: boolean; enabled: boolean; lastTestedAt: string | null; lastTestError: string | null;
+  connected: boolean;
+  /** Omitted for email: SMTP has no on/off switch (plan 2309). Push still has one. */
+  enabled?: boolean;
+  lastTestedAt: string | null;
+  lastTestError: string | null;
 }) {
   return (
     <div className="space-y-2">
@@ -826,7 +814,9 @@ function StatusLine({
         <Badge variant={connected ? "success" : lastTestError ? "danger" : "warning"}>
           {connected ? "Connected" : lastTestError ? "Test failed" : "Untested"}
         </Badge>
-        <Badge variant={enabled ? "info" : "default"}>{enabled ? "Enabled" : "Disabled"}</Badge>
+        {enabled !== undefined && (
+          <Badge variant={enabled ? "info" : "default"}>{enabled ? "Enabled" : "Disabled"}</Badge>
+        )}
         <span>Last tested: {lastTestedAt ? fmtDate(lastTestedAt) : "never"}</span>
       </div>
       {lastTestError && (

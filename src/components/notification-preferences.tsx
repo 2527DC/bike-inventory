@@ -11,6 +11,9 @@
 // entry, because the menu is built from the RBAC module list and this surface has no module.
 //
 // Loads once on mount and saves on each flip. No polling: nobody else changes these rows.
+//
+// Push is the only channel. Email is never a notification here (owner, 23 Sep 2026) — SMTP
+// exists only to email purchase orders to vendors — so there is no Email switch.
 
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
@@ -23,8 +26,6 @@ import type { PreferenceView, PreferenceUpdate } from "@/lib/notify/types";
 const log = createLogger("preferences:client");
 
 const ENDPOINT = "/api/notifications/preferences";
-
-type ChannelField = "push" | "email";
 
 export function NotificationPreferences() {
   const [rows, setRows] = useState<PreferenceView[] | null>(null);
@@ -59,16 +60,12 @@ export function NotificationPreferences() {
     return () => clearTimeout(t);
   }, [saved]);
 
-  async function toggle(eventKey: PreferenceView["eventKey"], field: ChannelField) {
+  async function toggle(eventKey: PreferenceView["eventKey"]) {
     if (!rows || pending.has(eventKey)) return;
     const before = rows.find((r) => r.eventKey === eventKey);
     if (!before) return;
 
-    const next: PreferenceUpdate = {
-      eventKey,
-      push: field === "push" ? !before.push : before.push,
-      email: field === "email" ? !before.email : before.email,
-    };
+    const next: PreferenceUpdate = { eventKey, push: !before.push };
 
     // Optimistic: flip first, revert only if the server refuses. The response is the merged
     // list, but it is NOT used to replace state — a second row flipped while this request was
@@ -76,7 +73,7 @@ export function NotificationPreferences() {
     setSaveError("");
     setPending((p) => new Set(p).add(eventKey));
     setRows((rs) => rs?.map((r) => (r.eventKey === eventKey ? { ...r, ...next } : r)) ?? rs);
-    log.debug("-> save", { eventKey, field, value: next[field] });
+    log.debug("-> save", { eventKey, push: next.push });
 
     try {
       await apiFetch<PreferenceView[]>(ENDPOINT, { method: "PUT", json: [next] });
@@ -84,7 +81,7 @@ export function NotificationPreferences() {
       setSaved({ eventKey, at: Date.now() });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Could not save";
-      log.error("save failed", { eventKey, field, error: msg });
+      log.error("save failed", { eventKey, error: msg });
       setRows((rs) => rs?.map((r) => (r.eventKey === eventKey ? before : r)) ?? rs);
       setSaveError(`Could not save "${before.label}": ${msg}`);
     } finally {
@@ -105,7 +102,8 @@ export function NotificationPreferences() {
       <div className="px-4 py-3">
         <p className="text-[13px] font-bold uppercase tracking-wide text-slate-500">My notifications</p>
         <p className="text-[11px] text-slate-500 mt-0.5">
-          Silence the ones you don&apos;t want. Admins control which events exist; this is only for you.
+          Notifications arrive as push on your devices. Silence the ones you don&apos;t want —
+          admins control which events exist; this is only for you.
         </p>
       </div>
 
@@ -118,7 +116,6 @@ export function NotificationPreferences() {
                   <Skeleton className="h-3.5 w-2/3" />
                   <Skeleton className="h-3 w-full" />
                 </div>
-                <Skeleton className="h-5 w-9 rounded-full" />
                 <Skeleton className="h-5 w-9 rounded-full" />
               </div>
             ))}
@@ -162,14 +159,7 @@ export function NotificationPreferences() {
                     eventLabel={row.label}
                     on={row.push}
                     disabled={busy}
-                    onToggle={() => void toggle(row.eventKey, "push")}
-                  />
-                  <ChannelSwitch
-                    label="Email"
-                    eventLabel={row.label}
-                    on={row.email}
-                    disabled={busy}
-                    onToggle={() => void toggle(row.eventKey, "email")}
+                    onToggle={() => void toggle(row.eventKey)}
                   />
                 </div>
               );

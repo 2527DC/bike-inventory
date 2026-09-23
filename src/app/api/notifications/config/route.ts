@@ -53,7 +53,8 @@ const EmailSchema = z
         message: "email.fromEmail: not a valid address",
       })
       .optional(),
-    enabled: z.boolean().optional(),
+    // No `enabled`: SMTP has no on/off switch (plan 2309). An old client's `enabled` is
+    // stripped by zod's default object parsing rather than refused.
   })
   .optional();
 
@@ -141,7 +142,6 @@ function toView(row: NotificationConfig | null): NotificationConfigView {
       smtpPasswordMasked: row?.smtpPassword ? PASSWORD_MASK : null,
       fromName: row?.fromName ?? null,
       fromEmail: row?.fromEmail ?? null,
-      enabled: row?.emailEnabled ?? false,
       connected: row?.emailConnected ?? false,
       lastTestedAt: row?.emailLastTestedAt?.toISOString() ?? null,
       lastTestError: row?.emailLastTestError ?? null,
@@ -218,7 +218,6 @@ export async function PUT(req: NextRequest) {
         smtpUser: textOrNull(email.smtpUser),
         fromName: textOrNull(email.fromName),
         fromEmail: textOrNull(email.fromEmail),
-        emailEnabled: email.enabled,
       };
       // Empty means "unchanged" — the browser only ever saw the mask, so an empty field is the
       // form echoing back what it was given, not a request to clear the password.
@@ -226,7 +225,7 @@ export async function PUT(req: NextRequest) {
 
       Object.assign(data, next, password !== undefined ? { smtpPassword: password } : {});
 
-      // fromName and enabled do not affect whether the server accepts a send; everything else
+      // fromName does not affect whether the server accepts a send; everything else
       // does. Gmail in particular rejects a From that is not the account or a verified alias.
       const credentialKeys = [
         "emailProvider", "smtpHost", "smtpPort", "smtpSecure", "smtpUser", "fromEmail",
@@ -310,7 +309,6 @@ export async function PUT(req: NextRequest) {
       pushTouched: !!push,
       emailCredentialChanged,
       pushCredentialChanged,
-      emailEnabled: row.emailEnabled,
       pushEnabled: row.pushEnabled,
       hasSmtpPassword: !!row.smtpPassword,
       hasServiceAccount: !!row.fcmServiceAccount,

@@ -7,6 +7,8 @@ import { BottomNav } from "@/components/bottom-nav";
 import { AppSidebar } from "@/components/app-sidebar";
 import { PwaInstallBanner } from "@/components/pwa-install-banner";
 import { useBottomNav } from "@/lib/use-bottom-nav";
+import { NotificationsBell } from "@/components/notifications-bell";
+import { useInboxSync } from "@/stores/inbox";
 import { cn } from "@/lib/utils";
 
 export default function DashboardLayout({
@@ -21,6 +23,9 @@ export default function DashboardLayout({
   // on nine other pages resolve. Custom properties inherit, so one override on the root
   // corrects every dependent at once — including position:fixed descendants.
   const { hasNav } = useBottomNav();
+  // The inbox count behind both bells and the app-icon badge — read once per navigation and on
+  // each push, never on a timer (plan 2309, Part D).
+  useInboxSync();
 
   if (status === "loading") {
     return (
@@ -47,6 +52,14 @@ export default function DashboardLayout({
         {/* Mobile top header (hidden on desktop — sidebar carries branding/user) */}
         <div className="lg:hidden">
           <Header />
+        </div>
+
+        {/* Laptop bar (lg+): the phone header is hidden there and the sidebar carries the logo,
+            name and menu, so this holds ONLY the bell (owner, 23 Sep 2026, plan 2309 Q19).
+            Deliberately NOT sticky: /stock's table header sticks to the page top from 1280px
+            (stock-table.tsx) and a sticky bar would sit on top of it. */}
+        <div className="hidden lg:flex h-12 items-center justify-end gap-2 border-b border-slate-200 bg-white px-8">
+          <NotificationsBell />
         </div>
 
         <main className="flex-1 pb-nav lg:pb-10">

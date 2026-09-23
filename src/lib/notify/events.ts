@@ -8,12 +8,11 @@
 // Plan: docs/implementation/pending/notifications-and-settings-rbac-plan.md, Part F.
 //
 // `defaults` is what applies when NotificationEventSetting has NO row for the key — the
-// column defaults on that table are deliberately not the whole story, because the right
-// default differs per event (zoho.pull_finished is the one that mails by default: it is the
-// event most likely to report something already broken while nobody is watching).
+// column default on that table is deliberately not the whole story, because the right
+// default can differ per event.
 //
-// Email defaults off nearly everywhere because it is the scarce channel: a free Gmail account
-// sends ~500/day, and one event to 40 staff is 8% of that. Push is free.
+// Push is the only channel. Email was withdrawn as a notification channel on 23 Sep 2026
+// (plan 2309); SMTP remains only for emailing purchase orders to vendors.
 
 export interface EventDefinition {
   /** Shown in the settings table and the personal preferences list. */
@@ -21,34 +20,34 @@ export interface EventDefinition {
   /** One line under the label. Say when it fires, in the business's words. */
   description: string;
   /** Applies when the admin has never touched this event's row. */
-  defaults: { push: boolean; email: boolean };
+  defaults: { push: boolean };
 }
 
 export const NOTIFICATION_EVENTS = {
   "stock.below_reorder": {
     label: "Stock below reorder level",
     description: "A sale or delivery took a product below its reorder level",
-    defaults: { push: true, email: false },
+    defaults: { push: true },
   },
   "service.job_ready": {
     label: "Service job ready",
     description: "A workshop job was marked READY for the customer",
-    defaults: { push: true, email: false },
+    defaults: { push: true },
   },
   "inbound.delivered": {
     label: "Inbound shipment delivered",
     description: "An inbound shipment was marked DELIVERED",
-    defaults: { push: true, email: false },
+    defaults: { push: true },
   },
   "zoho.pull_started": {
     label: "Zoho pull started",
     description: "Someone started a bills-and-invoices pull from Zoho Books or Zakya",
-    defaults: { push: true, email: false },
+    defaults: { push: true },
   },
   "zoho.pull_finished": {
     label: "Zoho pull finished",
     description: "A pull ended — clean, or partial with errors",
-    defaults: { push: true, email: false },
+    defaults: { push: true },
   },
   // Plan 1709-priority-build-and-stock-flow. Recipients are resolved from grants
   // (`usersWithPermission`), never from role names; the actor is always excluded.
@@ -56,18 +55,18 @@ export const NOTIFICATION_EVENTS = {
     label: "Stock transfer needed for an outward",
     description:
       "An outward's floor is short, or Find stock raised a transfer request — goes to holders of transfers.create",
-    defaults: { push: true, email: false },
+    defaults: { push: true },
   },
   "approval.requested": {
     label: "Approval requested",
     description:
       "An inbound, outbound, transfer or stock audit is waiting for approval — goes to holders of that module's approve grant",
-    defaults: { push: true, email: false },
+    defaults: { push: true },
   },
   "approval.returned": {
     label: "Returned for correction",
     description: "An approver sent your inbound, outbound or transfer back with a note to fix and resubmit",
-    defaults: { push: true, email: false },
+    defaults: { push: true },
   },
 } as const satisfies Record<string, EventDefinition>;
 

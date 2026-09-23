@@ -310,7 +310,7 @@ export default function EditTeamMemberPage({ params }: { params: Promise<{ id: s
           <div className="border-t border-slate-100 pt-4">
             <p className="text-sm font-semibold text-slate-800 mb-1">Bottom Navigation</p>
             <p className="text-[11px] text-slate-500 mb-3">
-              Pin up to {MAX_NAV_TABS} tabs (Home and More sit outside that count). Only modules
+              Pin up to {MAX_NAV_TABS} tabs (Home sits outside that count). Only modules
               this person&apos;s role grants are listed. Leaving it empty means this person gets
               no bottom navigation on their phone at all.
             </p>
@@ -327,8 +327,8 @@ export default function EditTeamMemberPage({ params }: { params: Promise<{ id: s
               </div>
             )}
 
-            {/* Preview of the real bar. With nothing pinned there IS no bar, so drawing Home and
-                More around an empty middle would promise a bar the PWA never renders. */}
+            {/* Preview of the real bar. With nothing pinned there IS no bar, so drawing Home
+                beside an empty middle would promise a bar the PWA never renders. */}
             <div className="flex items-center gap-1 flex-wrap mb-3 bg-slate-50 rounded-lg p-2">
               {navTabs.length === 0 ? (
                 <span className="text-[11px] text-slate-400">
@@ -342,7 +342,6 @@ export default function EditTeamMemberPage({ params }: { params: Promise<{ id: s
                       {moduleByRoute(route)?.label || route}
                     </Badge>
                   ))}
-                  <Badge variant="default" className="text-[11px]">More</Badge>
                 </>
               )}
             </div>

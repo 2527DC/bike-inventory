@@ -2,14 +2,15 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, MoreHorizontal } from "lucide-react";
+import { LayoutDashboard } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useBottomNav } from "@/lib/use-bottom-nav";
 import { moduleIcon } from "@/lib/module-icons";
 
-// Mobile bottom nav. Home and More are always present; the tabs between them are the ones an
-// admin pinned for THIS user on their edit page, in the admin's order, intersected with what
-// their role still grants — see src/lib/use-bottom-nav.ts for the whole rule. Nothing pinned
+// Mobile bottom nav. Home is always present, followed by the tabs an admin pinned for THIS
+// user on their edit page, in the admin's order, intersected with what their role still
+// grants — see src/lib/use-bottom-nav.ts for the whole rule. There is no More button (owner,
+// 23 Sep 2026): /more is reached from the ☰ drawer in the header. Nothing pinned
 // means no bar at all (owner decision, 7 Sep 2026), which is why the same hook also tells the
 // dashboard layout to stop reserving the bar's height.
 
@@ -25,7 +26,6 @@ export function BottomNav() {
       label: t.label,
       icon: moduleIcon(t.icon),
     })),
-    { key: "more", href: "/more", label: "More", icon: MoreHorizontal },
   ];
 
   // No bar when nothing is pinned — and none while the grants are still loading either

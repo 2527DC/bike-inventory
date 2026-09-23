@@ -785,7 +785,7 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     // section-scoped actions on `settings`.
     key: "settings_notifications",
     label: "Notifications",
-    description: "Email and push delivery — providers, credentials and per-event switches",
+    description: "Push notifications for staff, and the SMTP used to email purchase orders",
     icon: "Bell",
     route: null,
     group: "Admin", // MUST equal the parent's — the seeder asserts it

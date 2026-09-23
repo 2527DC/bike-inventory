@@ -1,13 +1,18 @@
 # Notifications — how it works, how to turn it on, what to watch out for
 
+> **23 Sep 2026 (plan 2309): push is the only notification channel.** Staff are never notified
+> by email. SMTP stays for one job only — emailing purchase orders to vendors — and has no on/off
+> switch any more. Every user also has a **Notifications** list (`/notifications`) with an unread
+> count on the header bell and, where supported, on the installed app's icon. Sections below are
+> updated to match.
+
 For whoever picks this up next: the staff member who configures it, the developer who adds an
 event, and the person asking "why didn't I get that?".
 
 **State as of 2 Sep 2026: installed and switched OFF.** Every event is wired, every screen
-exists, the tables are in the database — and both channels (push and email) are off at the
-master switch in **Settings → Notifications**. Nothing is sent until someone turns one on. The
-integration with a real Gmail account and a real Firebase project is deferred by the owner's
-decision; this guide is the runbook for when that day comes.
+exists, the tables are in the database — and push is off at the master switch in **Settings →
+Notifications**. Nothing is sent, and nothing reaches anyone's Notifications list, until someone
+turns it on.
 
 Plan and decisions: `docs/implementation/pending/notifications-and-settings-rbac-plan.md`.
 
@@ -18,14 +23,14 @@ Plan and decisions: `docs/implementation/pending/notifications-and-settings-rbac
 | # | Caution | Why | Where in the code |
 |---|---|---|---|
 | 1 | **Push links must be `https` in production.** Set `NEXTAUTH_URL` to the real `https://` origin on deploy. | FCM rejects `webpush.fcm_options.link` unless it is https — a relative path or `http://localhost` fails the **whole send** with `INVALID_ARGUMENT`. In dev the sender omits `fcm_options` and the service worker opens `data.link` instead, so clicking still works locally. | `src/lib/notify/push.ts` (the `webpush` block), `public/sw.js` (`notificationclick`) |
-| 2 | **A Gmail App Password is not your Gmail password.** 2-Step Verification must be on first; then Google Account → Security → App Passwords → generate. It is 16 characters shown as `abcd efgh ijkl mnop`. | Gmail refuses plain passwords over SMTP (error 535). If the first test fails with 535, retry with the spaces removed before anything else. | `src/lib/notify/email.ts` |
-| 3 | **A free `@gmail.com` sends ~500 recipients/day.** One event to 40 staff is 8% of that. Google Workspace: ~2,000/day. | This is why **email defaults OFF per event** and push defaults ON. Enable email only for events that matter when nobody is watching the screen. | `src/lib/notify/events.ts` (`defaults`) |
-| 4 | **`zoho.pull_finished` will say "partial" on most real pulls, and email defaults ON for it.** | `trigger-pull` counts *"already imported"* bills as errors (pre-existing behaviour). If that is noise, untick **Email** on that row in the Events table — do not change the sender. | `src/app/api/zoho/trigger-pull/route.ts`, Events table on `/settings/notifications` |
+| 2 | **(PO email) A Gmail App Password is not your Gmail password.** 2-Step Verification must be on first; then Google Account → Security → App Passwords → generate. It is 16 characters shown as `abcd efgh ijkl mnop`. | Gmail refuses plain passwords over SMTP (error 535). If the first test fails with 535, retry with the spaces removed before anything else. | `src/lib/notify/email.ts` |
+| 3 | **Email is not a notification channel.** Do not add one back without the owner. | Withdrawn on 23 Sep 2026 (plan 2309); the `email` columns and the `EMAIL` channel value were dropped. SMTP sends only purchase orders. | `src/lib/notify/index.ts` |
+| 4 | **`zoho.pull_finished` will say "partial" on most real pulls.** | `trigger-pull` counts *"already imported"* bills as errors (pre-existing behaviour). If that is noise, untick **Push** on that row in the Events table — do not change the sender. | `src/app/api/zoho/trigger-pull/route.ts`, Events table on `/settings/notifications` |
 | 5 | **A device token is a credential.** Logs and the outbox store only the **last 6 characters**. Never paste a full token into a ticket or a chat. | Anyone holding a token can push to that phone. | `src/lib/notify/push.ts` (`tokenTail`), `src/lib/logger.ts` (`redact` masks any key containing `token`) |
 | 6 | **The service-account JSON and the SMTP password are stored in plaintext in the database** and never returned to a browser — the API shows `••••••••` / `configured (client_email …)`. | Same accepted trade-off as S3 keys in `StorageConfig`. Anyone with database read access holds them. Rotate in Google if that ever changes hands. | `src/app/api/notifications/config/route.ts` |
 | 7 | **Changing a credential un-proves the channel.** Saving a new password / service account flips `Connected` back to "Untested". Press **Send test** again. | `Connected` is set only by a real successful send, never by saving the form — otherwise a typo would look configured. | `config/route.ts`, `test/route.ts` |
 | 8 | **Nothing here runs on a schedule.** No overdue-bill reminders, no stale-sync alerts. Every notification is caused by a person doing something. | The app has no cron and none may be added (`CLAUDE.md`). | — |
-| 9 | **Developers: never call `notify()` inside `prisma.$transaction`.** | Prisma allows a transaction 5 s; SMTP + FCM take longer. Inside the transaction it times out and **rolls back the stock write**, and a push already delivered cannot be recalled. Collect inside, send after, wrapped in `after()` from `next/server`. | Every call site; pattern in `src/lib/notify/stock.ts` and plan §F.0 |
+| 9 | **Developers: never call `notify()` inside `prisma.$transaction`.** | Prisma allows a transaction 5 s; FCM fan-out takes longer. Inside the transaction it times out and **rolls back the stock write**, and a push already delivered cannot be recalled. Collect inside, send after, wrapped in `after()` from `next/server`. | Every call site; pattern in `src/lib/notify/stock.ts` and plan §F.0 |
 | 10 | **Android 13+ needs the runtime `POST_NOTIFICATIONS` permission** and **iOS is out of scope** (no `apns` block). | Applies to the separate Expo app, not this repo. Without the permission, registration succeeds and nothing is ever displayed. | Plan §D.3, D10 |
 
 ---
@@ -38,25 +43,27 @@ something happens (sale, job READY, shipment DELIVERED, Zoho pull)
         ▼
 notify(eventKey, { recipients, title, body, refId, link })      src/lib/notify/index.ts
         │
-        ├─ master switches off?  → one SKIPPED row per channel, stop      (Settings → Notifications)
-        ├─ event switched off?   → SKIPPED row                            (Events table)
+        ├─ master switch off?    → one SKIPPED row, stop — reaches nobody  (Settings → Notifications)
+        ├─ event switched off?   → one SKIPPED row, stop — reaches nobody  (Events table)
+        ├─ INBOX → a notification_inbox row for EVERY active recipient     → src/lib/notify/inbox.ts
+        │          (even one who muted it or has no device), trimmed to 200 per user
         ├─ user opted out?       → SKIPPED row for that user              (/more → My notifications)
-        ├─ PUSH  → every registered device of every remaining user  → src/lib/notify/push.ts  (FCM v1)
-        └─ EMAIL → every remaining user's User.email                → src/lib/notify/email.ts (SMTP)
+        └─ PUSH  → every registered device of every remaining user  → src/lib/notify/push.ts  (FCM v1)
+                   carrying data.unread = that user's inbox count, for the app-icon badge
         │
         ▼
-one row per channel per recipient in notification_outbox: SENT / FAILED / SKIPPED + reason
+one row per recipient in notification_outbox: SENT / FAILED / SKIPPED + reason
 ```
 
 **Who receives what** — resolved from permissions at send time, never from a stored list:
 
-| Event | Fires when | Recipients | Default push / email |
+| Event | Fires when | Recipients | Default push |
 |---|---|---|---|
-| `stock.below_reorder` | an outward sale/delivery takes a product **below** its reorder level (downward crossing only — no repeat while it stays below) | holders of `reorder.edit` | on / off |
-| `service.job_ready` | a workshop job is set to READY | holders of `service_jobs.approve` + the job's mechanic | on / off |
-| `inbound.delivered` | a shipment is set to DELIVERED (not partial) | holders of `inbound.approve` | on / off |
-| `zoho.pull_started` | someone starts a bills-and-invoices pull | holders of `zoho.fetch` | on / off |
-| `zoho.pull_finished` | that pull ends — `success` or `partial` | holders of `zoho.fetch` | on / **on** |
+| `stock.below_reorder` | an outward sale/delivery takes a product **below** its reorder level (downward crossing only — no repeat while it stays below) | holders of `reorder.edit` | on |
+| `service.job_ready` | a workshop job is set to READY | holders of `service_jobs.approve` + the job's mechanic | on |
+| `inbound.delivered` | a shipment is set to DELIVERED (not partial) | holders of `inbound.approve` | on |
+| `zoho.pull_started` | someone starts a bills-and-invoices pull | holders of `zoho.fetch` | on |
+| `zoho.pull_finished` | that pull ends — `success` or `partial` | holders of `zoho.fetch` | on |
 
 The person who triggered the event is never a recipient. Deactivated users are never recipients.
 
@@ -71,7 +78,11 @@ up and cannot cross downward.
 | Event registry — the only place an event key is defined | `src/lib/notify/events.ts` |
 | Shared types / API payload shapes | `src/lib/notify/types.ts` |
 | `notify()` core | `src/lib/notify/index.ts` |
-| SMTP sender | `src/lib/notify/email.ts` |
+| SMTP sender — **PO email to vendors only** | `src/lib/notify/email.ts` |
+| Inbox write, 200-row trim, unread count | `src/lib/notify/inbox.ts` |
+| Inbox API (own rows only) | `src/app/api/notifications/inbox/route.ts`, `inbox/read/route.ts` |
+| Inbox screen | `src/app/(dashboard)/notifications/page.tsx` |
+| Unread count store, chime, app-icon badge | `src/stores/inbox.ts`, bell in `src/components/notifications-bell.tsx` |
 | FCM sender (JWT → OAuth → `messages:send`, no firebase-admin) | `src/lib/notify/push.ts` |
 | Reorder-crossing helper | `src/lib/notify/stock.ts` |
 | Reverse permission lookup `usersWithPermission()` | `src/lib/rbac.ts` |
@@ -84,7 +95,7 @@ up and cannot cross downward.
 | Personal opt-out | `src/app/api/notifications/preferences/route.ts`, `src/components/notification-preferences.tsx` (rendered on `/more`) |
 | "Enable push on this device" | `src/components/enable-push-button.tsx` |
 | Service worker (`push`, `notificationclick`) | `public/sw.js`, registered by `src/components/sw-register.tsx` |
-| Tables | `notification_config`, `push_devices`, `notification_event_settings`, `notification_preferences`, `notification_outbox` |
+| Tables | `notification_config`, `push_devices`, `notification_event_settings`, `notification_preferences`, `notification_outbox`, `notification_inbox` |
 
 **Access:** the admin screen and its routes need the `settings_notifications` module (`view` /
 `edit`), a child of Settings — grant it at Team → Roles & Permissions. Registering a device and
@@ -92,27 +103,23 @@ setting personal preferences need only a login.
 
 ---
 
-## 3. Turning on EMAIL (when the time comes)
+## 3. SMTP — for emailing purchase orders to vendors only
 
-Prerequisite — answer this first: **are the addresses in `User.email` real?** Staff log in with an
-access code, so that column has never had to be real. If they are placeholders, every send
-bounces, and bounces hurt the sending account's reputation. Fix the addresses on `/team` before
-step 4.
+SMTP is **not** a notification channel. It exists so **Send to vendor** on a purchase order can
+email the PO PDF. There is no on/off switch: PO email works as soon as the fields are filled in.
+Until then the PO screen shows an amber line saying email to vendors is not set up.
 
 1. On the sending Google account: turn on **2-Step Verification**, then create an **App Password**
    (Google Account → Security → App Passwords). Copy the 16 characters.
-2. As an admin: **Settings → Notifications → Email tab.**
+2. As an admin: **Settings → Notifications → Email (PO sending) tab.**
    Host `smtp.gmail.com` · Port `587` · TLS toggle **off** (587 uses STARTTLS; the sender
    requires the upgrade, so the password never travels in clear) · Username = the full Gmail
    address · Password = the App Password · From address = the same Gmail address (Gmail rejects
-   any other) · From name optional. Switch **Email enabled** on. **Save.**
-3. Press **Send test email.** It goes to *your* `User.email`. Expect the badge to read
-   **Connected** and the mail to arrive within ~10 s. Failures come back as a named message —
-   "rejected the username or password (SMTP 535)", "Could not resolve SMTP host", etc. — never a
-   500.
-4. In the **Events** table, tick **Email** only for the events that should mail. Remember the
-   ~500/day cap. **Save events.**
-5. Tell staff they can silence themselves under **More → My notifications**.
+   any other) · From name optional. **Save.**
+3. Press **Send test email.** Expect the badge to read **Connected** and the mail to arrive within
+   ~10 s. Failures come back as a named message — "rejected the username or password (SMTP
+   535)", "Could not resolve SMTP host", etc. — never a 500.
+4. Open an approved PO: **Send to vendor** is enabled and the amber line is gone.
 
 Port `465` with TLS **on** also works (implicit TLS). Anything else is a misconfiguration the
 test button will name.
@@ -157,19 +164,33 @@ Prerequisite: a Firebase project. Free tier is fine; ~40 devices is nothing.
 
 ## 5. Per-event switches and personal preferences
 
-- **Events table** (admin, `/settings/notifications`): two checkboxes per event, push and
-  email. "(default)" means the admin has never touched that row and the code default applies.
-- **My notifications** (everyone, `/more`, under the name card): each person's own push/email
-  opt-out per event. Only affects that person. Written from the session — the API refuses a
-  `userId` in the body.
-- Precedence: master switch → event switch → personal preference → does the user have a device /
-  an email address. Any "no" produces a `SKIPPED` row saying which.
+- **Events table** (admin, `/settings/notifications`): one Push checkbox per event. "(default)"
+  means the admin has never touched that row and the code default applies. **Off reaches
+  nobody** — no push and no Notifications-list entry.
+- **My notifications** (everyone, `/more`, under the name card): each person's own push opt-out
+  per event. Only affects that person's push; the item still lands in their Notifications list.
+  Written from the session — the API refuses a `userId` in the body.
+- Precedence: master switch → event switch → (inbox row written) → personal preference → does the
+  user have a device. Any "no" produces a `SKIPPED` row saying which.
+
+### The Notifications list, the count and the sound
+
+- **`/notifications`** — each user's own, newest first, 30 a page, newest 200 kept. Unread rows
+  are bold; tapping one marks it read and opens its link; **Mark all read** clears the lot.
+- **The count** — the bell in the phone header and in the slim bar at the top of laptop screens.
+  Read once per navigation and whenever a push arrives while the app is open. Never on a timer.
+- **The app icon** — `setAppBadge` puts the same number on the installed app's icon on Windows /
+  macOS (Chrome, Edge) and iOS 16.4+ Home Screen apps. Android draws its own dot from the tray.
+- **Sound** — when the app is the focused tab, the system notification is shown silently and the
+  app plays `public/sounds/notify.wav`. Everywhere else (background tab, minimised, app closed)
+  the device's own notification sound plays. Exactly one sound either way. A custom sound while
+  the app is closed is impossible — no browser supports it.
 
 ---
 
 ## 6. "Why didn't I get that?" — where to look
 
-**First: the outbox.** One row per channel per intended recipient:
+**First: the outbox.** One row per intended recipient (push only):
 
 ```sql
 select "createdAt", "eventKey", channel, status, "userId", target, error, "refId"
@@ -180,15 +201,15 @@ limit 50;
 
 | `status` | `userId` | Meaning |
 |---|---|---|
-| `SKIPPED` | null | Channel-level: master switch off, event switched off, or the channel is not configured (`error` says which) |
-| `SKIPPED` | set | That person opted out, or (push) has no registered device |
-| `FAILED` | set | The send was attempted and the provider refused — `error` carries the SMTP code or the FCM error code |
-| `SENT` | set | Delivered to the provider. `target` is the masked address or the token tail |
+| `SKIPPED` | null | Channel-level: master switch off, event switched off, or push is not configured (`error` says which) |
+| `SKIPPED` | set | That person opted out, or has no registered device — the item is still in their Notifications list |
+| `FAILED` | set | The send was attempted and FCM refused — `error` carries the FCM error code |
+| `SENT` | set | Delivered to FCM. `target` is the token tail |
 
 `refId` is the product / job / shipment / SyncLog id the notification was about.
 
 **Second: the server log.** Scopes to grep for: `notify` (the core — one `notification
-processed` line per event with counts), `notify:email`, `notify:push` (including `FCM access
+processed` line per event with counts), `notify:inbox`, `notifications:inbox`, `notify:push` (including `FCM access
 token minted` and `push sent`), `notify:stock`, `notify:config`, `notify:preferences`,
 `notify:push:devices`. Set `LOG_LEVEL=0` to see the debug lines (outbound requests, timings).
 The App Password and the service-account key never appear at any level.
@@ -201,7 +222,7 @@ registered, with its scope) and `push:client` (the enable flow, token tail).
 | Symptom | Likely cause |
 |---|---|
 | Every row `SKIPPED`, error "switched off in Settings → Notifications" | Master switch is off — this is the shipped state |
-| `FAILED` with `SMTP 535` | Not an App Password, or 2-Step Verification is off. Try the password without spaces |
+| PO **Send to vendor** fails with `SMTP 535` | Not an App Password, or 2-Step Verification is off. Try the password without spaces |
 | `FAILED` with `FCM 400 INVALID_ARGUMENT` mentioning link | `NEXTAUTH_URL` is not https (Caution 1) |
 | `FAILED` with `FCM 404 UNREGISTERED` | Stale token — the sender deletes that device row automatically; the user re-enables on the device |
 | `FAILED` with `Google OAuth 400 invalid_grant` | The service-account key was revoked or the JSON is from a different project |
@@ -231,5 +252,6 @@ registered, with its scope) and `push:client` (the enable flow, token tail).
    `console.log`. Look at `src/app/api/inventory/outwards/route.ts` for the smallest complete example.
 
 Deliberately not built: a "clear old outbox rows" button (growth is ~8 MB/year and was accepted),
-iOS/APNs, any scheduled digest, email for customers (SMTP is the wrong tool for that; the
-provider field exists so SES can take over later).
+iOS/APNs, any scheduled digest, email as a notification channel (withdrawn 23 Sep 2026, plan 2309),
+email for customers (SMTP is the wrong tool for that; the provider field exists so SES can take
+over later).
