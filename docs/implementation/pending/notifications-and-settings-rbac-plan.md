@@ -1,5 +1,10 @@
 # Push + email notifications, and the Settings RBAC tidy-up
 
+> **23 Sep 2026 — email withdrawn as a notification channel.** The owner ruled that no user is
+> ever notified by email; SMTP stays only for emailing purchase orders to vendors, with no on/off
+> switch. The email parts of this plan (Phase 4 / Part C as a notification channel, and Q14) are
+> **closed without being built**. See `2309-mobile-nav-email-notifications-category-size-plan.md`.
+
 Status: pending
 Branch: **`feat/notifications-and-settings-rbac`** — create it with exactly this name, off `main`.
 

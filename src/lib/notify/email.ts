@@ -1,8 +1,9 @@
 // ─── Email sender — SMTP via nodemailer ───────────────────────────────────────
 //
-// The ONLY code in the repo that puts a message on an SMTP socket. notify() (index.ts) and
-// POST /api/notifications/test call sendEmail() / sendTestEmail(); nothing else should import
-// nodemailer. Every shape here comes from ./types — the contract the notify modules and the
+// The ONLY code in the repo that puts a message on an SMTP socket. It exists for ONE job:
+// emailing purchase orders to vendors (POST /api/purchase-orders/[id]/send), plus the admin's
+// test send. It is never a staff notification channel — notify() is push only since 23 Sep
+// 2026 (plan 2309). Nothing else should import nodemailer. Every shape here comes from ./types — the contract the notify modules and the
 // routes are written against — so this file can change internally without anything else
 // noticing.
 //
@@ -42,9 +43,9 @@
 //   for AUTH PLAIN / AUTH LOGIN is the credentials in base64 — so every string we let out is
 //   scrubbed of the password in raw AND base64 form first (see scrub()).
 // - "Not configured" is a THROW (NotConfiguredError); "the send failed" is a RESULT
-//   ({ ok: false }). notify() turns the throw into ONE channel-level SKIPPED outbox row
-//   instead of a FAILED row per recipient, and the test route shows the message to the
-//   admin as-is. Blurring the two would either flood the outbox or hide a misconfiguration.
+//   ({ ok: false }). The PO send route and the test route show the message as-is, and the
+//   PO screen uses checkEmailReady() to say plainly that SMTP is not set up. Blurring the two
+//   would hide a misconfiguration behind a generic failure.
 //
 // Routes that call this must declare `export const runtime = "nodejs"`. SMTP is a raw TCP
 // socket on 587/465, the Edge runtime cannot open one, and the failure it produces does not
@@ -63,9 +64,8 @@ const log = createLogger("notify:email");
 /**
  * Send one email to one recipient using the SMTP details in NotificationConfig.
  *
- * Throws NotConfiguredError when email is switched off or the configuration is incomplete —
- * that is a state, not a failure, and notify() records it once per channel. A send that the
- * server refuses resolves to `{ ok: false, error }`; it never throws.
+ * Throws NotConfiguredError when the SMTP configuration is incomplete — that is a state, not a
+ * failure. A send that the server refuses resolves to `{ ok: false, error }`; it never throws.
  */
 export async function sendEmail(to: EmailRecipient, msg: EmailMessage): Promise<SendResult> {
   const settings = await loadSettings();
@@ -257,14 +257,8 @@ async function loadSettings(): Promise<SmtpSettings> {
       { reason: "no-row" }
     );
   }
-  if (!cfg.emailEnabled) {
-    // A switched-off channel is a decision someone made, not a fault. Logged at debug so it
-    // does not bury the misconfigurations below, which ARE worth a warn.
-    throw notConfigured("Email sending is switched off in Settings → Notifications", {
-      reason: "disabled",
-      deliberate: true,
-    });
-  }
+  // No on/off check: SMTP has no switch (owner, 23 Sep 2026, plan 2309). It exists only to email
+  // purchase orders to vendors, and it is ready exactly when the fields below are complete.
   if (cfg.emailProvider !== "SMTP") {
     throw notConfigured(
       `Email provider ${cfg.emailProvider} is declared but not implemented`,
@@ -453,9 +447,8 @@ function stripCode(line: string): string {
 
 /**
  * Minimal HTML around a plain-text body, for callers that did not supply their own. Inline
- * styles only — mail clients strip <style> blocks — and one column that fits a phone, because
- * that is where staff read these. The text is escaped and newlines become <br>, so what
- * notify() wrote is exactly what the reader sees.
+ * styles only — mail clients strip <style> blocks — and one column that fits a phone. The text
+ * is escaped and newlines become <br>, so what the caller wrote is exactly what the reader sees.
  */
 function wrapText(text: string): string {
   const body = escapeHtml(text).replace(/\r?\n/g, "<br>");
@@ -468,7 +461,6 @@ function wrapText(text: string): string {
     `<div style="max-width:600px;margin:0 auto;padding:24px 16px;font-family:${font};font-size:15px;line-height:1.5;color:#18181b;">`,
     '<div style="font-weight:600;font-size:13px;letter-spacing:0.04em;text-transform:uppercase;color:#71717a;margin-bottom:12px;">BCH Ops</div>',
     `<div style="background:#ffffff;border-radius:8px;padding:20px;">${body}</div>`,
-    '<div style="font-size:12px;color:#71717a;margin-top:16px;">You receive this because of your notification preferences. Change them under More → My notifications.</div>',
     "</div></body></html>",
   ].join("");
 }

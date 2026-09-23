@@ -9,9 +9,15 @@
 import type { EventKey } from "./events";
 
 // ─── Channels ─────────────────────────────────────────────────────────────────
-// Mirrors the Prisma enums exactly. Kept as string unions here so client components can
-// import this file without pulling @prisma/client into the browser bundle.
+// Kept as string unions here so client components can import this file without pulling
+// @prisma/client into the browser bundle.
+//
+// `Channel` is a configured SERVICE — the settings screen's two tabs, the test send and
+// NotConfiguredError. EMAIL is still one: SMTP sends purchase orders to vendors. It is NOT a
+// notification channel (owner, 23 Sep 2026, plan 2309): `OutboxChannel` mirrors the Prisma
+// enum NotificationChannel, which is PUSH only.
 export type Channel = "PUSH" | "EMAIL";
+export type OutboxChannel = "PUSH";
 export type OutboxStatus = "SENT" | "FAILED" | "SKIPPED";
 export type PushPlatformKey = "WEB" | "ANDROID";
 
@@ -25,7 +31,7 @@ export interface NotifyInput {
   recipients: string[];
   /** Notification title — one short line. */
   title: string;
-  /** Body — a sentence or two. Plain text; email wraps it, push shows it as is. */
+  /** Body — a sentence or two. Plain text; push and the /notifications inbox show it as is. */
   body: string;
   /** The record this is about: productId, jobId, shipmentId, SyncLog id. Written to the outbox. */
   refId?: string;
@@ -147,10 +153,10 @@ export interface PushMessage {
 }
 
 /**
- * Thrown by a sender when its channel has no usable configuration (no SMTP host, empty
- * fcmServiceAccount, emailEnabled false...). notify() catches it and writes ONE channel-level
- * SKIPPED outbox row (userId and target null) rather than one per recipient. The test route
- * surfaces `message` to the admin as a named failure — never a 500, never a stack trace.
+ * Thrown by a sender when its service has no usable configuration (no SMTP host, empty
+ * fcmServiceAccount...). For push, notify() catches it and writes ONE channel-level SKIPPED
+ * outbox row (userId and target null) rather than one per recipient. For SMTP, the PO send
+ * route and the test route surface `message` as a named failure — never a 500.
  */
 export class NotConfiguredError extends Error {
   channel: Channel;
@@ -175,7 +181,7 @@ export interface NotificationConfigView {
     smtpPasswordMasked: string | null;
     fromName: string | null;
     fromEmail: string | null;
-    enabled: boolean;
+    // No `enabled`: SMTP has no on/off switch (plan 2309). It is ready when the fields are set.
     connected: boolean;
     lastTestedAt: string | null;
     lastTestError: string | null;
@@ -213,7 +219,6 @@ export interface NotificationConfigUpdate {
     smtpPassword: string;
     fromName: string;
     fromEmail: string;
-    enabled: boolean;
   }>;
   push?: Partial<{
     provider: string;
@@ -266,7 +271,6 @@ export interface EventSettingView {
   label: string;
   description: string;
   push: boolean;
-  email: boolean;
   /** True when no DB row exists yet and the values shown are the code defaults. */
   isDefault: boolean;
 }
@@ -274,7 +278,6 @@ export interface EventSettingView {
 export interface EventSettingUpdate {
   eventKey: EventKey;
   push: boolean;
-  email: boolean;
 }
 
 /** GET/PUT /api/notifications/preferences — the SESSION user's own rows, defaults merged in. */
@@ -283,13 +286,11 @@ export interface PreferenceView {
   label: string;
   description: string;
   push: boolean;
-  email: boolean;
 }
 
 export interface PreferenceUpdate {
   eventKey: EventKey;
   push: boolean;
-  email: boolean;
 }
 
 /** POST /api/notifications/test body and response. */
@@ -305,4 +306,17 @@ export interface TestSendResult {
   ok: boolean;
   /** On success: where it went (masked). On failure: the named reason. */
   detail: string;
+}
+
+/** One row of GET /api/notifications/inbox — the session user's own (plan 2309, Part D). */
+export interface InboxItem {
+  id: string;
+  eventKey: string;
+  title: string;
+  body: string;
+  /** Relative, e.g. "/transfers/abc". Null when the notification links nowhere. */
+  link: string | null;
+  /** ISO time it was read; null while unread. */
+  readAt: string | null;
+  createdAt: string;
 }

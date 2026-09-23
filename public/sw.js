@@ -2,7 +2,8 @@
 // differ, so the bump is not what triggers the update — but the old cache is keyed on this
 // name and `activate` deletes every key that is not it, so a stale offline page cannot
 // survive the new worker. v3: notification action buttons + quick approve (plan 1709 §3.8).
-const CACHE_NAME = "bike-inventory-v3";
+// v4: app-icon badge, "push received" message to open windows, silent when focused (plan 2309).
+const CACHE_NAME = "bike-inventory-v4";
 const OFFLINE_URL = "/offline.html";
 
 self.addEventListener("install", (event) => {
@@ -44,10 +45,21 @@ self.addEventListener("fetch", (event) => {
 // Chrome a page cannot construct a Notification anyway — it has to come back through this
 // registration. For an ops app a notification while the tab is open is the wanted behaviour.
 //
+// Sound (plan 2309, Q11 b): when a window of the app is FOCUSED, the notification is shown
+// `silent` and the page plays its own chime (src/stores/inbox.ts). In every other case —
+// background tab, minimised, app closed — the device's own notification sound plays. Either
+// way exactly one sound, never two.
+//
+// Badge (plan 2309, Part D): `data.unread` is the recipient's inbox count, written by notify().
+// setAppBadge puts it on the installed app's icon where the platform supports it (Windows/macOS
+// installed PWA, iOS 16.4+ Home Screen app). Android ignores it and draws its own dot.
+//
 // No logger here: a service worker cannot import src/lib/logger.ts. console.error in the
 // catch blocks is the one thing that is allowed to speak.
 
 const PUSH_ICON = "/icons/icon-192.png";
+// Must match PUSH_RECEIVED in src/stores/inbox.ts.
+const PUSH_RECEIVED = "bch:push-received";
 const PUSH_DEFAULT_TITLE = "BCH OPS";
 
 // ─── Action buttons (plan 1709 §3.8, R24, Q19) ────────────────────────────────
@@ -128,9 +140,35 @@ self.addEventListener("push", (event) => {
   };
 
   event.waitUntil(
-    self.registration.showNotification(title, options).catch((err) => {
-      console.error("[sw] showNotification failed", err);
-    })
+    self.clients
+      .matchAll({ type: "window", includeUncontrolled: true })
+      .catch((err) => {
+        console.error("[sw] could not list open windows; showing the notification with sound", err);
+        return [];
+      })
+      .then((windows) => {
+        const focused = windows.some((w) => w.focused);
+        const shown = self.registration
+          .showNotification(title, focused ? Object.assign({}, options, { silent: true }) : options)
+          .catch((err) => {
+            console.error("[sw] showNotification failed", err);
+          });
+
+        // Tell every open window, so its bell re-reads the count (and a focused one chimes).
+        for (const w of windows) w.postMessage({ type: PUSH_RECEIVED });
+
+        // The badge is a nicety: an unsupported platform or a missing count never costs the
+        // notification itself.
+        const unread = Number(data.unread);
+        const badged =
+          self.navigator && self.navigator.setAppBadge && Number.isFinite(unread)
+            ? (unread > 0 ? self.navigator.setAppBadge(unread) : self.navigator.clearAppBadge()).catch((err) => {
+                console.error("[sw] setAppBadge failed", err);
+              })
+            : Promise.resolve();
+
+        return Promise.all([shown, badged]);
+      })
   );
 });
 

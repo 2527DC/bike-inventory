@@ -15,6 +15,9 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("purchase-orders:detail");
 
+/** Tooltip on Send / Resend when SMTP is missing; the visible amber line says the same. */
+const SMTP_MISSING_TITLE = "Email to vendors is not set up — Settings › Notifications › Email (PO sending)";
+
 interface PODetail {
   id: string;
   poNumber: string;
@@ -68,8 +71,10 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
   // This screen had NO permission checks of any kind before P9. Approve was shown to
   // everyone, and because the handlers used bare fetch with no !success branch, a 403 came
   // back and nothing happened at all — the error banner below was unreachable code.
-  const { canEdit, canApprove } = usePermissions();
+  const { canEdit, canApprove, canView } = usePermissions();
   const mayEdit = canEdit("purchase_orders");
+  // Who can fix SMTP decides the wording of the "not set up" line — cosmetic only.
+  const maySetUpSmtp = canView("settings_notifications");
   const mayApprove = canApprove("purchase_orders");
 
   const load = useCallback(() => {
@@ -255,7 +260,7 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
             <Button
               onClick={() => setSendOpen(true)}
               disabled={actionLoading || emailReady?.emailReady === false}
-              title={emailReady?.emailReady === false ? "Email not configured — Settings › Notifications" : undefined}
+              title={emailReady?.emailReady === false ? SMTP_MISSING_TITLE : undefined}
               className="flex-1 min-w-[10rem] min-h-[48px] rounded-lg font-medium bg-blue-600 hover:bg-blue-700 text-white"
               
             >
@@ -296,7 +301,7 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
             <Button
               onClick={() => setSendOpen(true)}
               disabled={actionLoading || emailReady?.emailReady === false}
-              title={emailReady?.emailReady === false ? "Email not configured — Settings › Notifications" : undefined}
+              title={emailReady?.emailReady === false ? SMTP_MISSING_TITLE : undefined}
               className="flex-1 min-w-[10rem] min-h-[48px] rounded-lg font-medium"
               variant="outline"
             >
@@ -326,12 +331,32 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
         )}
       </div>
 
-      {po.status === "APPROVED" && !po.sentAt && (
+      {/* Plan 2309 (R7): when SMTP is not set up, say so plainly wherever the Send / Resend
+          button is shown. The button's tooltip alone was invisible on a phone. */}
+      {emailReady?.emailReady === false && mayEdit && (po.status === "APPROVED" || po.status === "SENT_TO_VENDOR") && (
+        <div role="status" className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 -mt-2 mb-4 text-xs text-amber-800">
+          <Mail className="h-4 w-4 shrink-0 mt-0.5 text-amber-600" />
+          <p>
+            <strong>Email to vendors is not set up.</strong>{" "}
+            {maySetUpSmtp ? (
+              <>
+                Set up SMTP in{" "}
+                <Link href="/settings/notifications" className="font-semibold underline">
+                  Settings › Notifications › Email (PO sending)
+                </Link>{" "}
+                to send POs by email.
+              </>
+            ) : (
+              "Ask an admin to set up SMTP in Settings › Notifications to send POs by email."
+            )}{" "}
+            {po.status === "APPROVED" && "Until then, use Mark sent once you have sent it another way."}
+          </p>
+        </div>
+      )}
+
+      {po.status === "APPROVED" && !po.sentAt && emailReady?.emailReady !== false && (
         <p className="text-[11px] text-slate-400 -mt-2 mb-4">
-          Approved but not yet sent.
-          {emailReady?.emailReady === false
-            ? " Email is not configured, so use Mark sent once you have sent it another way."
-            : " Send it to the vendor, or record that you sent it another way."}
+          Approved but not yet sent. Send it to the vendor, or record that you sent it another way.
         </p>
       )}
 

@@ -11,8 +11,8 @@ import type { EventSettingView } from "@/lib/notify/types";
 
 const log = createLogger("notify:events");
 
-// The global per-event switches — "does this event go out by push? by email?" — for the whole
-// business. One row per event key in NotificationEventSetting; an ABSENT row means the code
+// The global per-event switches — "does this event go out by push?" — for the whole business.
+// Push is the only channel (email withdrawn 23 Sep 2026, plan 2309). One row per event key in NotificationEventSetting; an ABSENT row means the code
 // default in src/lib/notify/events.ts applies, which is why the response always carries every
 // registered key whether or not the table has heard of it. Personal opt-outs are a different
 // table (NotificationPreference) and a different route.
@@ -22,7 +22,8 @@ const UpdateSchema = z
     z.object({
       eventKey: z.string().min(1).max(100),
       push: z.boolean(),
-      email: z.boolean(),
+      // Accepted and ignored so a cached pre-2309 settings screen can still save.
+      email: z.boolean().optional(),
     })
   )
   .min(1, "Send at least one event")
@@ -42,7 +43,6 @@ async function listMerged(): Promise<EventSettingView[]> {
       label: def.label,
       description: def.description,
       push: row ? row.pushEnabled : def.defaults.push,
-      email: row ? row.emailEnabled : def.defaults.email,
       isDefault: !row,
     };
   });
@@ -72,12 +72,12 @@ export async function PUT(req: NextRequest) {
 
     // Zod proved the shape; the registry proves the key. A row for an unknown key would sit in
     // the table forever, matched by nothing, so it is refused by name rather than stored.
-    const updates: { eventKey: EventKey; push: boolean; email: boolean }[] = [];
+    const updates: { eventKey: EventKey; push: boolean }[] = [];
     for (const item of parsed.data) {
       if (!isEventKey(item.eventKey)) {
         return errorResponse(`Unknown event key: ${item.eventKey}`, 400);
       }
-      updates.push({ eventKey: item.eventKey, push: item.push, email: item.email });
+      updates.push({ eventKey: item.eventKey, push: item.push });
     }
 
     // One transaction so the table never ends up half-saved if a later upsert fails.
@@ -85,8 +85,8 @@ export async function PUT(req: NextRequest) {
       updates.map((u) =>
         prisma.notificationEventSetting.upsert({
           where: { eventKey: u.eventKey },
-          update: { pushEnabled: u.push, emailEnabled: u.email },
-          create: { eventKey: u.eventKey, pushEnabled: u.push, emailEnabled: u.email },
+          update: { pushEnabled: u.push },
+          create: { eventKey: u.eventKey, pushEnabled: u.push },
         })
       )
     );

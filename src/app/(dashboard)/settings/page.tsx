@@ -49,7 +49,7 @@ const ENTRIES: Entry[] = [
   {
     href: "/settings/notifications",
     title: "Notifications",
-    description: "Email and push delivery — providers, credentials and per-event switches",
+    description: "Push notifications for staff, and the SMTP used to email purchase orders",
     icon: "Bell",
     module: "settings_notifications",
   },

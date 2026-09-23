@@ -20,9 +20,10 @@ const log = createLogger("notify:preferences");
 // caller's own: `ItemSchema` is `.strict()` and declares no userId, so a forged userId in the
 // body is a 400, not a way to mute someone else. Plan §E.2.
 //
-// Absence of a row means "not opted out". The column defaults on NotificationPreference are
-// push=true / email=true and the view below says the same, so a user who has never touched
-// this screen sees every switch on and the server treats them as reachable on both channels.
+// Absence of a row means "not opted out". The column default on NotificationPreference is
+// push=true and the view below says the same, so a user who has never touched this screen sees
+// every switch on. Push is the only channel — email was withdrawn as a notification channel on
+// 23 Sep 2026 (plan 2309), and the `email` column is gone.
 // (Whether a channel is CONFIGURED, or an event is enabled at all, is the admin's call in
 // NotificationEventSetting — this table only ever narrows, never widens.)
 
@@ -30,7 +31,9 @@ const ItemSchema = z
   .object({
     eventKey: z.string().trim().min(1).max(100),
     push: z.boolean(),
-    email: z.boolean(),
+    // Accepted and ignored: a PWA still running the pre-2309 bundle sends it. Declared rather
+    // than dropping `.strict()`, which is what keeps a forged userId a 400.
+    email: z.boolean().optional(),
   })
   .strict();
 
@@ -49,7 +52,7 @@ const BodySchema = z.array(ItemSchema).min(1).max(EVENT_KEYS.length);
 async function buildView(userId: string): Promise<PreferenceView[]> {
   const rows = await prisma.notificationPreference.findMany({
     where: { userId },
-    select: { eventKey: true, push: true, email: true },
+    select: { eventKey: true, push: true },
   });
   const byKey = new Map(rows.map((r) => [r.eventKey, r]));
 
@@ -61,7 +64,6 @@ async function buildView(userId: string): Promise<PreferenceView[]> {
       label: def.label,
       description: def.description,
       push: row?.push ?? true,
-      email: row?.email ?? true,
     };
   });
 }
@@ -102,7 +104,7 @@ export async function PUT(req: NextRequest) {
         log.warn("rejected unknown event key", { userId: user.id, eventKey: row.eventKey });
         return errorResponse(`Unknown event key: ${row.eventKey}`, 400);
       }
-      updates.push({ eventKey: row.eventKey, push: row.push, email: row.email });
+      updates.push({ eventKey: row.eventKey, push: row.push });
     }
 
     log.debug("-> PUT preferences", {
@@ -116,8 +118,8 @@ export async function PUT(req: NextRequest) {
       updates.map((u) =>
         prisma.notificationPreference.upsert({
           where: { userId_eventKey: { userId: user.id, eventKey: u.eventKey } },
-          update: { push: u.push, email: u.email },
-          create: { userId: user.id, eventKey: u.eventKey, push: u.push, email: u.email },
+          update: { push: u.push },
+          create: { userId: user.id, eventKey: u.eventKey, push: u.push },
         })
       )
     );

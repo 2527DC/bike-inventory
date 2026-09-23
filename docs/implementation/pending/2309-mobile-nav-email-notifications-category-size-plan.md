@@ -1,12 +1,14 @@
-# Phone menu without the bottom bar; no email notifications anywhere; category names show their size in brackets
+# Bottom bar without "More"; no email notifications; a notifications inbox with an icon count
 
-Status: pending — questions in §1 are open; nothing is built.
-Branch: not created. Ask the owner which branch to base it on before starting (standing rule).
+Status: pending — rewritten 23 Sep 2026 after the owner answered the questions one by one (§1.1).
+**Every question is answered** (§1.1, last round 23 Sep 2026). Waiting for the owner's approval. Nothing is built. The owner said "dont implment it".
+Branch: `feat/2309-bottom-nav-no-more-email-removal`, created from `main` on 23 Sep 2026 on the
+owner's instruction. Nothing is committed.
 
-Every `file:line` below was read from disk on 23 Sep 2026 by three Explore agents and spot-checked
-by hand (`notify/index.ts:95`, `(dashboard)/layout.tsx:42,52,61`, `stock/page.tsx:915`,
-`notification-preferences.tsx:168`, `globals.css:6`, `purchase-orders/[id]/send/route.ts:14,217`).
-Check rather than trust.
+The file name still says "category-size". That requirement was **dropped by the owner** (R5 below).
+The name is kept so earlier links to this file still work.
+
+Every `file:line` below was read from disk on 23 Sep 2026. Check it rather than trust it.
 
 ---
 
@@ -14,44 +16,93 @@ Check rather than trust.
 
 ### 0.1 The owner's words, verbatim (23 Sep 2026)
 
+First request:
+
 > create a implementation plan where by listing the requiremnet the requirement are one thing is i need to remove the more bootm nav bar and let keep the elemnets in the right side sidebar at the phone or pwa and t i need to know about the notification where in the normal user he he seeaing the notification toggler thing where no one has the email notification the thing is we dont use the eamil fr the notification we will not notiy any user with emil remove any level if ther i option in data baser and also in the ui level and need the name with size at the categor in the brackets
 
-Follow-up, same day: *"jsut create the implementation plan dont implemnt it"*.
+> jsut create the implementation plan dont implemnt it
+
+The bottom bar, corrected:
+
+> i ned the bottom nav bar where i think only 5 items can be pined per user   in that i think we always have that more thing i need to remove that one elemnt lets us see only the  bottom nav bar which is  given  to the use i dont need that more  bottom navbutton   and i need u to ask the questions one by one
+
+Email:
+
+> see i am using the email for only the smtp intigration with the po where i dont want to make it enable dsable  by default it must be there thats it and leaving that i dont need to use as of now teh email for anything so remove any ui and related to those things
+
+> keep the switch or else remove it where switch and if teh smtp is not set let in the po show it that set the smtp to send email to vendors
+
+Category size, then dropped:
+
+> i need it like the word we have as category and sub category na  in that lable just say ( size ) thats it
+
+> no leave it dont change drop this req
+
+The notifications screen, sound and count:
+
+> i need u to also create a  notifications listing screen where it list the push notifications  and i need u to tell me this on recivising the push notification can i get the sound in pwa or in web if so let me know how
+
+> i need u to check can this sound feature on reciving the notification be done  if so how tell me where can  we get the notification sound only when the aplication is open or can we also get the sound if the   user is in another tab but the ablication is opend in another tab and tell me how it work in the pwa will it give the notification sound when the pwa app is not opend and can it show the count of notification in the pwa if so let me know how
+
+> ok update the implmenation plan with this requiremnt
+
+Where the count goes (answering Q19):
+
+> i think i dont need to code in the desktop  folder use the  normal dashboard  dont doe in desktop where we use in phone and laptops and pwa
+
+> in the header of the aplication web dont need in the sidebar  let it be in the header for both the pwa and web
+
+The logout-to-localhost question in the same conversation was answered in chat. It is a
+configuration fix, not code, so it is in §5 and not a requirement here.
 
 ### 0.2 Restated as requirements
 
-1. **R1** — Remove the bottom navigation bar (Home · pinned tabs · More) on phone and PWA.
-2. **R2** — Everything the bottom bar and its **More** page gave the user must be reachable from the
-   right-side drawer (the ☰ menu) on phone and PWA. Nothing becomes unreachable.
-3. **R3** — Normal users must no longer see an **Email** notification toggle.
-4. **R4** — The app never notifies a user by email. Remove the email notification option at
-   **every level**: UI, API, server logic and database.
-5. **R5** — Category names show the size in brackets — "name with size at the category in the
-   brackets". The exact format is open, see Q7–Q9.
-6. **R6** — This plan only. No code is written until the owner approves it.
+1. **R1** — The phone/PWA bottom bar **stays**. Only its **More** button is removed. The bar shows **Home + the tabs the admin pinned for that user** (up to 4). Nothing else changes.
+2. **R2** — `/more` is still reachable. It stays as it is, opened from the ☰ drawer's existing link.
+3. **R3** — Normal users no longer see an **Email** notification toggle.
+4. **R4** — The app never notifies a user by email. Remove the email notification option at **every level**: UI, API, server logic and database.
+5. **R5** — ~~Category labels say "(Size)"~~ — **dropped by the owner, 23 Sep 2026.** Not built.
+6. **R6** — SMTP stays **only** for emailing purchase orders to vendors, with **no enable/disable switch**. If SMTP is filled in, PO email works.
+7. **R7** — When SMTP is not set up, the **PO screen says so plainly**: set up SMTP to send POs to vendors by email.
+8. **R8** — A **notifications list screen**. Each user sees the notifications sent to them.
+9. **R9** — The count of unread notifications shows **inside the app, in the header** (a bell), on phone, PWA **and** laptop, **not in the sidebar**. It also shows **on the installed PWA's icon**, wherever the device supports it. All of this is in the normal dashboard, `src/app/(dashboard)/`. **Nothing goes in `src/app/desktop/`.**
+10. **R10** — A notification plays a **sound** when it arrives. Everywhere, the device plays its own sound (§2.5). The app adds its own chime **only when it is the tab in front** (Q11).
+11. **R11** — This plan only. No code is written until the owner approves it.
 
 ---
 
-## 1. Questions and clarifications — answer before build
-
-| # | Question | Why it changes the build | Options | Recommended default | Answer |
-|---|---|---|---|---|---|
-| Q1 | The bottom bar's tabs are **pinned per user** by an admin on `/team/[id]` (`User.navTabs`). With the bar gone, what happens to the pins? | Decides whether we delete a column, an admin editor and an API field, or keep them for the drawer | (a) Drop pins entirely: remove the "Bottom Navigation" section on `/team/[id]`, the `navTabs` API field and (in a later release) the `User.navTabs` column. (b) Keep the pins and show them as a **"Pinned"** group at the top of the drawer | **(a)**. The drawer already lists every module the user can open | |
-| Q2 | Should the drawer carry what only `/more` has today: the profile/role card, **My notifications**, Sign out, and the admin Zoho "Clear stuck syncs" panel? | R2 says nothing may be lost. Today these are reachable only through the drawer's "More, settings and sign out" link | (a) Keep the `/more` page, linked from the drawer as it is today. (b) Move Profile + My notifications + Sign out into the drawer footer, and keep `/more` for the Zoho panel and the version line | **(b)** — sign-out and notifications one tap away, like the desktop sidebar | |
-| Q3 | Should the drawer get the **Approvals** link the desktop sidebar has (`ApprovalsNavLink`)? On phone only the header badge exists today | Small addition to `header-menu.tsx` | yes / no | **yes** | |
-| Q4 | The **SMTP settings stay**. The purchase-order "Send to vendor" email uses the same SMTP config and sender as notifications. Is PO emailing staying? | If PO email stays, the `notification_config` SMTP columns, `src/lib/notify/email.ts`, the admin Email tab and the test-send must stay. Only the *notification* email path goes | (a) PO email stays, remove only notification email. (b) Email goes completely, including PO send | **(a)**. The PO email was built on purpose (plan 1509) | |
-| Q5 | If Q4 = (a): the admin screen `/settings/notifications` has an **Email** tab (SMTP). Rename it and explain its purpose? | UI wording only | (a) Rename the tab to **"Email (PO sending)"** with a one-line note: "Used only to send purchase orders to vendors. Staff are never notified by email." (b) Move SMTP to its own settings card "Purchase-order email" | **(a)** | |
-| Q6 | Delete the old `EMAIL` rows from `notification_outbox`? They are one "skipped" row per notification ever sent, plus any from before email was switched off | The `EMAIL` value cannot leave the `NotificationChannel` enum while rows use it | (a) Delete them in the migration. (b) Keep the enum value and just stop writing it | **(a)**. They record only "email skipped", which is noise | |
-| Q7 | "Name with size in brackets": which **screen** or picker? | Decides which files change | /stock filter · /stock bulk "Category" assign · /stock/[id] edit · /categories list · stock-audit brand-count · bins home-rule · everywhere a category is shown | **Everywhere a category is picked or shown**, through one shared helper | |
-| Q8 | Which **format**? Categories are already wheel sizes (`26`, `26 SS`, `27.5MS`, `700C MS`…); sub-categories MS/SS sit under a size parent | Decides what the helper returns | (a) Sub-category with its parent size: `SS (26)`, `MS (27.5)`; top level unchanged: `26`, `SPARES`. (b) Category with its product count: `26 SS (529)`. (c) Product name with its category: `UNIROX INSTRAGRAM BLU (26 SS)` | **(a)**. It uses the category tree, which exists; no size field, no guessing | |
-| Q9 | Where does the **size** come from? | The owner ruled twice (9 Sep; 11 Sep, Q47) that there is **no size column**, and on 1 Sep "don't use any auto type regex". Reading a size out of product names misreads `42T`/`44T` chainrings | (a) From the category tree only (parent name). (b) Parse the product name | **(a)**. Non-size categories (SPARES, Accessories) show just their name | |
-| Q10 | The dead `Product.size` column (`schema.prisma:593`, "dropped next release", plan 0909 §5): drop it in this plan's migration? | Adds one `DROP COLUMN` to the migration | yes / no | **yes**. Nothing reads it (grep of `src/` = comments only) | |
+## 1. Questions and clarifications
 
 ### 1.1 Decisions on record
 
-| Date | Q | Answer | By |
+Asked one at a time, 23 Sep 2026. The owner answered every question in this table.
+
+| # | Req | Question | Answer |
 |---|---|---|---|
-| — | — | none yet | — |
+| Q1 | R1 | What does the bar show once More is removed? | **Home + up to 4 pinned tabs.** The limit stays at `MAX_NAV_TABS = 4`. |
+| Q2 | R2 | How is `/more` reached without the More button? | **Keep the ☰ drawer's existing link.** `/more` is unchanged. |
+| Q3 | R4, R6 | Does PO email stay? | **Yes.** SMTP is used only for PO email. Everything else about email goes. |
+| Q4 | R6 | What does the admin SMTP screen keep? | **The SMTP fields and the Test send button.** The enable switch goes. |
+| Q5 | R7 | What happens on a PO when SMTP is not set? | The PO **says so**: set up SMTP to send email to vendors. |
+| Q6 | R4 | Delete the old `EMAIL` outbox rows? | **Yes, delete them.** |
+| Q7 | R4 | When are the unused email columns dropped? | **In this release**, in the same PR as the code. |
+| Q8 | R4, R6 | Drop the SMTP switch's column (`notification_config.emailEnabled`) too? | **Yes.** |
+| Q9 | — | Drop the dead `Product.size` column in the same migration? | **Yes.** |
+| Q10 | — | Where is the migration applied? | The owner says the Supabase database in `.env` is **a test copy**. The migration is written without touching any database (§3, B5), the owner reads the SQL, and then Claude runs `prisma migrate deploy` against it. **Never** `migrate dev` or `db push` there. |
+| Q12 | R8 | Who is the list for? | **Each user sees only their own.** |
+| Q13 | R9 | Read and unread? | **Yes.** Unread items are bold, a header bell shows the count, and there is a "Mark all read" button. |
+| Q14 | R8 | Which notifications go into the inbox? | **Every one meant for that user**, even if they have no registered device or turned push off for that event. |
+| Q15 | R8 | How long are notifications kept? | **The newest 200 per user.** Older ones are trimmed each time a new one is written, so no cron is needed. |
+| Q16 | R8, R9 | Where does the inbox open from? | **A header bell** that opens `/notifications`. |
+| Q17 | R5 | Category "(Size)" labels? | **Dropped.** |
+| Q11 | R10 | Should the app play its own chime while it is open? | **(b) Only when the app is the tab in front.** In every other case only the device sound plays. |
+| Q18 | R8 | An event an admin switched off, or push switched off completely: is it still listed? | **No.** "Off" reaches nobody. The user's own opt-out and a missing device still get listed (Q14). |
+| Q19 | R9 | Where does the count go on a laptop screen? | **In a header, not the sidebar.** Nothing goes in `src/app/desktop/`. The normal dashboard gets a **slim laptop bar with only the bell**. The sidebar is unchanged. |
+| — | — | Which branch? | **A new branch from `main`**: `feat/2309-bottom-nav-no-more-email-removal`. |
+
+### 1.2 Still open
+
+None.
 
 ---
 
@@ -59,287 +110,291 @@ Follow-up, same day: *"jsut create the implementation plan dont implemnt it"*.
 
 ### 2.1 The bottom bar
 
-- **Component:** `src/components/bottom-nav.tsx`. It renders **Home** (`/`), up to 4 admin-pinned tabs and
-  **More** (a link to `/more`, not a sheet) (`:20-29`). It returns `null` when nothing is pinned
-  (`:36`). It is fixed, `h-16`, with `safe-bottom` (`:44`).
-- **Pin logic:** `src/lib/use-bottom-nav.ts:53-78` intersects `User.navTabs` with the user's
-  granted modules; `MAX_NAV_TABS = 4` in `src/lib/nav-tabs.ts:11`.
-- **Pins stored in:** `User.navTabs String[]` (`prisma/schema.prisma:414`).
-  - Read path: `src/lib/rbac.ts:102-111,150-151,244`, then `src/app/api/my-permissions/route.ts:21-23`, then `src/stores/permissions.ts:66-70,102,111,121,133,165`, then `src/lib/use-permissions.ts:23,40-41`.
-  - Write path: `src/app/api/users/[id]/route.ts:11,15,46,57,95-107`.
-  - Admin editor: `src/app/(dashboard)/team/[id]/page.tsx:16,37,70,102,132,155-169,309-415`.
-- **Mounted:** `src/app/(dashboard)/layout.tsx`
-  - imports at `:6,9`
-  - `useBottomNav()` at `:23`
-  - `nav-hidden` at `:42`
-  - `<main className="flex-1 pb-nav lg:pb-10">` at `:52`
-  - `<div className="lg:hidden"><BottomNav/></div>` at `:59-62`
-- **Space reserved for it:** `src/app/globals.css`
-  - `--bottom-nav-height: 64px` (`:6`)
-  - `.nav-hidden` (`:62-64`)
-  - `.pb-nav` (`:67-69`)
-  - `.above-nav` (`:77-79`, desktop override `:85-93`)
-- **Pages using `.above-nav`** follow the variable automatically:
-  - `vendor-issues/page.tsx:816`
-  - `transfers/[id]:454`, `transfers/new:379`
-  - `stock-audit/brand-count:1015`
-  - `stock/page.tsx:814`
-  - `accounts/reconcile/[id]:544`
-  - `deliveries/dispatch:475,489`
-  - `receivables:530`
-- **Hard-coded offsets that assume the bar** (these leave a gap if left alone):
-  - `src/components/pwa-install-banner.tsx:75` (`bottom-20`)
-  - `src/components/error-toast.tsx:17` (`bottom-20`)
-  - `src/app/(dashboard)/assembly/_components/awaiting-tab.tsx:233` (`bottom-20`; the comment at `:231` says "above the mobile bottom nav")
-  - `src/app/(dashboard)/services/counter/page.tsx:856` (`bottom-16`, sits exactly on the bar)
-  - `vendor-issues/[id]/page.tsx:764` and `vendor-issues/page.tsx:823` (`bottom-24` toasts)
-- **PWA:** the only standalone detection is `pwa-install-banner.tsx:20-25,72`, which hides the banner. Nothing else
-  changes in standalone mode. Phone and PWA are the same code path (below `lg`).
-
-### 2.2 The phone drawer (already on the right)
-
-- `src/components/header-menu.tsx`, opened by ☰ (`:94-107`) in `src/components/header.tsx:44`.
-- The header is phone-only: `layout.tsx:48-50`.
-- It slides in from the **right** (`:111`, panel `:126`) and has Esc, backdrop, scroll lock and focus return (`:54-71`).
-- **Contents:**
-  - Home (`:145-155`)
-  - the full `buildNavTree(modules)` tree (`:78,170-245`)
-  - a "More, settings and sign out" link to `/more` (`:247-260`)
-- **Coverage:** every pinned tab is a module, so it is already in the drawer. **Only `/more` has:**
-  - the profile/role card
-  - `<NotificationPreferences/>`
-  - the admin Zoho "Clear stuck syncs" panel
+- `src/components/bottom-nav.tsx:20-29` builds **Home**, the pinned tabs, then **More** (a link to `/more`). A full bar is Home + 4 + More = 6 buttons.
+- `src/lib/nav-tabs.ts:11` sets `MAX_NAV_TABS = 4`. The comment at `:7-8` says "a full bar is Home + MAX_NAV_TABS + More".
+- `bottom-nav.tsx:36` shows no bar when nothing is pinned (`hasNav` false, `src/lib/use-bottom-nav.ts`). That is unchanged.
+- The ☰ drawer links to `/more` at `src/components/header-menu.tsx:247-260`. `/more` (`more/page.tsx`) holds:
+  - the profile card
+  - My notifications
+  - the Zoho "Clear stuck syncs" panel
   - Sign out
-  - the version line (`src/app/(dashboard)/more/page.tsx:75-211`)
-- The desktop sidebar's `ApprovalsNavLink` (`app-sidebar.tsx:197`) is not in the drawer. The phone shows `ApprovalsBadge` in the header (`header.tsx:35`).
+  - the version line
 
-### 2.3 Email notifications
+### 2.2 Email as a notification channel
 
-**Already switched off in code, but still visible and still stored.** Commit `c5a4317` ("PO-only email
-notifications") did the following:
-- It hard-coded `const emailOn = false;` (`src/lib/notify/index.ts:95`).
-- Every `notify()` call still writes an `EMAIL`/`SKIPPED` outbox row (`:103-108`).
-- It still reads the user's `email` preference (`:118-124`).
-- It kept a dead fan-out block (`:179-191`).
-
-What remains, by level:
+`c5a4317` hard-coded it off, but it is still visible and still stored:
 
 | Level | Where | What |
 |---|---|---|
-| **User UI** | `src/components/notification-preferences.tsx:27,70,122,160-173` — rendered for every user at `more/page.tsx:90` | an **Email** switch per event (`:167-173`) |
-| **User API** | `src/app/api/notifications/preferences/route.ts:23-25,33,52,64,105,119-120` | zod requires `email: z.boolean()`; upserts it |
-| **Admin UI** | `src/app/(dashboard)/settings/notifications/page.tsx:690-795` (EventsTable) | "Email" column header `:753`, "PO Only" badge `:770-774`, always sends `email:false` `:715-717` |
+| **User UI** | `src/components/notification-preferences.tsx:27,70,122,160-173`, rendered at `more/page.tsx:90` | an **Email** switch per event |
+| **User API** | `src/app/api/notifications/preferences/route.ts:23-25,33,52,64,105,119-120` | zod `email: z.boolean()`, upserted |
+| **Admin UI** | `settings/notifications/page.tsx:690-795` (EventsTable) | Email column `:753`, "PO Only" badge `:770-774`, sends `email:false` `:715-717` |
 | **Admin API** | `src/app/api/notifications/events/route.ts:25,45,88-89` | zod `email`, upserts `emailEnabled` |
-| **Types** | `src/lib/notify/types.ts:14,264-278,281-293` | `Channel = "PUSH" \| "EMAIL"`, `EventSettingView/Update.email`, `PreferenceView/Update.email` |
-| **Event defaults** | `src/lib/notify/events.ts:24,31-71` (stale header `:12-16`) | `defaults.email: false` on every event |
-| **Database** | `schema.prisma:1690` `NotificationEventSetting.emailEnabled` · `:1709` `NotificationPreference.email` · `:1718-1721` `enum NotificationChannel { PUSH EMAIL }` · `:1743` `NotificationOutbox.channel` | created in `prisma/migrations/0_init/migration.sql:53,707,720,731` |
-| **Docs** | `docs/notifications-guide.md:7-23,45,53-61,95-117,159-166,185-204` | a full "turn on email" runbook, now wrong |
+| **Server** | `src/lib/notify/index.ts` | reads `emailEnabled` as the email master switch (`:84-90`); `emailOn = false` (`:95`); writes an `EMAIL`/`SKIPPED` row on **every** call (`:103-108`); `wantsEmail` (`:124`); a dead email fan-out (`:179-191`); `absoluteUrl` is used only by that block (`:310-315`) |
+| **Types / defaults** | `src/lib/notify/types.ts:14,264-293`; `src/lib/notify/events.ts:24,31-71` (stale header `:12-16`) | `Channel = "PUSH" \| "EMAIL"`, `email` fields, `defaults.email` |
+| **Database** | `schema.prisma`: `NotificationEventSetting.emailEnabled`, `NotificationPreference.email`, `enum NotificationChannel { PUSH EMAIL }`, `NotificationOutbox.channel` | since `0_init` |
+| **Docs** | `docs/notifications-guide.md` | a "turn on email" runbook |
 | **Email footer** | `src/lib/notify/email.ts:471` | "Change them under More → My notifications" |
 
-**Email that is NOT a notification and must stay (Q4):**
-- **PO "Send to vendor" by email with the PDF attached.**
-  - The route: `src/app/api/purchase-orders/[id]/send/route.ts:14,153,217,292-293`.
-  - The email template: `src/lib/purchase-orders/email.ts:44`.
-  - The UI: `purchase-orders/[id]/_components/send-to-vendor-sheet.tsx`.
-- **The PO Send button's readiness check:** `src/app/api/notifications/status/route.ts`, which calls `checkEmailReady`, consumed at `purchase-orders/[id]/page.tsx:66,92,257-258,298-299,332`.
-- **What these depend on:**
-  - the SMTP config: `NotificationConfig` smtp*/from*/emailEnabled/emailConnected, `schema.prisma:1605-1618`
-  - the sender: `src/lib/notify/email.ts` (`sendEmail :70`, `sendTestEmail :161`, `checkEmailReady :205`, `loadSettings :240-308`)
-  - the admin Email tab and test send: `settings/notifications/page.tsx:163-410`, `api/notifications/test/route.ts`, `api/notifications/config/route.ts:32-54,134-147,212-235`
-- **Unrelated, untouched:**
-  - `User.email`, `Vendor.email`, `Customer.email`
-  - `PurchaseOrderSendChannel.EMAIL`
-  - `EvidenceKind.EMAIL`
+### 2.3 The SMTP switch and the PO screen
 
-### 2.4 Category names and size
+- **Admin screen:** `settings/notifications/page.tsx:340-343` has an **"Email enabled"** switch. `:829` shows an Enabled/Disabled badge.
+- **API:** `api/notifications/config/route.ts:144, 221, 313` reads and writes `emailEnabled`.
+- **The switch blocks PO email:** `src/lib/notify/email.ts:260-267` refuses with "Email sending is switched off". `checkEmailReady()` (`:205`) therefore reports "not ready", and PO email is blocked even when SMTP is filled in.
+- **The PO page** (`purchase-orders/[id]/page.tsx`) already reads `/api/notifications/status` (`:88-96`). When email is not ready, it disables **Send to vendor**, but the reason appears only as:
+  - a hover **tooltip**, "Email not configured — Settings › Notifications" (`:258, :299`), which a phone never shows
+  - a small grey line at `:328-336`
 
-- `Category` (`schema.prisma:502-523`) has no size field. It has a tree: `parentId`, relation `CategoryTree`.
-- 20 of 32 categories **are** wheel sizes (`prisma/data/catalog.sql:25-56`): `12 … 29 SS, 700C, 700C MS/SS`. Parents 24/26/27.5/29/700C each have MS/SS children (`:59-68`). About 61% of products sit in them.
-- There is **no shared category label helper**. Each screen formats its own label:
-  - `src/components/category-tree-select.tsx:288-304`: indented name, full path `Parent › Child` while searching
-  - `stock/page.tsx:915`: `{c.name} ({c._count.products})`, the only bracket today
-  - `stock/[id]/page.tsx:43-58,356-369`: local flatten, parent as hint
-  - `stock-audit/brand-count/page.tsx:174-194`: its own flatten, which **lists each child twice** (the same bug plan 0909 Q10 fixed elsewhere)
-  - display-only chips: `stock/_components/stock-table.tsx:204-208`, `stock-card.tsx:225-228`, `assembly/_components/my-queue-tab.tsx:105,228`, `stock-audit/[id]/page.tsx:951,1116`, `inbound/[id]/page.tsx:787-789`, `complaints/page.tsx:468,666`, `purchase-orders/_components/reorder-tab.tsx:80,237-240`
-- `GET /api/categories` (`src/app/api/categories/route.ts:24-44`) already returns `parent` for every row, so a `Name (Parent)` label needs **no API change** on the pickers that use it.
-- Zoho sends no size attribute: `src/lib/integrations/inventory.ts:16-27` carries only `category_id`, `name` and `parent_category_id`.
-- `Product.size` (`schema.prisma:593`) is dead: no reads or writes in `src/`.
+### 2.4 Nothing stores a notification's text
+
+- `NotificationOutbox` (`schema.prisma:1740-1765`) keeps the event, channel, status, user, masked device and `refId`. It has **no title, no body, no link and no read state**. It is a delivery log, not an inbox.
+- `notify()` (`notify/index.ts:56`) receives `input.title`, `input.body` and `input.link`, and passes them only to `sendPush` (`:151-163`).
+- **For the unread count, follow the pattern of `src/components/approvals-badge.tsx:32-52`.** It reads once per navigation, with **no timer** (CLAUDE.md, "There are no scheduled jobs").
+- **There is no top header on desktop.** `app-sidebar.tsx:197` carries `ApprovalsNavLink`. The phone header (`src/components/header.tsx:33-45`) carries `ApprovalsBadge`.
+
+### 2.5 Push, sound and the icon count — what the platform allows
+
+- `public/sw.js:95-135` handles **every** push itself and always calls `showNotification`, with no `silent` flag. So a system notification with the **device's default sound** is shown whether the app is in front, in a background tab, or closed.
+  - `enable-push-button.tsx:15` explains why there is deliberately no `onMessage()`.
+- **Sound when closed:**
+  - **Android:** yes. Phones with aggressive battery savers need "No restrictions" for Chrome or the app.
+  - **iPhone:** yes, on iOS 16.4+ and only for a Home Screen app.
+  - **Desktop:** yes while Chrome is running, even with no window open.
+  - A **custom** sound is impossible when the app is closed. The spec's `sound` option is implemented by no browser.
+- **The app's own chime (Q11):** only a page that is open can play audio. The service worker `postMessage`s every open client, and the page plays a file. Browsers allow this only after the user has tapped or clicked the page once since it loaded.
+- **The icon count** uses the Badging API, `navigator.setAppBadge(n)`, which the service worker can call inside the push handler, even when the app is closed.
+  - **Yes:** installed PWA on Windows or macOS (Chrome or Edge); iOS 16.4+ Home Screen app.
+  - **No:** on **Android** the launcher shows its own dot or count from the tray, not ours. Firefox and a Safari tab don't support it.
+- **Nothing calls `setAppBadge` or `clearAppBadge` today** (grep of `public/` and `src/`).
 
 ---
 
 ## 3. Implementation plan
 
-Assumes the recommended defaults. Any different answer in §1 changes the part it names.
+### Part A — the bottom bar without More (R1, R2)
 
-### Part A — no bottom bar; the right drawer holds everything (R1, R2)
+**A1.** `src/components/bottom-nav.tsx`:
+- remove the `more` entry (`:28`) and the `MoreHorizontal` import (`:5`)
+- update the header comment (`:9-13`) to say "Home is always present; More was removed on 23 Sep 2026, and `/more` is reached from the ☰ drawer"
 
-**A1. Remove the bar**
-- Delete `src/components/bottom-nav.tsx` and `src/lib/use-bottom-nav.ts`.
-- In `(dashboard)/layout.tsx`:
-  - drop the imports (`:6,9`), the hook (`:23`), the `nav-hidden` class (`:42`) and the mount (`:59-62`)
-  - change `pb-nav` at `:52` to `pb-safe`
-  - update the comment at `:19-20`
-- In `globals.css`, set `--bottom-nav-height` to `0px` and remove `.nav-hidden`. Keep the variable so every `.above-nav` page works unchanged: it now sits 8px above the safe area.
+**A2.** `src/lib/nav-tabs.ts:7-8`: fix the comment to say a full bar is Home + `MAX_NAV_TABS`. The number stays at 4 (Q1).
 
-**A2. Fix the hard-coded offsets from §2.1.** Bring each one down to the safe area, e.g. `bottom-4` plus `env(safe-area-inset-bottom)`:
-- `pwa-install-banner.tsx:75`
-- `error-toast.tsx:17`
-- `awaiting-tab.tsx:231-233`
-- `services/counter/page.tsx:856`
-- `vendor-issues/[id]/page.tsx:764`
-- `vendor-issues/page.tsx:823`
+**A3.** `/more`, the drawer link, the pin editor on `/team/[id]`, `User.navTabs`, `hasNav` and the `.above-nav` offsets are all **unchanged**. The bar keeps its height, so no offset moves.
 
-**A3. Drawer contents** (`header-menu.tsx`), Q2 (b) and Q3:
-- Top: a user card with name and role.
-- Then Home, **Approvals** (Q3) and the module tree, all as today.
-- Footer:
-  - **My notifications**, which opens the existing `NotificationPreferences` in a sheet or links to `/more#notifications`
-  - **Sign out**, reusing the call in `app-sidebar.tsx:321-330`
-  - "More" (to `/more`) for the Zoho panel and the version line
-
-**A4. Pins go** (Q1 (a)):
-- Remove the "Bottom Navigation" section and `MAX_NAV_TABS` from `team/[id]/page.tsx`.
-- Remove `navTabs` from `api/users/[id]/route.ts`, `rbac.ts`, `api/my-permissions`, `stores/permissions.ts` and `use-permissions.ts`.
-- Delete `src/lib/nav-tabs.ts`.
-- **Column:** keep `User.navTabs` in this release (additive-first, CLAUDE.md rule 7) and mark it `// dropped next release`.
-- **Grep first:** `prisma/rbac-catalog.ts:111,346-355,450,487,545` mentions nav tabs. Fix the comments; the catalog data changes only if it actually seeds tab routes, and that needs checking before the build.
-
-### Part B — email is never a notification channel (R3, R4)
+### Part B — email is never a notification (R3, R4)
 
 **B1. User UI:** in `notification-preferences.tsx`:
-- remove the Email switch (`:167-173`), the skeleton row (`:122`), `"email"` from `ChannelField` (`:27`) and the payload field (`:70`)
+- remove the Email switch (`:160-173`), its skeleton row (`:122`), `"email"` from `ChannelField` (`:27`) and the payload field (`:70`)
 - one switch remains per event: **Push**
-- the header text says "Notifications arrive as push on this device"
 
-**B2. User API:** in `api/notifications/preferences/route.ts`:
-- zod drops `email`, and uses `.strip()` rather than strict, so an old cached client still saves
-- the GET no longer returns `email`
+**B2. User API:** `api/notifications/preferences/route.ts` drops `email` from zod (known keys stay strict, unknown keys are stripped, so a cached old client still saves) and from the GET.
 
-**B3. Admin UI and API:**
-- In EventsTable, remove the Email column (`:746,753,770-774`) and `email:false` (`:715-717`).
-- In `api/notifications/events/route.ts`, drop `email`/`emailEnabled` (`:25,45,88-89`).
-- Rename the Email tab (Q5 (a)) and change the subtitle at `page.tsx:114`. Update the card text at `settings/page.tsx:52` and the RBAC module description at `rbac-catalog.ts:788` to "Push notifications and the SMTP used to email purchase orders".
+**B3. Admin events:**
+- In EventsTable, remove the Email column, the "PO Only" badge and `email:false` (`:715-717, 746, 753, 770-774`).
+- In `api/notifications/events/route.ts`, drop `email` / `emailEnabled` (`:25, 45, 88-89`).
 
-**B4. Server:** in `src/lib/notify/index.ts`:
-- delete `emailOn` (`:95`), the EMAIL/SKIPPED outbox write (`:103-108`), `wantsEmail` (`:118-124`), the dead fan-out (`:179-191`) and the `sendEmail`/`maskEmail` import (`:34`, if now unused)
-- keep `absoluteUrl` (`:310-315`) only if push still uses it
+**B4. Server**, in `notify/index.ts`:
+- select only `pushEnabled` from the config (`:84-90`)
+- delete `emailOn` and the EMAIL/SKIPPED write (`:95-108`), `wantsEmail` (`:124`), the email fan-out (`:179-191`), `absoluteUrl` (`:310-315`) and the `sendEmail`/`maskEmail` import (`:34`)
+- update the file header (`:1-6`) to say "push"
 
 Also:
-- In `events.ts`, `defaults` becomes `{ push }`; fix the stale header `:12-16`.
-- In `types.ts`, `Channel = "PUSH"`; drop the `email` fields at `:264-293`.
-- `email.ts` stays for PO send (Q4). Delete the "My notifications" footer line (`:471`), since PO email never needed it.
+- `events.ts`: `defaults` becomes `{ push }`, and fix the stale header.
+- `types.ts`: `Channel = "PUSH"`, and drop the `email` fields.
+- `email.ts:471`: remove the "My notifications" footer line.
 
-**B5. Database:** one migration, `<ts>_remove_email_notification_channel`, written with `migrate dev` on
-**localhost only** (owner rule 9 Sep: Claude applies to local `bch` only; the owner deploys). It runs these steps in order:
+**B5. Database:** one migration, `<ts>_notification_inbox_remove_email`. It carries Part B, Part C's `emailEnabled` drop and Part D's new table (Q6–Q10).
+
+- **How it is written:** `npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --script`, **or** `migrate dev --create-only` against localhost only.
+  - The diff route needs a shadow database, given as `--shadow-database-url` pointing at a **local** Postgres. If none is available, Claude stops and asks rather than touching Supabase.
+  - The owner reads the SQL. **Claude then runs `npx prisma migrate status` and `npx prisma migrate deploy` against the Supabase test database** (Q10). Never `migrate dev`, `db push`, `reset` or `--accept-data-loss` there.
+- **Order of statements:**
 
 ```sql
-DELETE FROM "notification_outbox" WHERE "channel" = 'EMAIL';          -- Q6
-ALTER TABLE "notification_event_settings" DROP COLUMN "emailEnabled";
-ALTER TABLE "notification_preferences" DROP COLUMN "email";
--- enum PUSH-only: Postgres cannot drop an enum value, so Prisma recreates the type
-ALTER TABLE "Product" DROP COLUMN "size";                              -- Q10
+DELETE FROM "notification_outbox" WHERE "channel" = 'EMAIL';                  -- Q6
+ALTER TABLE "notification_event_settings" DROP COLUMN "emailEnabled";        -- R4
+ALTER TABLE "notification_preferences"    DROP COLUMN "email";               -- R4
+ALTER TABLE "notification_config"         DROP COLUMN "emailEnabled";        -- Q8
+-- NotificationChannel becomes PUSH-only: Postgres cannot drop an enum value, so Prisma
+-- renames the type, creates the new one, casts the column, and drops the old type.
+ALTER TABLE "Product" DROP COLUMN "size";                                     -- Q9
+CREATE TABLE "notification_inbox" (...);                                       -- Part D
 ```
 
-- **Rule 7 (additive first) is broken on purpose, and here is why.** The dropped columns are read by today's
-  code, so the old code fails against the new schema. There is no production deployment yet (memory: local and
-  the cloud test db only), so this is acceptable **only if** code and migration deploy together. The owner confirms that at Q4/Q6 time.
-  If that is not acceptable, split it: this release stops using the columns, and the next one drops them.
-- Read the generated SQL before committing (rule 3), especially the enum recreate.
-- `npm run db:snapshot` before the PR (rule 9).
+- **Rule 7 (additive first) is broken on purpose, by the owner's choice (Q7).** Today's code reads the dropped columns, so **the migration and the code must go live together**. If the migration runs first, the running app errors on the notification screens and in `notify()` until the new code is deployed.
+- **Rule 9:** `npm run db:snapshot` before the PR merges. Read the enum recreate SQL line by line (rule 3).
+- **Before writing any of this,** grep for every reader of each dropped column (`emailEnabled`, `.email` on preferences, `Product.size`) and list them in the PR.
 
-**B6. Docs:** rewrite `docs/notifications-guide.md` as push only, plus one section "SMTP is for PO email
-only". Add a note at the top of `docs/implementation/pending/notifications-and-settings-rbac-plan.md`
-that email as a notification channel is withdrawn (23 Sep 2026), so Phase 4 / Part C and Q14 are
-closed without being built.
+**B6. Docs:**
+- Rewrite `docs/notifications-guide.md` as push only, plus a section "SMTP is for PO email only".
+- Add a note to `docs/implementation/pending/notifications-and-settings-rbac-plan.md` that email as a notification channel was withdrawn on 23 Sep 2026.
 
-### Part C — category name with size in brackets (R5)
+### Part C — SMTP for PO email only, no switch (R6, R7)
 
-Q8 (a) and Q9 (a):
+**C1. Admin screen** (`settings/notifications/page.tsx`):
+- remove the "Email enabled" switch (`:340-343`) and `enabled` from the email form state (`:174, 187, 228`)
+- the status line (`:283`, `StatusLine` `:819-829`) shows only Connected / Not tested for email; push keeps its Enabled badge
+- rename the tab to **"Email (PO sending)"**, with the note: *"Used only to send purchase orders to vendors. Staff are never notified by email."*
+- the SMTP fields and **Test send** stay (Q4)
 
-**C1. One helper:** `categoryLabel(c)` in `src/lib/categories/tree.ts`.
-- A child whose parent exists returns `"SS (26)"`, which is `${name} (${parent.name})`.
-- A top-level category returns its name unchanged.
-- It is pure and has no parsing.
+**C2. API** (`api/notifications/config/route.ts`): drop `enabled` from the email zod object and from the read and write (`:144, 221, 313`).
 
-**C2. Use it everywhere a category is shown:**
-- `category-tree-select.tsx`: the selected value and the search results (the tree rows stay indented)
-- the `/stock` bulk assign `<option>` at `:915`, which becomes `SS (26) · 529`. The count moves out of the brackets so the brackets mean one thing only
-- `stock/[id]` edit and chip
-- the `stock-table`/`stock-card` chips
-- the `brand-count` picker, and fix its double-listing while there
-- assembly, stock-audit, inbound, complaints and reorder labels
+**C3. `email.ts` `loadSettings()`:** delete the `emailEnabled` check (`:260-267`). Email is then "ready" exactly when SMTP is complete. `checkEmailReady()` needs no other change.
 
-**C3. Server-built labels:** check the display-only screens in §2.4. Where the API returns only `category.name`, add `parent: { select: { name } }` to that route's `select`. List each route touched in the PR.
+**C4. PO page** (`purchase-orders/[id]/page.tsx`): when `emailReady === false`, show a **visible amber line under the buttons**, not only a tooltip:
+- the text is **"Email to vendors is not set up. Set up SMTP in Settings › Notifications › Email (PO sending) to send POs by email."**
+- a clerk without settings access gets the same line, ending "… ask an admin to set up SMTP"
+- **Mark sent** stays as the other way through
+- the tooltips at `:258, :299` use the same wording
 
-### Phases
+**C5.** Wording: `settings/page.tsx:52` and `rbac-catalog.ts:788` become "Push notifications, and the SMTP used to email purchase orders". This is description text only; the owner runs `npm run db:seed:rbac` after the deploy.
 
-| Phase | Parts | Depends on |
-|---|---|---|
-| 1 | A (nav) | Q1–Q3 |
-| 2 | B1–B4, B6 (email code) | Q4–Q5 |
-| 3 | B5 (migration) | Phase 2 merged in the same PR; Q6, Q10 |
-| 4 | C (category label) | Q7–Q9 |
+### Part D — the notifications inbox (R8, R9)
 
-The phases are independent of each other except 2 → 3. One agent per phase can build them in parallel.
+**D1. Schema:** a new model, in the same migration as B5:
+
+```prisma
+/// One row per notification per recipient: what the user sees on /notifications.
+/// Not the delivery log — that is NotificationOutbox. Trimmed to the newest 200 per user.
+model NotificationInbox {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  eventKey  String
+  title     String
+  body      String    @db.Text
+  link      String?
+  refId     String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@map("notification_inbox")
+}
+```
+
+- **Cascade on user delete is deliberate.** This is the user's own inbox, not an audit log. The outbox keeps the delivery history without a foreign key.
+- Run this model past the `schema-reviewer` agent before the migration is written.
+
+**D2. Write it in `notify()`**, right after recipients are resolved (the `users` query at `:113-116`):
+- Q18 (b): only when the push master switch is on **and** the event is switched on (`pushOn`, `:94`). The write is not affected by the user's own opt-out or by a missing device (Q14).
+- One `createMany` for every active recipient.
+- **Trim to 200 per user** in one statement:
+  ```sql
+  DELETE FROM notification_inbox WHERE id IN (
+    SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY "userId" ORDER BY "createdAt" DESC) rn
+                    FROM notification_inbox WHERE "userId" = ANY($1)) t WHERE rn > 200)
+  ```
+- Read each recipient's **unread count** with one `groupBy`, and add it to the push `data` as `unread` (a string, as FCM requires).
+- The write has its own try/catch that logs `log.error("inbox write failed", { eventKey, refId, users })` and carries on. `notify()` still never throws (rule 1 in its header).
+
+**D3. API.** Every route is authentication only (`requireAuth`). No module check, because it is the user's own data. Every query filters `userId: user.id`.
+
+| Route | Does |
+|---|---|
+| `GET /api/notifications/inbox?cursor=` | the user's rows, newest first, 30 at a time |
+| `GET /api/notifications/inbox?count=1` | `{ unread }`, for the bell (the same pattern as approvals) |
+| `POST /api/notifications/inbox/read` | `{ ids }` or `{ all: true }` → sets `readAt`, and returns the new `unread` |
+
+- Zod on each route, and `successResponse` / `errorResponse`.
+- Log at debug for reads and at info for mark-all.
+
+**D4. Screen: `/notifications`** (`src/app/(dashboard)/notifications/page.tsx`):
+- A list: bold title plus body for unread, normal weight for read, a relative time, tap to open its `link` (marking it read).
+- **"Mark all read"** at the top.
+- Loading skeleton, empty state ("No notifications yet"), and an error state with retry. Mobile-first, BCH OPS styling.
+- Uses `apiFetch` / `apiTry` only, never a raw `.json()`.
+
+**D5. The bell (R9):**
+- **Phone:** a `NotificationsBell` in `header.tsx`, next to `ApprovalsBadge` (`:35`). It is a bell icon with a red count that is hidden at 0, and it links to `/notifications`.
+- **Laptop, lg and up (Q19):** the phone header is `lg:hidden` (`(dashboard)/layout.tsx:48-50`), so a new **slim bar** shows only at `lg` and up, above `<main>` (`:52`).
+  - It is right-aligned, about 48px tall, with a bottom border.
+  - It holds only the same `NotificationsBell`. The logo, the name and the menu stay in the sidebar, so nothing appears twice.
+  - **`app-sidebar.tsx` is not changed.**
+- **Not in `src/app/desktop/`.** That folder is not touched.
+- The count is read **once per navigation**, as `approvals-badge.tsx` does, and also when the service worker says a push arrived (D6). **No timer, no polling.**
+
+**D6. The icon count and the service worker** (`public/sw.js`):
+- In the push handler, after `showNotification`: `if (self.navigator.setAppBadge && data.unread) self.navigator.setAppBadge(Number(data.unread))`, guarded and in its own `.catch`.
+- `postMessage({ type: "push-received" })` to every open client (`clients.matchAll`). The bell re-reads its count on this message.
+- **On the page:** whenever the bell learns a count, it calls `navigator.setAppBadge(n)`, or `clearAppBadge()` at 0, if supported. So reading notifications in the app clears the icon.
+- Bump the service worker's version or cache name, so installed PWAs pick up the new worker.
+
+**D7. The chime (Q11 (b)):**
+- Add `public/sounds/notify.mp3`, short and small.
+- On `push-received`, the page plays it with `new Audio(...)`, only when `document.visibilityState === "visible"` **and** the window has focus (`document.hasFocus()`). A rejected `play()` (autoplay blocked) is logged at debug and ignored.
 
 ### RBAC
 
-- No new module and no new action.
-- Only the `settings_notifications` description text changes, so the owner runs `npm run db:seed:rbac` after deploy.
-- No role-name checks are introduced.
+- No new module, no new action, no role-name checks.
+- `/notifications` and `/api/notifications/inbox*` are **authentication only**, like `/more`.
+- Only description text changes (C5), so the owner runs `npm run db:seed:rbac` after the deploy.
 
 ### Logging
 
-- `notify/index.ts` keeps its existing `createLogger` scope.
-- Remove the "email skipped" log line along with the code.
-- Every new or changed `catch` logs before it returns (CLAUDE.md).
-- The drawer's sign-out uses the existing handler, which already logs.
+- `notify` keeps its `createLogger("notify")` scope, and the "email skipped" line goes with the code.
+- The new inbox routes use `createLogger("notifications:inbox")`.
+- The bell uses `createLogger("notifications:bell")`, with a failed count logged at debug and shown as nothing.
+- The service worker keeps its existing `console.error` convention in `sw.js`, which the logger cannot reach.
+- Every new `catch` logs before it swallows.
 
 ### Board of agents
 
 | Agent | Check |
 |---|---|
-| **Frontend** | drawer focus, scroll lock and Esc are kept; no fixed element overlaps the safe area; loading states on the preferences sheet |
-| **Backend** | zod on preferences and events stays strict for known keys and strips old ones; `requireAuth` stays; `/api/my-permissions` stays authentication-only |
-| **Database** | enum recreate SQL is read; snapshot before merge; `navTabs` kept one release |
-| **Integration** | the PO email path (`send/route.ts`, `status/route.ts`, `email.ts`) is untouched and verified by a real send |
+| **Database** | the inbox model, indexes and cascade; the enum recreate SQL; the trim query; snapshot before merge; all drops in one release are the owner's call (Q7) |
+| **Backend** | every inbox query scoped to `user.id`; `notify()` still never throws; zod strips old `email` keys |
+| **Frontend** | the bell and list follow approvals-badge (no polling); the laptop bar does not shift the sidebar or `.above-nav` pages; loading, empty and error states; the PO amber line is visible on a phone |
+| **Integration** | `sw.js`: badge and postMessage never block `showNotification`; the PO email path is verified by a real send after the switch is removed |
 
 ---
 
 ## 4. Verification
 
-1. `npx tsc --noEmit` passes, then `npm run build` (the owner runs it; it takes 21–45 min).
-2. `npx prisma migrate status` on localhost is up to date. Then run these on local `bch`:
-
-   ```sql
-   SELECT count(*) FROM notification_outbox WHERE channel::text = 'EMAIL';
-   ```
-
-   This should return 0. `\d notification_preferences` should show no `email` column.
-3. **Phone width (375px) and installed PWA:**
-   - No bottom bar on any page.
-   - The last row of `/stock`, `/transfers/new` and `/vendor-issues` is fully visible.
-   - The toast, the PWA banner, the assembly "assign" bar and the services counter bar sit at the bottom edge with no 64px gap.
-4. **The drawer (☰, right side)** shows the user card, Home, Approvals, every module the user can view, My notifications, Sign out and More. Sign out works.
-5. **As a normal user**, My notifications shows **only Push** per event, and saving works.
-6. **As an admin:**
-   - The Events table has no Email column.
-   - The SMTP tab is labelled for PO sending, and its test email still arrives.
-   - Sending a PO to a vendor by email still works and a `PurchaseOrderSend` row is written.
-7. Trigger any notification (e.g. a Zoho pull). A PUSH outbox row is written and **no** EMAIL row.
-8. Category labels:
-   - `/stock` bulk assign shows `SS (26) · 529`.
-   - The filter shows `SS (26)` when selected.
-   - A `SPARES` product shows `SPARES`.
-   - brand-count lists each sub-category once.
+1. `npx tsc --noEmit` passes. Then `npm run build`, which the owner runs.
+2. `npx prisma migrate status` on the Supabase test database is up to date after `migrate deploy`. Then:
+   - `SELECT count(*) FROM notification_outbox WHERE channel::text='EMAIL'` returns 0
+   - `notification_preferences.email`, `notification_event_settings.emailEnabled`, `notification_config.emailEnabled` and `Product.size` are gone
+   - `notification_inbox` exists
+3. **Bottom bar (375px and installed PWA):**
+   - a user with pins sees Home + their pins and **no More**
+   - a user with no pins sees no bar
+   - ☰ → "More, settings and sign out" still opens `/more`, and Sign out works
+4. **Normal user, My notifications:** only Push per event, and saving works.
+5. **Admin:**
+   - the Events table has no Email column
+   - the tab reads "Email (PO sending)" with no Enabled switch
+   - Test send arrives
+6. **PO:**
+   - with SMTP complete, **Send to vendor** sends and writes a `PurchaseOrderSend` row
+   - with the SMTP host cleared on the test database, the button is disabled and the **amber line** is visible on a phone
+7. **Inbox:**
+   - trigger a notification, e.g. a Zoho pull
+   - an inbox row exists for each recipient, **including** one who turned push off for the event
+   - the bell shows 1, and opening it and tapping the item marks it read, so the bell hides
+   - "Mark all read" works
+   - write 205 rows for one user, and only the newest 200 are left
+   - one user cannot see another's rows (`GET` as user B returns only B's)
+8. **Icon count and sound:**
+   - Installed PWA on Windows or Mac Chrome: a push sets the icon number, and reading clears it.
+   - Android: the notification arrives **with the device sound** while the app is closed.
+   - iPhone Home Screen app, if one is available: the same.
+   - App open in a background tab: the system notification shows with sound, and on returning the bell count is already updated.
+   - The chime (Q11 b) plays when the app is the tab in front, and **not** when it is in a background tab; there, only the device sound plays.
+   - Laptop width: the slim header bar shows the bell with the count, and the sidebar has **no** Notifications row.
+   - Trigger an event that an admin switched off: nothing is listed and nothing is pushed (Q18).
+9. A push with no inbox (push master off) still writes the outbox SKIPPED row as today.
 
 ---
 
 ## 5. Out of scope, deliberately
 
-- **The SMTP config, `email.ts` and PO emailing.** Kept for vendor POs (Q4). Emailing a vendor is not a user notification.
-- **Dropping `User.navTabs`.** That happens in the release after this one.
-- **A size column or size parsed from product names.** Ruled out by the owner on 1, 9 and 11 Sep.
-- **Moving products that are in the wrong size category**, e.g. "SPRINT SLINGSHOT+26T" filed under `24 MS`. That is data, not code; raise it separately.
-- **The desktop sidebar.** It is unchanged.
-- **The `/more` page.** It stays, reached from the drawer.
+- **Category "(Size)" labels (R5).** Dropped by the owner.
+- **A custom notification sound while the app is closed.** No browser supports it (§2.5).
+- **A number on the Android app icon.** Android's launcher draws its own dot or count from the tray.
+- **Changing the pin limit, the pin editor, `User.navTabs` or `/more`.** R1 and R2 keep them.
+- **An admin view of everyone's notifications.** The owner chose "each user, their own" (Q12). `NotificationOutbox` stays the delivery log.
+- **Logout redirecting to localhost in production.** Explained in chat: next-auth builds the post-signout URL from `NEXTAUTH_URL`, and the production `.env` has `http://localhost:3000`, set twice (lines 5 and 31). The fix is configuration: set one `NEXTAUTH_URL=https://<public domain>` in the VPS `.env` and in the `ENV_FILE` secret, then restart pm2. No code. The same value also makes push links absolute (`push.ts:457`).
+- **The desktop app under `src/app/desktop/`.** Not touched (Q19, the owner's words).
+- **A Notifications row in the sidebar.** The owner chose the header (Q19).

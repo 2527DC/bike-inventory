@@ -486,6 +486,7 @@ model User {
   // The delivery log (NotificationOutbox) deliberately has NO relation here, so it survives.
   pushDevices             PushDevice[]
   notificationPreferences NotificationPreference[]
+  notificationInbox       NotificationInbox[]
   poExtractions           PoExtraction[]           @relation("PoExtractionCreatedBy")
 
   // Priority build & approvals (plan 1709-priority-build-and-stock-flow)
@@ -590,7 +591,6 @@ model Product {
   reorderQty    Int @default(0)
 
   // Bicycle specific
-  size      String? // dropped next release — plan 0909-stock-screens-size-category-and-sidebar §5
   color     String?
   imageUrls String[] // Array of image URLs
   tags      String[] // Condition tags, custom tags
@@ -1611,7 +1611,8 @@ model NotificationConfig {
   smtpPassword       String? // Gmail App Password. NEVER returned to the browser, never logged.
   fromName           String?
   fromEmail          String?
-  emailEnabled       Boolean   @default(false) // the master switch an admin flips
+  // No on/off switch (dropped 23 Sep 2026, plan 2309): SMTP exists only to email purchase
+  // orders to vendors, and it is ready exactly when the fields above are complete.
   // Set only by a real 250 from the SMTP server on a test send. Saving the form never sets it.
   emailConnected     Boolean   @default(false)
   emailLastTestedAt  DateTime?
@@ -1678,18 +1679,15 @@ model PushDevice {
   @@map("push_devices")
 }
 
-// Global, admin-controlled: is this event allowed to send on each channel at all. One row per
-// event key; an ABSENT row means "use the code default" for that event, which is why the
-// column defaults here are not the whole story — see src/lib/notify/events.ts.
-//
-// Email defaults off and push defaults on because email is the scarce channel: a free Gmail
-// account sends ~500/day, and one event to 40 staff is 8% of that. Push is free.
+// Global, admin-controlled: is this event allowed to send at all. One row per event key; an
+// ABSENT row means "use the code default" for that event, which is why the column default here
+// is not the whole story — see src/lib/notify/events.ts. Push is the only channel; email was
+// withdrawn as a notification channel on 23 Sep 2026 (plan 2309).
 model NotificationEventSetting {
-  eventKey     String   @id
-  pushEnabled  Boolean  @default(true)
-  emailEnabled Boolean  @default(false)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  eventKey    String   @id
+  pushEnabled Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@map("notification_event_settings")
 }
@@ -1706,7 +1704,6 @@ model NotificationPreference {
   user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   eventKey String
   push     Boolean @default(true)
-  email    Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1715,9 +1712,9 @@ model NotificationPreference {
   @@map("notification_preferences")
 }
 
+// PUSH only. EMAIL was removed on 23 Sep 2026 (plan 2309): no user is notified by email.
 enum NotificationChannel {
   PUSH
-  EMAIL
 }
 
 enum NotificationStatus {
@@ -1726,9 +1723,9 @@ enum NotificationStatus {
   SKIPPED
 }
 
-// The delivery log — one row per channel per recipient per event. Unlike WhatsApp, which is
-// fire-and-forget and only records intent, FCM and SMTP both return a real outcome, so this
-// records what actually happened.
+// The delivery log — one row per recipient per event. Unlike WhatsApp, which is fire-and-forget
+// and only records intent, FCM returns a real outcome, so this records what actually happened.
+// It is NOT what a user reads — that is NotificationInbox below.
 //
 // NOT to be confused with `NotificationLog` (table notification_logs) further down, which is
 // the SERVICE module's record of WhatsApp messages a human chose to send. Different table,
@@ -1762,6 +1759,38 @@ model NotificationOutbox {
   @@index([eventKey, createdAt])
   @@index([userId, createdAt])
   @@map("notification_outbox")
+}
+
+// A user's own notifications, read on /notifications and counted by the header bell and the
+// installed app's icon badge (plan 2309, Part D). One row per notification per recipient,
+// written by notify() for every active recipient of an event that is switched on — including
+// one who muted it for push or has no device (Q14).
+//
+// Not the delivery log: that is NotificationOutbox, which keeps no text. Cascades with the
+// user on purpose — this is their inbox, not an audit trail.
+//
+// Kept to the newest 200 per user: notify() trims in the same step as it writes, because there
+// is no cron to prune it (CLAUDE.md, "There are no scheduled jobs").
+model NotificationInbox {
+  id       String    @id @default(cuid())
+  userId   String
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  eventKey String
+  title    String
+  body     String    @db.Text
+  // Relative, as push carries it ("/transfers/abc"). Null when the event links nowhere.
+  link     String?
+  refId    String?
+  // Null = unread. Set by opening the item or by "Mark all read".
+  readAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  // The list (newest first) and the trim both walk this one.
+  @@index([userId, createdAt])
+  // The unread count: WHERE userId = ? AND readAt IS NULL.
+  @@index([userId, readAt])
+  @@map("notification_inbox")
 }
 
 model SyncLog {

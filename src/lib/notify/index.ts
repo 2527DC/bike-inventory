@@ -1,9 +1,12 @@
 // ─── notify() — the one entry point ───────────────────────────────────────────
 //
 // Every event in the app raises a notification through this function and nothing else. It
-// resolves the admin's global per-event switch, subtracts each recipient's own opt-out, fans
-// out to push and email, and writes one NotificationOutbox row per channel per recipient so
-// "why didn't I get that?" has an answer in the database.
+// resolves the admin's global per-event switch, writes each recipient's /notifications inbox
+// row, subtracts each recipient's own opt-out, fans out to push, and writes NotificationOutbox
+// rows so "why didn't I get that?" has an answer in the database.
+//
+// Push is the only delivery channel. Email was withdrawn as a notification channel on 23 Sep
+// 2026 (plan 2309); SMTP remains only for emailing purchase orders to vendors.
 //
 // Plan: docs/implementation/pending/notifications-and-settings-rbac-plan.md, Part F.
 //
@@ -14,8 +17,8 @@
 //    failure is logged and recorded as FAILED or SKIPPED, and the caller gets a count.
 //
 // 2. It is called AFTER the caller's prisma.$transaction has COMMITTED, never inside it
-//    (§F.0). Prisma 6 gives an interactive transaction five seconds; this function does SMTP
-//    and FCM network I/O. Inside the transaction it would time the write out and roll it back —
+//    (§F.0). Prisma 6 gives an interactive transaction five seconds; this function does FCM
+//    network I/O. Inside the transaction it would time the write out and roll it back —
 //    and a push already delivered cannot be recalled by a rollback. Callers collect what they
 //    need inside the transaction and call this afterwards, ideally inside next/server's
 //    `after()` so the HTTP response is not delayed either.
@@ -25,26 +28,26 @@ import { createLogger } from "@/lib/logger";
 import { NOTIFICATION_EVENTS, type EventKey } from "./events";
 import {
   NotConfiguredError,
-  type Channel,
+  type OutboxChannel,
   type NotifyInput,
   type NotifyOutcome,
   type OutboxStatus,
   type SendResult,
 } from "./types";
-import { sendEmail, maskEmail } from "./email";
 import { sendPush, tokenTail } from "./push";
+import { writeInbox } from "./inbox";
 
 export type { NotifyInput, NotifyOutcome, PushAction } from "./types";
 export { NOTIFICATION_EVENTS, EVENT_KEYS, type EventKey } from "./events";
 
 const log = createLogger("notify");
 
-/** How many sends run at once per channel. Enough to finish 40 staff in a few seconds; not enough to trip FCM or Gmail rate limits. */
+/** How many sends run at once. Enough to finish 40 staff in a few seconds; not enough to trip FCM rate limits. */
 const SEND_CONCURRENCY = 5;
 
 type OutboxRow = {
   eventKey: string;
-  channel: Channel;
+  channel: OutboxChannel;
   status: OutboxStatus;
   userId: string | null;
   target: string | null;
@@ -72,18 +75,16 @@ export async function notify(eventKey: EventKey, input: NotifyInput): Promise<No
       return outcome;
     }
 
-    // ── 0. The MASTER switches ────────────────────────────────────────────────
-    // The system ships installed but OFF (owner, 2 Sep 2026): every event is wired, and both
-    // channels stay switched off in Settings → Notifications until someone deliberately turns
-    // one on. While a channel is off there is no point resolving recipients, preferences or
-    // devices for it — one channel-level SKIPPED row says why, and we move on. This is also
-    // what keeps the outbox quiet in the months before push or email is actually configured.
+    // ── 0. The MASTER switch ──────────────────────────────────────────────────
+    // The system ships installed but OFF (owner, 2 Sep 2026): every event is wired, and push
+    // stays switched off in Settings → Notifications until someone deliberately turns it on.
+    // While it is off there is no point resolving recipients, preferences or devices — one
+    // channel-level SKIPPED row says why, and we move on.
     const config = await prisma.notificationConfig.findUnique({
       where: { id: "singleton" },
-      select: { pushEnabled: true, emailEnabled: true },
+      select: { pushEnabled: true },
     });
     const pushMaster = config?.pushEnabled ?? false;
-    const emailMaster = config?.emailEnabled ?? false;
 
     // ── 1. The admin's global switch for this event ───────────────────────────
     // An absent row means "use the code default" — the column defaults on the table are not
@@ -91,49 +92,49 @@ export async function notify(eventKey: EventKey, input: NotifyInput): Promise<No
     const setting = await prisma.notificationEventSetting.findUnique({ where: { eventKey } });
     const defaults = NOTIFICATION_EVENTS[eventKey].defaults;
     const pushOn = pushMaster && (setting ? setting.pushEnabled : defaults.push);
-    // Email is reserved exclusively for Purchase Orders to vendors; internal events use Push only.
-    const emailOn = false;
 
+    // Switched off — by the master switch or for this event — reaches nobody: no push AND no
+    // inbox row (owner, 23 Sep 2026, plan 2309 Q18). "Off" is the admin saying so.
     if (!pushOn) {
       record({
         channel: "PUSH", status: "SKIPPED", userId: null, target: null,
         error: pushMaster ? "event disabled for push" : "push is switched off in Settings → Notifications",
       });
     }
-    if (!emailOn) {
-      record({
-        channel: "EMAIL", status: "SKIPPED", userId: null, target: null,
-        error: "email is reserved exclusively for Purchase Orders to vendors",
-      });
-    }
 
-    if (pushOn || emailOn) {
+    if (pushOn) {
       // ── 2. Recipients and their own opt-outs ─────────────────────────────────
       // Inactive users are dropped here as a second line of defence — usersWithPermission
       // already filters them, but a caller may pass ids from elsewhere (a job's mechanic).
       const users = await prisma.user.findMany({
         where: { id: { in: recipientIds }, isActive: true },
-        select: { id: true, name: true, email: true },
+        select: { id: true },
       });
       const prefs = await prisma.notificationPreference.findMany({
         where: { eventKey, userId: { in: users.map((u) => u.id) } },
-        select: { userId: true, push: true, email: true },
+        select: { userId: true, push: true },
       });
       const prefByUser = new Map(prefs.map((p) => [p.userId, p]));
       const wantsPush = (id: string) => prefByUser.get(id)?.push ?? true;
-      const wantsEmail = (id: string) => prefByUser.get(id)?.email ?? true;
 
       log.debug("resolved", {
         eventKey,
         refId,
         asked: recipientIds.length,
         active: users.length,
-        pushOn,
-        emailOn,
       });
 
-      // ── 3. Push ──────────────────────────────────────────────────────────────
-      if (pushOn) {
+      // ── 3. The inbox ─────────────────────────────────────────────────────────
+      // EVERY active recipient gets a row — including one who muted this event for push or has
+      // no registered device (plan 2309, Q14): the inbox is where nothing is missed. Never
+      // throws; an empty map means the write failed and pushes simply carry no unread count.
+      const unreadByUser = await writeInbox(
+        users.map((u) => u.id),
+        { eventKey, title: input.title, body: input.body, link: input.link ?? null, refId }
+      );
+
+      // ── 4. Push ──────────────────────────────────────────────────────────────
+      {
         const pushUsers = users.filter((u) => wantsPush(u.id));
         for (const u of users) {
           if (!wantsPush(u.id)) record({ channel: "PUSH", status: "SKIPPED", userId: u.id, target: null, error: "opted out" });
@@ -158,7 +159,13 @@ export async function notify(eventKey: EventKey, input: NotifyInput): Promise<No
               title: input.title,
               body: input.body,
               link: input.link,
-              data: { ...(input.data ?? {}), ...(refId ? { refId } : {}), eventKey },
+              // `unread` is this user's inbox count, for the service worker's app-icon badge.
+              data: {
+                ...(input.data ?? {}),
+                ...(refId ? { refId } : {}),
+                eventKey,
+                ...(unreadByUser.has(d.userId) ? { unread: String(unreadByUser.get(d.userId)) } : {}),
+              },
               // Buttons, when the caller asked for them (plan 1709 §3.8). Every existing caller
               // omits this and gets byte-for-byte the payload it got before.
               actions: input.actions,
@@ -174,20 +181,6 @@ export async function notify(eventKey: EventKey, input: NotifyInput): Promise<No
           await prisma.pushDevice.deleteMany({ where: { id: { in: deadDeviceIds } } });
           log.warn("dead push tokens removed", { eventKey, count: deadDeviceIds.length });
         }
-      }
-
-      // ── 4. Email ─────────────────────────────────────────────────────────────
-      if (emailOn) {
-        const emailUsers = users.filter((u) => wantsEmail(u.id));
-        for (const u of users) {
-          if (!wantsEmail(u.id)) record({ channel: "EMAIL", status: "SKIPPED", userId: u.id, target: null, error: "opted out" });
-        }
-
-        const text = input.link ? `${input.body}\n\n${absoluteUrl(input.link)}` : input.body;
-        await fanOut("EMAIL", emailUsers, async (u) => {
-          const result = await sendEmail({ email: u.email, name: u.name }, { subject: input.title, text });
-          return { userId: u.id, target: maskEmail(u.email), result };
-        });
       }
     }
   } catch (error) {
@@ -220,7 +213,7 @@ export async function notify(eventKey: EventKey, input: NotifyInput): Promise<No
    * the channel is configured do the rest go out concurrently.
    */
   async function fanOut<T>(
-    channel: Channel,
+    channel: OutboxChannel,
     targets: T[],
     send: (t: T) => Promise<{ userId: string; target: string; result: SendResult }>
   ): Promise<void> {
@@ -272,8 +265,8 @@ export async function notify(eventKey: EventKey, input: NotifyInput): Promise<No
       await Promise.all(rest.slice(i, i + SEND_CONCURRENCY).map(handle));
 
       // Flush what we have. The outbox used to be written in ONE createMany after every send
-      // finished, so an invocation killed mid-fan-out — 40 staff × a fresh SMTP handshake each
-      // is tens of seconds — lost every row including the SENT ones. Mail had gone out and the
+      // finished, so an invocation killed mid-fan-out — 40 staff × an FCM round-trip each
+      // is tens of seconds — lost every row including the SENT ones. Pushes had gone out and the
       // table said nothing happened, which is the exact question the table exists to answer.
       await flushOutbox();
 
@@ -305,11 +298,4 @@ export async function notify(eventKey: EventKey, input: NotifyInput): Promise<No
       });
     }
   }
-}
-
-/** A link in an email has to be absolute; push carries relative links for the service worker. */
-function absoluteUrl(link: string): string {
-  if (/^https?:\/\//i.test(link)) return link;
-  const base = (process.env.NEXTAUTH_URL || "").replace(/\/$/, "");
-  return base ? `${base}${link.startsWith("/") ? "" : "/"}${link}` : link;
 }
