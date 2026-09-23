@@ -88,7 +88,7 @@ name: Deploy to VPS
 #   VPS_PASSWORD          required   that user's password (sshpass reads it from $SSHPASS)
 #   ENV_FILE              required   the entire .env, pasted in — see the write step
 #   NEXT_PUBLIC_LOG_LEVEL optional   build-time log threshold, defaults to 2 (warn)
-#   NEXTAUTH_URL          optional   defaults to http://localhost:3000 — next-auth/react parses it
+#   NEXTAUTH_URL          optional   defaults to http://localhost:3001 — next-auth/react parses it
 #                                    with new URL() at module load, and an UNSET secret renders
 #                                    as '' which throws; the real value comes from ENV_FILE
 #
@@ -428,7 +428,7 @@ jobs:
         env:
           NEXT_PUBLIC_LOG_LEVEL: ${{ secrets.NEXT_PUBLIC_LOG_LEVEL || '2' }}
           NEXTAUTH_SECRET: build-time-placeholder-not-used-at-runtime
-          NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL || 'http://localhost:3000' }}
+          NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL || 'http://localhost:3001' }}
 
       - name: Check the build produced something
         run: |
