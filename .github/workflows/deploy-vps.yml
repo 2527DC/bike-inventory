@@ -270,7 +270,7 @@ jobs:
           set -euo pipefail
 
           sshpass -e rsync -az --delete \
-            --exclude='node_modules' \
+            --exclude='/node_modules' \
             -e "ssh -p $SSH_PORT" \
             prisma package.json package-lock.json \
             "$VPS_USER@$VPS_HOST:$DEPLOY_PATH/"
@@ -490,6 +490,17 @@ jobs:
       # root: rsync only prunes directories it is actually mirroring. node_modules, .env,
       # .deploy-sha and the lock hash are excluded anyway, because losing any of them
       # mid-deploy breaks the restart that follows.
+      #
+      # The excludes are ANCHORED with a leading slash, and that slash is load-bearing. An
+      # unanchored rsync pattern matches at every depth, and Next 16 (Turbopack) writes the
+      # externalised Prisma client as a shim at `.next/node_modules/@prisma/client-<hash>`
+      # that the server chunks require by that hashed name. `--exclude='node_modules'`
+      # silently dropped that folder from the shipment, and every page that touched Prisma
+      # answered "Internal Server Error" with
+      #   Cannot find module '@prisma/client-2c3a283f134fdcb6'
+      # in the pm2 log. The shim only requires `.prisma/client/...` by bare name, which
+      # resolves to the VPS's own node_modules/.prisma that `npx prisma generate` writes in
+      # the next step — so shipping it is safe, and omitting it is fatal.
       - name: Copy the build to the VPS
         env:
           SSHPASS: ${{ secrets.VPS_PASSWORD }}
@@ -500,10 +511,10 @@ jobs:
 
           sshpass -e rsync -az --delete \
             --exclude='.next/cache' \
-            --exclude='node_modules' \
-            --exclude='.env' \
-            --exclude='.deploy-lock-hash' \
-            --exclude='.deploy-sha' \
+            --exclude='/node_modules' \
+            --exclude='/.env' \
+            --exclude='/.deploy-lock-hash' \
+            --exclude='/.deploy-sha' \
             -e "ssh -p $SSH_PORT" \
             .next public package.json package-lock.json next.config.ts tsconfig.json prisma \
             "$VPS_USER@$VPS_HOST:$DEPLOY_PATH/"
