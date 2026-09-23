@@ -87,7 +87,6 @@ name: Deploy to VPS
 #   VPS_USER              required   ssh user that owns DEPLOY_PATH
 #   VPS_PASSWORD          required   that user's password (sshpass reads it from $SSHPASS)
 #   ENV_FILE              required   the entire .env, pasted in — see the write step
-#   VPS_KNOWN_HOSTS       optional   pinned host key; see "Trust the VPS host key"
 #   NEXT_PUBLIC_LOG_LEVEL optional   build-time log threshold, defaults to 2 (warn)
 #   NEXTAUTH_URL          optional   only if a build-time read of it is ever added
 #
@@ -101,8 +100,9 @@ name: Deploy to VPS
 #   * The password reaches sshpass through the SSHPASS environment variable — never on a
 #     command line, where `ps` on the server would show it.
 #   * The server needs `PasswordAuthentication yes` in /etc/ssh/sshd_config.
-# Set VPS_KNOWN_HOSTS to pin the host key. Without it this falls back to ssh-keyscan, which
-# trusts whatever answers on the first connection of every run and so authenticates nothing.
+#   * The host key is NOT pinned, by the owner's choice: each run accepts whatever key the
+#     server presents (ssh-keyscan, trust-on-first-use). Any runner can deploy with only
+#     the four required secrets and nothing else to set up.
 
 on:
   workflow_dispatch:
@@ -156,22 +156,16 @@ jobs:
       - name: Install sshpass on the runner
         run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
 
+      # Trust-on-first-use: whatever key the server presents is accepted for this run. Not
+      # pinned, by the owner's choice — nothing beyond the four required secrets is needed
+      # for any runner to deploy.
       - name: Trust the VPS host key
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-
-          if [ -n "${VPS_KNOWN_HOSTS:-}" ]; then
-            printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
-            echo "host key: pinned from VPS_KNOWN_HOSTS"
-          else
-            ssh-keyscan -p "$SSH_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-            echo "::warning::VPS_KNOWN_HOSTS is not set — the host key was accepted unverified."
-          fi
-
+          ssh-keyscan -p "$SSH_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           chmod 600 ~/.ssh/known_hosts
 
       # GATE 1 — git. Read the commit the last successful deploy recorded, then diff only
@@ -451,18 +445,10 @@ jobs:
       - name: Trust the VPS host key
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-
-          if [ -n "${VPS_KNOWN_HOSTS:-}" ]; then
-            printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          else
-            ssh-keyscan -p "$SSH_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-            echo "::warning::VPS_KNOWN_HOSTS is not set — the host key was accepted unverified."
-          fi
-
+          ssh-keyscan -p "$SSH_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           chmod 600 ~/.ssh/known_hosts
 
       # .env is written here as well as in the migrate job. The migrate job skips it entirely
