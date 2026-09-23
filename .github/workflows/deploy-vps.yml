@@ -1,0 +1,638 @@
+name: Deploy to VPS
+
+# ─── MANUAL ONLY ─────────────────────────────────────────────────────────────────────────
+#
+# There is no `push:` trigger on purpose. This runs when a person clicks it:
+#   Actions ▸ "Deploy to VPS" ▸ Run workflow ▸ pick the branch ▸ Run.
+# The branch chosen in that dropdown is what gets built and shipped.
+#
+# Vercel is untouched by this file. Vercel stays the testing/staging deploy with its own
+# vercel.json and scripts/vercel-build.mjs; this is production. A push triggers Vercel and
+# never triggers this, so the two cannot race.
+#
+# ─── TWO JOBS, AND THE SECOND WAITS FOR THE FIRST ────────────────────────────────────────
+#
+#   ┌───────────────────────────┐   needs    ┌──────────────────────────┐
+#   │  migrate                  │ ─────────▶ │  deploy                  │
+#   │  prisma/migrations only   │            │  build + ship + restart  │
+#   └───────────────────────────┘            └──────────────────────────┘
+#
+# `needs: migrate` is the gate. If the migration job fails, GitHub never starts the deploy
+# job — the VPS keeps serving the previous build, untouched, against the database it was
+# already working with. Nothing half-applied reaches production.
+#
+# The migrate job does nothing at all unless prisma/migrations/ actually changed since the
+# last successful deploy. See "HOW A CHANGE IS DETECTED" below.
+#
+# ─── WHAT GETS SHIPPED: THE BUILD, NOT THE SOURCE ────────────────────────────────────────
+#
+# The runner compiles, and only the compiled output crosses the wire. `src/` never reaches
+# the server — there is no git clone and no `next build` on the VPS.
+#
+#   migrate job ships:  prisma/  package.json  package-lock.json  + writes .env
+#   deploy  job ships:  .next (minus cache/)  public  next.config.ts  tsconfig.json
+#
+# The VPS is assumed provisioned already — Ubuntu, nginx, Node and pm2 are yours and this
+# workflow does not touch any of them. The only `apt-get` runs on the GITHUB RUNNER: it is
+# sshpass, which the runner image does not ship and password auth cannot work without.
+#
+# ─── HOW A CHANGE IS DETECTED ────────────────────────────────────────────────────────────
+#
+# Two gates, both must open before a single migration is applied:
+#
+#   1. GIT — the deploy records the commit it shipped in `.deploy-sha` on the server. The
+#      migrate job diffs that commit against this one, limited to prisma/migrations/. No
+#      files changed there, nothing runs. This is the "only when the folder changed" rule.
+#      First ever run (no .deploy-sha) counts as changed.
+#
+#   2. THE DATABASE — `prisma migrate status` then asks the target database what it actually
+#      has. This second gate exists because the owner applies migrations by hand
+#      (CLAUDE.md rule 4, and the standing rule that Claude only migrates local). A folder
+#      that git calls new but the database already holds is reported and skipped, not
+#      re-applied.
+#
+# Git alone would be wrong here: it knows what was committed, not what was applied.
+#
+# ─── ON MIGRATIONS RUNNING AT ALL ────────────────────────────────────────────────────────
+#
+# This reverses the 7 Sep 2026 decision recorded in scripts/vercel-build.mjs, where
+# `prisma migrate deploy` was pulled out of the Vercel build. That reversal is deliberate
+# and applies to the VPS only — Vercel still applies nothing.
+#
+# What makes migrate-before-build safe is CLAUDE.md rule 7, "Additive first": a migration
+# must leave the OLD code working, because it lands minutes before the new code does. This
+# pipeline widens those minutes to "until the deploy job finishes", and if the build then
+# fails the server sits on old code against a new-but-additive schema — the state rule 7
+# already requires every migration to survive.
+#
+# Rule 5 still holds and is not bypassed: this runs `migrate deploy` and nothing else. Never
+# `db push`, `migrate dev`, `migrate reset`, `--force-reset` or `--accept-data-loss`.
+# Rule 9 still holds too, and this workflow cannot do it for you: `npm run db:snapshot`
+# before you merge a PR carrying a migration. Prisma has no down migrations. The snapshot is
+# the rollback.
+#
+# ─── CONFIGURATION ───────────────────────────────────────────────────────────────────────
+#
+# Variables (Settings ▸ Secrets and variables ▸ Actions ▸ *Variables* tab) — not secret, so
+# they print in the run log, which is what you want for a port or a path:
+#
+#   APP_PORT       default 3000                     the port next start listens on
+#   DEPLOY_PATH    default /var/www/bch-management   where the build lands
+#   PM2_APP_NAME   default bch-management            the pm2 process name
+#   SSH_PORT       default 22                        ssh port
+#
+# Secrets (the *Secrets* tab):
+#
+#   VPS_HOST              required   IP or hostname
+#   VPS_USER              required   ssh user that owns DEPLOY_PATH
+#   VPS_PASSWORD          required   that user's password (sshpass reads it from $SSHPASS)
+#   ENV_FILE              required   the entire .env, pasted in — see the write step
+#   VPS_KNOWN_HOSTS       optional   pinned host key; see "Trust the VPS host key"
+#   NEXT_PUBLIC_LOG_LEVEL optional   build-time log threshold, defaults to 2 (warn)
+#   NEXTAUTH_URL          optional   only if a build-time read of it is ever added
+#
+# APP_PORT is the single source of truth for the port. It is exported AFTER .env is sourced,
+# so it wins over any PORT line in ENV_FILE, and the health check reads the same variable
+# the restart used.
+#
+# ─── ON PASSWORD AUTH ────────────────────────────────────────────────────────────────────
+#
+# Requested explicitly: sshpass with a password, not a key pair.
+#   * The password reaches sshpass through the SSHPASS environment variable — never on a
+#     command line, where `ps` on the server would show it.
+#   * The server needs `PasswordAuthentication yes` in /etc/ssh/sshd_config.
+# Set VPS_KNOWN_HOSTS to pin the host key. Without it this falls back to ssh-keyscan, which
+# trusts whatever answers on the first connection of every run and so authenticates nothing.
+
+on:
+  workflow_dispatch:
+
+# Two runs touching the same directory and the same database at once would interleave an
+# rsync with a pm2 restart, or two `migrate deploy` calls with one advisory lock between
+# them. cancel-in-progress is false: a run killed mid-migration is the one state with no
+# clean recovery. Let the first finish.
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  APP_PORT: ${{ vars.APP_PORT || '3000' }}
+  DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/var/www/bch-management' }}
+  PM2_APP_NAME: ${{ vars.PM2_APP_NAME || 'bch-management' }}
+  SSH_PORT: ${{ vars.SSH_PORT || '22' }}
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════════════════
+  # JOB 1 — MIGRATE
+  # Runs only if prisma/migrations/ changed since the last successful deploy AND the target
+  # database reports something pending. Deploy does not start until this job is green.
+  # ═══════════════════════════════════════════════════════════════════════════════════════
+  migrate:
+    name: Migrate database
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # fetch-depth: 0 — the default shallow clone has one commit, and `git diff` against
+      # the previously deployed SHA needs both ends of the range present locally.
+      - name: Check out the selected branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Show what this run will do
+        run: |
+          echo "branch:      ${{ github.ref_name }}"
+          echo "commit:      ${{ github.sha }}"
+          echo "deploy path: $DEPLOY_PATH"
+          echo "pm2 name:    $PM2_APP_NAME"
+          echo "app port:    $APP_PORT"
+          echo "ssh port:    $SSH_PORT"
+
+      # RUNNER-SIDE ONLY. rsync ships with the ubuntu-latest image; sshpass does not.
+      - name: Install sshpass on the runner
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+
+      - name: Trust the VPS host key
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+
+          if [ -n "${VPS_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+            echo "host key: pinned from VPS_KNOWN_HOSTS"
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+            echo "::warning::VPS_KNOWN_HOSTS is not set — the host key was accepted unverified."
+          fi
+
+          chmod 600 ~/.ssh/known_hosts
+
+      # GATE 1 — git. Read the commit the last successful deploy recorded, then diff only
+      # prisma/migrations/ between it and this commit.
+      #
+      # Three cases count as "changed" without a diff being possible:
+      #   * no .deploy-sha at all        → first run against this server
+      #   * the SHA is not in this clone → history was rewritten, or a different repo
+      # Both fall through to gate 2, which asks the database directly and is safe either way.
+      - name: Has prisma/migrations changed since the last deploy?
+        id: gate_git
+        env:
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+
+          LAST_SHA=$(sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
+            "cat '$DEPLOY_PATH/.deploy-sha' 2>/dev/null || true")
+
+          if [ -z "$LAST_SHA" ]; then
+            echo "no .deploy-sha on the server — treating as a first deploy"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "last deployed commit: $LAST_SHA"
+
+          if ! git cat-file -e "${LAST_SHA}^{commit}" 2>/dev/null; then
+            echo "::warning::$LAST_SHA is not in this clone (rewritten history?) — falling through to the database check"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only "$LAST_SHA" "${{ github.sha }}" -- prisma/migrations || true)
+
+          if [ -z "$CHANGED" ]; then
+            echo "prisma/migrations is unchanged since $LAST_SHA — nothing to migrate"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "migration files changed:"
+            printf '%s\n' "$CHANGED" | sed 's/^/  /'
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # From here on, every step is skipped when gate 1 said "unchanged". The job still ends
+      # green, and the deploy job still runs — an ordinary deploy with no schema change costs
+      # nothing here.
+
+      # .env carries DATABASE_URL and DIRECT_URL, so it has to land before anything talks to
+      # the database. Written over ssh's STDIN rather than echoed into a remote command — a
+      # remote command line is visible to `ps` on the server and would need every quote in
+      # every value escaped correctly.
+      #
+      # It must be shell-sourceable: KEY=value per line, and any value containing a space or
+      # a `#` needs quoting. The Supabase password contains `@`, which is fine unquoted.
+      #
+      # DIRECT_URL must be the 5432 SESSION pooler, never 6543 (CLAUDE.md rule 8). Migrate
+      # takes a session lock and a transaction pooler never releases it — the symptom is a
+      # migration that hangs rather than fails.
+      - name: Write .env on the VPS
+        if: steps.gate_git.outputs.changed == 'true'
+        env:
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${ENV_FILE:-}" ]; then
+            echo "::error::The ENV_FILE secret is empty. Nothing can reach the database."
+            exit 1
+          fi
+
+          sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" "mkdir -p '$DEPLOY_PATH'"
+
+          printf '%s\n' "$ENV_FILE" > env.deploy
+          sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
+            "umask 077 && cat > '$DEPLOY_PATH/.env'" < env.deploy
+          rm -f env.deploy
+
+          echo "wrote $DEPLOY_PATH/.env (mode 600)"
+
+      # prisma/ holds schema.prisma and the migrations themselves; package.json and the
+      # lockfile are what npm ci installs the prisma CLI from. This is the whole reason the
+      # migrate job can run before anything is built — none of it depends on .next.
+      #
+      # No --delete on prisma/migrations would be wrong the other way: a migration folder
+      # deleted from git must disappear here too, or `migrate deploy` sees a migration the
+      # repo no longer has and refuses on a checksum mismatch.
+      - name: Copy prisma/ and the manifests to the VPS
+        if: steps.gate_git.outputs.changed == 'true'
+        env:
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+
+          sshpass -e rsync -az --delete \
+            --exclude='node_modules' \
+            -e "ssh -p $SSH_PORT" \
+            prisma package.json package-lock.json \
+            "$VPS_USER@$VPS_HOST:$DEPLOY_PATH/"
+
+      # `npm ci` wipes node_modules and reinstalls from scratch — minutes, every run, for a
+      # dependency list that changes maybe once a fortnight. The lockfile's own sha256
+      # decides instead. `.deploy-lock-hash` is never rsynced, so a copy cannot clear it.
+      #
+      # The install keeps dev dependencies. `prisma` — the CLI that runs both `generate` and
+      # `migrate deploy` — is one of them, and `next start` in the deploy job has to load a
+      # TypeScript next.config.ts. `--omit=dev` takes both away and the failure surfaces at
+      # boot, not here.
+      - name: Install dependencies on the VPS (only if the lockfile changed)
+        if: steps.gate_git.outputs.changed == 'true'
+        env:
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+
+          sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+
+          NEW_HASH=$(sha256sum package-lock.json | cut -d' ' -f1)
+          OLD_HASH=$(cat .deploy-lock-hash 2>/dev/null || echo none)
+
+          if [ "$NEW_HASH" != "$OLD_HASH" ] || [ ! -d node_modules ]; then
+            echo "lockfile changed (or node_modules missing) — running npm ci"
+            npm ci
+            printf '%s\n' "$NEW_HASH" > .deploy-lock-hash
+          else
+            echo "lockfile unchanged — skipping npm ci"
+          fi
+
+          npx prisma generate
+          REMOTE
+
+      # GATE 2 — the database. `migrate status` exits non-zero when migrations are pending,
+      # which is information, not failure, so the exit code is captured rather than allowed
+      # to end the step. The full output is printed either way: it names every pending
+      # migration, and that list is what you check against what you expected to apply.
+      - name: What does the database say is pending?
+        id: gate_db
+        if: steps.gate_git.outputs.changed == 'true'
+        env:
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+
+          set +e
+          OUT=$(sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
+            "cd '$DEPLOY_PATH' && set -a && . ./.env && set +a && npx prisma migrate status" 2>&1)
+          STATUS=$?
+          set -e
+
+          printf '%s\n' "$OUT"
+
+          if printf '%s' "$OUT" | grep -qi "Database schema is up to date"; then
+            echo "database already holds every committed migration — nothing to apply"
+            echo "pending=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if printf '%s' "$OUT" | grep -qiE "following migration.*not yet been applied|have not yet been applied"; then
+            echo "pending=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Anything else — drift, a failed migration, no connection — is a real problem and
+          # must stop the pipeline. Deploying new code onto a database in an unknown state is
+          # exactly what the gate exists to prevent.
+          echo "::error::prisma migrate status returned an unrecognised state (exit $STATUS). Not deploying."
+          exit 1
+
+      # The only schema command this workflow will ever run. `migrate deploy` applies
+      # committed folders and nothing else: it never creates a shadow database, never resets,
+      # and never prompts.
+      - name: Apply migrations
+        if: steps.gate_git.outputs.changed == 'true' && steps.gate_db.outputs.pending == 'true'
+        env:
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+
+          sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          set -a; . ./.env; set +a
+
+          npx prisma migrate deploy
+          echo "--- status after applying ---"
+          npx prisma migrate status
+          REMOTE
+
+      - name: Summarise
+        if: always()
+        run: |
+          if [ "${{ steps.gate_git.outputs.changed }}" != "true" ]; then
+            echo "prisma/migrations unchanged — migration skipped, deploy will proceed."
+          elif [ "${{ steps.gate_db.outputs.pending }}" != "true" ]; then
+            echo "migrations changed in git but the database already had them — nothing applied."
+          else
+            echo "migrations applied. Deploy will proceed."
+          fi
+
+  # ═══════════════════════════════════════════════════════════════════════════════════════
+  # JOB 2 — DEPLOY
+  # `needs: migrate` — GitHub will not start this job unless the migrate job finished green.
+  # A failed or still-running migration means the build never reaches the server.
+  # ═══════════════════════════════════════════════════════════════════════════════════════
+  deploy:
+    name: Build and deploy
+    needs: migrate
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out the selected branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci`, not `npm install`: it installs exactly what package-lock.json pins and
+      # fails loudly on a mismatch. CLAUDE.md records that a truncated install leaves
+      # packages which look present but aren't — a lockfile-exact install prevents that.
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm run build` is `prisma generate && next build`.
+      #
+      # NEXT_PUBLIC_* is baked into the client bundle at BUILD time, so it belongs here and
+      # not in the VPS .env — setting it there changes nothing. NEXT_PUBLIC_LOG_LEVEL is the
+      # only one this app reads: 0=debug 1=info 2=warn 3=error 4=silent.
+      #
+      # NEXTAUTH_SECRET is a throwaway placeholder, as in typecheck.yml. next-auth only wants
+      # it defined while the pages compile; the real one comes from the VPS .env at runtime.
+      # Do NOT put the production secret here — it would be baked into a build artifact.
+      #
+      # No DATABASE_URL: the three /staff-lms pages that used to force a build-time database
+      # connection are client components now, so nothing queries Prisma during the build.
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_LOG_LEVEL: ${{ secrets.NEXT_PUBLIC_LOG_LEVEL || '2' }}
+          NEXTAUTH_SECRET: build-time-placeholder-not-used-at-runtime
+          NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
+
+      - name: Check the build produced something
+        run: |
+          set -euo pipefail
+          if [ ! -d .next ] || [ ! -f .next/BUILD_ID ]; then
+            echo "::error::.next/BUILD_ID is missing — the build did not produce a servable app."
+            ls -la .next || echo "(no .next directory at all)"
+            exit 1
+          fi
+          echo "BUILD_ID: $(cat .next/BUILD_ID)"
+          echo ".next size: $(du -sh .next | cut -f1)  (.next/cache is not shipped)"
+
+      - name: Install sshpass on the runner
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+
+      - name: Trust the VPS host key
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+
+          if [ -n "${VPS_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+            echo "::warning::VPS_KNOWN_HOSTS is not set — the host key was accepted unverified."
+          fi
+
+          chmod 600 ~/.ssh/known_hosts
+
+      # .env is written here as well as in the migrate job. The migrate job skips it entirely
+      # when prisma/migrations did not change, and an ordinary deploy still has to be able to
+      # pick up a rotated secret — so this is the one that runs on most deploys, not a
+      # duplicate of a step that always ran.
+      - name: Write .env on the VPS
+        env:
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${ENV_FILE:-}" ]; then
+            echo "::error::The ENV_FILE secret is empty. The app would start with no DATABASE_URL."
+            exit 1
+          fi
+
+          sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" "mkdir -p '$DEPLOY_PATH'"
+
+          printf '%s\n' "$ENV_FILE" > env.deploy
+          sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
+            "umask 077 && cat > '$DEPLOY_PATH/.env'" < env.deploy
+          rm -f env.deploy
+
+          echo "wrote $DEPLOY_PATH/.env (mode 600)"
+
+      # Only the build output and the two configs `next start` reads at boot. prisma/,
+      # package.json and package-lock.json are shipped by the migrate job when they matter;
+      # they are included here too so a first-ever deploy with no migration change still
+      # lands a complete tree.
+      #
+      # --delete prunes stale files INSIDE these directories — a renamed chunk or a deleted
+      # route would otherwise linger forever. It cannot reach anything else at the deploy
+      # root: rsync only prunes directories it is actually mirroring. node_modules, .env,
+      # .deploy-sha and the lock hash are excluded anyway, because losing any of them
+      # mid-deploy breaks the restart that follows.
+      - name: Copy the build to the VPS
+        env:
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+
+          sshpass -e rsync -az --delete \
+            --exclude='.next/cache' \
+            --exclude='node_modules' \
+            --exclude='.env' \
+            --exclude='.deploy-lock-hash' \
+            --exclude='.deploy-sha' \
+            -e "ssh -p $SSH_PORT" \
+            .next public package.json package-lock.json next.config.ts tsconfig.json prisma \
+            "$VPS_USER@$VPS_HOST:$DEPLOY_PATH/"
+
+      - name: Install dependencies on the VPS (only if the lockfile changed)
+        env:
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+
+          sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+
+          NEW_HASH=$(sha256sum package-lock.json | cut -d' ' -f1)
+          OLD_HASH=$(cat .deploy-lock-hash 2>/dev/null || echo none)
+
+          if [ "$NEW_HASH" != "$OLD_HASH" ] || [ ! -d node_modules ]; then
+            echo "lockfile changed (or node_modules missing) — running npm ci"
+            npm ci
+            printf '%s\n' "$NEW_HASH" > .deploy-lock-hash
+          else
+            echo "lockfile unchanged — skipping npm ci"
+          fi
+
+          npx prisma generate
+          REMOTE
+
+      # pm2 in FORK mode — one process, no cluster. Fork is pm2's default, so the absence of
+      # `-i` here IS the setting; `pm2 start -i max` would fork N workers instead.
+      #
+      # `set -a; . ./.env; set +a` exports every variable in the file into this shell, then
+      # PORT is set from the APP_PORT variable so it wins regardless of what .env says. pm2
+      # hands its own environment to the process it spawns, and --update-env on restart is
+      # what makes a change take effect — without it pm2 replays the environment captured at
+      # first start, so a changed port or a rotated secret is silently ignored.
+      - name: Restart the app with pm2
+        env:
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+
+          sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' PM2_APP_NAME='$PM2_APP_NAME' APP_PORT='$APP_PORT' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+
+          set -a
+          . ./.env
+          set +a
+
+          export NODE_ENV=production
+          export PORT="$APP_PORT"
+
+          if pm2 describe "$PM2_APP_NAME" > /dev/null 2>&1; then
+            echo "restarting the existing pm2 process on port $PORT"
+            pm2 restart "$PM2_APP_NAME" --update-env
+          else
+            echo "first run — starting pm2 in fork mode on port $PORT"
+            pm2 start npm --name "$PM2_APP_NAME" --cwd "$DEPLOY_PATH" -- run start
+          fi
+
+          pm2 save
+          pm2 list
+          REMOTE
+
+      # A green rsync and a green pm2 restart both happen before the app has parsed a single
+      # module, so neither proves it is serving. This asks the server itself, on the same
+      # APP_PORT the restart used. A redirect to /login counts as a pass — routing and
+      # middleware are alive. Only a 5xx, or no answer at all, is a failure.
+      - name: Check the app is answering
+        env:
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+
+          sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
+            "PM2_APP_NAME='$PM2_APP_NAME' APP_PORT='$APP_PORT' bash -s" <<'REMOTE'
+          set -uo pipefail
+          code=000
+
+          for attempt in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+              "http://127.0.0.1:${APP_PORT}/" || echo 000)
+            if [ "$code" != "000" ] && [ "$code" -lt 500 ]; then
+              echo "app answered HTTP $code on port $APP_PORT after ${attempt}s"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "::error::app did not answer on port ${APP_PORT} (last code: ${code})"
+          pm2 logs "$PM2_APP_NAME" --lines 40 --nostream || true
+          exit 1
+          REMOTE
+
+      # LAST. This is what gate 1 of the next run diffs against, so it is written only after
+      # the app has proved it answers. A deploy that failed anywhere above leaves the old SHA
+      # in place, and the next run re-examines the same migrations rather than assuming they
+      # were handled.
+      - name: Record the deployed commit
+        env:
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+
+          printf '%s\n' "${{ github.sha }}" | \
+            sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
+              "cat > '$DEPLOY_PATH/.deploy-sha'"
+
+          echo "recorded ${{ github.sha }} as the deployed commit"
