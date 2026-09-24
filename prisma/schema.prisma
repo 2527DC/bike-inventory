@@ -1118,6 +1118,10 @@ model Vendor {
   openingBalance  Float    @default(0) // As of 2026-04-01
   isActive        Boolean  @default(true)
   notes           String?
+  // Zoho's `vendor_id` (its contact_id) — the vendor's identity on the Zoho side, and what the
+  // bill import resolves by (plan 2409-zoho-vendor-id). Written only by the import, never by the
+  // vendor forms. Nullable: a vendor created by hand on /vendors has none.
+  zohoVendorId    String?  @unique
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

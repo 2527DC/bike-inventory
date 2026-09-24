@@ -52,6 +52,35 @@ export interface IntegrationBill {
   status: string;
 }
 
+/** A Zoho contact (vendor) as `GET /contacts/{id}` returns it — only the fields we copy. */
+export interface IntegrationContact {
+  contact_id: string;
+  contact_name: string;
+  company_name?: string;
+  gst_no?: string;
+  pan_no?: string;
+  email?: string;
+  phone?: string;
+  mobile?: string;
+  payment_terms?: number;
+  billing_address?: {
+    address?: string;
+    street2?: string;
+    city?: string;
+    state?: string;
+    zip?: string;
+  };
+  contact_persons?: Array<{
+    first_name?: string;
+    last_name?: string;
+    designation?: string;
+    email?: string;
+    phone?: string;
+    mobile?: string;
+    is_primary_contact?: boolean;
+  }>;
+}
+
 export interface IntegrationInvoice {
   invoice_id: string;
   invoice_number: string;
@@ -381,6 +410,21 @@ export abstract class IntegrationClient {
       `/bills/${billId}`,
       undefined,
       "bills.get"
+    );
+  }
+
+  /**
+   * One vendor, by the `vendor_id` a bill carries. On the base class rather than BooksClient
+   * because the bill import reads bills from whichever provider is connected (Books, else
+   * Zakya) and the owner ruled the vendor flow must be the same for both (plan 2409, Q2).
+   * Typed to the fields the import copies onto a new Vendor — nothing else is read.
+   */
+  async getContact(contactId: string) {
+    return this.apiCall<{ contact?: IntegrationContact }>(
+      "GET",
+      `/contacts/${encodeURIComponent(contactId)}`,
+      undefined,
+      "contacts.get"
     );
   }
 

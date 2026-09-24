@@ -129,6 +129,14 @@ export const ENDPOINTS = {
     owner: "BooksClient.createContact",
     purpose: "Create a vendor or customer in Zoho",
   },
+  "contacts.get": {
+    key: "contacts.get",
+    method: "GET",
+    path: "/contacts/{contact_id}",
+    providers: ALL,
+    owner: "getContact",
+    purpose: "One vendor's details (GSTIN, address, phone) when the bill import first creates it",
+  },
   "contacts.search": {
     key: "contacts.search",
     method: "GET",
