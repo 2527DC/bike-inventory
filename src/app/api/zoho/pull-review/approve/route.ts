@@ -20,6 +20,7 @@ import { logActivity } from "@/lib/activity-log";
 import { toPlus91 } from "@/lib/phone";
 import { nextSequence } from "@/lib/sequence";
 import { ibSeedSql } from "@/lib/inbound/sequence";
+import { resolveBillVendor } from "@/lib/vendors/resolve-zoho-vendor";
 
 // This route had no logger at all — a 499-line import handler whose only record of what it
 // did was the response body, which a 504 never delivers.
@@ -191,21 +192,8 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          // Find vendor — auto-create if not found
-          let vendor = await prisma.vendor.findFirst({
-            where: { name: { equals: String(d.vendorName), mode: "insensitive" } },
-          });
-          if (!vendor) {
-            const code = String(d.vendorName || "")
-              .replace(/[^a-zA-Z0-9]/g, "")
-              .substring(0, 6)
-              .toUpperCase() + String(Date.now()).slice(-4);
-            vendor = await prisma.vendor.create({
-              data: { name: String(d.vendorName), code },
-            });
-          }
-
-          // Dedup: skip if shipment already exists for this bill
+          // Dedup: skip if shipment already exists for this bill. Before the vendor is resolved,
+          // so an already-imported bill never costs a Zoho contact read or creates a vendor.
           const existsShipment = await prisma.inboundShipment.findFirst({
             where: { billNo: String(d.billNumber) },
             select: { id: true, shipmentNo: true },
@@ -217,6 +205,16 @@ export async function POST(req: NextRequest) {
             await prisma.zohoPullPreview.update({ where: { id: preview.id }, data: { status: "APPROVED", reviewedAt: new Date(), reviewedById: user.id } });
             continue;
           }
+
+          // Vendor by Zoho vendor id, never by name (plan 2409). Created once, with its Zoho
+          // details, the first time an id is seen; a throw lands in this bill's catch below.
+          const { vendor, notice: vendorNotice } = await resolveBillVendor({
+            billNo: String(d.billNumber),
+            vendorName: String(d.vendorName || ""),
+            vendorId: typeof d.vendorId === "string" && d.vendorId ? d.vendorId : null,
+            vendorSource: typeof d.vendorSource === "string" ? d.vendorSource : null,
+          });
+          if (vendorNotice) results.notices.push(vendorNotice);
 
           // Reuse existing VendorBill if it exists (e.g. from accounting import), or create new
           const existingVB = await prisma.vendorBill.findFirst({ where: { billNo: String(d.billNumber) } });

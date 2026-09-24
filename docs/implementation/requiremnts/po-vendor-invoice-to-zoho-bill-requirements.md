@@ -177,6 +177,22 @@ five doubts are new, and two of them block.
   a retry hits Zoho's duplicate-bill-number rule. Q9 covers a Zoho *rejection*; this is the
   opposite. Also: may a PO have a second AI run while an earlier one is `DONE` but not accepted?
 
+### 4.2 Answers on record (owner, one question at a time, from 24 Sep 2026)
+
+Context: `Vendor.zohoVendorId` now exists (plan `2409-zoho-vendor-id-on-bill-import-plan.md`,
+migration `20260924034908_vendor_zoho_vendor_id`). Vendors that arrive through the bill import
+carry their Zoho id; a vendor added by hand on `/vendors` has none. All vendors and inbound
+data were wiped from the test database on 24 Sep 2026.
+
+| Date | Q | Answer |
+|---|---|---|
+| 24 Sep 2026 | Q1 | **Link it at accept.** When the PO's vendor has no `zohoVendorId`, the review screen says "not linked to Zoho" and offers a search of the org's Zoho vendors (name / GSTIN). The person picks one once; its id is saved on the `Vendor` and reused from then on. **Nothing is created in Zoho** — no `POST /contacts`. |
+| 24 Sep 2026 | Q2 (GSTIN) | **Picked on the review.** The review screen carries a store / GSTIN choice, pre-filled from the PO header's store, changeable before accept. *Still open, settled by one live Zoho call at build time:* `tax_id` vs `tax_percentage`, and how the chosen GSTIN is expressed on `POST /bills` in this org (branch / location / `gst_no`). |
+| 24 Sep 2026 | Q5 | **Auto + picker + remember.** Exact SKU / code first, then closest product names as suggestions, then a search picker. A person's pick is remembered as that vendor's alias for the product, so the same line auto-matches next time. *(Where the alias lives — `BrandSkuMapping` or a new per-vendor table — is a plan decision.)* |
+| 24 Sep 2026 | Q6 | **Auto-import that one bill**, inside the accept request, through the existing importer — the shipment is waiting on `/inbound`. If the import step fails after Zoho accepted the bill, the bill stays in Zoho and the ordinary Fetch bills picks it up (no scheduler). |
+| 24 Sep 2026 | Q10 | **Many invoices per PO, from day one.** Each upload is its own run / proposal row; the PO tracks invoiced and received quantity per line and stays `PARTIALLY_RECEIVED` until everything is in. |
+| 24 Sep 2026 | Q12 | **Leave the PO's prices at 0.** Prices live on the vendor bill and in Zoho; the PO stays a product + quantity document (15 Sep decision). |
+
 **Confirmed, not a question:** D2 is doubly right. The bill importer matches a line to a product
 by **`zohoItemId` first**, then SKU, then a `contains` on the first 20 characters of the name
 (`api/zoho/pull-review/approve/route.ts:310-323`), and **auto-creates a product** when all three

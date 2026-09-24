@@ -345,7 +345,7 @@ export async function POST(req: NextRequest) {
             });
 
             await prisma.$transaction(
-              newBills.map((bill: { bill_id: string; bill_number: string; vendor_name: string; date: string; due_date: string; total: number; balance: number; status: string }) =>
+              newBills.map((bill: IntegrationBill) =>
                 prisma.zohoPullPreview.create({
                   data: {
                     pullId: existingPullId,
@@ -354,6 +354,11 @@ export async function POST(req: NextRequest) {
                     data: {
                       billNumber: bill.bill_number,
                       vendorName: bill.vendor_name,
+                      // Zoho's vendor id — approve resolves the Vendor by it (plan 2409). It
+                      // used to arrive here and be dropped. `vendorSource` says which client
+                      // can read that contact back: Books and Zakya ids are not interchangeable.
+                      vendorId: bill.vendor_id || null,
+                      vendorSource: source,
                       date: bill.date,
                       dueDate: bill.due_date,
                       total: bill.total,

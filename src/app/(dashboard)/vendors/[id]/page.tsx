@@ -25,6 +25,8 @@ type VendorDetail = Vendor & {
   bills: (VendorBill & { payments: Array<{ amount: number }> })[];
   credits: VendorCredit[];
   _count?: { issues: number };
+  /** Zoho's vendor id. Written only by the Zoho bill import; read-only here, never sent on PUT. */
+  zohoVendorId?: string | null;
 };
 
 export default function VendorDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -297,6 +299,12 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
             <div>
               <p className="text-xs text-slate-500 mb-0.5">GSTIN</p>
               <p className="text-sm text-slate-700 font-mono">{vendor.gstin}</p>
+            </div>
+          )}
+          {vendor.zohoVendorId && (
+            <div>
+              <p className="text-xs text-slate-500 mb-0.5">Zoho vendor id</p>
+              <p className="text-sm text-slate-700 font-mono select-all">{vendor.zohoVendorId}</p>
             </div>
           )}
 

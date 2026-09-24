@@ -9,6 +9,7 @@ import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { inboundIssueSchema } from "@/lib/validations";
 import { nextSequence } from "@/lib/sequence";
 import { issSeedSql } from "@/lib/vendor-issues/sequence";
+import { vendorCodeFor } from "@/lib/vendors/code";
 import { logActivity } from "@/lib/activity-log";
 import { createLogger } from "@/lib/logger";
 
@@ -82,16 +83,6 @@ function issueDescription(
   }
 }
 
-/** A vendor code in the shape the Zoho import mints one: 6 alphanumerics + 4 digits of now. */
-function vendorCodeFor(name: string): string {
-  return (
-    name
-      .replace(/[^a-zA-Z0-9]/g, "")
-      .substring(0, 6)
-      .toUpperCase() + String(Date.now()).slice(-4)
-  );
-}
-
 // POST: raise a VendorIssue against one line of this shipment
 export async function POST(
   req: NextRequest,
@@ -160,8 +151,9 @@ export async function POST(
       }
 
       if (!vendorId) {
-        // Mirrors the find-or-create in api/zoho/pull-review/approve — an unknown brand must
-        // not stop the goods desk recording what actually turned up.
+        // An unknown brand must not stop the goods desk recording what actually turned up. The
+        // vendor made here has no Zoho id — the bill import no longer creates by name (plan
+        // 2409), and a later Zoho bill under this exact name fails with a "not linked" message.
         const created = await tx.vendor.create({
           data: {
             name: shipment.brand.name,
