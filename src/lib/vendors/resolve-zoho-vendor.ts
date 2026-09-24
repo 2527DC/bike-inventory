@@ -149,7 +149,12 @@ function clean(v: string | null | undefined): string | null {
   return t ? t : null;
 }
 
-function vendorDataFrom(
+/**
+ * A Zoho contact → the Vendor row we create from it. Exported so the "Import vendors from
+ * Zoho" route (plan 2409-zoho-vendor-sync, Part A) writes exactly the same fields a bill
+ * import does — one mapping, not two that drift.
+ */
+export function vendorDataFrom(
   zohoVendorId: string,
   billVendorName: string,
   c: IntegrationContact | null

@@ -13,6 +13,7 @@ import { DesktopTable } from "@/components/desktop-table";
 import { exportToExcel, exportToPDF, type ExportColumn } from "@/lib/export";
 import { apiFetchEnvelope } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
+import { ZohoVendorSheet } from "./_components/zoho-vendor-sheet";
 
 const log = createLogger("vendors");
 
@@ -112,10 +113,13 @@ export default function VendorsPage() {
     <div>
       <div className="flex items-center justify-between mb-3">
         <h1 className="text-lg font-bold text-slate-900">Vendors</h1>
-        <ExportButtons
-          onExcel={() => exportToExcel(vendors as unknown as Record<string, unknown>[], VENDOR_COLUMNS, "vendors")}
-          onPDF={() => exportToPDF("Vendors List", vendors as unknown as Record<string, unknown>[], VENDOR_COLUMNS, "vendors")}
-        />
+        <div className="flex items-center gap-2">
+          <ZohoVendorSheet onDone={() => void fetchData()} />
+          <ExportButtons
+            onExcel={() => exportToExcel(vendors as unknown as Record<string, unknown>[], VENDOR_COLUMNS, "vendors")}
+            onPDF={() => exportToPDF("Vendors List", vendors as unknown as Record<string, unknown>[], VENDOR_COLUMNS, "vendors")}
+          />
+        </div>
       </div>
 
       <div className="relative mb-3">
