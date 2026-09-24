@@ -11,6 +11,7 @@ import { productIdsForBinRules } from "@/lib/bins/rule-products";
 import { nextSequence } from "@/lib/sequence";
 import { logActivity } from "@/lib/activity-log";
 import { createLogger } from "@/lib/logger";
+import { notifyStockAudit } from "@/lib/notify/stock-audit";
 import { Prisma } from "@prisma/client";
 
 const log = createLogger("stock-counts");
@@ -259,6 +260,19 @@ export async function POST(req: NextRequest) {
       items: products.length,
       fromRules,
       assignedToId: stockCount.assignedToId,
+    });
+
+    // After the commit, never inside it (plan 2409-stock-audit-push, R1). Silent for a
+    // self-count — the helper drops the actor from every audience (Q4).
+    notifyStockAudit("assigned", {
+      stockCountId: stockCount.id,
+      countNo: stockCount.countNo,
+      title: stockCount.title,
+      assignedToId: stockCount.assignedToId,
+      actorId: user.id,
+      actorName: user.name,
+      scopeLabel: `${store.name} · ${scopedWarehouse.name} · Bin ${scopedBin.code}`,
+      dueDate: stockCount.dueDate,
     });
 
     return successResponse(stockCount, 201);

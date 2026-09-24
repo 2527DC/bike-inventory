@@ -65,7 +65,25 @@ export const NOTIFICATION_EVENTS = {
   },
   "approval.returned": {
     label: "Returned for correction",
-    description: "An approver sent your inbound, outbound or transfer back with a note to fix and resubmit",
+    description:
+      "An approver sent your inbound, outbound, transfer or stock audit back with a note to fix and resubmit",
+    defaults: { push: true },
+  },
+  // Plan 2409-stock-audit-push-notifications. Recipients come from the record's own assignee,
+  // never from role names; nobody is pushed about something they did themselves.
+  "stock_audit.assigned": {
+    label: "Stock audit assigned to you",
+    description: "A stock audit was created and assigned to you to count",
+    defaults: { push: true },
+  },
+  "stock_audit.approved": {
+    label: "Your stock audit was approved",
+    description: "An approver approved a stock audit you counted",
+    defaults: { push: true },
+  },
+  "assembly.assigned": {
+    label: "Bicycles assigned to you for assembly",
+    description: "Bicycles were assigned to you on the assembly line — one notification per assignment",
     defaults: { push: true },
   },
 } as const satisfies Record<string, EventDefinition>;
