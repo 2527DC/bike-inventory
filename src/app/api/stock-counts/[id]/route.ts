@@ -14,6 +14,7 @@ import { getBinQtyMap } from "@/lib/units/bin-qty";
 import { applyBinCountLine } from "../_lib/apply-bin-line";
 import { assignBinToCountedProducts } from "../_lib/assign-product-bin";
 import { createLogger } from "@/lib/logger";
+import { notifyStockAudit } from "@/lib/notify/stock-audit";
 
 // This route applies a counter's numbers — and used to apply their spelling of a brand name
 // straight into the brand list — with no record of either beyond the response body.
@@ -627,6 +628,27 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
       return updated;
     }, { timeout: 120000 }); // 2 min timeout for large stock counts
+
+    // After the commit (plan 2409-stock-audit-push, R2/R3): one push for the transition that
+    // just happened. Starting a count (PENDING/REJECTED → IN_PROGRESS) pushes nobody.
+    if (data.status && data.status !== existing.status) {
+      const kind =
+        data.status === "COMPLETED" ? "completed"
+        : data.status === "APPROVED" ? "approved"
+        : data.status === "REJECTED" ? "rejected"
+        : null;
+      if (kind) {
+        notifyStockAudit(kind, {
+          stockCountId: id,
+          countNo: existing.countNo,
+          title: existing.title,
+          assignedToId: existing.assignedToId,
+          actorId: user.id,
+          actorName: user.name,
+          reason: data.status === "REJECTED" ? data.rejectionReason ?? null : null,
+        });
+      }
+    }
 
     // `brandNotices` and `applied` ride alongside the updated count rather than replacing
     // the response shape — every existing reader of this endpoint keeps the object it

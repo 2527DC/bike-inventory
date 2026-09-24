@@ -10,6 +10,7 @@ import { assemblyTaskCreateSchema } from "@/lib/validations";
 import { assemblyLevelLabel } from "@/lib/assembly-level";
 import { logActivity } from "@/lib/activity-log";
 import { createLogger } from "@/lib/logger";
+import { notifyAssemblyAssigned } from "@/lib/notify/stock-audit";
 import type { AssemblyLevel, Prisma } from "@prisma/client";
 
 const log = createLogger("assembly:tasks");
@@ -436,12 +437,16 @@ export async function POST(req: NextRequest) {
       return errorResponse("That mechanic is not an active user — pick another", 400);
     }
 
+    // For the mechanic's push after the commit — kept out of the response shape.
+    let productNames: string[] = [];
+
     const result = await prisma.$transaction(
       async (tx) => {
         const units = await tx.inventoryUnit.findMany({
           where: { id: { in: unitIds } },
           include: { product: { select: { id: true, name: true, sku: true, assemblyLevel: true } } },
         });
+        productNames = units.map((u) => u.product.name);
         if (units.length !== unitIds.length) {
           throw new Refusal(unitIds.length === 1 ? "Unit not found" : `${unitIds.length - units.length} of the chosen bicycles no longer exist — reload the list`, 404);
         }
@@ -572,6 +577,16 @@ export async function POST(req: NextRequest) {
       unitIds: unitIds.slice(0, 20),
       assignedToId,
       levelsSaved: result.levelsSaved.length,
+    });
+
+    // ONE push for the whole assignment, after the commit (plan 2409-stock-audit-push, R5/Q6).
+    // Silent when the supervisor assigned the bikes to themselves.
+    notifyAssemblyAssigned({
+      assignedToId,
+      actorId: user.id,
+      actorName: user.name,
+      unitCount: result.assigned,
+      productNames,
     });
 
     return successResponse(result, 201);
