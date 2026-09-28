@@ -2,31 +2,27 @@
 
 // ─── Enable push on this device ────────────────────────────────────────────────
 //
-// The browser half of Part D. Two rules shape everything here:
+// Rendered on /profile (every signed-in user, plan 2809) and on Settings → Notifications
+// (admins testing the setup). The enrolment itself lives in src/lib/push-enrol.ts, shared with
+// the prompt card and the silent refresh — read the rules at the top of that file.
 //
-// 1. Notification.requestPermission() runs ONLY inside the click handler. Browsers refuse an
-//    unprompted request outright, and Chrome scores the origin down for trying, which then
-//    makes the real prompt quieter for everyone (plan D.2). So nothing on mount touches
-//    permission or Firebase — mount only asks our API whether push is configured.
-//
-// 2. getToken() is handed the EXISTING service-worker registration. Without it the SDK
-//    registers its own /firebase-messaging-sw.js, and two workers means two push handlers and
-//    every notification shown twice. public/sw.js is the one handler, and it shows every push
-//    whether or not the tab is focused — so there is deliberately no onMessage() here: the SDK
-//    only fires that for messages posted by its own worker (it checks an `isFirebaseMessaging`
-//    flag), and on Android Chrome a page cannot construct a Notification itself anyway.
-//
-// `firebase/*` is imported ONLY from client files like this one. It touches window and
-// IndexedDB at import time and must never land in a server bundle.
+// On mount nothing asks for permission. If permission is ALREADY granted, the device is
+// re-filed straight away (no prompt is involved) so the screen can say "Enabled" instead of
+// offering a button that would do nothing new.
 
 import { useEffect, useState, type ReactNode } from "react";
-import { Bell, BellOff, BellRing, Loader2 } from "lucide-react";
-import { getApp, getApps, initializeApp, type FirebaseOptions } from "firebase/app";
-import { getMessaging, getToken } from "firebase/messaging";
-import { apiFetch, apiTry } from "@/lib/api-client";
+import { Bell, BellOff, BellRing, Loader2, Send } from "lucide-react";
+import { apiFetch } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 import { Button } from "@/components/ui/button";
-import type { DeviceView, PushWebConfig, RegisterDeviceInput } from "@/lib/notify/types";
+import {
+  enrolThisDevice,
+  isPushCapable,
+  loadPushConfig,
+  messageOf,
+  PushPermissionError,
+} from "@/lib/push-enrol";
+import type { DeviceView, PushWebConfig } from "@/lib/notify/types";
 
 const log = createLogger("push:client");
 
@@ -39,15 +35,21 @@ type Phase =
   | "working" // click in progress
   | "enabled"; // token minted and registered
 
-// navigator.serviceWorker.ready never settles if registration failed (sw-register.tsx logs
-// why). Without a cap the button would spin forever with no message.
-const SW_READY_TIMEOUT_MS = 10_000;
-
-export function EnablePushButton() {
+export function EnablePushButton({
+  showTest = false,
+  onEnrolled,
+}: {
+  /** Offer "Send me a test" once enabled — sends to the caller's own devices only. */
+  showTest?: boolean;
+  /** Called after this device is (re-)registered, so a device list can refresh. */
+  onEnrolled?: (device: DeviceView) => void;
+}) {
   const [phase, setPhase] = useState<Phase>("loading");
   const [config, setConfig] = useState<PushWebConfig | null>(null);
   const [tail, setTail] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; detail: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,12 +61,10 @@ export function EnablePushButton() {
         return;
       }
 
-      const { data, error: loadError } = await apiTry<PushWebConfig>("/api/notifications/push-config");
+      const { config: data, error: loadError } = await loadPushConfig();
       if (cancelled) return;
-
       if (loadError || !data) {
-        log.error("could not load push config", { error: loadError });
-        setError(loadError ?? "Could not load the push configuration");
+        setError(loadError);
         setPhase("not-ready");
         return;
       }
@@ -75,9 +75,29 @@ export function EnablePushButton() {
         setPhase("not-ready");
         return;
       }
-      // Read, never requested, on mount. A denied permission cannot be re-asked from code;
-      // the person has to change it in the browser, so say so instead of showing a dead button.
-      setPhase(Notification.permission === "denied" ? "blocked" : "ready");
+      if (Notification.permission === "denied") {
+        setPhase("blocked");
+        return;
+      }
+      if (Notification.permission === "granted") {
+        // Already allowed: re-file without a prompt. A failure falls back to the button with
+        // the reason shown, so the person can retry and read why.
+        setPhase("working");
+        try {
+          const device = await enrolThisDevice(data, { ask: false });
+          if (cancelled) return;
+          setTail(device.tokenTail);
+          setPhase("enabled");
+          onEnrolled?.(device);
+        } catch (e) {
+          if (cancelled) return;
+          log.warn("re-registration on mount failed", { error: messageOf(e) });
+          setError(messageOf(e));
+          setPhase("ready");
+        }
+        return;
+      }
+      setPhase("ready");
     }
 
     load().catch((e: unknown) => {
@@ -90,64 +110,46 @@ export function EnablePushButton() {
     return () => {
       cancelled = true;
     };
+    // onEnrolled is a notification hook for the parent, not an input to this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function enable() {
     if (!config) return;
     setPhase("working");
     setError(null);
-
     try {
       // Inside the click handler — the user gesture is what makes the prompt appear.
-      const permission = await Notification.requestPermission();
-      if (permission === "denied") {
-        log.warn("notification permission denied");
+      const device = await enrolThisDevice(config, { ask: true });
+      setTail(device.tokenTail);
+      setPhase("enabled");
+      onEnrolled?.(device);
+    } catch (e) {
+      if (e instanceof PushPermissionError && e.permission === "denied") {
         setPhase("blocked");
         return;
       }
-      if (permission !== "granted") {
-        // "default": the prompt was dismissed, not refused. Pressing again re-asks.
-        log.info("notification prompt dismissed");
-        setError("The permission prompt was dismissed — press the button again to retry.");
-        setPhase("ready");
-        return;
-      }
-
-      const options = firebaseOptions(config);
-      const vapidKey = config.vapidKey;
-      if (!options || !vapidKey) {
-        // push-config said ready:true, so this is the server and client disagreeing.
-        throw new Error("Push configuration is incomplete — reload the page and try again");
-      }
-
-      // Re-renders and a second click must not initialise a second default app — the SDK
-      // throws on a duplicate name. A changed config mid-session needs a reload; acceptable.
-      const app = getApps().length > 0 ? getApp() : initializeApp(options);
-      const messaging = getMessaging(app);
-
-      const registration = await activeRegistration();
-      const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: registration });
-      log.debug("fcm token minted", { tail: token.slice(-6) });
-
-      const body: RegisterDeviceInput = {
-        token,
-        platform: "WEB",
-        userAgent: navigator.userAgent,
-      };
-      const device = await apiFetch<DeviceView>("/api/notifications/devices", {
-        method: "POST",
-        json: body,
-      });
-
-      log.info("device registered for push", { deviceId: device.id, tail: device.tokenTail });
-      setTail(device.tokenTail);
-      setPhase("enabled");
-    } catch (e) {
       const msg = messageOf(e);
       log.error("enable push failed", { error: msg });
       setError(msg);
-      // The permission may have flipped during the attempt (the SDK asks too if needed).
       setPhase(Notification.permission === "denied" ? "blocked" : "ready");
+    }
+  }
+
+  async function sendTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await apiFetch<{ ok: boolean; detail: string }>("/api/notifications/devices/test", {
+        method: "POST",
+      });
+      log.info("self test push requested", { ok: result.ok });
+      setTestResult(result);
+    } catch (e) {
+      log.error("self test push failed", { error: messageOf(e) });
+      setTestResult({ ok: false, detail: messageOf(e) });
+    } finally {
+      setTesting(false);
     }
   }
 
@@ -172,7 +174,7 @@ export function EnablePushButton() {
     case "not-ready":
       return (
         <Status icon={<Bell className="h-4 w-4" />} tone="muted">
-          Push is not configured yet.
+          Push is not configured yet — an admin has to finish Settings → Notifications.
           {error && <span className="block text-xs text-red-600">{error}</span>}
         </Status>
       );
@@ -180,16 +182,40 @@ export function EnablePushButton() {
     case "blocked":
       return (
         <Status icon={<BellOff className="h-4 w-4" />} tone="warn">
-          Notifications are blocked for this site — allow them in the browser settings, then
-          reload.
+          Notifications are blocked for this app.
+          <span className="block text-xs text-slate-600 mt-0.5">
+            Android: long-press the BCH OPS icon → App info → Notifications → Allow. In Chrome:
+            tap the icon left of the address → Permissions → Notifications → Allow. Then reload.
+          </span>
         </Status>
       );
 
     case "enabled":
       return (
-        <Status icon={<BellRing className="h-4 w-4" />} tone="ok">
-          Enabled on this device · …{tail}
-        </Status>
+        <div className="flex flex-col gap-2">
+          <Status icon={<BellRing className="h-4 w-4" />} tone="ok">
+            Enabled on this device · …{tail}
+          </Status>
+          {showTest && (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={sendTest}
+                disabled={testing}
+                className="w-fit gap-2"
+              >
+                {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                {testing ? "Sending…" : "Send me a test"}
+              </Button>
+              {testResult && (
+                <p className={`text-xs ${testResult.ok ? "text-emerald-700" : "text-red-600"}`}>
+                  {testResult.ok ? `Sent ${testResult.detail} — it should appear in a few seconds.` : testResult.detail}
+                </p>
+              )}
+            </>
+          )}
+        </div>
       );
 
     case "ready":
@@ -203,54 +229,13 @@ export function EnablePushButton() {
             disabled={phase === "working"}
             className="w-fit gap-2"
           >
-            {phase === "working" ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Bell className="h-4 w-4" />
-            )}
+            {phase === "working" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bell className="h-4 w-4" />}
             {phase === "working" ? "Enabling…" : "Enable push on this device"}
           </Button>
           {error && <p className="text-xs text-red-600">{error}</p>}
         </div>
       );
   }
-}
-
-// ─── helpers ───────────────────────────────────────────────────────────────────
-
-function isPushCapable(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    "serviceWorker" in navigator &&
-    "Notification" in window &&
-    "PushManager" in window
-  );
-}
-
-/** The four public values initializeApp() needs, or null if the server sent an incomplete set. */
-function firebaseOptions(config: PushWebConfig): FirebaseOptions | null {
-  const { apiKey, projectId, messagingSenderId, appId } = config;
-  if (!apiKey || !projectId || !messagingSenderId || !appId) return null;
-  return { apiKey, projectId, messagingSenderId, appId };
-}
-
-async function activeRegistration(): Promise<ServiceWorkerRegistration> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error("The service worker did not become active — reload the page and try again")),
-      SW_READY_TIMEOUT_MS
-    );
-  });
-  try {
-    return await Promise.race([navigator.serviceWorker.ready, timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function messageOf(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }
 
 function Status({

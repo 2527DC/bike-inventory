@@ -311,13 +311,20 @@ export function AppSidebar({ className }: AppSidebarProps) {
 
       <div className="border-t border-slate-200 px-4 py-3 shrink-0">
         <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-full bg-slate-200 flex items-center justify-center shrink-0">
-            <span className="text-xs font-semibold text-slate-600">{initials}</span>
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-slate-900 truncate">{userName}</p>
-            <p className="text-[11px] text-slate-400 truncate">{role?.name || ""}</p>
-          </div>
+          {/* Opens /profile — push on this device, devices, mutes (plan 2809) */}
+          <Link
+            href="/profile"
+            title="Profile and notifications"
+            className="flex flex-1 min-w-0 items-center gap-3 rounded-lg -m-1 p-1 hover:bg-slate-50 focus-ring"
+          >
+            <div className="h-9 w-9 rounded-full bg-slate-200 flex items-center justify-center shrink-0">
+              <span className="text-xs font-semibold text-slate-600">{initials}</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-slate-900 truncate">{userName}</p>
+              <p className="text-[11px] text-slate-400 truncate">{role?.name || ""}</p>
+            </div>
+          </Link>
           <button
             onClick={() => {
               clearPermissionCache();
