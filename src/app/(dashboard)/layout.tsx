@@ -8,6 +8,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { PwaInstallBanner } from "@/components/pwa-install-banner";
 import { useBottomNav } from "@/lib/use-bottom-nav";
 import { NotificationsBell } from "@/components/notifications-bell";
+import { PushPromptCard } from "@/components/push-prompt-card";
 import { useInboxSync } from "@/stores/inbox";
 import { cn } from "@/lib/utils";
 
@@ -63,7 +64,11 @@ export default function DashboardLayout({
         </div>
 
         <main className="flex-1 pb-nav lg:pb-10">
-          <div className="max-w-lg lg:max-w-6xl xl:max-w-7xl mx-auto px-4 py-4 lg:px-8 lg:py-6">{children}</div>
+          <div className="max-w-lg lg:max-w-6xl xl:max-w-7xl mx-auto px-4 py-4 lg:px-8 lg:py-6">
+            {/* Asks for push once per browser, and keeps a granted device's token fresh (plan 2809) */}
+            <PushPromptCard />
+            {children}
+          </div>
         </main>
 
         {/* PWA Install Banner */}

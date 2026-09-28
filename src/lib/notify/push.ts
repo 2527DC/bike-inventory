@@ -181,11 +181,12 @@ export async function sendPush(target: PushTarget, msg: PushMessage): Promise<Se
 }
 
 /** What the "Send test push" button sends. Opens the settings screen it was pressed on. */
-export async function sendTestPush(target: PushTarget): Promise<SendResult> {
+/** `link` is where tapping it goes — the admin test opens Settings, a user's own test /profile. */
+export async function sendTestPush(target: PushTarget, link = "/settings/notifications"): Promise<SendResult> {
   return sendPush(target, {
     title: "BCH Ops — test notification",
     body: `Push is working on this device (${new Date().toISOString()})`,
-    link: "/settings/notifications",
+    link,
   });
 }
 

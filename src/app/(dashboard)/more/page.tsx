@@ -6,7 +6,6 @@ import { User, LogOut, ChevronRight, ChevronDown, RefreshCw } from "lucide-react
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { NotificationPreferences } from "@/components/notification-preferences";
 import { usePermissions } from "@/lib/use-permissions";
 import { moduleIcon } from "@/lib/module-icons";
 import { buildNavTree, showDividerBefore, type NavGroup } from "@/lib/nav-tree";
@@ -71,23 +70,25 @@ export default function MorePage() {
 
   return (
     <div>
-      {/* User Card */}
-      <Card className="mb-4">
-        <CardContent className="p-4 flex items-center gap-3">
-          <div className="h-12 w-12 rounded-full bg-slate-200 flex items-center justify-center">
-            <User className="h-6 w-6 text-slate-500" />
-          </div>
-          <div className="flex-1">
-            <p className="text-base font-semibold text-slate-900">
-              {user?.name || "User"}
-            </p>
-            <Badge variant="info">{role?.name || "No role"}</Badge>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Personal notification mutes. Plain JSX OUTSIDE the modules loop below: this surface has no module and no permission, so the permission-driven menu could never show it (plan E.2) */}
-      <NotificationPreferences />
+      {/* User Card — opens /profile: push on this device, my devices, my notification mutes
+          (plan 2809; the mutes moved there from here) */}
+      <Link href="/profile" className="block mb-4 focus-ring rounded-xl">
+        <Card>
+          <CardContent className="p-4 flex items-center gap-3">
+            <div className="h-12 w-12 rounded-full bg-slate-200 flex items-center justify-center">
+              <User className="h-6 w-6 text-slate-500" />
+            </div>
+            <div className="flex-1">
+              <p className="text-base font-semibold text-slate-900">
+                {user?.name || "User"}
+              </p>
+              <Badge variant="info">{role?.name || "No role"}</Badge>
+              <p className="text-[11px] text-slate-500 mt-1">Profile, push notifications and devices</p>
+            </div>
+            <ChevronRight className="h-4 w-4 text-slate-300 shrink-0" />
+          </CardContent>
+        </Card>
+      </Link>
 
       {/* Grouped Menu — built from the modules this user can view */}
       <div className="space-y-2">
