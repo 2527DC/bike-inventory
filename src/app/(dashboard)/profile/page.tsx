@@ -12,14 +12,14 @@
 // No polling.
 
 import { useCallback, useEffect, useState } from "react";
-import { useSession } from "next-auth/react";
-import { Laptop, Loader2, Smartphone, Trash2, User } from "lucide-react";
+import { signOut, useSession } from "next-auth/react";
+import { Laptop, Loader2, LogOut, Smartphone, Trash2, User } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { EnablePushButton } from "@/components/enable-push-button";
 import { NotificationPreferences } from "@/components/notification-preferences";
-import { usePermissions } from "@/lib/use-permissions";
+import { clearPermissionCache, usePermissions } from "@/lib/use-permissions";
 import { apiFetch, apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 import type { DeviceView } from "@/lib/notify/types";
@@ -64,6 +64,12 @@ export default function ProfilePage() {
     } finally {
       setRemoving(null);
     }
+  }
+
+  function handleSignOut() {
+    log.info("sign out");
+    clearPermissionCache();
+    void signOut({ callbackUrl: "/login" });
   }
 
   return (
@@ -149,6 +155,17 @@ export default function ProfilePage() {
 
       {/* Personal mutes — moved here from /more */}
       <NotificationPreferences />
+
+      {/* Sign Out — destructive, set apart. The mobile header's avatar opens this page, so this
+          is the phone's way out; the desktop sidebar keeps its own button. */}
+      <button
+        type="button"
+        onClick={handleSignOut}
+        className="flex items-center gap-3 px-4 py-3 min-h-[44px] rounded-xl border border-red-200 bg-white hover:bg-red-50 transition-colors w-full mt-4 focus-ring"
+      >
+        <LogOut className="h-5 w-5 text-red-500 shrink-0" />
+        <span className="text-sm font-semibold text-red-600">Sign Out</span>
+      </button>
     </div>
   );
 }

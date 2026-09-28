@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, X, LayoutDashboard, MoreHorizontal, ChevronRight, ChevronDown, UserRound } from "lucide-react";
+import { Menu, X, LayoutDashboard, MoreHorizontal, ChevronRight, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePermissions } from "@/lib/use-permissions";
 import { moduleIcon } from "@/lib/module-icons";
@@ -245,19 +245,6 @@ export function HeaderMenu({ className }: { className?: string }) {
               ))}
 
               <div className="mt-4 pt-3 border-t border-slate-100">
-                {/* Every user's own page — push on this device, devices, mutes (plan 2809) */}
-                <Link
-                  href="/profile"
-                  onClick={() => setOpen(false)}
-                  className={cn(
-                    "flex items-center gap-3 px-3 py-2.5 min-h-[44px] rounded-lg hover:bg-slate-50 transition-colors focus-ring",
-                    isActive("/profile") ? "bg-slate-100 text-slate-900 font-semibold" : "text-slate-700"
-                  )}
-                >
-                  <UserRound className="h-4 w-4 text-slate-500 shrink-0" />
-                  <span className="flex-1 text-sm">Profile and notifications</span>
-                  <ChevronRight className="h-4 w-4 text-slate-300 shrink-0" />
-                </Link>
                 <Link
                   href="/more"
                   onClick={() => setOpen(false)}

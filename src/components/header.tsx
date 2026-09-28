@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { HeaderMenu } from "@/components/header-menu";
 import { ApprovalsBadge } from "@/components/approvals-badge";
@@ -36,14 +37,22 @@ export function Header() {
           <ApprovalsBadge />
           {/* The user's own notifications (plan 2309). Always present; counts unread. */}
           <NotificationsBell />
-          <span className="text-sm text-slate-500 hidden min-[400px]:block">
-            {userName}
-          </span>
-          <div className="h-8 w-8 rounded-full bg-slate-200 flex items-center justify-center">
-            <span className="text-xs font-semibold text-slate-600">
-              {initials}
+          {/* Name + avatar open /profile — push, devices, mutes and Sign Out. The drawer no
+              longer carries a profile link; this is the one way in on a phone. */}
+          <Link
+            href="/profile"
+            aria-label="Profile and sign out"
+            className="flex items-center gap-2 rounded-lg -m-1 p-1 hover:bg-slate-100 transition-colors focus-ring"
+          >
+            <span className="text-sm text-slate-500 hidden min-[400px]:block">
+              {userName}
             </span>
-          </div>
+            <span className="h-8 w-8 rounded-full bg-slate-200 flex items-center justify-center">
+              <span className="text-xs font-semibold text-slate-600">
+                {initials}
+              </span>
+            </span>
+          </Link>
           <HeaderMenu />
         </div>
       </div>
