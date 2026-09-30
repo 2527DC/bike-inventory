@@ -69,11 +69,10 @@ export function isPlaceholderBrand(name: string | null | undefined): boolean {
  *   products land on the placeholder. It is the exception again, so the /stock card tests it
  *   once more and renders it muted — the same treatment a placeholder brand gets.
  *
- * Still NOT part of the "Needs details" filter (`api/products/route.ts`), which matches on
- * brand only. Display and filter therefore disagree about category on purpose: a muted
- * category tells a person to look, it does not put the row in the fix-up queue. If that queue
- * is ever widened to include category, change both together — a card that flags a row the
- * filter passes by is the same failure, in the other direction.
+ * Part of the "Needs details" filter (`api/products/route.ts`) again since plan 3009: a product
+ * with a placeholder brand OR a placeholder category is in the fix-up queue. Display and filter
+ * agree once more — keep it that way; a card that flags a row the filter passes by (or the
+ * reverse) is the failure this file exists to prevent.
  */
 export function isPlaceholderCategory(name: string | null | undefined): boolean {
   return (name ?? "").trim().toLowerCase() === PLACEHOLDER_CATEGORY.toLowerCase();

@@ -30,7 +30,6 @@ interface StockCountItemData {
   assembledQty: number | null;
   unassembledQty: number | null;
   variance: number | null;
-  suggestedBrand: string | null;
   notes: string | null;
   countedAt: string | null;
   product: {
@@ -151,8 +150,6 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
   // Screenshot receipt shown when a count is completed (WhatsApp verification gate)
   const [receipt, setReceipt] = useState<{ referenceId: string; items: Array<{ label: string; value: string }> } | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [brands, setBrands] = useState<Record<string, string>>({});
-  const [brandList, setBrandList] = useState<string[]>([]);
   const [items, setItems] = useState<StockCountItemData[]>([]);
   const [loadingSummary, setLoadingSummary] = useState(true);
   const [loadingItems, setLoadingItems] = useState(false);
@@ -287,21 +284,6 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
 
   useEffect(() => { fetchSummary(); }, [fetchSummary]);
   useEffect(() => { fetchItems(); }, [fetchItems]);
-  useEffect(() => {
-    // The pick-existing list for the per-line brand suggestion. Once brands carry an active
-    // flag this returns the active ones only, with no change here.
-    let cancelled = false;
-    (async () => {
-      const { data, error } = await apiTry<Array<{ name: string }>>("/api/brands");
-      if (cancelled) return;
-      if (error) {
-        log.error("brand list failed", { countId: id, message: error });
-        return;
-      }
-      setBrandList((data ?? []).map((b) => b.name));
-    })();
-    return () => { cancelled = true; };
-  }, [id]);
 
   // "Add a product" typeahead (Q26). Hits and the spinner are cleared in the input's onChange,
   // so this effect only sets state after its await (react-hooks/set-state-in-effect).
@@ -374,7 +356,6 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
         id: itemId,
         countedQty: counts[itemId]!,
         ...splitFields(itemId),
-        ...(brands[itemId] ? { suggestedBrand: brands[itemId] } : {}),
       }));
 
     if (batch.length === 0) return;
@@ -408,12 +389,10 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
         id: itemId,
         countedQty: val!,
         ...splitFields(itemId),
-        ...(brands[itemId] ? { suggestedBrand: brands[itemId] } : {}),
       }));
 
     if (batch.length === 0) {
-      // Nothing to send — a row can be dirty with only a brand suggestion and no count. That
-      // suggestion has nothing to attach to yet, so it is not a reason to hold up anything.
+      // Nothing to send — every dirty row was cleared back to no count.
       dirtyRef.current = new Set();
       return;
     }
@@ -1007,27 +986,6 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                           </div>
                         );
                       })()}
-                      <div className="mt-1">
-                        <label className="text-[11px] text-slate-500 mb-0.5 block">
-                          Brand {item.product.brand ? `(current: ${item.product.brand.name})` : ""}
-                        </label>
-                        {/* PICK, NEVER CREATE (R5). This select used to end in "+ Add new
-                            brand…", which POSTed to /api/brands without reading the answer —
-                            a counter without brands.create got a name that existed only on
-                            their screen. A stock audit suggests an existing brand; creating
-                            one is brands.create on /more/brands, and stays there. */}
-                        <select
-                          value={brands[item.id] ?? item.suggestedBrand ?? ""}
-                          onChange={(e) => {
-                            setBrands((prev) => ({ ...prev, [item.id]: e.target.value }));
-                            if (e.target.value) dirtyRef.current.add(item.id);
-                          }}
-                          className="w-full rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400"
-                        >
-                          <option value="">— Keep current —</option>
-                          {brandList.map((b) => <option key={b} value={b}>{b}</option>)}
-                        </select>
-                      </div>
                     </div>
                   ) : item.countedQty !== null ? (
                     <div className="flex items-center gap-2 mt-2 text-xs tabular-nums">

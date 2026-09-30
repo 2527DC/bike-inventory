@@ -12,7 +12,7 @@ import {
 import { productSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
-import { PLACEHOLDER_BRAND_NAMES_LOWER } from "@/lib/import-placeholders";
+import { PLACEHOLDER_BRAND_NAMES_LOWER, PLACEHOLDER_CATEGORY } from "@/lib/import-placeholders";
 import { storeById } from "@/lib/stores";
 import { createLogger } from "@/lib/logger";
 import { categorySubtreeIds } from "@/lib/categories/tree";
@@ -83,17 +83,18 @@ export async function GET(req: NextRequest) {
     if (noAssemblyOnly) and.push(hasNoAssemblyUnitsWhere(storeId));
 
     if (needsDetails) {
-      // A product "needs details" when nobody has given it a real brand. `Product.brandId` is
-      // non-null, so an import with no brand cannot record "unknown" — it writes one of the
-      // placeholder names instead, and matching those IS the query for "nobody has looked at
-      // this row yet". Case-insensitive, and sharing `PLACEHOLDER_BRAND_NAMES_LOWER` with
-      // `isPlaceholderBrand` so the filter and the card can never disagree: if they did, a
-      // row would render as needing a brand while the filter meant to collect it passed by.
+      log.debug("needs-details filter", { hasSearch: Boolean(search), storeId: storeId ?? null });
+      // A product "needs details" when nobody has given it a real brand OR a real category
+      // (plan 3009, R1–R3). Either one is enough. `Product.brandId` and `categoryId` are
+      // non-null, so an import with no value cannot record "unknown" — it writes a placeholder
+      // name instead, and matching those IS the query for "nobody has looked at this row yet".
+      // Case-insensitive, sharing `PLACEHOLDER_BRAND_NAMES_LOWER` / `PLACEHOLDER_CATEGORY` with
+      // `isPlaceholderBrand` / `isPlaceholderCategory` so the filter and the card can never
+      // disagree: if they did, a row would render as needing details while the filter passed it by.
       //
-      // CATEGORY IS DELIBERATELY NOT TESTED HERE, and must not be added back. Every product
-      // the catalog import creates is `Uncategorized`, so the name is the normal state of the
-      // whole catalog rather than the exception — including it would return all 8,175 rows
-      // and the filter would stop distinguishing anything.
+      // Category used to be excluded because every imported product was `Uncategorized`. The
+      // catalog import now writes the real Zoho category, so the placeholder is the exception
+      // again (665 of 5,738) and belongs in the queue.
       //
       // The bin is the other kind of missing detail, and the only one no import could ever
       // fill: a bin is a physical shelf here and Zoho has never heard of it. Bins are always on
@@ -105,6 +106,7 @@ export async function GET(req: NextRequest) {
       and.push({
         OR: [
           { brand: { name: { in: PLACEHOLDER_BRAND_NAMES_LOWER, mode: "insensitive" as const } } },
+          { category: { name: { equals: PLACEHOLDER_CATEGORY, mode: "insensitive" as const } } },
           productHasNoBinWhere(),
         ],
       });

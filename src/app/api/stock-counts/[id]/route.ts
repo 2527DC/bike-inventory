@@ -6,7 +6,6 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { stockCountUpdateSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { userCan } from "@/lib/rbac";
-import { isPlaceholderBrand } from "@/lib/import-placeholders";
 import { logActivity } from "@/lib/activity-log";
 import { recordApprovalEvent } from "@/lib/approvals/events";
 import { syncBinStock } from "@/lib/units";
@@ -304,12 +303,6 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     // Filled inside the transaction when `correctionTarget` is set; null for verify-only.
     let applied: AppliedSummary | null = null;
 
-    // Suggested brands the count could NOT apply, one line per unmatched name (§6). A stock
-    // count no longer creates brands, so the person who typed the suggestion has to hear
-    // that it was not applied — silence would read as "applied", and the product would keep
-    // its placeholder brand with nobody the wiser.
-    const brandNotices: string[] = [];
-
     const result = await prisma.$transaction(async (tx) => {
       if (data.items && data.items.length > 0) {
         for (const item of data.items) {
@@ -370,7 +363,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         const countedItems = await tx.stockCountItem.findMany({
           where: { stockCountId: id, countedQty: { not: null } },
           include: {
-            product: { select: { id: true, name: true, sku: true, brandId: true, brand: { select: { name: true } } } },
+            product: { select: { id: true, name: true, sku: true } },
           },
         });
 
@@ -401,39 +394,6 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           const product = item.product;
           const live = liveMap.get(item.productId) ?? 0;
           const delta = counted - live;
-
-          // Apply the counter's suggested brand only when the current one carries no
-          // information. The three "no brand" names this catalog has collected used to be
-          // listed inline here; they now live in `isPlaceholderBrand`, so this test, the
-          // /stock card and the "Needs details" filter share one definition and cannot drift
-          // apart. A real brand is never overwritten by a count.
-          let brandUpdate: Record<string, string> = {};
-          if (item.suggestedBrand && (!product.brand || isPlaceholderBrand(product.brand.name))) {
-            const targetBrand = await tx.brand.findFirst({
-              where: { name: { equals: item.suggestedBrand, mode: "insensitive" } },
-            });
-            if (targetBrand) {
-              brandUpdate = { brandId: targetBrand.id };
-              log.info("suggested brand matched", {
-                stockCountId: id, productId: product.id, brandId: targetBrand.id,
-              });
-            } else {
-              // MATCH ONLY (§6). This used to `brand.create` whatever the counter typed, so
-              // a typo on a shelf became a permanent row in the brand list. The product keeps
-              // the brandId it already has — non-null, so nothing is left dangling — and the
-              // unmatched name is reported back instead. Creating a brand is `brands.create`
-              // on /more/brands, and it stays there.
-              const notice = `brand "${item.suggestedBrand}" is not in the list; create it on /more/brands`;
-              if (!brandNotices.includes(notice)) brandNotices.push(notice);
-              log.warn("suggested brand not in the list — left unchanged", {
-                stockCountId: id, productId: product.id, suggestedBrand: item.suggestedBrand,
-              });
-            }
-          }
-
-          if (Object.keys(brandUpdate).length) {
-            await tx.product.update({ where: { id: product.id }, data: brandUpdate });
-          }
 
           summary.lines += 1;
           if (counted === 0) {
@@ -650,10 +610,11 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       }
     }
 
-    // `brandNotices` and `applied` ride alongside the updated count rather than replacing
-    // the response shape — every existing reader of this endpoint keeps the object it
-    // already reads. `applied` is null unless stock was actually corrected.
-    return successResponse({ ...result, brandNotices, applied });
+    // `applied` rides alongside the updated count rather than replacing the response shape —
+    // every existing reader of this endpoint keeps the object it already reads. `applied` is
+    // null unless stock was actually corrected. A count never changes a product's brand
+    // (plan 3009, R6); `brandNotices` went with the brand-apply block.
+    return successResponse({ ...result, applied });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
     // This is the route that overwrites stock; a failed approval must leave a server-side

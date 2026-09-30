@@ -27,7 +27,6 @@ const lineSchema = z
     countedQty: qty.optional(),
     assembledQty: qty.optional(),
     unassembledQty: qty.optional(),
-    suggestedBrand: z.string().max(200).nullable().optional(),
     notes: z.string().max(1000).nullable().optional(),
   })
   .refine((l) => l.countedQty !== undefined || (l.assembledQty !== undefined && l.unassembledQty !== undefined), {
@@ -233,7 +232,6 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
             assembledQty: split ? item.assembledQty! : null,
             unassembledQty: split ? item.unassembledQty! : null,
             variance: countedQty - existing.systemQty,
-            suggestedBrand: item.suggestedBrand ?? existing.suggestedBrand,
             notes: item.notes ?? existing.notes,
             countedAt: new Date(),
           },
