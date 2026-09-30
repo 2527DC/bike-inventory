@@ -24,7 +24,6 @@ interface StockCountItem {
   variance: number | null;
   /** Stock in the audit's scope NOW, as opposed to `systemQty`, the snapshot at raise time. */
   liveQty?: number;
-  suggestedBrand: string | null;
   notes: string | null;
   countedAt: string | null;
   product: {
@@ -89,7 +88,6 @@ const EXPORT_COLS: ExportColumn[] = [
   { header: "SKU", key: "sku" },
   { header: "Product", key: "name" },
   { header: "Brand", key: "brand" },
-  { header: "Suggested Brand", key: "suggestedBrand" },
   { header: "System Qty", key: "systemQty" },
   { header: "Now", key: "liveQty" },
   { header: "Counted Qty", key: "countedQty" },
@@ -220,7 +218,6 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
     sku: i.product.sku,
     name: i.product.name,
     brand: i.product.brand?.name || "—",
-    suggestedBrand: i.suggestedBrand || "—",
     systemQty: i.systemQty,
     liveQty: liveOf(i),
     countedQty: i.countedQty ?? "—",
@@ -457,9 +454,6 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
             </div>
             <div className="flex items-center gap-1 mt-1 text-[10px] text-slate-500">
               {item.product.brand?.name && <span>{item.product.brand.name}</span>}
-              {item.suggestedBrand && (
-                <span className="text-amber-600"> (Sug: {item.suggestedBrand})</span>
-              )}
             </div>
             <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-100">
               <div className="text-center flex-1">

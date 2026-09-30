@@ -224,7 +224,6 @@ export const stockCountUpdateSchema = z.object({
       z.object({
         id: z.string(),
         countedQty: z.number().int().min(0),
-        suggestedBrand: z.string().optional(),
         notes: z.string().optional(),
       })
     )

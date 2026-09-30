@@ -463,84 +463,95 @@ function StockScreen() {
     onSetStatus: (p, status) => { void setProductStatus(p, status); },
   };
 
+  // Header actions, built once and placed by breakpoint below (desktop header row vs. the phone
+  // scrolling toolbar). The two scope cross-links — By Location (per warehouse) and By Store (the
+  // sum of a store's warehouses; plan 0909-stock-store-and-warehouse-scoping, B4) — read as
+  // destinations, and all of these hide in select mode.
+  const toolbarBtn = "flex items-center gap-1 px-3 py-1.5 min-h-[36px] text-xs font-medium whitespace-nowrap";
+  const scopeLinks = (
+    <>
+      <Link href="/stock/by-bin" className={`${toolbarBtn} rounded-lg bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100`}>
+        <MapPin className="h-3.5 w-3.5" /> By Location
+      </Link>
+      <Link href="/stock/by-store" className={`${toolbarBtn} rounded-lg bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100`}>
+        <Store className="h-3.5 w-3.5" /> By Store
+      </Link>
+    </>
+  );
+  const selectButton = canBulkEdit ? (
+    <button onClick={() => setSelectMode(true)} className={`${toolbarBtn} rounded-lg bg-slate-100 border border-slate-200 text-slate-600 hover:bg-slate-200`}>
+      <CheckSquare className="h-3.5 w-3.5" /> Select
+    </button>
+  ) : null;
+  const exportButtons = (
+    <ExportButtons
+      onExcel={() => exportToExcel(filtered as unknown as Record<string, unknown>[], STOCK_COLUMNS, "stock-inventory")}
+      onPDF={() => exportToPDF("Stock Inventory", filtered as unknown as Record<string, unknown>[], STOCK_COLUMNS, "stock-inventory")}
+    />
+  );
+  // Categories and Brands left the sidebar and live here; each shows only to a role holding its
+  // view grant — cosmetic, the screens re-check. "Assembled vs unassembled" is stock.view, which
+  // this page already is.
+  const relatedLinks = (
+    <>
+      {canView("categories") && (
+        <Link href="/categories" className={`${toolbarBtn} rounded-full bg-violet-50 border border-violet-200 text-violet-700 hover:bg-violet-100`}>
+          <Layers className="h-3.5 w-3.5" /> Categories
+        </Link>
+      )}
+      {canView("brands") && (
+        <Link href="/more/brands" className={`${toolbarBtn} rounded-full bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100`}>
+          <Tags className="h-3.5 w-3.5" /> Brands
+        </Link>
+      )}
+      <Link href="/stock/condition" className={`${toolbarBtn} rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-100`}>
+        <BarChart3 className="h-3.5 w-3.5" /> Assembled vs unassembled
+      </Link>
+    </>
+  );
+
   return (
     <div>
-      {/* Header */}
+      {/* Header. Desktop keeps title-left / actions-right with the chips row below. On a phone
+          that row cannot hold eight buttons, so below lg the title stands alone and every action
+          and chip moves into one toolbar that scrolls sideways instead of squeezing. */}
       <div className="flex items-center justify-between mb-2">
         <h1 className="text-lg font-bold text-slate-900">
           {selectMode ? `${selectedIds.size} selected` : "Stock"}
         </h1>
         <div className="flex items-center gap-1.5">
-          {/* The two scope cross-links — By Location (per warehouse) and By Store (the sum of
-              a store's warehouses; plan 0909-stock-store-and-warehouse-scoping, B4). They sit
-              in the header action row so they read as destinations, not orphaned tabs, and
-              hide in select mode like the other actions beside them. */}
-          {!selectMode && (
-            <Link
-              href="/stock/by-bin"
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100"
-            >
-              <MapPin className="h-3.5 w-3.5" /> By Location
-            </Link>
-          )}
-          {!selectMode && (
-            <Link
-              href="/stock/by-store"
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100"
-            >
-              <Store className="h-3.5 w-3.5" /> By Store
-            </Link>
-          )}
-          {canBulkEdit && !selectMode && (
-            <button
-              onClick={() => setSelectMode(true)}
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200"
-            >
-              <CheckSquare className="h-3.5 w-3.5" /> Select
-            </button>
-          )}
+          {!selectMode && <div className="hidden lg:flex items-center gap-1.5">{scopeLinks}{selectButton}{exportButtons}</div>}
           {selectMode && (
             <button onClick={exitSelectMode}
               className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-900 text-white">
               <X className="h-3.5 w-3.5" /> Cancel
             </button>
           )}
-          {!selectMode && (
-            <ExportButtons
-              onExcel={() => exportToExcel(filtered as unknown as Record<string, unknown>[], STOCK_COLUMNS, "stock-inventory")}
-              onPDF={() => exportToPDF("Stock Inventory", filtered as unknown as Record<string, unknown>[], STOCK_COLUMNS, "stock-inventory")}
-            />
-          )}
         </div>
       </div>
 
-      {/* Stock & inventory's own chips (plan 1709, R33, R11). Categories and Brands left the
-          sidebar and live here; each shows only to a role holding its view grant — cosmetic, the
-          screens re-check. "Assembled vs unassembled" is stock.view, which this page already is. */}
+      {/* Phone toolbar: views | select | export | related pages, one swipeable row. The right-edge
+          fade tells the user there is more to scroll to. */}
       {!selectMode && (
-        <div className="flex gap-1.5 overflow-x-auto scrollbar-hide pb-0.5 mb-2">
-          {canView("categories") && (
-            <Link
-              href="/categories"
-              className="shrink-0 flex items-center gap-1 px-3 py-1.5 min-h-[36px] rounded-full text-xs font-medium bg-violet-50 border border-violet-200 text-violet-700 hover:bg-violet-100"
-            >
-              <Layers className="h-3.5 w-3.5" /> Categories
-            </Link>
-          )}
-          {canView("brands") && (
-            <Link
-              href="/more/brands"
-              className="shrink-0 flex items-center gap-1 px-3 py-1.5 min-h-[36px] rounded-full text-xs font-medium bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100"
-            >
-              <Tags className="h-3.5 w-3.5" /> Brands
-            </Link>
-          )}
-          <Link
-            href="/stock/condition"
-            className="shrink-0 flex items-center gap-1 px-3 py-1.5 min-h-[36px] rounded-full text-xs font-medium bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-100"
-          >
-            <BarChart3 className="h-3.5 w-3.5" /> Assembled vs unassembled
-          </Link>
+        <div className="relative lg:hidden mb-2">
+          <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5 pr-6 [&>*]:shrink-0 [&_button]:min-h-[36px]">
+            {scopeLinks}
+            {selectButton && <span className="h-5 w-px bg-slate-200" aria-hidden />}
+            {selectButton}
+            <span className="h-5 w-px bg-slate-200" aria-hidden />
+            {exportButtons}
+            <span className="h-5 w-px bg-slate-200" aria-hidden />
+            {relatedLinks}
+          </div>
+          <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-slate-50 to-transparent" aria-hidden />
+        </div>
+      )}
+
+      {/* Stock & inventory's own chips (plan 1709, R33, R11) — desktop row. On a phone they live
+          in the toolbar above. */}
+      {!selectMode && (
+        <div className="hidden lg:flex gap-1.5 overflow-x-auto scrollbar-hide pb-0.5 mb-2 [&>*]:shrink-0">
+          {relatedLinks}
         </div>
       )}
 
