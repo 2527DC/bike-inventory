@@ -210,9 +210,9 @@ export const ENDPOINTS = {
   "items.list.inventory": {
     key: "items.list.inventory",
     method: "GET",
-    path: "/items?page&per_page&filter_by",
+    path: "/items?page&per_page&filter_by&last_modified_time",
     providers: INVENTORY_ONLY,
-    owner: "InventoryClient.listItems / listAllItems",
+    owner: "InventoryClient.listItems / listAllItems / listAllActiveItems",
     purpose:
       "item_id -> category_id for every item, so the category import files each product under its Zoho category (plan 1709, R47). Read only",
   },

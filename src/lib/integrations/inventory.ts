@@ -38,6 +38,14 @@ export interface ZohoItem {
   category_id?: string;
   category_name?: string;
   status?: string;
+  brand?: string;
+  rate?: number;
+  purchase_rate?: number;
+  tax_percentage?: number;
+  hsn_or_sac?: string;
+  stock_on_hand?: number;
+  created_time?: string;
+  last_modified_time?: string;
 }
 
 /** base.ts declares this shape but does not export it; the two files must not drift. */
@@ -163,13 +171,51 @@ export class InventoryClient extends IntegrationClient {
   /** Pages fetched concurrently by listAllItems. Well under Zoho's concurrent-call limit. */
   private static readonly ITEM_PAGE_WINDOW = 3;
 
-  async listItems(page = 1) {
+  async listItems(page = 1, filter_by?: string, last_modified_time?: string) {
+    const filter = filter_by ? `&filter_by=${filter_by}` : "&filter_by=Status.All";
+    const modified = last_modified_time
+      ? `&last_modified_time=${encodeURIComponent(last_modified_time)}`
+      : "";
     return this.apiCall<{ items: ZohoItem[] } & PageContext>(
       "GET",
-      `/items?page=${page}&per_page=200&filter_by=Status.All`,
+      `/items?page=${page}&per_page=200${filter}${modified}`,
       undefined,
       "items.list.inventory"
     );
+  }
+
+  /**
+   * Active items only, following `page_context.has_more_page`.
+   * Uses windowed pagination matching listAllItems with filter_by=Status.Active.
+   */
+  async listAllActiveItems(lastModifiedTime?: string): Promise<ZohoItem[]> {
+    const all: ZohoItem[] = [];
+    const started = Date.now();
+    let page = 1;
+    let pages = 0;
+    for (;;) {
+      const window = Array.from({ length: InventoryClient.ITEM_PAGE_WINDOW }, (_, i) => page + i);
+      const results = await Promise.all(
+        window.map((p) => this.listItems(p, "Status.Active", lastModifiedTime))
+      );
+      let more = true;
+      for (let i = 0; i < results.length; i++) {
+        const rows = (results[i].items || []).filter(
+          (item) => item.status?.toLowerCase() === "active"
+        );
+        pages++;
+        log.debug("active items page fetched", { page: window[i], rows: rows.length });
+        all.push(...rows);
+        if (!results[i].page_context?.has_more_page) {
+          more = false;
+          break;
+        }
+      }
+      if (!more) break;
+      page += InventoryClient.ITEM_PAGE_WINDOW;
+    }
+    log.info("active items pull finished", { items: all.length, pages, ms: Date.now() - started });
+    return all;
   }
 
   /**
