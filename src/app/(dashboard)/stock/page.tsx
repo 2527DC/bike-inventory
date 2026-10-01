@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, X, Package, Store, Tags, Layers, BarChart3 } from "lucide-react";
+import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, X, Package, Store, Tags, Layers, BarChart3, Cloud } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,7 @@ import { ASSEMBLY_LEVELS, type AssemblyLevelValue } from "@/lib/assembly-level";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useStores } from "@/hooks/use-sites";
 import { CategoryTreeSelect } from "@/components/category-tree-select";
+import { ZohoStockImportSheet } from "./_components/zoho-stock-import-sheet";
 
 const STOCK_COLUMNS: ExportColumn[] = [
   { header: "SKU", key: "sku" },
@@ -89,7 +90,7 @@ export default function StockPage() {
 
 function StockScreen() {
   const { data: session } = useSession();
-  const { canEdit, canView, canApprove } = usePermissions();
+  const { canEdit, canView, canApprove, canFetch } = usePermissions();
 
   // Deep links (plan 1709, R11): /stock/condition links here with the product's SKU and store,
   // and `?condition=no-assembly` opens the No assembly chip. Read ONCE as initial state — the
@@ -128,6 +129,10 @@ function StockScreen() {
   // assembly.approve; PUT /api/products/[id]/assembly-level demands the same, so the button and
   // the route can never disagree.
   const mayAssemblyLevel = canApprove("assembly");
+
+  // Zoho fetch: canFetch("zoho") or canFetch("stock") or canEdit("stock")
+  const mayFetchZoho = canFetch("zoho") || canFetch("stock") || canEdit("stock");
+  const [isZohoSheetOpen, setIsZohoSheetOpen] = useState(false);
 
   const [rowBusy, setRowBusy] = useState<string | null>(null);
 
@@ -271,10 +276,10 @@ function StockScreen() {
     }
   }
 
-  // Fetch brands + categories + bins once. apiTry, not `fetch().json()` (CLAUDE.md): each list
+  // Fetch brands + categories + bins. apiTry, not `fetch().json()` (CLAUDE.md): each list
   // failing on its own leaves its picker empty and says why in the log, rather than a parse
   // error from a login page swallowing all three.
-  useEffect(() => {
+  const reloadMasterData = useCallback(() => {
     void Promise.all([
       apiTry<BrandItem[]>("/api/brands"),
       apiTry<BinItem[]>("/api/bins"),
@@ -288,6 +293,10 @@ function StockScreen() {
       else log.warn("category list unavailable", { message: catsRes.error });
     });
   }, []);
+
+  useEffect(() => {
+    reloadMasterData();
+  }, [reloadMasterData]);
 
   // Vendors load only when the bulk Vendor tab is first opened, not with the brands and
   // categories above: most visits to /stock never enter select mode at all, and this list is
@@ -478,6 +487,14 @@ function StockScreen() {
       </Link>
     </>
   );
+  const zohoFetchButton = mayFetchZoho ? (
+    <button
+      onClick={() => setIsZohoSheetOpen(true)}
+      className={`${toolbarBtn} rounded-lg bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100`}
+    >
+      <Cloud className="h-3.5 w-3.5" /> Fetch from Zoho
+    </button>
+  ) : null;
   const selectButton = canBulkEdit ? (
     <button onClick={() => setSelectMode(true)} className={`${toolbarBtn} rounded-lg bg-slate-100 border border-slate-200 text-slate-600 hover:bg-slate-200`}>
       <CheckSquare className="h-3.5 w-3.5" /> Select
@@ -520,7 +537,7 @@ function StockScreen() {
           {selectMode ? `${selectedIds.size} selected` : "Stock"}
         </h1>
         <div className="flex items-center gap-1.5">
-          {!selectMode && <div className="hidden lg:flex items-center gap-1.5">{scopeLinks}{selectButton}{exportButtons}</div>}
+          {!selectMode && <div className="hidden lg:flex items-center gap-1.5">{scopeLinks}{zohoFetchButton}{selectButton}{exportButtons}</div>}
           {selectMode && (
             <button onClick={exitSelectMode}
               className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-900 text-white">
@@ -536,6 +553,8 @@ function StockScreen() {
         <div className="relative lg:hidden mb-2">
           <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5 pr-6 [&>*]:shrink-0 [&_button]:min-h-[36px]">
             {scopeLinks}
+            {zohoFetchButton && <span className="h-5 w-px bg-slate-200" aria-hidden />}
+            {zohoFetchButton}
             {selectButton && <span className="h-5 w-px bg-slate-200" aria-hidden />}
             {selectButton}
             <span className="h-5 w-px bg-slate-200" aria-hidden />
@@ -801,6 +820,15 @@ function StockScreen() {
         product={levelTarget}
         onClose={() => setLevelTarget(null)}
         onSaved={applyAssemblyLevelSaved}
+      />
+
+      <ZohoStockImportSheet
+        isOpen={isZohoSheetOpen}
+        onClose={() => setIsZohoSheetOpen(false)}
+        onImportComplete={() => {
+          fetchProducts(1);
+          reloadMasterData();
+        }}
       />
 
       {rowOutcome && (

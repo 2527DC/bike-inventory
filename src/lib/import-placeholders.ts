@@ -23,6 +23,7 @@
  * the marker.
  */
 export const PLACEHOLDER_BRAND = "Imported";
+export const DEFAULT_BRAND = "Unbranded";
 export const PLACEHOLDER_CATEGORY = "Uncategorized";
 
 /**
