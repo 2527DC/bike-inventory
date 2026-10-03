@@ -7,6 +7,7 @@ import { binSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { createLogger } from "@/lib/logger";
 import { getBinUnitCounts, EMPTY_BIN_COUNTS } from "@/lib/bins/unit-counts";
+import { binDeleteBlockers, binDeleteRefusal } from "@/lib/bins/delete-check";
 
 const log = createLogger("bins:crud");
 
@@ -25,7 +26,8 @@ export async function GET(req: NextRequest) {
       where,
       include: {
         warehouse: { select: { id: true, name: true, code: true, kind: true } },
-        _count: { select: { products: true, binStocks: true, units: true } },
+        // `homeBinRules` lets the delete dialog say how many rules go with the bin (plan 0310, Q1).
+        _count: { select: { products: true, binStocks: true, units: true, homeBinRules: true } },
       },
       orderBy: [{ warehouse: { name: "asc" } }, { code: "asc" }],
     });
@@ -46,20 +48,23 @@ export async function POST(req: NextRequest) {
     await requireFeature("bins", "create");
     const body = await req.json();
     const data = binSchema.parse(body);
+    // Normalised ONCE, before the lookup: rows are stored trimmed and upper-cased, so looking up
+    // the raw "a1" missed a deleted "A1" and the create then died on the unique index.
+    const code = data.code.trim().toUpperCase();
 
     // Check for duplicate code within the same warehouse
     const existing = await prisma.bin.findUnique({
       where: {
         warehouseId_code: {
           warehouseId: data.warehouseId,
-          code: data.code,
+          code,
         },
       },
     });
 
-    if (existing) {
+    if (existing?.isActive) {
       return errorResponse(
-        `Bin code "${data.code}" already exists in this warehouse. Try a different code.`,
+        `Bin code "${code}" already exists in this warehouse. Try a different code.`,
         409
       );
     }
@@ -72,23 +77,51 @@ export async function POST(req: NextRequest) {
     // and this is the only route that may set the flag.
     const nonAssemblable = body?.nonAssemblable === true;
 
+    const fields = {
+      code,
+      name: data.name.trim(),
+      location: data.location || null,
+      directions: data.directions || null,
+      floor: data.floor || null,
+      zone: data.zone || null,
+      capacity: data.capacity ?? null,
+      isAssemblyArea: data.isAssemblyArea ?? false,
+      nonAssemblable,
+    };
+    const include = { warehouse: { select: { id: true, name: true, code: true, kind: true } } };
+
+    // ── A DELETED BIN'S CODE IS REUSABLE (plan 0310, Q3) ──
+    //
+    // Delete is soft, so the row — and `@@unique([warehouseId, code])` — survive it. Creating
+    // that code again brings the row back with the new details, keeping its movement history.
+    // Choosing `nonAssemblable` afresh is safe only because the bin is empty; a bin retired by the
+    // old Active checkbox may still hold items, and is refused rather than revived around them.
+    if (existing) {
+      const blockers = await binDeleteBlockers(prisma, existing.id);
+      if (!blockers.empty) {
+        log.warn("bin revive refused", { binId: existing.id, code: existing.code, items: blockers.items });
+        return errorResponse(
+          `A deleted bin ${existing.code} in this warehouse still holds items, so its code cannot be reused yet. ${binDeleteRefusal(existing.code, blockers)}`,
+          409
+        );
+      }
+      const revived = await prisma.bin.update({
+        where: { id: existing.id },
+        data: { ...fields, isActive: true },
+        include,
+      });
+      log.info("bin revived from retired row", {
+        binId: revived.id,
+        code: revived.code,
+        warehouseId: revived.warehouseId,
+        nonAssemblable: revived.nonAssemblable,
+      });
+      return successResponse(revived, 201);
+    }
+
     const bin = await prisma.bin.create({
-      data: {
-        code: data.code.trim().toUpperCase(),
-        name: data.name.trim(),
-        warehouseId: data.warehouseId,
-        location: data.location || null,
-        directions: data.directions || null,
-        floor: data.floor || null,
-        zone: data.zone || null,
-        capacity: data.capacity ?? null,
-        isAssemblyArea: data.isAssemblyArea ?? false,
-        nonAssemblable,
-        isActive: data.isActive ?? true,
-      },
-      include: {
-        warehouse: { select: { id: true, name: true, code: true, kind: true } },
-      },
+      data: { ...fields, warehouseId: data.warehouseId, isActive: data.isActive ?? true },
+      include,
     });
     log.info("bin created", {
       binId: bin.id,
