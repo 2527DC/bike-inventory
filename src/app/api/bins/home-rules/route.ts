@@ -4,6 +4,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { z } from "zod";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("bins:home-rules");
@@ -89,22 +90,47 @@ export async function GET(req: NextRequest) {
   }
 }
 
+/**
+ * The body of a rule save — plan 0310-bin-delete-multi-category-rules-and-transfer-directions, R5.
+ *
+ * `categoryIds` is the new shape: one brand, one bin, MANY categories, saved in one go (Q4). The
+ * older single `categoryId` / `subcategoryId` pair is still accepted and becomes a one-item list,
+ * so nothing that sends the old body breaks.
+ */
+const ruleSaveSchema = z.object({
+  warehouseId: z.string({ error: "Choose the warehouse this rule is for" }).min(1, "Choose the warehouse this rule is for"),
+  brandId: z.string({ error: "Choose a brand" }).min(1, "Choose a brand"),
+  binId: z.string({ error: "Choose the home bin" }).min(1, "Choose the home bin"),
+  categoryIds: z.array(z.string().min(1)).max(200, "At most 200 categories in one save").optional(),
+  categoryId: z.string().optional(),
+  subcategoryId: z.string().optional(),
+});
+
+/** "Cycles › Kids › 16 inch" from rows already in memory — no query per step (cf. `categoryPath`). */
+function pathFrom(rows: Map<string, { name: string; parentId: string | null }>, id: string): string {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  let current: string | null = id;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const row = rows.get(current);
+    if (!row) break;
+    names.unshift(row.name);
+    current = row.parentId;
+  }
+  return names.join(" › ");
+}
+
 export async function POST(req: NextRequest) {
   try {
     await requireFeature("bins", "edit");
-    const body = await req.json();
+    const body = ruleSaveSchema.parse(await req.json());
     const { warehouseId, brandId, binId } = body;
-    // R39, P13: the form sends a root category and — when that root has children — the
-    // subcategory under it. The SUBCATEGORY is what the rule stores; `categoryId` is only how
-    // the user got there.
-    const chosenCategoryId: string | null =
-      (typeof body.subcategoryId === "string" && body.subcategoryId.trim()) ||
-      (typeof body.categoryId === "string" && body.categoryId.trim()) ||
-      null;
 
-    if (!warehouseId || !binId) {
-      return errorResponse("warehouseId and binId are required", 400);
-    }
+    // R39, P13 kept: the legacy body sends a root and, when it has children, the subcategory —
+    // the SUBCATEGORY is what the rule stores.
+    const requested = body.categoryIds ?? [body.subcategoryId?.trim() || body.categoryId?.trim() || ""];
+    const categoryIds = [...new Set(requested.map((c) => c.trim()).filter(Boolean))];
 
     // ── A RULE IS ALWAYS BRAND + CATEGORY (plan 2109-bin-audit-lists-rule-products, R5) ──
     //
@@ -112,30 +138,36 @@ export async function POST(req: NextRequest) {
     // (R1). A brand-only, category-only or single-product rule would still place items at
     // inbound but list nothing, so those items would never be on a count list. The owner chose
     // to require both (Q6a). Old rules of other kinds are flagged by GET (`incomplete`).
-    if (!brandId || !chosenCategoryId) {
+    if (categoryIds.length === 0) {
       log.warn("home bin rule refused", { reason: "brand and category required", warehouseId, binId });
-      return errorResponse("Choose a brand and a category", 400);
+      return errorResponse("Choose a brand and at least one category", 400);
     }
 
-    // ── A RULE ALWAYS NAMES A LEAF (P13) ──
+    const brand = await prisma.brand.findUnique({ where: { id: brandId }, select: { id: true, name: true, isActive: true } });
+    if (!brand) return errorResponse("That brand does not exist", 400);
+    if (!brand.isActive) return errorResponse(`${brand.name} is inactive — activate it or choose another brand`, 400);
+
+    // ── EVERY RULE NAMES A LEAF (P13) ──
     //
     // A rule on a parent would have to mean either "this category only" or "the whole
     // subtree", and nothing on the screen said which. So it is refused: choose the
-    // subcategory. Only ACTIVE children count — a category whose children were all
-    // deactivated is a leaf again, and blocking it would strand the rule.
-    if (chosenCategoryId) {
-      const category = await prisma.category.findUnique({
-        where: { id: chosenCategoryId },
-        select: { id: true, name: true, isActive: true },
-      });
-      if (!category) return errorResponse("That category does not exist", 400);
+    // subcategory. Only ACTIVE children count — a category whose children were all deactivated
+    // is a leaf again, and blocking it would strand the rule. One read of the whole table
+    // answers this for every chosen category AND builds their paths, instead of a query each.
+    const all = await prisma.category.findMany({ select: { id: true, name: true, parentId: true, isActive: true } });
+    const byId = new Map(all.map((c) => [c.id, c]));
+    const withActiveChildren = new Set(all.filter((c) => c.isActive && c.parentId).map((c) => c.parentId as string));
 
-      const activeChildren = await prisma.category.count({
-        where: { parentId: chosenCategoryId, isActive: true },
-      });
-      if (activeChildren > 0) {
-        return errorResponse(`Choose a subcategory of ${category.name}`, 400);
-      }
+    const problems: string[] = [];
+    for (const id of categoryIds) {
+      const c = byId.get(id);
+      if (!c) problems.push("a category that no longer exists");
+      else if (!c.isActive) problems.push(`${pathFrom(byId, id)} (inactive)`);
+      else if (withActiveChildren.has(id)) problems.push(`${pathFrom(byId, id)} (choose a subcategory of it)`);
+    }
+    if (problems.length > 0) {
+      log.warn("home bin rule refused", { reason: "category not a usable leaf", warehouseId, binId, problems: problems.length });
+      return errorResponse(`These categories cannot take a rule: ${problems.join("; ")}`, 400);
     }
 
     // Verify bin belongs to warehouse
@@ -143,7 +175,6 @@ export async function POST(req: NextRequest) {
       where: { id: binId },
       select: { id: true, code: true, warehouseId: true, isActive: true },
     });
-
     if (!bin || bin.warehouseId !== warehouseId) {
       return errorResponse("Destination bin does not belong to the selected warehouse", 400);
     }
@@ -151,60 +182,56 @@ export async function POST(req: NextRequest) {
       return errorResponse(`Bin ${bin.code} is not active — pick another`, 400);
     }
 
-    const include = {
-      warehouse: { select: { id: true, name: true, code: true } },
-      brand: { select: { id: true, name: true } },
-      category: { select: { id: true, name: true, parentId: true } },
-      bin: {
-        select: {
-          id: true,
-          code: true,
-          name: true,
-          directions: true,
-          isAssemblyArea: true,
-          nonAssemblable: true,
-        },
-      },
-    };
+    // ── ONE TRANSACTION FOR THE WHOLE SAVE (Q5) ──
+    //
+    // Each brand + category pair is one row per warehouse. A pair that already points to ANOTHER
+    // bin is re-pointed — what a single save always did — and reported, so moving it is never
+    // silent. `updateMany` over every row of the pair: there is no unique index, so an older
+    // duplicate must move with it rather than keep firing to the old bin.
+    const outcome = await prisma.$transaction(async (tx) => {
+      const existing = await tx.homeBinRule.findMany({
+        where: { warehouseId, brandId, categoryId: { in: categoryIds }, productId: null },
+        select: { id: true, categoryId: true, binId: true, bin: { select: { code: true } } },
+      });
 
-    // Check for existing rule with identical criteria in this warehouse
-    const existing = await prisma.homeBinRule.findFirst({
-      where: {
-        warehouseId,
-        brandId: brandId || null,
-        categoryId: chosenCategoryId,
-        productId: null,
-      },
+      let created = 0;
+      let unchanged = 0;
+      const moved: { categoryPath: string; fromBinCode: string }[] = [];
+      for (const categoryId of categoryIds) {
+        const rows = existing.filter((r) => r.categoryId === categoryId);
+        if (rows.length === 0) {
+          await tx.homeBinRule.create({ data: { warehouseId, brandId, categoryId, productId: null, binId } });
+          created += 1;
+          continue;
+        }
+        const elsewhere = rows.find((r) => r.binId !== binId);
+        if (!elsewhere) {
+          unchanged += 1;
+          continue;
+        }
+        await tx.homeBinRule.updateMany({ where: { id: { in: rows.map((r) => r.id) } }, data: { binId } });
+        moved.push({ categoryPath: pathFrom(byId, categoryId), fromBinCode: elsewhere.bin.code });
+      }
+      return { created, unchanged, moved };
     });
 
-    const rule = existing
-      ? await prisma.homeBinRule.update({ where: { id: existing.id }, data: { binId }, include })
-      : await prisma.homeBinRule.create({
-          data: {
-            warehouseId,
-            brandId: brandId || null,
-            categoryId: chosenCategoryId,
-            productId: null,
-            binId,
-          },
-          include,
-        });
-
-    log.info(existing ? "home bin rule updated" : "home bin rule created", {
-      ruleId: rule.id,
+    log.info("home bin rules saved", {
       warehouseId,
-      brandId: brandId || null,
-      categoryId: chosenCategoryId,
-      productId: null,
+      brandId,
       binId,
+      categories: categoryIds.length,
+      created: outcome.created,
+      moved: outcome.moved.length,
+      unchanged: outcome.unchanged,
     });
 
-    return successResponse(
-      { ...rule, categoryPath: await categoryPath(rule.categoryId) },
-      201
-    );
+    return successResponse({ binCode: bin.code, brandName: brand.name, ...outcome }, 201);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof z.ZodError) {
+      log.warn("home bin rule refused: invalid body", { message: error.issues[0]?.message });
+      return errorResponse(error.issues[0]?.message ?? "Invalid rule", 400);
+    }
     log.error("home bin rule save failed", {
       message: error instanceof Error ? error.message : String(error),
     });

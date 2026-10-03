@@ -2252,13 +2252,21 @@ enum TransferDocType {
   TAX_INVOICE
 }
 
-/// Chosen on the form, not derived. Store to store carries a tax invoice; store to warehouse
-/// carries a delivery challan. The GSTIN is deliberately NOT consulted — a store's tax
-/// registration is master data, and the document that travels with a van is not.
+/// The direction of a transfer, by the KIND of warehouse at each end (plan 0310-bin-delete-multi-
+/// category-rules-and-transfer-directions, R7): the form offers the four FLOOR/GODOWN directions,
+/// between any two stores or inside one (Q6). The document is NOT read from the mode any more — it
+/// is decided by the two stores (Q7, `docTypeForLane`): different stores carry a tax invoice, one
+/// store a delivery challan. The GSTIN is still never consulted.
+///
+/// STORE_TO_STORE and STORE_TO_WAREHOUSE are no longer written (Q13); they stay so orders raised
+/// before 3 Oct 2026 still read. GODOWN_TO_FLOOR predates the four and is one of them.
 enum TransferMode {
   STORE_TO_STORE
   STORE_TO_WAREHOUSE
   GODOWN_TO_FLOOR
+  FLOOR_TO_FLOOR
+  FLOOR_TO_GODOWN
+  GODOWN_TO_GODOWN
 }
 
 model TransferOrder {

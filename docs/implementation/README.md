@@ -166,6 +166,7 @@ preserved across regeneration — but do not remove the marker comments.
 <!-- BEGIN:pending -->
 | Plan | State |
 |---|---|
+| `0310-bin-delete-multi-category-rules-and-transfer-directions-plan.md` | approved 3 Oct 2026 with Q1–Q8 answered and the Q9–Q14 defaults accepted; building Part A first. |
 | `2209-transfer-and-outward-by-bin-plan.md` | written 22 Sep 2026; **waiting for the owner's answers to §1 and the go-ahead.** |
 | `2309-app-name-per-environment-plan.md` | written 23 Sep 2026. **Every question in §1 is answered (§1.1). Waiting for the |
 | `2309-dark-mode-visibility-plan.md` | **plan only.** The owner answered Q1, Q2, Q3, Q6 and Q7 on 23 Sep 2026 (§1.1) |

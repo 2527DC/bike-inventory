@@ -25,8 +25,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { CategoryTreeSelect } from "@/components/category-tree-select";
+import { CategoryMultiSelect } from "@/components/category-multi-select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { UnitLabelSheet } from "@/components/units/unit-label-sheet";
+import { DeleteBinDialog } from "@/components/bins/delete-bin-dialog";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 
@@ -60,6 +62,8 @@ interface BinSummary {
     products: number;
     binStocks: number;
     units: number;
+    /** How many home-bin rules point here — removed with the bin on delete (plan 0310, Q1). */
+    homeBinRules?: number;
   };
   /** R5 / Q9: live units only, split on `assembledAt` — from one groupBy in `GET /api/bins`. */
   unitCounts?: { total: number; assembled: number; unassembled: number };
@@ -124,7 +128,7 @@ interface CategoryRow {
  * of Admin › Settings › Store management (/stores?tab=bins). Part H extends it.
  */
 export function BinsManager() {
-  const { canView, canCreate, canEdit } = usePermissions();
+  const { canView, canCreate, canEdit, canDelete } = usePermissions();
 
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>("ALL");
@@ -166,7 +170,7 @@ export function BinsManager() {
   const [editBinZone, setEditBinZone] = useState("");
   const [editBinCapacity, setEditBinCapacity] = useState("");
   const [editBinIsAssembly, setEditBinIsAssembly] = useState(false);
-  const [editBinIsActive, setEditBinIsActive] = useState(true);
+  // The Active checkbox is gone (plan 0310, Q11): Delete is the one way to retire a bin.
   const [editBinSaving, setEditBinSaving] = useState(false);
   const [editFormError, setEditFormError] = useState("");
 
@@ -185,6 +189,11 @@ export function BinsManager() {
   const [moveSaving, setMoveSaving] = useState(false);
   const [moveError, setMoveError] = useState("");
 
+  // Delete (plan 0310, Part A). `reopenDeleteFor` brings the dialog back after "Move everything
+  // out", so the person lands on the now-empty bin's Delete button instead of hunting for it.
+  const [deletingBin, setDeletingBin] = useState<BinSummary | null>(null);
+  const [reopenDeleteFor, setReopenDeleteFor] = useState<string | null>(null);
+
   // Home Rules State
   const [rulesWarehouseId, setRulesWarehouseId] = useState("");
   const [homeRules, setHomeRules] = useState<HomeRule[]>([]);
@@ -193,10 +202,11 @@ export function BinsManager() {
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [ruleBins, setRuleBins] = useState<BinSummary[]>([]);
   const [ruleBrandId, setRuleBrandId] = useState("");
-  // R39, P13: the top-level category, then the SUBCATEGORY — required whenever the chosen
-  // category still has active children, because a rule always names a leaf.
-  const [ruleCategoryId, setRuleCategoryId] = useState<string | null>(null);
-  const [ruleSubcategoryId, setRuleSubcategoryId] = useState<string | null>(null);
+  // Plan 0310, R5, Q4: MANY leaf categories in one save. The checklist only offers leaves, so the
+  // old root → subcategory two-step (R39, P13) is no longer needed to keep a rule on a leaf.
+  const [ruleCategoryIds, setRuleCategoryIds] = useState<string[]>([]);
+  /** "3 created, 1 moved from A2" — what the last save did (Q5: a re-point is never silent). */
+  const [ruleResult, setRuleResult] = useState("");
   const [ruleBinId, setRuleBinId] = useState("");
   const [ruleSaving, setRuleSaving] = useState(false);
   const [ruleError, setRuleError] = useState("");
@@ -239,7 +249,7 @@ export function BinsManager() {
   }, []);
 
   // 2. Fetch Bins
-  async function fetchBins(warehouseId?: string) {
+  async function fetchBins(warehouseId?: string): Promise<BinSummary[] | null> {
     const wId = warehouseId !== undefined ? warehouseId : selectedWarehouseId;
     setLoading(true);
     const url = wId && wId !== "ALL" ? `/api/bins?warehouseId=${encodeURIComponent(wId)}` : "/api/bins";
@@ -247,6 +257,28 @@ export function BinsManager() {
     if (error) log.error("bin load failed", { warehouseId: wId, message: error });
     else if (data) setBins(data);
     setLoading(false);
+    return data;
+  }
+
+  /**
+   * Move Out: everything in the bin goes to one target (plan 0310, R4, Q2). Every field is reset,
+   * `moveUnitId` above all — a cancelled Relocate used to leave it set, and Move Out then moved
+   * that one bike instead of the bin.
+   */
+  function openMoveOut(bin: BinSummary) {
+    setMoveUnitId("");
+    setMoveFromBinId(bin.id);
+    setMoveToBinId("");
+    setMoveReason("");
+    setMoveError("");
+    setShowMoveModal(true);
+  }
+
+  async function handleBinDeleted(bin: BinSummary) {
+    log.info("bin deleted", { binId: bin.id, code: bin.code });
+    setDeletingBin(null);
+    if (selectedBinForDetail?.id === bin.id) setSelectedBinForDetail(null);
+    await fetchBins();
   }
 
   // Pre-select warehouse for new bin modal or rules modal
@@ -289,11 +321,6 @@ export function BinsManager() {
     };
   }, [showRulesModal, rulesWarehouseId]);
 
-  /** Active children of the chosen category: while there are any, a subcategory is required (P13). */
-  const ruleSubcategories = useMemo(
-    () => (ruleCategoryId ? categories.filter((c) => c.parentId === ruleCategoryId) : []),
-    [categories, ruleCategoryId]
-  );
 
   // Load Bin Detailed Inventory
   async function openBinDetail(bin: BinSummary) {
@@ -376,7 +403,6 @@ export function BinsManager() {
     setEditBinZone(bin.zone || "");
     setEditBinCapacity(bin.capacity !== null && bin.capacity !== undefined ? String(bin.capacity) : "");
     setEditBinIsAssembly(Boolean(bin.isAssemblyArea));
-    setEditBinIsActive(bin.isActive !== false);
     setEditFormError("");
   }
 
@@ -403,7 +429,6 @@ export function BinsManager() {
         zone: editBinZone.trim() || null,
         capacity: editBinCapacity.trim() ? Number(editBinCapacity) : null,
         isAssemblyArea: editBinIsAssembly,
-        isActive: editBinIsActive,
       },
     });
     if (error) {
@@ -420,23 +445,16 @@ export function BinsManager() {
     setEditBinSaving(false);
   }
 
-  // Save Home Bin Rule
+  // Save Home Bin Rule — one brand, one bin, many categories (plan 0310, R5)
   async function handleSaveRule(e: React.FormEvent) {
     e.preventDefault();
     setRuleError("");
+    setRuleResult("");
     if (!ruleBinId) return;
     // Plan 2109-bin-audit-lists-rule-products (R5): a rule names BOTH a brand and a category,
     // because a bin's audit lists the products matching both. The server refuses it too.
-    if (!ruleBrandId || !ruleCategoryId) {
-      setRuleError("Choose a brand and a category");
-      return;
-    }
-    // P13: a rule always names a leaf. While the chosen category still has active children,
-    // the subcategory decides — the server refuses it too, but saying so here is kinder.
-    if (ruleCategoryId && ruleSubcategories.length > 0 && !ruleSubcategoryId) {
-      setRuleError(
-        `Choose a subcategory of ${categories.find((c) => c.id === ruleCategoryId)?.name ?? "that category"}`
-      );
+    if (!ruleBrandId || ruleCategoryIds.length === 0) {
+      setRuleError("Choose a brand and at least one category");
       return;
     }
 
@@ -447,24 +465,41 @@ export function BinsManager() {
     }
 
     setRuleSaving(true);
-    const { data, error } = await apiTry<HomeRule>("/api/bins/home-rules", {
+    const { data, error } = await apiTry<{
+      binCode: string;
+      created: number;
+      unchanged: number;
+      moved: { categoryPath: string; fromBinCode: string }[];
+    }>("/api/bins/home-rules", {
       method: "POST",
       json: {
         warehouseId: targetWhId,
-        brandId: ruleBrandId || undefined,
-        categoryId: ruleCategoryId || undefined,
-        subcategoryId: ruleSubcategoryId || undefined,
+        brandId: ruleBrandId,
+        categoryIds: ruleCategoryIds,
         binId: ruleBinId,
       },
     });
-    if (error) {
-      log.error("home bin rule save failed", { warehouseId: targetWhId, message: error });
-      setRuleError(error);
+    if (error || !data) {
+      log.error("home bin rule save failed", { warehouseId: targetWhId, categories: ruleCategoryIds.length, message: error });
+      setRuleError(error ?? "Failed to save the rules");
     } else {
-      log.info("home bin rule saved", { ruleId: data?.id, warehouseId: targetWhId, binId: ruleBinId });
+      log.info("home bin rules saved", {
+        warehouseId: targetWhId,
+        binId: ruleBinId,
+        created: data.created,
+        moved: data.moved.length,
+        unchanged: data.unchanged,
+      });
+      const parts: string[] = [];
+      if (data.created > 0) parts.push(`${data.created} created`);
+      if (data.moved.length > 0) {
+        const from = [...new Set(data.moved.map((m) => m.fromBinCode))].join(", ");
+        parts.push(`${data.moved.length} moved from ${from}`);
+      }
+      if (data.unchanged > 0) parts.push(`${data.unchanged} already pointed to ${data.binCode}`);
+      setRuleResult(`${parts.join(", ")}.`);
       setRuleBrandId("");
-      setRuleCategoryId(null);
-      setRuleSubcategoryId(null);
+      setRuleCategoryIds([]);
       setRuleBinId("");
       const refreshed = await apiTry<HomeRule[]>(
         `/api/bins/home-rules?warehouseId=${encodeURIComponent(targetWhId)}`
@@ -521,22 +556,35 @@ export function BinsManager() {
       return;
     }
 
+    // The SOURCE bin decides the warehouse — the target list only offers bins in it.
     const targetWhId =
-      selectedWarehouseId !== "ALL"
+      bins.find((b) => b.id === moveFromBinId)?.warehouseId ??
+      (selectedWarehouseId !== "ALL"
         ? selectedWarehouseId
-        : bins.find((b) => b.id === moveToBinId)?.warehouseId || warehouses[0]?.id;
+        : bins.find((b) => b.id === moveToBinId)?.warehouseId || warehouses[0]?.id);
+
+    // No unit chosen = Move Out of the whole bin (plan 0310, Q2).
+    const moveAll = !moveUnitId && Boolean(moveFromBinId);
 
     setMoveSaving(true);
     setMoveError("");
     const { error } = await apiTry("/api/bins/move", {
       method: "POST",
-      json: {
-        warehouseId: targetWhId,
-        unitId: moveUnitId || undefined,
-        fromBinId: moveFromBinId || undefined,
-        toBinId: moveToBinId,
-        reason: moveReason.trim(),
-      },
+      json: moveAll
+        ? {
+            warehouseId: targetWhId,
+            fromBinId: moveFromBinId,
+            toBinId: moveToBinId,
+            reason: moveReason.trim(),
+            all: true,
+          }
+        : {
+            warehouseId: targetWhId,
+            unitId: moveUnitId || undefined,
+            fromBinId: moveFromBinId || undefined,
+            toBinId: moveToBinId,
+            reason: moveReason.trim(),
+          },
     });
     if (error) {
       // A 409 here is the P6 refusal: a no-assembly item cannot go into a bin that holds items
@@ -544,6 +592,7 @@ export function BinsManager() {
       log.warn("bin move refused", { unitId: moveUnitId || null, toBinId: moveToBinId, message: error });
       setMoveError(error);
     } else {
+      if (moveAll) log.info("bin emptied", { fromBinId: moveFromBinId, toBinId: moveToBinId });
       setShowMoveModal(false);
       setMoveUnitId("");
       setMoveFromBinId("");
@@ -551,12 +600,24 @@ export function BinsManager() {
       setMoveReason("");
 
       // Refresh bins and active detail
-      fetchBins();
+      const refreshed = await fetchBins();
       if (selectedBinForDetail) {
         openBinDetail(selectedBinForDetail);
       }
+      if (reopenDeleteFor) {
+        setDeletingBin(refreshed?.find((b) => b.id === reopenDeleteFor) ?? null);
+        setReopenDeleteFor(null);
+      }
     }
     setMoveSaving(false);
+  }
+
+  /** The bin being emptied or relocated from — decides the warehouse and the move-all wording. */
+  const moveSourceBin = bins.find((b) => b.id === moveFromBinId) ?? null;
+
+  function closeMoveModal() {
+    setShowMoveModal(false);
+    setReopenDeleteFor(null);
   }
 
   // Unique Stores for filtering
@@ -740,6 +801,17 @@ export function BinsManager() {
                 >
                   <Pencil className="h-3 w-3 text-slate-500" />
                   Edit
+                </Button>
+              )}
+              {canDelete("bins") && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setDeletingBin(bin)}
+                  aria-label={`Delete bin ${bin.code}`}
+                  className="h-8 px-2 text-xs border-slate-200 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-slate-800 dark:hover:bg-red-950/40"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               )}
               <Button
@@ -1338,18 +1410,8 @@ export function BinsManager() {
                   </label>
                 </div>
 
-                <div className="flex items-center gap-2 rounded-lg border border-slate-200 p-2.5 dark:border-slate-800">
-                  <input
-                    type="checkbox"
-                    id="editActiveCheck"
-                    checked={editBinIsActive}
-                    onChange={(e) => setEditBinIsActive(e.target.checked)}
-                    className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                  />
-                  <label htmlFor="editActiveCheck" className="text-xs font-medium text-slate-700 dark:text-slate-300">
-                    Active (visible in putaway and audit selections)
-                  </label>
-                </div>
+                {/* The Active checkbox was removed (plan 0310, Q11): it retired a bin with no
+                    emptiness check. Delete on the card is the one way now. */}
 
                 {/* Read-only: the flag is fixed when the bin is created (R42, P6a). */}
                 <div className="flex items-center gap-2 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-2.5 dark:border-slate-800 dark:bg-slate-800/40">
@@ -1460,13 +1522,21 @@ export function BinsManager() {
                   </Button>
                 )}
 
+                {canDelete("bins") && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setDeletingBin(selectedBinForDetail)}
+                    className="h-8 gap-1.5 border-slate-200 text-xs text-red-600 hover:bg-red-50 dark:border-slate-800"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Delete
+                  </Button>
+                )}
+
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => {
-                    setMoveFromBinId(selectedBinForDetail.id);
-                    setShowMoveModal(true);
-                  }}
+                  onClick={() => openMoveOut(selectedBinForDetail)}
                   className="h-8 gap-1.5 border-slate-200 text-xs text-slate-700 hover:bg-slate-100 dark:border-slate-800 dark:text-slate-200"
                 >
                   <ArrowRightLeft className="h-3.5 w-3.5 text-indigo-500" /> Move Out
@@ -1662,11 +1732,13 @@ export function BinsManager() {
               <div className="flex items-center gap-2">
                 <ArrowRightLeft className="h-5 w-5 text-indigo-600" />
                 <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                  Intra-Warehouse Relocate
+                  {moveSourceBin && !moveUnitId
+                    ? `Move everything out of ${moveSourceBin.code}`
+                    : "Intra-Warehouse Relocate"}
                 </h2>
               </div>
               <button
-                onClick={() => setShowMoveModal(false)}
+                onClick={closeMoveModal}
                 className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
               >
                 <X className="h-5 w-5" />
@@ -1689,6 +1761,14 @@ export function BinsManager() {
                 </p>
               </div>
 
+              {moveSourceBin && !moveUnitId && (
+                <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 leading-relaxed text-slate-700 dark:border-slate-800 dark:bg-slate-800/40 dark:text-slate-300">
+                  Every item in <strong>{moveSourceBin.code}</strong>
+                  {moveSourceBin.unitCounts ? <> ({moveSourceBin.unitCounts.total} coded)</> : null}, plus any loose
+                  stock, moves to the bin you choose. Each one is logged in the movement history.
+                </p>
+              )}
+
               <div>
                 <label className="font-semibold text-slate-700 dark:text-slate-300">Target Bin *</label>
                 <select
@@ -1699,7 +1779,11 @@ export function BinsManager() {
                 >
                   <option value="">Select destination bin...</option>
                   {bins
-                    .filter((b) => b.id !== moveFromBinId)
+                    // Same warehouse only — the route refuses anything else (plan 0310, §2.2).
+                    .filter(
+                      (b) =>
+                        b.id !== moveFromBinId && (!moveSourceBin || b.warehouseId === moveSourceBin.warehouseId)
+                    )
                     .map((b) => (
                       <option key={b.id} value={b.id}>
                         {b.code} - {b.name} ({b.directions || "No directions"})
@@ -1722,11 +1806,11 @@ export function BinsManager() {
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
-                <Button type="button" variant="outline" onClick={() => setShowMoveModal(false)}>
+                <Button type="button" variant="outline" onClick={closeMoveModal} disabled={moveSaving}>
                   Cancel
                 </Button>
                 <Button type="submit" disabled={moveSaving} className="bg-indigo-600 text-white hover:bg-indigo-700">
-                  {moveSaving ? "Moving..." : "Confirm Move"}
+                  {moveSaving ? "Moving..." : moveSourceBin && !moveUnitId ? "Move everything" : "Confirm Move"}
                 </Button>
               </div>
             </form>
@@ -1786,66 +1870,32 @@ export function BinsManager() {
                     {ruleError}
                   </div>
                 )}
+                {ruleResult && (
+                  <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 p-2.5 text-[11px] font-medium text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
+                    {ruleResult}
+                  </div>
+                )}
 
                 <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {/* R6: searchable, like the category picker. */}
                   <div>
-                    <label className="text-[11px] font-medium text-slate-600 dark:text-slate-400">Brand *</label>
-                    <select
-                      value={ruleBrandId}
-                      onChange={(e) => setRuleBrandId(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-900 dark:border-slate-800 dark:bg-slate-800 dark:text-white"
-                    >
-                      <option value="">Choose a brand</option>
-                      {brands.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {b.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* R39, P13: category, then subcategory. The picker shows the top level only —
-                      choosing a parent is never a rule on its own while it has children. */}
-                  <div>
-                    <label className="text-[11px] font-medium text-slate-600 dark:text-slate-400">Category *</label>
-                    <CategoryTreeSelect
-                      categories={categories}
-                      mode="roots"
-                      value={ruleCategoryId}
+                    <label htmlFor="rule-brand" className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
+                      Brand *
+                    </label>
+                    <SearchableSelect
+                      id="rule-brand"
+                      options={brands.map((b) => ({ id: b.id, label: b.name }))}
+                      value={ruleBrandId || null}
                       onChange={(id) => {
-                        setRuleCategoryId(id);
-                        setRuleSubcategoryId(null);
+                        setRuleBrandId(id ?? "");
                         setRuleError("");
                       }}
-                      placeholder="Choose a category"
+                      placeholder="Search brand…"
+                      emptyText="No matching brand"
+                      disabled={ruleSaving}
                       className="mt-1"
                     />
                   </div>
-
-                  {/* Shown only when the chosen category HAS children — then it is required. */}
-                  {ruleCategoryId && ruleSubcategories.length > 0 && (
-                    <div>
-                      <label className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
-                        Subcategory *
-                      </label>
-                      <CategoryTreeSelect
-                        categories={categories}
-                        mode="childrenOf"
-                        parentId={ruleCategoryId}
-                        value={ruleSubcategoryId}
-                        onChange={(id) => {
-                          setRuleSubcategoryId(id);
-                          setRuleError("");
-                        }}
-                        placeholder="Choose a subcategory"
-                        className="mt-1"
-                      />
-                      <p className="mt-1 text-[10px] text-slate-400">
-                        A rule always names a category with nothing under it, so it cannot be
-                        ambiguous about which products it covers.
-                      </p>
-                    </div>
-                  )}
 
                   <div>
                     <label className="text-[11px] font-medium text-slate-600 dark:text-slate-400">Home Bin *</label>
@@ -1853,7 +1903,8 @@ export function BinsManager() {
                       required
                       value={ruleBinId}
                       onChange={(e) => setRuleBinId(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-900 dark:border-slate-800 dark:bg-slate-800 dark:text-white"
+                      disabled={ruleSaving}
+                      className="mt-1 h-10 min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-2 text-xs text-slate-900 dark:border-slate-800 dark:bg-slate-800 dark:text-white"
                     >
                       <option value="">Select destination bin...</option>
                       {ruleBins.map((b) => (
@@ -1863,11 +1914,36 @@ export function BinsManager() {
                       ))}
                     </select>
                   </div>
+
+                  {/* R5, Q4: tick as many categories as this brand + bin should cover. Only leaf
+                      categories are listed, so a rule can never name a parent (P13). */}
+                  <div className="md:col-span-2">
+                    <label className="text-[11px] font-medium text-slate-600 dark:text-slate-400">Categories *</label>
+                    <CategoryMultiSelect
+                      categories={categories}
+                      value={ruleCategoryIds}
+                      onChange={(ids) => {
+                        setRuleCategoryIds(ids);
+                        setRuleError("");
+                      }}
+                      disabled={ruleSaving}
+                      className="mt-1"
+                    />
+                  </div>
                 </div>
 
                 <div className="mt-3 flex justify-end">
-                  <Button type="submit" disabled={ruleSaving} size="sm" className="bg-indigo-600 text-white hover:bg-indigo-700">
-                    {ruleSaving ? "Saving..." : "Save Rule"}
+                  <Button
+                    type="submit"
+                    disabled={ruleSaving || !ruleBrandId || !ruleBinId || ruleCategoryIds.length === 0}
+                    size="sm"
+                    className="bg-indigo-600 text-white hover:bg-indigo-700"
+                  >
+                    {ruleSaving
+                      ? "Saving..."
+                      : ruleCategoryIds.length > 1
+                        ? `Save ${ruleCategoryIds.length} Rules`
+                        : "Save Rule"}
                   </Button>
                 </div>
               </form>
@@ -2008,6 +2084,24 @@ export function BinsManager() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── MODAL 8: DELETE BIN (plan 0310, Part A) ── */}
+      {deletingBin && (
+        <DeleteBinDialog
+          bin={deletingBin}
+          onClose={() => setDeletingBin(null)}
+          onDeleted={() => handleBinDeleted(deletingBin)}
+          onMoveOut={
+            canEdit("bins")
+              ? () => {
+                  setReopenDeleteFor(deletingBin.id);
+                  setDeletingBin(null);
+                  openMoveOut(deletingBin);
+                }
+              : undefined
+          }
+        />
       )}
 
       {/* ── MODAL 7: PRINTABLE LABELS (R46) ── */}
