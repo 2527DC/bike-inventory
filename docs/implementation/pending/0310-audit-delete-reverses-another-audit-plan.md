@@ -48,6 +48,7 @@ live database (Supabase project `izighywsutktzarkfbiv`) on 3 Oct 2026 with `SELE
 | 3 Oct 2026 | Q1 | **(a)** — the audit fix ships alone; receive-into-to-bin stays with the 2209 plan, Phase 2. |
 | 3 Oct 2026 | Q2, Q3 | **(a)**, the recommended defaults — one `[REPAIR]` row per product, dated today; bin restored only where empty and the live units sit in one bin. |
 | 3 Oct 2026 | Q4 | **(b)** — Claude runs the snapshot, the dry run and `--apply`, with the owner's go-ahead before each step. `.env` needs a working database URL first. |
+| 3 Oct 2026 | Q4 | Owner, after the production dry run (13 products, +49): **"dont aply it to product"** — rehearse on test instead. Production was copied to test (`0310-prod-to-test-sync-plan.md`) and the repair applied there: 13 repaired, 7002 → 6. **Production is not repaired**; snapshot `backups/postgres-20261003-143830.dump` was taken first. |
 
 ---
 

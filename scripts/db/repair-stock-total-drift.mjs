@@ -75,7 +75,11 @@ try {
   fail("the connection string in .env is not a valid URL");
 }
 const dbName = decodeURIComponent(parsed.pathname.replace(/^\//, "")) || "postgres";
-console.log(`\ntarget: ${dbName} at ${parsed.hostname}:${parsed.port || 5432}  (${apply ? "APPLY — writes" : "dry run — read-only"})\n`);
+// Every Supabase project shares the pooler host, so the host alone cannot tell production from
+// test — the project ref in the pooler user (`postgres.<ref>`) can.
+const user = decodeURIComponent(parsed.username);
+const project = user.includes(".") ? `project ${user.split(".").slice(1).join(".")}, ` : "";
+console.log(`\ntarget: ${project}${dbName} at ${parsed.hostname}:${parsed.port || 5432}  (${apply ? "APPLY — writes" : "dry run — read-only"})\n`);
 
 const prisma = new PrismaClient({ datasourceUrl: url });
 
