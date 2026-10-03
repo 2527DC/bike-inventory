@@ -8,12 +8,15 @@ import { DIRECTION_LABEL, DIRECTION_MODES, docTypeForLane, kindsForMode, type Di
 
 /**
  * The route of a transfer — plan 0310-bin-delete-multi-category-rules-and-transfer-directions,
- * Part D (R7, Q6, Q7, Q12).
+ * Part D (R7, Q6, Q7) and R8–R9.
  *
- * Four directions by the kind of warehouse at each end: Floor → Godown, Godown → Floor,
- * Floor → Floor, Godown → Godown. Each side picks a STORE (any store — the same one included),
- * then that store's warehouse of the kind the direction needs: chosen for you when there is one,
- * a select when there are several, and a plain message when there is none (Q12).
+ * Four directions by the kind of warehouse at each end. On screen a FLOOR warehouse is called a
+ * **Hub** (owner, 3 Oct 2026, R9) — wording only; the stored kind stays FLOOR.
+ *
+ * Each side is ONE list of every warehouse of the kind its direction needs, across all stores,
+ * grouped under its store (R8): Hub → Godown lists every hub on the left and every godown on the
+ * right. The source warehouse is never offered as the destination. A side with exactly one
+ * possible warehouse picks it; otherwise nothing is pre-selected.
  *
  * The document follows the two STORES, not the direction (Q7): different stores carry a tax
  * invoice, one store a delivery challan. The helpers are `src/lib/transfers/mode.ts`'s — the
@@ -24,63 +27,71 @@ export type { DirectionMode };
 export { DIRECTION_LABEL };
 export const DIRECTIONS = DIRECTION_MODES;
 
-const KIND_WORD = { FLOOR: "floor", GODOWN: "godown" } as const;
+/** What a warehouse kind is called on the transfer screens (R9). */
+export const KIND_WORD = { FLOOR: "hub", GODOWN: "godown" } as const;
 
 export function docLabel(docType: TransferDocType): string {
   return docType === "TAX_INVOICE" ? "Tax invoice" : "Delivery challan";
 }
 
-type WarehouseOption = StoreOption["warehouses"][number];
+type Kind = "FLOOR" | "GODOWN";
+
+/** A warehouse with the store it belongs to — what each side's list shows. */
+export interface RouteWarehouse {
+  id: string;
+  name: string;
+  kind: Kind;
+  storeId: string;
+  storeName: string;
+}
 
 export interface RoutePicks {
   mode: DirectionMode;
-  fromStoreId: string;
   fromWarehouseId: string;
-  toStoreId: string;
   toWarehouseId: string;
 }
 
 export interface ResolvedRoute {
-  fromStore: StoreOption | null;
-  toStore: StoreOption | null;
-  /** The source store's warehouses of the source kind. */
-  fromOptions: WarehouseOption[];
-  /** The destination store's warehouses of the destination kind, minus the source warehouse. */
-  toOptions: WarehouseOption[];
-  fromWarehouse: WarehouseOption | null;
-  toWarehouse: WarehouseOption | null;
-  /** Null until both stores are chosen. */
+  /** Every warehouse of the source kind, in store order. */
+  fromOptions: RouteWarehouse[];
+  /** Every warehouse of the destination kind, minus the chosen source. */
+  toOptions: RouteWarehouse[];
+  fromWarehouse: RouteWarehouse | null;
+  toWarehouse: RouteWarehouse | null;
+  /** Null until both warehouses are known. */
   docType: TransferDocType | null;
+}
+
+/** Every active warehouse with its store's name, in the order `/api/stores` returns them. */
+function allWarehouses(stores: StoreOption[]): RouteWarehouse[] {
+  return stores.flatMap((s) =>
+    s.warehouses.map((w) => ({ id: w.id, name: w.name, kind: w.kind, storeId: s.id, storeName: s.name }))
+  );
 }
 
 /**
  * Everything the screen and the submit need, derived from what was picked. A pick that no longer
- * fits (the direction changed, the store changed) is ignored rather than cleared in an effect,
- * and a side with exactly one fitting warehouse resolves to it.
+ * fits (the direction changed) is ignored rather than cleared in an effect, and a side with
+ * exactly one fitting warehouse resolves to it.
  */
 export function resolveRoute(stores: StoreOption[], picks: RoutePicks): ResolvedRoute {
   const kinds = kindsForMode(picks.mode);
-  const fromStore = stores.find((s) => s.id === picks.fromStoreId) ?? null;
-  const toStore = stores.find((s) => s.id === picks.toStoreId) ?? null;
+  const all = allWarehouses(stores);
 
-  const fromOptions = fromStore?.warehouses.filter((w) => w.kind === kinds.from) ?? [];
+  const fromOptions = all.filter((w) => w.kind === kinds.from);
   const fromWarehouse =
     fromOptions.find((w) => w.id === picks.fromWarehouseId) ?? (fromOptions.length === 1 ? fromOptions[0] : null);
 
-  const toOptions = (toStore?.warehouses.filter((w) => w.kind === kinds.to) ?? []).filter(
-    (w) => w.id !== fromWarehouse?.id
-  );
+  const toOptions = all.filter((w) => w.kind === kinds.to && w.id !== fromWarehouse?.id);
   const toWarehouse =
     toOptions.find((w) => w.id === picks.toWarehouseId) ?? (toOptions.length === 1 ? toOptions[0] : null);
 
   return {
-    fromStore,
-    toStore,
     fromOptions,
     toOptions,
     fromWarehouse,
     toWarehouse,
-    docType: fromStore && toStore ? docTypeForLane({ storeId: fromStore.id }, { storeId: toStore.id }) : null,
+    docType: fromWarehouse && toWarehouse ? docTypeForLane(fromWarehouse, toWarehouse) : null,
   };
 }
 
@@ -93,9 +104,7 @@ interface Props {
   /** True while the order is being submitted — every control here goes inert. */
   disabled: boolean;
   onModeChange: (mode: DirectionMode) => void;
-  onFromStoreChange: (storeId: string) => void;
   onFromWarehouseChange: (warehouseId: string) => void;
-  onToStoreChange: (storeId: string) => void;
   onToWarehouseChange: (warehouseId: string) => void;
 }
 
@@ -122,98 +131,76 @@ function ListState({ loading, error }: { loading: boolean; error: string | null 
   return <p className="min-h-[44px] text-xs text-slate-500">No active stores.</p>;
 }
 
-function Select({
-  id,
-  value,
-  onChange,
-  disabled,
-  children,
-}: {
-  id: string;
-  value: string;
-  onChange: (v: string) => void;
-  disabled: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="relative">
-      <select id={id} value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} className={selectClass}>
-        {children}
-      </select>
-      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400">
-        <ChevronDown className="h-4 w-4" />
-      </div>
-    </div>
-  );
+/** The options of one list, grouped under each store's name. */
+function groupByStore(options: RouteWarehouse[]): { storeId: string; storeName: string; items: RouteWarehouse[] }[] {
+  const groups: { storeId: string; storeName: string; items: RouteWarehouse[] }[] = [];
+  for (const w of options) {
+    const g = groups.find((x) => x.storeId === w.storeId);
+    if (g) g.items.push(w);
+    else groups.push({ storeId: w.storeId, storeName: w.storeName, items: [w] });
+  }
+  return groups;
 }
 
-/** One side of the route: a store, then its warehouse of the needed kind. */
+/** One side of the route: every warehouse of its kind, grouped by store. */
 function Side({
   side,
-  stores,
-  storeId,
-  store,
   kind,
   options,
   warehouse,
   noneMessage,
   disabled,
-  onStoreChange,
-  onWarehouseChange,
+  onChange,
 }: {
   side: "from" | "to";
-  stores: StoreOption[];
-  storeId: string;
-  store: StoreOption | null;
-  kind: "FLOOR" | "GODOWN";
-  options: WarehouseOption[];
-  warehouse: WarehouseOption | null;
+  kind: Kind;
+  options: RouteWarehouse[];
+  warehouse: RouteWarehouse | null;
   noneMessage: string;
   disabled: boolean;
-  onStoreChange: (id: string) => void;
-  onWarehouseChange: (id: string) => void;
+  onChange: (id: string) => void;
 }) {
   const word = KIND_WORD[kind];
+  const id = `${side}-warehouse-select`;
   return (
     <div>
-      <label
-        htmlFor={`${side}-store-select`}
-        className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300"
-      >
+      <label htmlFor={id} className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300">
         {side === "to" && <ArrowRight className="h-3.5 w-3.5 text-indigo-500" />}
         {side === "from" ? `From (${word})` : `To (${word})`}
       </label>
-      <Select id={`${side}-store-select`} value={storeId} onChange={onStoreChange} disabled={disabled}>
-        <option value="">{side === "from" ? "Select source store…" : "Select destination store…"}</option>
-        {stores.map((s) => (
-          <option key={s.id} value={s.id}>
-            {s.name}
-          </option>
-        ))}
-      </Select>
 
-      {store && options.length > 1 && (
-        <div className="mt-2">
-          <label htmlFor={`${side}-warehouse-select`} className="sr-only">
-            {side === "from" ? "Source" : "Destination"} {word}
-          </label>
-          <Select
-            id={`${side}-warehouse-select`}
+      {options.length === 0 ? (
+        <p className="flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <span>{noneMessage}</span>
+        </p>
+      ) : (
+        <div className="relative">
+          <select
+            id={id}
             value={warehouse?.id ?? ""}
-            onChange={onWarehouseChange}
+            onChange={(e) => onChange(e.target.value)}
             disabled={disabled}
+            className={selectClass}
           >
-            <option value="">Choose the {word}…</option>
-            {options.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name}
-              </option>
+            <option value="">{`Select ${side === "from" ? "source" : "destination"} ${word}…`}</option>
+            {groupByStore(options).map((g) => (
+              <optgroup key={g.storeId} label={g.storeName}>
+                {g.items.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name} — {w.storeName}
+                  </option>
+                ))}
+              </optgroup>
             ))}
-          </Select>
+          </select>
+          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400">
+            <ChevronDown className="h-4 w-4" />
+          </div>
         </div>
       )}
 
-      {store && warehouse && (
+      {warehouse && (
         <div
           className={`mt-2 flex items-center gap-2 rounded-lg border px-3 py-2 text-xs ${
             kind === "GODOWN"
@@ -223,16 +210,9 @@ function Side({
         >
           <span className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider">{word}</span>
           <span className="truncate font-medium">
-            {side === "from" ? "Departs" : "Arrives"}: {warehouse.name} ({store.name})
+            {side === "from" ? "Departs" : "Arrives"}: {warehouse.name} · {warehouse.storeName}
           </span>
         </div>
-      )}
-
-      {store && options.length === 0 && (
-        <p className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-          <span>{noneMessage}</span>
-        </p>
       )}
     </div>
   );
@@ -246,14 +226,13 @@ export function RoutePicker({
   route,
   disabled,
   onModeChange,
-  onFromStoreChange,
   onFromWarehouseChange,
-  onToStoreChange,
   onToWarehouseChange,
 }: Props) {
   const kinds = kindsForMode(picks.mode);
   const listReady = !loading && !error && stores.length > 0;
-  const sameStore = route.fromStore && route.toStore && route.fromStore.id === route.toStore.id;
+  const fromWord = KIND_WORD[kinds.from];
+  const toWord = KIND_WORD[kinds.to];
 
   return (
     <Card className="mb-4 border-slate-200 shadow-sm dark:border-slate-800">
@@ -280,33 +259,25 @@ export function RoutePicker({
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Side
               side="from"
-              stores={stores}
-              storeId={picks.fromStoreId}
-              store={route.fromStore}
               kind={kinds.from}
               options={route.fromOptions}
               warehouse={route.fromWarehouse}
-              noneMessage={`${route.fromStore?.name ?? "This store"} has no ${KIND_WORD[kinds.from]}, so stock cannot leave from one.`}
+              noneMessage={`No store has an active ${fromWord}, so nothing can leave from one.`}
               disabled={disabled}
-              onStoreChange={onFromStoreChange}
-              onWarehouseChange={onFromWarehouseChange}
+              onChange={onFromWarehouseChange}
             />
             <Side
               side="to"
-              stores={stores}
-              storeId={picks.toStoreId}
-              store={route.toStore}
               kind={kinds.to}
               options={route.toOptions}
               warehouse={route.toWarehouse}
               noneMessage={
-                sameStore && kinds.from === kinds.to
-                  ? `${route.toStore?.name} has no other ${KIND_WORD[kinds.to]} to send to. Choose another store.`
-                  : `${route.toStore?.name ?? "This store"} has no ${KIND_WORD[kinds.to]}.`
+                kinds.from === kinds.to
+                  ? `There is no other ${toWord} to send to.`
+                  : `No store has an active ${toWord}.`
               }
               disabled={disabled}
-              onStoreChange={onToStoreChange}
-              onWarehouseChange={onToWarehouseChange}
+              onChange={onToWarehouseChange}
             />
           </div>
         )}
@@ -316,7 +287,7 @@ export function RoutePicker({
           <FileText className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600 dark:text-indigo-400" />
           <p className="text-xs text-slate-600 dark:text-slate-300">
             {route.docType === null ? (
-              <>Choose both stores to see which document travels with this transfer.</>
+              <>Choose both sides to see which document travels with this transfer.</>
             ) : route.docType === "TAX_INVOICE" ? (
               <>
                 <span className="font-semibold text-slate-900 dark:text-white">Tax invoice required</span> — the stock
@@ -325,7 +296,8 @@ export function RoutePicker({
             ) : (
               <>
                 <span className="font-semibold text-slate-900 dark:text-white">Delivery challan required</span> — the
-                stock stays inside {route.fromStore?.name}. Attach the challan, or a photo of the signed copy, below.
+                stock stays inside {route.fromWarehouse?.storeName}. Attach the challan, or a photo of the signed copy,
+                below.
               </>
             )}
           </p>
