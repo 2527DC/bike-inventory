@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
+import { LineBinPickers, resolveLineBins, type LineBins } from "../../_components/line-bin-pickers";
+import { useTransferBinOptions } from "../../_components/use-bin-options";
 
 const log = createLogger("transfers:edit-items");
 
@@ -20,14 +22,25 @@ const log = createLogger("transfers:edit-items");
  * per-line endpoints, and why the server re-runs the same source-stock check the create form
  * applies — an approver who sent the order back because a quantity was impossible must not be
  * able to receive it back unchanged.
+ *
+ * Every line names its from-bin and to-bin (plan 0310, Part C): the PATCH runs the same
+ * `validateTransferItems` as create, which refuses a line without both — so this sheet sent
+ * lines the server could never accept until it carried the bins too.
  */
 
-interface Line {
+export interface EditLine extends LineBins {
   productId: string;
   name: string;
   sku: string;
   quantity: number;
 }
+
+interface Line extends EditLine {
+  key: string;
+}
+
+let lineSeq = 0;
+const nextKey = () => `line-${++lineSeq}`;
 
 interface ProductResult {
   id: string;
@@ -39,13 +52,16 @@ interface ProductResult {
 interface Props {
   orderId: string;
   orderNo: string;
-  initial: Line[];
+  /** The order's lane — fixed, the PATCH never changes it. */
+  fromWarehouse: { id: string; name: string } | null;
+  toWarehouse: { id: string; name: string } | null;
+  initial: EditLine[];
   onClose: () => void;
   onSaved: (message: string) => void;
 }
 
-export function EditItemsSheet({ orderId, orderNo, initial, onClose, onSaved }: Props) {
-  const [lines, setLines] = useState<Line[]>(initial);
+export function EditItemsSheet({ orderId, orderNo, fromWarehouse, toWarehouse, initial, onClose, onSaved }: Props) {
+  const [lines, setLines] = useState<Line[]>(() => initial.map((l) => ({ ...l, key: nextKey() })));
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<ProductResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -76,14 +92,45 @@ export function EditItemsSheet({ orderId, orderNo, initial, onClose, onSaved }: 
 
   const visibleResults = query.length >= 1 ? results : [];
 
+  const { options, loading: binsLoading } = useTransferBinOptions(
+    fromWarehouse?.id ?? null,
+    toWarehouse?.id ?? null,
+    lines.map((l) => l.productId)
+  );
+  const resolved = lines.map((l) => resolveLineBins(l.productId, l, options));
+  const limits = lines.map((line, index) => {
+    const r = resolved[index];
+    if (!r.fromBinId) return Infinity;
+    const others = lines.reduce(
+      (n, o, j) => (j !== index && o.productId === line.productId && resolved[j].fromBinId === r.fromBinId ? n + o.quantity : n),
+      0
+    );
+    return Math.max(0, r.fromQty - others);
+  });
+  const ready =
+    lines.length > 0 &&
+    resolved.every((r) => r.fromBinId && r.toBinId) &&
+    lines.every((l, index) => l.quantity >= 1 && l.quantity <= limits[index]);
+
   function addProduct(p: ProductResult) {
     setSearch("");
     setResults([]);
     setLines((prev) =>
       prev.some((l) => l.productId === p.id)
         ? prev
-        : [...prev, { productId: p.id, name: p.name, sku: p.sku, quantity: 1 }]
+        : [...prev, { key: nextKey(), productId: p.id, name: p.name, sku: p.sku, quantity: 1, fromBinId: "", toBinId: "" }]
     );
+  }
+
+  function patchLine(index: number, patch: Partial<Line>) {
+    setLines((prev) => prev.map((l, i) => (i === index ? { ...l, ...patch } : l)));
+  }
+
+  function splitLine(index: number) {
+    setLines((prev) => {
+      const line = prev[index];
+      return [...prev.slice(0, index + 1), { ...line, key: nextKey(), quantity: 1, fromBinId: "" }, ...prev.slice(index + 1)];
+    });
   }
 
   async function save() {
@@ -93,7 +140,14 @@ export function EditItemsSheet({ orderId, orderNo, initial, onClose, onSaved }: 
       `/api/transfer-orders/${orderId}`,
       {
         method: "PATCH",
-        json: { items: lines.map((l) => ({ productId: l.productId, quantity: l.quantity })) },
+        json: {
+          items: lines.map((l, index) => ({
+            productId: l.productId,
+            quantity: l.quantity,
+            fromBinId: resolved[index].fromBinId,
+            toBinId: resolved[index].toBinId,
+          })),
+        },
       }
     );
     setSaving(false);
@@ -162,7 +216,7 @@ export function EditItemsSheet({ orderId, orderNo, initial, onClose, onSaved }: 
         ) : (
           <div className="space-y-2">
             {lines.map((line, index) => (
-              <div key={line.productId} className="rounded-lg border border-slate-200 p-2.5">
+              <div key={line.key} className="rounded-lg border border-slate-200 p-2.5">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-sm text-slate-900 truncate">{line.name}</p>
@@ -178,20 +232,39 @@ export function EditItemsSheet({ orderId, orderNo, initial, onClose, onSaved }: 
                   </button>
                 </div>
                 <div className="mt-1.5 flex items-center gap-2">
-                  <label className="text-[11px] text-slate-500" htmlFor={`qty-${line.productId}`}>Qty</label>
+                  <label className="text-[11px] text-slate-500" htmlFor={`qty-${line.key}`}>Qty</label>
                   <input
-                    id={`qty-${line.productId}`}
+                    id={`qty-${line.key}`}
                     type="number"
                     min={1}
                     inputMode="numeric"
                     value={line.quantity}
                     onChange={(e) => {
                       const next = Math.max(1, Math.trunc(Number(e.target.value) || 1));
-                      setLines((prev) => prev.map((l, i) => (i === index ? { ...l, quantity: next } : l)));
+                      patchLine(index, { quantity: next });
                     }}
                     className="h-10 w-24 rounded-lg border border-slate-200 px-2 text-sm tabular-nums focus-ring"
                   />
+                  {Number.isFinite(limits[index]) && (
+                    <span className="text-[11px] text-slate-400 tabular-nums">/ {limits[index]}</span>
+                  )}
                 </div>
+                {line.quantity > limits[index] && (
+                  <p className="mt-1 text-xs text-red-600">Only {limits[index]} available in this bin</p>
+                )}
+                <LineBinPickers
+                  productId={line.productId}
+                  lineKey={line.key}
+                  choice={line}
+                  options={options}
+                  loading={binsLoading}
+                  routeReady={Boolean(fromWarehouse && toWarehouse)}
+                  sourceName={fromWarehouse?.name}
+                  destinationName={toWarehouse?.name}
+                  disabled={saving}
+                  onChange={(patch) => patchLine(index, patch)}
+                  onSplit={() => splitLine(index)}
+                />
               </div>
             ))}
           </div>
@@ -201,7 +274,7 @@ export function EditItemsSheet({ orderId, orderNo, initial, onClose, onSaved }: 
           <Button variant="outline" onClick={onClose} className="flex-1 min-h-[44px]">
             Cancel
           </Button>
-          <Button onClick={save} disabled={saving || lines.length === 0} className="flex-1 min-h-[44px]">
+          <Button onClick={save} disabled={saving || !ready} className="flex-1 min-h-[44px]">
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save lines"}
           </Button>
         </div>

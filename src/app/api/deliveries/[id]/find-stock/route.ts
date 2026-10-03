@@ -11,7 +11,7 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { floorShortForDispatch, isDummy, stockLines, findDeliveryProduct } from "@/lib/deliveries/floor-stock";
 import { AVAILABLE_UNIT_STATUSES, pickUnitsUpTo } from "@/lib/units";
-import { docTypeForMode } from "@/lib/transfers/mode";
+import { docTypeForLane, modeForKinds } from "@/lib/transfers/mode";
 import { TRF_SEQUENCE_PAD, currentTransferYm, trfSeedSql, trfSequenceKey } from "@/lib/transfers/sequence";
 import { nextSequence } from "@/lib/sequence";
 import { recordApprovalEvent } from "@/lib/approvals/events";
@@ -20,7 +20,7 @@ import { notify } from "@/lib/notify";
 import { APPROVAL_NOTIFICATION_ACTIONS } from "@/lib/approvals/notify-actions";
 import { logActivity } from "@/lib/activity-log";
 import { createLogger } from "@/lib/logger";
-import type { TransferMode, Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 
 const log = createLogger("deliveries:find-stock");
 
@@ -50,7 +50,7 @@ const log = createLogger("deliveries:find-stock");
  * cycle can go on a bench before the transfer is approved (Q12) and arrives already spoken for.
  *
  * Numbering, mode and document type come from the same helpers `POST /api/transfer-orders` uses
- * (`nextSequence` + `trfSeedSql` inside the transaction, `docTypeForMode`) rather than a second
+ * (`nextSequence` + `trfSeedSql` inside the transaction, `modeForKinds` + `docTypeForLane`) rather than a second
  * copy of the rules. Bin selection is the one thing not replicated: the create form asks for
  * source and destination bins when bin tracking is on, and this screen has no bin picker — the
  * lines are raised without bins and put away on receipt.
@@ -78,15 +78,6 @@ class FindStockRefusal extends Error {
     this.name = "FindStockRefusal";
     this.status = status;
   }
-}
-
-/** The mode this lane travels on — the same three the create form offers. */
-function modeFor(
-  source: { storeId: string; kind: string },
-  destination: { storeId: string }
-): TransferMode {
-  if (source.storeId !== destination.storeId) return "STORE_TO_STORE";
-  return source.kind === "GODOWN" ? "GODOWN_TO_FLOOR" : "STORE_TO_WAREHOUSE";
 }
 
 /** Condition counts for the units that could actually be sent from one warehouse. */
@@ -311,8 +302,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           }
         }
 
-        const mode = modeFor(source, { storeId: delivery.warehouse.storeId });
-        const requiredDocType = docTypeForMode(mode);
+        // The direction by the two kinds and the document by the two stores — the helpers the
+        // create form uses (plan 0310, Part D), so a Find-stock order reads "Godown → Floor".
+        const mode = modeForKinds(source.kind, delivery.warehouse.kind);
+        const requiredDocType = docTypeForLane(source, delivery.warehouse);
         const seq = await nextSequence(tx, trfSequenceKey(ym), TRF_SEQUENCE_PAD, trfSeedSql(prefix));
         const orderNo = `${prefix}-${seq}`;
 
@@ -324,7 +317,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             createdById: user.id,
             mode,
             fromStoreId: source.storeId,
-            toStoreId: mode === "STORE_TO_STORE" ? delivery.warehouse.storeId : null,
+            toStoreId: delivery.warehouse.storeId,
             fromWarehouseId: source.id,
             toWarehouseId: delivery.warehouse.id,
             requiredDocType,

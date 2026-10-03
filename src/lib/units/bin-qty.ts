@@ -60,3 +60,55 @@ export async function getBinQtyMap(
   }
   return out;
 }
+
+/**
+ * What every ACTIVE bin of one warehouse holds of each of several products — plan 0310, Part C
+ * (2209 Phase 1): the From-bin picker on a transfer line, and the server's check that the chosen
+ * bin holds the line's quantity. Both read this one function, so the screen and the refusal agree.
+ *
+ * The same rule as `getBinQtyMap`, for many bins in two queries instead of one call per bin: live
+ * units count where a product has units anywhere; otherwise the typed-in `BinStock` quantity.
+ *
+ * Returns productId → binId → qty, with only quantities above 0.
+ */
+export async function getWarehouseBinQty(
+  warehouseId: string,
+  productIds: string[],
+  client: DbClient = prisma
+): Promise<Map<string, Map<string, number>>> {
+  const out = new Map<string, Map<string, number>>();
+  if (productIds.length === 0) return out;
+
+  const [liveUnits, binStocks, withUnits] = await Promise.all([
+    client.inventoryUnit.groupBy({
+      by: ["binId", "productId"],
+      where: {
+        warehouseId,
+        productId: { in: productIds },
+        status: { in: LIVE_UNIT_STATUSES },
+        bin: { isActive: true },
+      },
+      _count: { _all: true },
+    }),
+    client.binStock.findMany({
+      where: { productId: { in: productIds }, quantity: { gt: 0 }, bin: { warehouseId, isActive: true } },
+      select: { binId: true, productId: true, quantity: true },
+    }),
+    client.inventoryUnit.findMany({
+      where: { productId: { in: productIds } },
+      select: { productId: true },
+      distinct: ["productId"],
+    }),
+  ]);
+
+  const put = (productId: string, binId: string, qty: number) => {
+    if (qty <= 0) return;
+    const bins = out.get(productId) ?? new Map<string, number>();
+    bins.set(binId, (bins.get(binId) ?? 0) + qty);
+    out.set(productId, bins);
+  };
+  for (const u of liveUnits) if (u.binId) put(u.productId, u.binId, u._count._all);
+  const tracked = new Set(withUnits.map((u) => u.productId));
+  for (const b of binStocks) if (!tracked.has(b.productId)) put(b.productId, b.binId, b.quantity);
+  return out;
+}

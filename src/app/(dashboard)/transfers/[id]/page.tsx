@@ -32,7 +32,15 @@ type Action =
   // Plan 1709 (R25): a RETURNED order goes back to its creator to fix and send again.
   | "edit"
   | "resubmit";
-type TransferMode = "STORE_TO_STORE" | "STORE_TO_WAREHOUSE";
+// Plan 0310, Part D: the four directions new orders carry, plus the two store-based modes older
+// orders keep (Q13).
+type TransferMode =
+  | "FLOOR_TO_GODOWN"
+  | "GODOWN_TO_FLOOR"
+  | "FLOOR_TO_FLOOR"
+  | "GODOWN_TO_GODOWN"
+  | "STORE_TO_STORE"
+  | "STORE_TO_WAREHOUSE";
 
 interface WarehouseRef {
   id: string;
@@ -44,6 +52,9 @@ interface WarehouseRef {
 interface Item {
   id: string;
   quantity: number;
+  /** The line's bins (plan 0310, Part C). Null on orders raised before they were required. */
+  fromBinId?: string | null;
+  toBinId?: string | null;
   receivedQty: number | null;
   unitCost?: number;
   product: { id: string; name: string; sku: string; hsnCode: string | null };
@@ -102,6 +113,10 @@ function when(value: string | null): string {
  * the two stores' GSTINs, and keep the wording that matched that derivation.
  */
 function modeLabel(mode: TransferMode | null | undefined, transferType: TransferDetail["transferType"]): string {
+  if (mode === "FLOOR_TO_GODOWN") return "Floor → Godown";
+  if (mode === "GODOWN_TO_FLOOR") return "Godown → Floor";
+  if (mode === "FLOOR_TO_FLOOR") return "Floor → Floor";
+  if (mode === "GODOWN_TO_GODOWN") return "Godown → Godown";
   if (mode === "STORE_TO_STORE") return "Store → Store";
   if (mode === "STORE_TO_WAREHOUSE") return "Store → Warehouse";
   return transferType === "INTER_STORE" ? "Inter-store" : "Within one store";
@@ -616,11 +631,15 @@ export default function TransferDetailPage({ params }: { params: Promise<{ id: s
         <EditItemsSheet
           orderId={order.id}
           orderNo={order.orderNo}
+          fromWarehouse={order.fromWarehouse}
+          toWarehouse={order.toWarehouse}
           initial={order.items.map((i) => ({
             productId: i.product.id,
             name: i.product.name,
             sku: i.product.sku,
             quantity: i.quantity,
+            fromBinId: i.fromBinId ?? "",
+            toBinId: i.toBinId ?? "",
           }))}
           onClose={() => setEditingItems(false)}
           onSaved={(message) => {

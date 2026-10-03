@@ -1,6 +1,7 @@
 # Transfer and outward move stock bin by bin
 
 Status: pending — written 22 Sep 2026; **waiting for the owner's answers to §1 and the go-ahead.**
+**Phase 1 (R1, Q1a/Q2a defaults) was built on 3 Oct 2026 inside `0310-bin-delete-multi-category-rules-and-transfer-directions-plan.md` Part C** — do not build it again; Phases 2–3 remain.
 Nothing built. **Phase 1 is a merge blocker for `feat/2109-inbound-bins-audit-fixes`** (§2.1).
 **The audit part (former R6–R8, Q6 / Q7 / Q9, Phase 4) moved to
 `2209-audit-assigns-product-bin-plan.md`** on the owner's instruction, 22 Sep 2026.

@@ -14,31 +14,46 @@ import { apiTry } from "@/lib/api-client";
 import { compressImageFull } from "@/lib/media-compress";
 import { uploadMedia } from "@/lib/media-upload";
 import { createLogger } from "@/lib/logger";
-import { RoutePicker, docLabelForMode, sourceFloor, type TransferMode } from "./_components/route-picker";
+import {
+  RoutePicker,
+  DIRECTIONS,
+  DIRECTION_LABEL,
+  docLabel,
+  resolveRoute,
+  type DirectionMode,
+  type RoutePicks,
+} from "./_components/route-picker";
 import { DocumentPicker } from "./_components/document-picker";
 import { ItemList, type Product, type TransferItem } from "./_components/item-list";
+import { resolveLineBins, type LineBins } from "../_components/line-bin-pickers";
+import { useTransferBinOptions } from "../_components/use-bin-options";
 
 const log = createLogger("transfers:new");
 
 /**
- * `-v3` because the draft SHAPE changed, not for a version number's sake.
+ * `-v4` because the draft SHAPE changed, not for a version number's sake.
  *
- * A v2 draft holds `fromWarehouseId`/`toWarehouseId`. Read back into this page it would restore
- * warehouse ids into store fields and silently pick nothing. Changing the key orphans those
- * drafts instead — sessionStorage, so at worst somebody re-picks a route once.
+ * A v3 draft holds a store-based mode ("STORE_TO_STORE") and lines without bins or keys. Read
+ * back into this page it would restore a direction that no longer exists. Changing the key
+ * orphans those drafts instead — sessionStorage, so at worst somebody re-picks a route once.
  *
  * The file is NOT in the draft. A `File` does not survive JSON, and a draft that claimed to
  * hold a document it could not produce would be worse than one that asks again.
  */
-const STORAGE_KEY = "transfer-order-draft-v3";
+const STORAGE_KEY = "transfer-order-draft-v4";
 
-interface DraftData {
-  mode: TransferMode;
-  fromStoreId: string;
-  toStoreId: string;
-  toWarehouseId: string;
+interface DraftData extends RoutePicks {
   items: TransferItem[];
   notes: string;
+}
+
+function newLineKey(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Where the document is uploaded before the order (and its number) exists. */
+function newDocumentKey(ext: string): string {
+  return `transfers/new/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
 }
 
 function saveDraft(d: DraftData) {
@@ -82,10 +97,14 @@ export default function NewTransferOrderPage() {
 
   const { stores, loading: storesLoading, error: storesError } = useStores();
 
-  const [mode, setMode] = useState<TransferMode>("STORE_TO_STORE");
-  const [fromStoreId, setFromStoreId] = useState("");
-  const [toStoreId, setToStoreId] = useState("");
-  const [toWarehouseId, setToWarehouseId] = useState("");
+  // Plan 0310, Part D: a direction and two warehouses, each reached through its store.
+  const [picks, setPicks] = useState<RoutePicks>({
+    mode: "GODOWN_TO_FLOOR",
+    fromStoreId: "",
+    fromWarehouseId: "",
+    toStoreId: "",
+    toWarehouseId: "",
+  });
   const [items, setItems] = useState<TransferItem[]>([]);
   const [notes, setNotes] = useState("");
   const [docFile, setDocFile] = useState<File | null>(null);
@@ -114,19 +133,22 @@ export default function NewTransferOrderPage() {
     // sessionStorage does not exist — and a client that started with the draft while the
     // server started without it is a hydration mismatch. Mount-only, so it cascades once.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (draft.mode === "STORE_TO_STORE" || draft.mode === "STORE_TO_WAREHOUSE") setMode(draft.mode);
-    if (draft.fromStoreId) setFromStoreId(draft.fromStoreId);
-    if (draft.toStoreId) setToStoreId(draft.toStoreId);
-    if (draft.toWarehouseId) setToWarehouseId(draft.toWarehouseId);
+    setPicks({
+      mode: (DIRECTIONS as readonly string[]).includes(draft.mode) ? draft.mode : "GODOWN_TO_FLOOR",
+      fromStoreId: draft.fromStoreId ?? "",
+      fromWarehouseId: draft.fromWarehouseId ?? "",
+      toStoreId: draft.toStoreId ?? "",
+      toWarehouseId: draft.toWarehouseId ?? "",
+    });
     if (draft.items?.length > 0) setItems(draft.items);
     if (draft.notes) setNotes(draft.notes);
   }, []);
 
   useEffect(() => {
-    if (items.length > 0 || notes || fromStoreId || toStoreId || toWarehouseId) {
-      saveDraft({ mode, fromStoreId, toStoreId, toWarehouseId, items, notes });
+    if (items.length > 0 || notes || picks.fromStoreId || picks.toStoreId) {
+      saveDraft({ ...picks, items, notes });
     }
-  }, [mode, fromStoreId, toStoreId, toWarehouseId, items, notes]);
+  }, [picks, items, notes]);
 
   useEffect(() => {
     if (search.length < 1) return;
@@ -149,62 +171,114 @@ export default function NewTransferOrderPage() {
   // the state in the effect above. Same behaviour, no cascading render.
   const visibleResults = search.length >= 1 ? searchResults : [];
 
-  // The route, derived during render. The source store resolves to its floor exactly as the
-  // server will; the destination is whichever field the current mode reads.
-  const fromStore = stores.find((s) => s.id === fromStoreId) ?? null;
-  const floor = sourceFloor(fromStore);
-  const toStore = mode === "STORE_TO_STORE" ? (stores.find((s) => s.id === toStoreId) ?? null) : null;
-  const toWarehouse =
-    mode === "STORE_TO_WAREHOUSE"
-      ? stores
-          .flatMap((s) => s.warehouses.map((w) => ({ ...w, storeName: s.name })))
-          .find((w) => w.id === toWarehouseId) ?? null
-      : null;
-  const destinationId = mode === "STORE_TO_STORE" ? toStoreId : toWarehouseId;
-  const destinationName = toStore?.name ?? (toWarehouse ? `${toWarehouse.storeName} · ${toWarehouse.name}` : null);
+  // The route, derived during render — `resolveRoute` is also what the picker shows, so the two
+  // can never disagree about which warehouse a side resolved to.
+  const route = resolveRoute(stores, picks);
+  const fromWh = route.fromWarehouse;
+  const toWh = route.toWarehouse;
+  const routeChosen = Boolean(fromWh && toWh && fromWh.id !== toWh.id);
+  const sourceLabel = fromWh && route.fromStore ? `${route.fromStore.name} · ${fromWh.name}` : null;
+  const destinationLabel = toWh && route.toStore ? `${route.toStore.name} · ${toWh.name}` : null;
 
-  const routeChosen = Boolean(
-    fromStore && floor && destinationName && destinationId !== fromStoreId && destinationId !== floor?.id
+  // The bins every line can name (plan 0310, Part C), and what each line will actually send.
+  const { options: binOptions, loading: binsLoading, error: binsError } = useTransferBinOptions(
+    fromWh?.id ?? null,
+    toWh?.id ?? null,
+    items.map((i) => i.product.id)
   );
-  const quantitiesValid = items.every((i) => i.quantity > 0 && i.quantity <= i.product.currentStock);
-  const isValid = routeChosen && items.length > 0 && quantitiesValid && Boolean(docFile);
+  const resolved = items.map((i) => resolveLineBins(i.product.id, i, binOptions));
+  // A line may take what its from-bin holds less what the OTHER lines on that same bin take.
+  const limits = items.map((item, index) => {
+    const r = resolved[index];
+    if (!r.fromBinId) return item.product.currentStock;
+    const others = items.reduce(
+      (n, o, j) =>
+        j !== index && o.product.id === item.product.id && resolved[j].fromBinId === r.fromBinId ? n + o.quantity : n,
+      0
+    );
+    return Math.max(0, r.fromQty - others);
+  });
+  const binsChosen = resolved.every((r) => r.fromBinId && r.toBinId);
+  const quantitiesValid = items.every((i, index) => i.quantity > 0 && i.quantity <= limits[index]);
+  const isValid = routeChosen && items.length > 0 && binsChosen && quantitiesValid && Boolean(docFile);
 
   function missingHint(): string {
-    if (!fromStore) return "Choose the source store.";
-    if (!floor) return `${fromStore.name} has no shop-floor warehouse to send from.`;
-    if (!destinationName) return mode === "STORE_TO_STORE" ? "Choose the destination store." : "Choose the destination warehouse.";
-    if (!routeChosen) return "The destination is the same place as the source.";
+    if (!route.fromStore) return "Choose the source store.";
+    if (!fromWh) {
+      return route.fromOptions.length === 0
+        ? `${route.fromStore.name} has nothing of that kind to send from.`
+        : "Choose the warehouse the stock leaves from.";
+    }
+    if (!route.toStore) return "Choose the destination store.";
+    if (!toWh) {
+      return route.toOptions.length === 0
+        ? `${route.toStore.name} has nowhere of that kind to send to.`
+        : "Choose the warehouse the stock goes to.";
+    }
     if (items.length === 0) return "Add at least one item to transfer.";
-    if (!quantitiesValid) return "Set a valid quantity for each item.";
-    if (!docFile) return `Attach the ${docLabelForMode(mode).toLowerCase()} — it is required.`;
+    if (binsLoading) return "Loading bins…";
+    if (binsError) return `Bins could not be loaded: ${binsError}`;
+    if (!binsChosen) return "Choose the from-bin and to-bin on every line.";
+    if (!quantitiesValid) return "Set a valid quantity for each line.";
+    if (!docFile) return `Attach the ${route.docType ? docLabel(route.docType).toLowerCase() : "document"} — it is required.`;
     return "";
   }
 
-  function switchMode(next: TransferMode) {
-    if (next === mode) return;
-    log.debug("mode switched", { from: mode, to: next });
-    setMode(next);
-    // The destination is cleared — it is a different kind of place now. So is the file: the
-    // mode decides which document travels (tax invoice vs delivery challan), so a file picked
-    // under the other mode is the wrong document. The items are kept.
-    setToStoreId("");
-    setToWarehouseId("");
-    setDocFile(null);
+  function switchMode(next: DirectionMode) {
+    if (next === picks.mode) return;
+    log.debug("direction switched", { from: picks.mode, to: next });
+    // The stores stay; the warehouses are re-resolved for the new kinds. The items stay too, and
+    // their bins re-resolve against the new warehouses (`resolveLineBins` drops what no longer fits).
+    setPicks((p) => ({ ...p, mode: next, fromWarehouseId: "", toWarehouseId: "" }));
+  }
+
+  /** A store change can change the document (Q7) — a file picked for the other one is the wrong paper. */
+  function changeStores(next: Partial<RoutePicks>) {
+    const after = { ...picks, ...next };
+    const before = resolveRoute(stores, picks).docType;
+    const now = resolveRoute(stores, after).docType;
+    if (before !== now && docFile) {
+      log.debug("document cleared: the stores changed which document travels", { before, now });
+      setDocFile(null);
+    }
+    setPicks(after);
+  }
+
+  function handleFromStoreChange(storeId: string) {
+    // Most moves stay inside one store (godown ↔ floor), so an empty destination store follows the source.
+    changeStores({
+      fromStoreId: storeId,
+      fromWarehouseId: "",
+      ...(picks.toStoreId ? {} : { toStoreId: storeId, toWarehouseId: "" }),
+    });
   }
 
   function addItem(product: Product) {
     if (items.some((i) => i.product.id === product.id)) {
-      setError(`${product.name} is already in the list`);
-      setTimeout(() => setError(""), 2000);
+      setError(`${product.name} is already in the list — use "+ from another bin" on its line to take more from a different bin`);
+      setTimeout(() => setError(""), 3000);
       return;
     }
-    setItems((prev) => [...prev, { product, quantity: 1 }]);
+    setItems((prev) => [...prev, { key: newLineKey(), product, quantity: 1, fromBinId: "", toBinId: "" }]);
     setSearch("");
     setSearchResults([]);
   }
 
   function setQuantity(index: number, quantity: number) {
     setItems((prev) => prev.map((item, i) => (i === index ? { ...item, quantity } : item)));
+  }
+
+  function setLineBins(index: number, patch: Partial<LineBins>) {
+    setItems((prev) => prev.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+  }
+
+  /** Same product, another bin (2209 Q2a): a new line under this one, its from-bin left to choose. */
+  function splitLine(index: number) {
+    setItems((prev) => {
+      const line = prev[index];
+      const copy: TransferItem = { key: newLineKey(), product: line.product, quantity: 1, fromBinId: "", toBinId: line.toBinId };
+      return [...prev.slice(0, index + 1), copy, ...prev.slice(index + 1)];
+    });
   }
 
   function removeItem(index: number) {
@@ -217,13 +291,13 @@ export default function NewTransferOrderPage() {
    * one would be a record the server has to refuse anyway. Two steps, each logged.
    */
   async function handleSubmit() {
-    if (!isValid || !docFile || submitting) return;
+    if (!isValid || !docFile || !fromWh || !toWh || submitting) return;
 
     setSubmitting(true);
     setError("");
 
     const itemCount = items.length;
-    const ids = { mode, fromStoreId, toId: destinationId, itemCount };
+    const ids = { mode: picks.mode, fromWarehouseId: fromWh.id, toWarehouseId: toWh.id, itemCount };
 
     let url: string;
     try {
@@ -231,7 +305,7 @@ export default function NewTransferOrderPage() {
       // Images are downscaled and re-encoded; a PDF comes back untouched with ext "pdf".
       const { blob, ext, contentType } = await compressImageFull(docFile);
       const type = contentType || (ext === "pdf" ? "application/pdf" : docFile.type) || "application/octet-stream";
-      const key = `transfers/new/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+      const key = newDocumentKey(ext);
       url = await uploadMedia(blob, key, type);
       // The key is logged; the URL is not — the presigned form of it is a credential.
       log.debug("submit 1/2: document uploaded", { key, bytes: blob.size, contentType: type });
@@ -248,11 +322,20 @@ export default function NewTransferOrderPage() {
       ...(docNumber.trim() ? { number: docNumber.trim() } : {}),
       ...(docDate ? { date: docDate } : {}),
     };
-    const lines = items.map((i) => ({ productId: i.product.id, quantity: i.quantity }));
-    const body =
-      mode === "STORE_TO_STORE"
-        ? { mode, fromStoreId, toStoreId, items: lines, notes: notes || undefined, document }
-        : { mode, fromStoreId, toWarehouseId, items: lines, notes: notes || undefined, document };
+    const lines = items.map((i, index) => ({
+      productId: i.product.id,
+      quantity: i.quantity,
+      fromBinId: resolved[index].fromBinId,
+      toBinId: resolved[index].toBinId,
+    }));
+    const body = {
+      mode: picks.mode,
+      fromWarehouseId: fromWh.id,
+      toWarehouseId: toWh.id,
+      items: lines,
+      notes: notes || undefined,
+      document,
+    };
 
     log.debug("submit 2/2: creating order", { ...ids, hasNumber: Boolean(document.number), hasDate: Boolean(document.date) });
     const { data, error: err } = await apiTry<CreatedOrder>("/api/transfer-orders", { method: "POST", json: body });
@@ -267,15 +350,16 @@ export default function NewTransferOrderPage() {
 
     clearDraft();
     const approved = data.status === "APPROVED";
-    log.info("transfer created", { orderId: data.id, orderNo: data.orderNo, mode, itemCount, status: data.status });
+    log.info("transfer created", { orderId: data.id, orderNo: data.orderNo, mode: picks.mode, itemCount, status: data.status });
     setReceipt({
       type: approved ? "success" : "warning",
       title: approved ? "Transfer Approved" : "Transfer Submitted",
       referenceId: data.orderNo || "Transfer",
       redirectTo: data.id ? `/transfers/${data.id}` : "/transfers",
       items: [
-        { label: "Route", value: `${fromStore?.name ?? "—"} → ${destinationName ?? "—"}` },
-        { label: "Document", value: docLabelForMode(mode) },
+        { label: "Direction", value: DIRECTION_LABEL[picks.mode] },
+        { label: "Route", value: `${sourceLabel ?? "—"} → ${destinationLabel ?? "—"}` },
+        { label: "Document", value: route.docType ? docLabel(route.docType) : "—" },
         ...items.map((i) => ({
           label: i.product.name.length > 28 ? i.product.name.slice(0, 28) + "…" : i.product.name,
           value: `×${i.quantity}`,
@@ -310,15 +394,14 @@ export default function NewTransferOrderPage() {
         stores={stores}
         loading={storesLoading}
         error={storesError}
-        mode={mode}
-        fromStoreId={fromStoreId}
-        toStoreId={toStoreId}
-        toWarehouseId={toWarehouseId}
+        picks={picks}
+        route={route}
         disabled={submitting}
         onModeChange={switchMode}
-        onFromChange={setFromStoreId}
-        onToStoreChange={setToStoreId}
-        onToWarehouseChange={setToWarehouseId}
+        onFromStoreChange={handleFromStoreChange}
+        onFromWarehouseChange={(id) => setPicks((p) => ({ ...p, fromWarehouseId: id }))}
+        onToStoreChange={(id) => changeStores({ toStoreId: id, toWarehouseId: "" })}
+        onToWarehouseChange={(id) => setPicks((p) => ({ ...p, toWarehouseId: id }))}
       />
 
       {/* Search & Add Items */}
@@ -353,11 +436,24 @@ export default function NewTransferOrderPage() {
         </div>
       </div>
 
-      {/* Items — product and quantity only. The lane lives on the route card above. */}
-      <ItemList items={items} disabled={submitting} onQuantityChange={setQuantity} onRemove={removeItem} />
+      {/* Items — product, quantity and the two bins. The lane lives on the route card above. */}
+      <ItemList
+        items={items}
+        limits={limits}
+        options={binOptions}
+        optionsLoading={binsLoading}
+        routeReady={routeChosen}
+        sourceName={fromWh?.name}
+        destinationName={toWh?.name}
+        disabled={submitting}
+        onQuantityChange={setQuantity}
+        onBinChange={setLineBins}
+        onSplit={splitLine}
+        onRemove={removeItem}
+      />
 
       <DocumentPicker
-        mode={mode}
+        docType={route.docType}
         file={docFile}
         number={docNumber}
         date={docDate}

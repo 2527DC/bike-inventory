@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getWarehouseBreakdown } from "@/lib/stock-location";
+import { getWarehouseBinQty } from "@/lib/units/bin-qty";
+import { loadHomeBinRules, pickHomeBin } from "@/lib/bins/rule-match";
 import type { WarehouseRef } from "@/lib/warehouses";
 import { createLogger } from "@/lib/logger";
 
@@ -89,7 +91,7 @@ export async function validateTransferItems(params: {
   const productIds = [...new Set(items.map((i) => i.productId))];
   const products = await prisma.product.findMany({
     where: { id: { in: productIds } },
-    select: { id: true, name: true },
+    select: { id: true, name: true, brandId: true, categoryId: true },
   });
   const productMap = new Map(products.map((p) => [p.id, p]));
 
@@ -125,7 +127,73 @@ export async function validateTransferItems(params: {
   for (const item of items) {
     if (!item.fromBinId || !item.toBinId) {
       log.warn("transfer lines refused: bin missing", { ...context, productId: item.productId });
-      return { error: "Source and destination bins are required", status: 400 };
+      return { error: "Choose the source bin and the destination bin on every line", status: 400 };
+    }
+  }
+
+  // ── THE BINS ARE REAL, ON THE RIGHT SIDE, AND HOLD THE STOCK (plan 0310 Part C, 2209 Phase 1) ──
+  //
+  // Presence alone was all this used to test — any two ids passed, from any warehouse. The
+  // From-bin picker and this check read the same `getWarehouseBinQty` and `pickHomeBin`, so
+  // whatever the screen offered is what passes here.
+  const binIds = [...new Set(items.flatMap((i) => [i.fromBinId as string, i.toBinId as string]))];
+  const bins = await prisma.bin.findMany({
+    where: { id: { in: binIds } },
+    select: { id: true, code: true, warehouseId: true, isActive: true },
+  });
+  const binMap = new Map(bins.map((b) => [b.id, b]));
+  for (const item of items) {
+    const from = binMap.get(item.fromBinId as string);
+    const to = binMap.get(item.toBinId as string);
+    if (!from || !from.isActive || from.warehouseId !== fromWh.id) {
+      log.warn("transfer lines refused: source bin", { ...context, productId: item.productId, binId: item.fromBinId, warehouseId: fromWh.id });
+      return { error: `The source bin must be an active bin of ${fromWh.name}.`, status: 400 };
+    }
+    if (!to || !to.isActive || to.warehouseId !== toWh.id) {
+      log.warn("transfer lines refused: destination bin", { ...context, productId: item.productId, binId: item.toBinId, warehouseId: toWh.id });
+      return { error: `The destination bin must be an active bin of ${toWh.name}.`, status: 400 };
+    }
+  }
+
+  // The chosen bin must hold the line (2209 Q2a: refuse, never spread silently). Lines naming the
+  // same product AND bin draw from one shelf, so they are summed first.
+  const binQty = await getWarehouseBinQty(fromWh.id, productIds);
+  const wantedFromBin = new Map<string, { productId: string; binId: string; qty: number }>();
+  for (const item of items) {
+    const key = `${item.productId}|${item.fromBinId}`;
+    const row = wantedFromBin.get(key) ?? { productId: item.productId, binId: item.fromBinId as string, qty: 0 };
+    row.qty += item.quantity;
+    wantedFromBin.set(key, row);
+  }
+  for (const { productId, binId, qty } of wantedFromBin.values()) {
+    const held = binQty.get(productId) ?? new Map<string, number>();
+    const inBin = held.get(binId) ?? 0;
+    if (inBin >= qty) continue;
+    const others = [...held.entries()]
+      .filter(([b]) => b !== binId)
+      .sort((a, b) => b[1] - a[1])
+      .map(([b, n]) => `${binMap.get(b)?.code ?? "another bin"} (${n})`);
+    log.warn("transfer lines refused: short in source bin", { ...context, productId, binId, inBin, wanted: qty });
+    const code = binMap.get(binId)?.code ?? "That bin";
+    return {
+      error:
+        `Bin ${code} holds ${inBin} of ${productMap.get(productId)?.name ?? "this product"}, not ${qty}.` +
+        (others.length > 0 ? ` It is also in ${others.join(", ")} — split the line across bins.` : ""),
+      status: 400,
+    };
+  }
+
+  // A destination home-bin rule LOCKS the to-bin, as it does at inbound (plan 2109, R34).
+  const rules = await loadHomeBinRules(prisma, toWh.id);
+  for (const item of items) {
+    const product = productMap.get(item.productId)!;
+    const match = pickHomeBin(rules, { productId: product.id, brandId: product.brandId, categoryId: product.categoryId });
+    if (match && match.bin.id !== item.toBinId) {
+      log.warn("transfer lines refused: rule bin", { ...context, productId: product.id, binId: item.toBinId, ruleBinId: match.bin.id });
+      return {
+        error: `${product.name} goes to bin ${match.bin.code} at ${toWh.name} by its home-bin rule. Choose ${match.bin.code} as the destination bin.`,
+        status: 409,
+      };
     }
   }
 

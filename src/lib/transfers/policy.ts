@@ -5,8 +5,8 @@ import type { TransferDocType } from "@prisma/client";
  *
  * `deriveTransferPolicy` — the rule that read both stores' GSTINs and refused a store-to-store
  * transfer while either was blank — was deleted on 9 Sep 2026. The document is now decided by
- * the MODE chosen on the form; see `src/lib/transfers/mode.ts` (`docTypeForMode`). The GSTIN
- * is never consulted. What is left here is the wording and the e-way threshold, which the
+ * whether the two warehouses belong to the same store; see `src/lib/transfers/mode.ts`
+ * (`docTypeForLane`, plan 0310 Q7). The GSTIN is never consulted. What is left here is the wording and the e-way threshold, which the
  * dispatch, document and detail routes still read.
  */
 

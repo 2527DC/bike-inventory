@@ -6,12 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { createLogger } from "@/lib/logger";
-import { docLabelForMode, type TransferMode } from "./route-picker";
+import type { TransferDocType } from "@prisma/client";
+import { docLabel } from "./route-picker";
 
 const log = createLogger("transfers:new");
 
 interface Props {
-  mode: TransferMode;
+  /** Decided by the two stores (plan 0310, Q7). Null until both are chosen. */
+  docType: TransferDocType | null;
   file: File | null;
   number: string;
   date: string;
@@ -43,7 +45,7 @@ function formatBytes(n: number): string {
  * in Zoho Books, the tax system of record, and attached here. This app does not generate one.
  */
 export function DocumentPicker({
-  mode,
+  docType,
   file,
   number,
   date,
@@ -83,7 +85,7 @@ export function DocumentPicker({
     onFileChange(picked);
   }
 
-  const label = docLabelForMode(mode);
+  const label = docType ? docLabel(docType) : "The document";
 
   return (
     <Card className={`mb-4 ${file ? "" : "border-amber-200"}`}>
@@ -91,7 +93,9 @@ export function DocumentPicker({
         <div className="flex items-start justify-between gap-2 mb-2">
           <div className="min-w-0">
             <p className="text-sm font-semibold text-slate-900">Document</p>
-            <p className="text-xs text-slate-500">{label} — required</p>
+            <p className="text-xs text-slate-500">
+              {docType ? `${label} — required` : "Required — choose both stores first"}
+            </p>
           </div>
           <FileText className={`h-5 w-5 shrink-0 ${file ? "text-green-600" : "text-amber-500"}`} />
         </div>
@@ -134,7 +138,7 @@ export function DocumentPicker({
             type="button"
             variant="outline"
             onClick={() => fileRef.current?.click()}
-            disabled={disabled}
+            disabled={disabled || !docType}
             className="w-full min-h-[44px]"
           >
             <Upload className="h-4 w-4 mr-2" /> Attach {label.toLowerCase()}
@@ -159,7 +163,7 @@ export function DocumentPicker({
               value={number}
               onChange={(e) => onNumberChange(e.target.value)}
               maxLength={40}
-              placeholder={mode === "STORE_TO_STORE" ? "INV-00123" : "DC-00123"}
+              placeholder={docType === "TAX_INVOICE" ? "INV-00123" : "DC-00123"}
               disabled={disabled}
               className="min-h-[44px]"
             />
