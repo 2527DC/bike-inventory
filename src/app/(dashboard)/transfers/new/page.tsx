@@ -14,10 +14,13 @@ import { apiTry } from "@/lib/api-client";
 import { compressImageFull } from "@/lib/media-compress";
 import { uploadMedia } from "@/lib/media-upload";
 import { createLogger } from "@/lib/logger";
+import type { TransferDocType } from "@prisma/client";
+import { kindsForMode } from "@/lib/transfers/mode";
 import {
   RoutePicker,
   DIRECTIONS,
   DIRECTION_LABEL,
+  KIND_WORD,
   docLabel,
   resolveRoute,
   type DirectionMode,
@@ -97,17 +100,19 @@ export default function NewTransferOrderPage() {
 
   const { stores, loading: storesLoading, error: storesError } = useStores();
 
-  // Plan 0310, Part D: a direction and two warehouses, each reached through its store.
+  // Plan 0310, Part D and R8: a direction and two warehouses, each picked from one list of every
+  // warehouse of its kind across all stores.
   const [picks, setPicks] = useState<RoutePicks>({
     mode: "GODOWN_TO_FLOOR",
-    fromStoreId: "",
     fromWarehouseId: "",
-    toStoreId: "",
     toWarehouseId: "",
   });
   const [items, setItems] = useState<TransferItem[]>([]);
   const [notes, setNotes] = useState("");
-  const [docFile, setDocFile] = useState<File | null>(null);
+  // The file AND the document it was attached as. A route change can switch the document (Q7):
+  // a challan attached for a same-store move is the wrong paper once the stores differ, so it
+  // stops counting (`docFile` below) instead of being cleared in a handler that might be missed.
+  const [attached, setAttached] = useState<{ file: File; type: TransferDocType } | null>(null);
   const [docNumber, setDocNumber] = useState("");
   const [docDate, setDocDate] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -135,9 +140,7 @@ export default function NewTransferOrderPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setPicks({
       mode: (DIRECTIONS as readonly string[]).includes(draft.mode) ? draft.mode : "GODOWN_TO_FLOOR",
-      fromStoreId: draft.fromStoreId ?? "",
       fromWarehouseId: draft.fromWarehouseId ?? "",
-      toStoreId: draft.toStoreId ?? "",
       toWarehouseId: draft.toWarehouseId ?? "",
     });
     if (draft.items?.length > 0) setItems(draft.items);
@@ -145,7 +148,7 @@ export default function NewTransferOrderPage() {
   }, []);
 
   useEffect(() => {
-    if (items.length > 0 || notes || picks.fromStoreId || picks.toStoreId) {
+    if (items.length > 0 || notes || picks.fromWarehouseId || picks.toWarehouseId) {
       saveDraft({ ...picks, items, notes });
     }
   }, [picks, items, notes]);
@@ -177,8 +180,9 @@ export default function NewTransferOrderPage() {
   const fromWh = route.fromWarehouse;
   const toWh = route.toWarehouse;
   const routeChosen = Boolean(fromWh && toWh && fromWh.id !== toWh.id);
-  const sourceLabel = fromWh && route.fromStore ? `${route.fromStore.name} · ${fromWh.name}` : null;
-  const destinationLabel = toWh && route.toStore ? `${route.toStore.name} · ${toWh.name}` : null;
+  const sourceLabel = fromWh ? `${fromWh.storeName} · ${fromWh.name}` : null;
+  const destinationLabel = toWh ? `${toWh.storeName} · ${toWh.name}` : null;
+  const docFile = attached && attached.type === route.docType ? attached.file : null;
 
   // The bins every line can name (plan 0310, Part C), and what each line will actually send.
   const { options: binOptions, loading: binsLoading, error: binsError } = useTransferBinOptions(
@@ -203,17 +207,16 @@ export default function NewTransferOrderPage() {
   const isValid = routeChosen && items.length > 0 && binsChosen && quantitiesValid && Boolean(docFile);
 
   function missingHint(): string {
-    if (!route.fromStore) return "Choose the source store.";
+    const kinds = kindsForMode(picks.mode);
     if (!fromWh) {
       return route.fromOptions.length === 0
-        ? `${route.fromStore.name} has nothing of that kind to send from.`
-        : "Choose the warehouse the stock leaves from.";
+        ? `No store has an active ${KIND_WORD[kinds.from]} to send from.`
+        : `Choose the ${KIND_WORD[kinds.from]} the stock leaves from.`;
     }
-    if (!route.toStore) return "Choose the destination store.";
     if (!toWh) {
       return route.toOptions.length === 0
-        ? `${route.toStore.name} has nowhere of that kind to send to.`
-        : "Choose the warehouse the stock goes to.";
+        ? `There is no ${KIND_WORD[kinds.to]} to send to.`
+        : `Choose the ${KIND_WORD[kinds.to]} the stock goes to.`;
     }
     if (items.length === 0) return "Add at least one item to transfer.";
     if (binsLoading) return "Loading bins…";
@@ -227,30 +230,9 @@ export default function NewTransferOrderPage() {
   function switchMode(next: DirectionMode) {
     if (next === picks.mode) return;
     log.debug("direction switched", { from: picks.mode, to: next });
-    // The stores stay; the warehouses are re-resolved for the new kinds. The items stay too, and
-    // their bins re-resolve against the new warehouses (`resolveLineBins` drops what no longer fits).
+    // The warehouses are re-picked for the new kinds. The items stay, and their bins re-resolve
+    // against the new warehouses (`resolveLineBins` drops what no longer fits).
     setPicks((p) => ({ ...p, mode: next, fromWarehouseId: "", toWarehouseId: "" }));
-  }
-
-  /** A store change can change the document (Q7) — a file picked for the other one is the wrong paper. */
-  function changeStores(next: Partial<RoutePicks>) {
-    const after = { ...picks, ...next };
-    const before = resolveRoute(stores, picks).docType;
-    const now = resolveRoute(stores, after).docType;
-    if (before !== now && docFile) {
-      log.debug("document cleared: the stores changed which document travels", { before, now });
-      setDocFile(null);
-    }
-    setPicks(after);
-  }
-
-  function handleFromStoreChange(storeId: string) {
-    // Most moves stay inside one store (godown ↔ floor), so an empty destination store follows the source.
-    changeStores({
-      fromStoreId: storeId,
-      fromWarehouseId: "",
-      ...(picks.toStoreId ? {} : { toStoreId: storeId, toWarehouseId: "" }),
-    });
   }
 
   function addItem(product: Product) {
@@ -398,9 +380,7 @@ export default function NewTransferOrderPage() {
         route={route}
         disabled={submitting}
         onModeChange={switchMode}
-        onFromStoreChange={handleFromStoreChange}
         onFromWarehouseChange={(id) => setPicks((p) => ({ ...p, fromWarehouseId: id }))}
-        onToStoreChange={(id) => changeStores({ toStoreId: id, toWarehouseId: "" })}
         onToWarehouseChange={(id) => setPicks((p) => ({ ...p, toWarehouseId: id }))}
       />
 
@@ -458,7 +438,7 @@ export default function NewTransferOrderPage() {
         number={docNumber}
         date={docDate}
         disabled={submitting}
-        onFileChange={setDocFile}
+        onFileChange={(file) => setAttached(file && route.docType ? { file, type: route.docType } : null)}
         onNumberChange={setDocNumber}
         onDateChange={setDocDate}
       />

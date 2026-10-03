@@ -28,6 +28,15 @@ The owner's answers to the questions, the same day, are in §1.1.
 6. **R6** — The home-bin rule's **Brand** field is **searchable**, like the Category field.
 7. **R7** — `/transfers/new` offers four directions: **Floor → Godown, Godown → Floor, Floor → Floor, Godown → Godown**. These replace today's "Store → Store" and "Store → Warehouse" buttons. (The owner wrote "gowdown to flore" twice; Q6 confirmed the fourth direction is Godown → Godown.)
 
+**Follow-up, after PR #70 was merged (3 Oct 2026), verbatim:**
+
+> i need it like when it form transfer the user select what type of transfer and i need to see the respected like if its flore to gowdowen then it must list all the flores in the left side and which must show which storr does it belongs to and in the right side respectde gowdon w hich also show the name of it and it store i need it like that
+
+> i need u to chnage the name in the ui that is what we have like floor as hub in the ui in the stock transfer do this change and push to git and create a pr and merge it
+
+8. **R8** — Each side of the transfer route is **one list of every warehouse of the kind the direction needs, across all stores**, and each entry shows its **store**. Hub → Godown lists every hub on the left and every godown on the right. The store-then-warehouse two-step goes.
+9. **R9** — On the stock transfer screens a FLOOR warehouse is called a **Hub** ("Hub → Godown", "From (hub)"). Wording only: the stored kind and enum stay `FLOOR`, and warehouse names (e.g. "BCH Floor") are data, renamed on `/stores` if wanted.
+
 ---
 
 ## 1. Questions and clarifications
@@ -68,6 +77,7 @@ in this plan (§5).
 | 3 Oct 2026 | Q7 | By store: tax invoice between stores, delivery challan within one |
 | 3 Oct 2026 | Q8 | Add bin pickers now (2209 Phase 1) |
 | 3 Oct 2026 | Q9–Q14 | Defaults accepted with the go-ahead ("is there anything to be confirmed … if not start implementing") |
+| 3 Oct 2026 | R8 | The owner skipped the layout questions and asked to build it: lists are **grouped by store** (each option also reads "Warehouse — Store"), and the destination is **not pre-selected** unless it has only one possible warehouse |
 
 ---
 
@@ -483,4 +493,19 @@ the create page). Pushed and merged by PR on the owner's instruction, 3 Oct 2026
 2. Grant `bins.delete` on `/team/permissions` to whoever should delete bins.
 3. `npm run lint` repo-wide reports 187 errors / 91 warnings, all pre-existing on `main`; the
    only finding in a file this plan touched is the existing `bins-manager.tsx` effect error.
+
+## 7. Follow-up build — R8, R9 (3 Oct 2026)
+
+Branch `feat/0310-transfer-hub-lists`, cut from `main` at `736c2f5` (PR #70 merged).
+
+- `transfers/new/_components/route-picker.tsx`: `RoutePicks` is `{ mode, fromWarehouseId,
+  toWarehouseId }`; `resolveRoute` lists every warehouse of each kind across stores; each side is
+  one `<select>` with an `<optgroup>` per store. `KIND_WORD.FLOOR` is "hub".
+- `src/lib/transfers/mode.ts`: `DIRECTION_LABEL` reads Hub → Godown, Godown → Hub, Hub → Hub,
+  Godown → Godown — the chips, the receipt, the create route's refusal and the detail chip all
+  read it (the detail page's own copy of the four labels was removed).
+- `transfers/new/page.tsx`: store handlers gone; the attached document is kept with the document
+  type it was attached as and stops counting when the route needs the other one.
+- No server, schema or migration change: the create route already takes two warehouse ids.
+- `npx tsc --noEmit` and eslint on the touched files clean; build below. Not browser-checked.
 

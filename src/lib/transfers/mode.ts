@@ -35,11 +35,14 @@ const MODE_BY_KINDS: Record<WarehouseKind, Record<WarehouseKind, TransferMode>> 
 export const DIRECTION_MODES = ["FLOOR_TO_GODOWN", "GODOWN_TO_FLOOR", "FLOOR_TO_FLOOR", "GODOWN_TO_GODOWN"] as const;
 export type DirectionMode = (typeof DIRECTION_MODES)[number];
 
-/** How a direction reads on screen and in refusals. */
+/**
+ * How a direction reads on screen and in refusals. A FLOOR warehouse is called a **Hub** on the
+ * transfer screens (owner, 3 Oct 2026, plan 0310 R9) — wording only; the enum keeps FLOOR.
+ */
 export const DIRECTION_LABEL: Record<DirectionMode, string> = {
-  FLOOR_TO_GODOWN: "Floor → Godown",
-  GODOWN_TO_FLOOR: "Godown → Floor",
-  FLOOR_TO_FLOOR: "Floor → Floor",
+  FLOOR_TO_GODOWN: "Hub → Godown",
+  GODOWN_TO_FLOOR: "Godown → Hub",
+  FLOOR_TO_FLOOR: "Hub → Hub",
   GODOWN_TO_GODOWN: "Godown → Godown",
 };
 

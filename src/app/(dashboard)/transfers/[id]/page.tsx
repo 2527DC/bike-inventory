@@ -18,6 +18,7 @@ import { DispatchSheet } from "./_components/dispatch-sheet";
 import { ReceiveSheet } from "./_components/receive-sheet";
 import { DocumentCard } from "./_components/document-card";
 import { EditItemsSheet } from "./_components/edit-items-sheet";
+import { DIRECTION_LABEL } from "@/lib/transfers/mode";
 
 const log = createLogger("transfers:detail");
 
@@ -113,10 +114,8 @@ function when(value: string | null): string {
  * the two stores' GSTINs, and keep the wording that matched that derivation.
  */
 function modeLabel(mode: TransferMode | null | undefined, transferType: TransferDetail["transferType"]): string {
-  if (mode === "FLOOR_TO_GODOWN") return "Floor → Godown";
-  if (mode === "GODOWN_TO_FLOOR") return "Godown → Floor";
-  if (mode === "FLOOR_TO_FLOOR") return "Floor → Floor";
-  if (mode === "GODOWN_TO_GODOWN") return "Godown → Godown";
+  // The four directions read as the create form wrote them — a floor is a "Hub" on screen (R9).
+  if (mode && mode in DIRECTION_LABEL) return DIRECTION_LABEL[mode as keyof typeof DIRECTION_LABEL];
   if (mode === "STORE_TO_STORE") return "Store → Store";
   if (mode === "STORE_TO_WAREHOUSE") return "Store → Warehouse";
   return transferType === "INTER_STORE" ? "Inter-store" : "Within one store";
