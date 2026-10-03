@@ -166,6 +166,7 @@ preserved across regeneration — but do not remove the marker comments.
 <!-- BEGIN:pending -->
 | Plan | State |
 |---|---|
+| `0310-audit-delete-reverses-another-audit-plan.md` | approved 3 Oct 2026; delete fix and repair script built and verified locally; production repair of 13 products pending the owner's go-ahead. |
 | `0310-bin-delete-multi-category-rules-and-transfer-directions-plan.md` | approved 3 Oct 2026 with Q1–Q8 answered and the Q9–Q14 defaults accepted; building Part A first. |
 | `2209-transfer-and-outward-by-bin-plan.md` | written 22 Sep 2026; **waiting for the owner's answers to §1 and the go-ahead.** |
 | `2309-app-name-per-environment-plan.md` | written 23 Sep 2026. **Every question in §1 is answered (§1.1). Waiting for the |

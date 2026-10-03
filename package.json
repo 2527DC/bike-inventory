@@ -24,6 +24,7 @@
     "db:wipe:catalog": "node scripts/db/wipe-catalog-and-stock.mjs",
     "db:backfill:vendor-contact": "node scripts/db/backfill-vendor-contact.mjs",
     "db:check:unbinned": "node scripts/db/check-unbinned-stock.mjs",
+    "db:repair:stock-total": "node scripts/db/repair-stock-total-drift.mjs",
     "db:migrate:status": "prisma migrate status"
   },
   "prisma": {
