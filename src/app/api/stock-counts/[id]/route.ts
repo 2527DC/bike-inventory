@@ -627,76 +627,75 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 }
 
+/** Thrown inside the delete's transaction to roll it back when the count changed under it. */
+class StaleDeleteError extends Error {}
+
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
     const user = await requireFeature("stock_audit", "delete");
 
-    const stockCount = await prisma.stockCount.findUnique({ where: { id } });
+    const stockCount = await prisma.stockCount.findUnique({
+      where: { id },
+      select: { id: true, countNo: true, title: true, status: true },
+    });
     if (!stockCount) return errorResponse("Stock count not found", 404);
 
     if (stockCount.status === "APPROVED") {
       return errorResponse("Cannot delete an approved stock count", 403);
     }
 
-    if (stockCount.status === "COMPLETED") {
-      // Only ADMIN can delete completed stock counts
-      if (!(await userCan(user.id, "stock_audit", "approve"))) {
-        return errorResponse("Only ADMIN can delete a completed stock count", 403);
-      }
-
-      await prisma.$transaction(async (tx) => {
-        // Find all transactions created by this stock count
-        const transactions = await tx.inventoryTransaction.findMany({
-          where: {
-            referenceNo: stockCount.title,
-            notes: { contains: "[STOCK_COUNT]" },
-          },
-        });
-
-        // Reverse each product's stock and bin assignment
-        for (const txn of transactions) {
-          const product = await tx.product.findUnique({
-            where: { id: txn.productId },
-            select: { id: true, binId: true },
-          });
-          if (!product) continue;
-
-          await tx.product.update({
-            where: { id: product.id },
-            data: {
-              currentStock: txn.previousStock,
-              // Clear bin only if it was assigned by this stock count
-              ...(stockCount.binId && product.binId === stockCount.binId && { binId: null }),
-            },
-          });
-        }
-
-        // Delete the transactions
-        await tx.inventoryTransaction.deleteMany({
-          where: {
-            referenceNo: stockCount.title,
-            notes: { contains: "[STOCK_COUNT]" },
-          },
-        });
-
-        // Delete count items and count
-        await tx.stockCountItem.deleteMany({ where: { stockCountId: id } });
-        await tx.stockCount.delete({ where: { id } });
-      });
-
-      return successResponse({ deleted: true, reversed: true });
+    // Only ADMIN can delete completed stock counts
+    if (stockCount.status === "COMPLETED" && !(await userCan(user.id, "stock_audit", "approve"))) {
+      return errorResponse("Only ADMIN can delete a completed stock count", 403);
     }
 
-    // Non-completed counts: simple delete
-    await prisma.$transaction([
-      prisma.stockCountItem.deleteMany({ where: { stockCountId: id } }),
-      prisma.stockCount.delete({ where: { id } }),
-    ]);
+    // ─── A DELETE NEVER TOUCHES STOCK (plan 0310-audit-delete-reverses-another-audit, R2) ─────
+    //
+    // The COMPLETED branch used to "reverse" the count: it found ledger rows by
+    // `referenceNo: stockCount.title` + `[STOCK_COUNT]`, wrote `Product.currentStock` back to each
+    // row's `previousStock`, cleared the product's bin and deleted the rows. Both halves were wrong:
+    //
+    //   1. A COMPLETED count never applied stock. Only an APPROVED count with "apply to stock"
+    //      does (PATCH above); the branch that applied stock at Complete ended 31 Jul 2026. So
+    //      there was nothing of its own to reverse.
+    //   2. Titles are not unique — every audit of a bin gets the same default title
+    //      (`stock-audit/new/page.tsx`). It reversed a DIFFERENT, approved audit's rows. On
+    //      30 Sep 2026 deleting a completed EMOTORAD audit zeroed the shown stock of 25 products
+    //      (7002 among them), cleared their bins and erased their ledger rows — while their
+    //      StockLevel rows and units stayed, because it wrote only the `currentStock` cache.
+    //
+    // Every delete now removes the count and its lines, and nothing else.
+    await prisma.$transaction(async (tx) => {
+      await tx.stockCountItem.deleteMany({ where: { stockCountId: id } });
+      // The status read above is the precondition: a count approved between that read and this
+      // write may have moved stock, so it is not deleted.
+      const removed = await tx.stockCount.deleteMany({ where: { id, status: stockCount.status } });
+      if (removed.count !== 1) throw new StaleDeleteError();
 
+      // Inside the transaction: the deletes of 30 Sep 2026 left no trace at all, and the log row
+      // is the only record that the count ever existed.
+      await logActivity(tx, {
+        module: "stock_audit",
+        action: "deleted",
+        entityType: "StockCount",
+        entityId: id,
+        entityRef: stockCount.countNo,
+        fromValue: stockCount.status,
+        details: stockCount.title,
+        userId: user.id,
+        userName: user.name,
+      });
+    });
+
+    log.info("stock count deleted", { stockCountId: id, countNo: stockCount.countNo, status: stockCount.status });
     return successResponse({ deleted: true });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof StaleDeleteError) {
+      log.warn("stock count delete refused: changed while deleting", { stockCountId: id });
+      return errorResponse("This stock count changed while you were deleting it. Reload and try again.", 409);
+    }
     log.error("stock count delete failed", {
       stockCountId: id,
       message: error instanceof Error ? error.message : String(error),
