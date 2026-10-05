@@ -1,9 +1,12 @@
-import { nextUnitCode } from "@/lib/sequence";
+import { nextUnitCodes } from "@/lib/sequence";
 import { createLogger } from "@/lib/logger";
 import type { Tx } from "./constants";
 import { syncBinStock } from "./bin-stock";
 
 const log = createLogger("units:createUnits");
+
+/** Rows per INSERT. ~12 columns each, so a chunk stays far below Postgres's 65,535 parameters. */
+const INSERT_CHUNK = 1000;
 
 export interface CreateUnitsInput {
   productId: string;
@@ -41,26 +44,45 @@ export async function createUnits(tx: Tx, input: CreateUnitsInput): Promise<stri
     binNonAssemblable = bin.nonAssemblable;
   }
 
+  // ONE code allocation and one INSERT per chunk — never a statement per item (plan 0510).
+  // Until 5 Oct 2026 this looped `nextUnitCode` + `create` once per unit: three statements per
+  // item, one of them a scan of the whole table, so an audit giving 4,050 items their codes
+  // outran its transaction and was rolled back.
+  const started = Date.now();
   const now = new Date();
-  const ids: string[] = [];
-  for (let i = 0; i < input.qty; i++) {
-    const unitCode = await nextUnitCode(tx);
-    const unit = await tx.inventoryUnit.create({
-      data: {
-        unitCode,
-        productId: input.productId,
-        warehouseId: input.warehouseId,
-        binId: input.binId ?? null,
-        status: input.assembled ? "ASSEMBLED" : input.binId ? "PUT_AWAY" : "RECEIVED",
-        assembledAt: input.assembled ? now : null,
-        nonAssemblable: binNonAssemblable,
-        inboundShipmentId: input.inboundShipmentId ?? null,
-        sourceTransactionId: input.sourceTransactionId ?? null,
-      },
-      select: { id: true },
+  const codes = await nextUnitCodes(tx, input.qty);
+  const rows = codes.map((unitCode) => ({
+    unitCode,
+    productId: input.productId,
+    warehouseId: input.warehouseId,
+    binId: input.binId ?? null,
+    status: input.assembled ? ("ASSEMBLED" as const) : input.binId ? ("PUT_AWAY" as const) : ("RECEIVED" as const),
+    assembledAt: input.assembled ? now : null,
+    nonAssemblable: binNonAssemblable,
+    inboundShipmentId: input.inboundShipmentId ?? null,
+    sourceTransactionId: input.sourceTransactionId ?? null,
+  }));
+
+  const idByCode = new Map<string, string>();
+  for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
+    const created = await tx.inventoryUnit.createManyAndReturn({
+      data: rows.slice(i, i + INSERT_CHUNK),
+      select: { id: true, unitCode: true },
     });
-    ids.push(unit.id);
+    for (const u of created) idByCode.set(u.unitCode, u.id);
   }
+  // Code order is what the label sheet prints in; it is rebuilt from the codes allocated, not
+  // trusted to the order the INSERT happened to return.
+  const ids = codes.map((code) => idByCode.get(code)).filter((id): id is string => id !== undefined);
+  if (ids.length !== codes.length) {
+    log.error("units created do not match the codes allocated", {
+      productId: input.productId,
+      allocated: codes.length,
+      returned: idByCode.size,
+    });
+    throw new Error("Creating the unit codes failed — nothing was saved. Try again.");
+  }
+  log.debug("units inserted", { productId: input.productId, count: codes.length, ms: Date.now() - started });
 
   if (input.binId) await syncBinStock(tx, [input.binId]);
 

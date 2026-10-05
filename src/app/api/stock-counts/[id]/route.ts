@@ -132,6 +132,13 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   }
 }
 
+/** Thrown inside the update's transaction when another request changed the status first. */
+class StaleStatusError extends Error {
+  constructor(readonly expected: string, readonly wanted: string) {
+    super("stock count status changed under the request");
+  }
+}
+
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   // Resolved outside the try so the catch can name the audit in its log line.
   const { id } = await params;
@@ -304,6 +311,22 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     let applied: AppliedSummary | null = null;
 
     const result = await prisma.$transaction(async (tx) => {
+      // ─── CLAIM THE AUDIT BEFORE ANYTHING ELSE (plan 0510, §3.3) ───────────────────────────
+      //
+      // The transition was checked against `existing`, read BEFORE this transaction. Two
+      // approvals of one audit — a retry after the browser timed out while the first was still
+      // running — both passed that check, and both applied the counts: the stock twice over.
+      // This conditional write takes the row lock, so a second request waits here until the
+      // first commits, then finds the status no longer what it read and is refused before it
+      // touches stock. Same pattern as the delete below (`StaleDeleteError`).
+      if (data.status) {
+        const claimed = await tx.stockCount.updateMany({
+          where: { id, status: existing.status },
+          data: { updatedAt: new Date() },
+        });
+        if (claimed.count !== 1) throw new StaleStatusError(existing.status, data.status);
+      }
+
       if (data.items && data.items.length > 0) {
         for (const item of data.items) {
           if (item.countedQty < 0) continue; // Reject negative counts
@@ -617,6 +640,14 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     return successResponse({ ...result, applied });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof StaleStatusError) {
+      log.warn("stock count update refused: status changed by another request", {
+        stockCountId: id,
+        expected: error.expected,
+        wanted: error.wanted,
+      });
+      return errorResponse("This audit changed while you were saving it — refresh the page to see where it stands.", 409);
+    }
     // This is the route that overwrites stock; a failed approval must leave a server-side
     // trace and not only a response body somebody may never read.
     log.error("stock count update failed", {
