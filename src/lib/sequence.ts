@@ -92,22 +92,7 @@ export async function nextSequence(
   pad: number,
   seedSql: Prisma.Sql
 ): Promise<string> {
-  // The seed is read first because the INSERT needs a value for the not-yet-existing row.
-  // On every call after the first the ON CONFLICT branch wins and this value is discarded —
-  // it is never allowed to lower an existing counter.
-  // Typed as an unnamed row on purpose: the caller writes the SELECT, so the column could be
-  // called anything ("max", "coalesce", …). Reading the first VALUE rather than a named
-  // property is what makes any correctly-shaped seed query work. Postgres returns ::int as a
-  // JS number and ::bigint as a BigInt, hence Number() rather than a cast.
-  const seedRows = await db.$queryRaw<Array<Record<string, unknown>>>(seedSql);
-  const rawSeed = seedRows.length ? Object.values(seedRows[0])[0] : 0;
-  const seed = Number(rawSeed ?? 0);
-
-  if (!Number.isFinite(seed) || seed < 0) {
-    // A seed query that returns something unusable would silently start the series at NaN.
-    log.error("sequence seed query returned a non-number", { key, rawSeed: String(rawSeed) });
-    throw new Error(`Sequence seed for "${key}" was not a number`);
-  }
+  const seed = await readSeed(db, key, seedSql);
 
   const rows = await db.$queryRaw<Array<{ current: number | bigint }>>`
     INSERT INTO counter (key, current)
@@ -124,12 +109,84 @@ export async function nextSequence(
 }
 
 /**
+ * Allocate `count` consecutive numbers in a series with ONE counter statement — the block form
+ * of `nextSequence`, for a caller that numbers many rows at once (plan 0510, §3.1).
+ *
+ * `nextSequence` in a loop costs two statements per number, and the seed query scans the whole
+ * numbered table on every one of them. A stock audit that gave 4,050 items their unit codes
+ * ran ~12,000 statements inside one transaction and timed out (5 Oct 2026). Here the seed is
+ * read once and the counter moves by `count` in the same single upsert, so the row lock still
+ * serialises concurrent callers and two blocks can never overlap.
+ *
+ * @returns `count` zero-padded numbers, ascending — ["000326", "000327", …].
+ */
+export async function nextSequenceBlock(
+  db: Db,
+  key: string,
+  pad: number,
+  seedSql: Prisma.Sql,
+  count: number
+): Promise<string[]> {
+  if (!Number.isInteger(count) || count < 1) {
+    log.error("sequence block of an invalid size requested", { key, count });
+    throw new Error(`Cannot allocate ${count} numbers in sequence "${key}"`);
+  }
+  const seed = await readSeed(db, key, seedSql);
+
+  const rows = await db.$queryRaw<Array<{ current: number | bigint }>>`
+    INSERT INTO counter (key, current)
+    VALUES (${key}, ${seed + count})
+    ON CONFLICT (key) DO UPDATE SET current = counter.current + ${count}
+    RETURNING current
+  `;
+
+  const last = Number(rows[0].current);
+  const first = last - count + 1;
+  log.debug("sequence block allocated", { key, first, last, seedUsed: last === seed + count });
+  return Array.from({ length: count }, (_, i) => String(first + i).padStart(pad, "0"));
+}
+
+/**
+ * The seed: the highest number already used in the series, from the caller's query.
+ *
+ * Read before the upsert because the INSERT needs a value for a not-yet-existing row. Once the
+ * row exists the ON CONFLICT branch wins and this value is discarded — it is never allowed to
+ * lower an existing counter.
+ */
+async function readSeed(db: Db, key: string, seedSql: Prisma.Sql): Promise<number> {
+  // Typed as an unnamed row on purpose: the caller writes the SELECT, so the column could be
+  // called anything ("max", "coalesce", …). Reading the first VALUE rather than a named
+  // property is what makes any correctly-shaped seed query work. Postgres returns ::int as a
+  // JS number and ::bigint as a BigInt, hence Number() rather than a cast.
+  const seedRows = await db.$queryRaw<Array<Record<string, unknown>>>(seedSql);
+  const rawSeed = seedRows.length ? Object.values(seedRows[0])[0] : 0;
+  const seed = Number(rawSeed ?? 0);
+
+  if (!Number.isFinite(seed) || seed < 0) {
+    // A seed query that returns something unusable would silently start the series at NaN.
+    log.error("sequence seed query returned a non-number", { key, rawSeed: String(rawSeed) });
+    throw new Error(`Sequence seed for "${key}" was not a number`);
+  }
+  return seed;
+}
+
+const UNIT_CODE_KEY = "INVENTORY_UNIT";
+const UNIT_CODE_PAD = 6;
+const unitSeedSql = () =>
+  Prisma.sql`SELECT COALESCE(MAX(NULLIF(regexp_replace("unit_code", '\\D', '', 'g'), '')::int), 0) FROM "inventory_units"`;
+
+/**
  * Allocate sequential company-wide unit code for physical bicycles (U-000481).
  */
 export async function nextUnitCode(db: Db): Promise<string> {
-  const seedSql = Prisma.sql`SELECT COALESCE(MAX(NULLIF(regexp_replace("unit_code", '\\D', '', 'g'), '')::int), 0) FROM "inventory_units"`;
-  const num = await nextSequence(db, "INVENTORY_UNIT", 6, seedSql);
+  const num = await nextSequence(db, UNIT_CODE_KEY, UNIT_CODE_PAD, unitSeedSql());
   return `U-${num}`;
+}
+
+/** `count` consecutive unit codes in one allocation — ["U-000326", "U-000327", …]. */
+export async function nextUnitCodes(db: Db, count: number): Promise<string[]> {
+  const nums = await nextSequenceBlock(db, UNIT_CODE_KEY, UNIT_CODE_PAD, unitSeedSql(), count);
+  return nums.map((n) => `U-${n}`);
 }
 
 /**

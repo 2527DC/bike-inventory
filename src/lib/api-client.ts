@@ -174,8 +174,12 @@ export async function apiFetchEnvelope<T = unknown>(
     if (timedOut) {
       const secs = Math.round((timeoutMs as number) / 1000);
       log.error(`#${id} xx ${method} ${url} — timed out after ${timeoutMs}ms`);
+      // Says nothing about WHY: this client serves every screen, most of which never call Zoho.
+      // It used to blame Zoho for every timeout, which sent a stock-audit approval — pure
+      // database work — hunting for a Zoho fault (plan 0510). The server may still finish
+      // after the browser gives up, hence "check before trying again".
       throw new ApiError(
-        `Timed out after ${secs}s — Zoho may be slow, try again.`,
+        `Timed out after ${secs}s — the server did not answer in time. Refresh to check whether it went through before trying again.`,
         { status: 0, url, isTimeout: true }
       );
     }
