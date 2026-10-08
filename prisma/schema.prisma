@@ -2043,7 +2043,10 @@ model Delivery {
   whatsAppScheduledSent  Boolean @default(false)
   whatsAppDispatchedSent Boolean @default(false)
   whatsAppDeliveredSent  Boolean @default(false)
-  freeAccessories        String?
+  // Removed from the app on 8 Oct 2026 (plan 0510-remove-free-accessories, release 1). `@ignore`
+  // takes it out of Prisma Client so nothing reads or writes it; the column stays until release 2
+  // drops it (CLAUDE.md rule 7: the live code must survive the schema it runs against).
+  freeAccessories        String? @ignore
 
   reversePickup Boolean @default(false)
 

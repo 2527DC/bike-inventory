@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, CheckCircle2, Loader2, Package, Check } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, Check } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
@@ -34,7 +34,6 @@ export function HandoverChecklist({
   onConfirmation,
 }: HandoverChecklistProps) {
   const [checkedItems, setCheckedItems] = useState<Set<string>>(new Set());
-  const [accessoriesConfirmed, setAccessoriesConfirmed] = useState(false);
   const [salesPersonConfirmed, setSalesPersonConfirmed] = useState(false);
   const [loading, setLoading] = useState(false);
   // The server refusal, shown inside the card. A floor-short WALK_OUT/DELIVERED comes back as
@@ -43,7 +42,7 @@ export function HandoverChecklist({
 
   const itemCount = data.lineItems?.length || 0;
   const allItemsChecked = itemCount === 0 || checkedItems.size >= itemCount;
-  const allConfirmed = allItemsChecked && accessoriesConfirmed && salesPersonConfirmed;
+  const allConfirmed = allItemsChecked && salesPersonConfirmed;
 
   const handleConfirm = async () => {
     setLoading(true);
@@ -171,23 +170,6 @@ export function HandoverChecklist({
           )}
         </div>
 
-        {/* Accessories confirmation */}
-        <label className="flex items-center gap-2 bg-white rounded-lg px-2.5 py-2 border border-blue-200 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={accessoriesConfirmed}
-            onChange={(e) => setAccessoriesConfirmed(e.target.checked)}
-            className="rounded border-blue-400 text-blue-600 focus:ring-blue-500"
-          />
-          <div className="flex-1">
-            <p className="text-xs font-medium text-slate-900">Free accessories handed over</p>
-            <p className="text-xs text-slate-500">
-              {data.freeAccessories || "None specified"}
-            </p>
-          </div>
-          <Package className={`h-4 w-4 shrink-0 ${accessoriesConfirmed ? "text-blue-600" : "text-slate-200"}`} />
-        </label>
-
         {/* Sales person confirmation */}
         <label className="flex items-center gap-2 bg-white rounded-lg px-2.5 py-2 border border-purple-200 cursor-pointer">
           <input
@@ -230,7 +212,7 @@ export function HandoverChecklist({
                 ? type === "WALK_OUT"
                   ? "Confirm Walk-out"
                   : "Confirm Delivered"
-                : `Check all items (${checkedItems.size + (accessoriesConfirmed ? 1 : 0) + (salesPersonConfirmed ? 1 : 0)}/${itemCount + 2})`}
+                : `Check all items (${checkedItems.size + (salesPersonConfirmed ? 1 : 0)}/${itemCount + 1})`}
           </button>
           <button
             onClick={handleCancel}

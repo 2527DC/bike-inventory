@@ -42,10 +42,9 @@ export function DispatchForm({ data, deliveryId, onDispatched, onCancel, onError
       if (data.customerPhone) {
         const productName = data.lineItems?.map((item) => item.name).join(", ") || "your order";
         const lineItemsText = data.lineItems?.map((item) => `- ${item.name} (Qty: ${item.quantity})`).join("\n") || "";
-        const accessories = data.freeAccessories || "None";
         const trackingLink = courierTrackingNo.trim();
 
-        const msg = `Hello ${data.customerName},\n\nYour ${productName} is on the way!${trackingLink ? `\nTrack: ${trackingLink}` : ""}\n\nItems:\n${lineItemsText}\n\nFree Accessories:\n${accessories}\n\nThank you for choosing Bharath Cycle Hub!`;
+        const msg = `Hello ${data.customerName},\n\nYour ${productName} is on the way!${trackingLink ? `\nTrack: ${trackingLink}` : ""}\n\nItems:\n${lineItemsText}\n\nThank you for choosing Bharath Cycle Hub!`;
         const digits = whatsappDigits(data.customerPhone);
         if (digits) {
           window.open(`https://api.whatsapp.com/send?phone=${digits}&text=${encodeURIComponent(msg)}`, "_blank");

@@ -787,7 +787,6 @@ export const deliveryUpdateSchema = z.object({
   courierCost: z.number().optional(),
   vehicleNo: z.string().optional(),
   invoiceType: z.enum(["SALES", "SERVICE", "CENTRE"]).nullable().optional(),
-  freeAccessories: z.string().optional(),
   reversePickup: z.boolean().optional(),
   whatsAppScheduledSent: z.boolean().optional(),
   whatsAppDispatchedSent: z.boolean().optional(),

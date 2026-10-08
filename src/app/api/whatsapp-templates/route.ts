@@ -27,9 +27,6 @@ Track: {{trackingLink}}{{/trackingLink}}
 Items:
 {{lineItems}}
 
-Free Accessories:
-{{accessories}}
-
 Thank you for choosing Bharath Cycle Hub!`,
 
   delivered: `Hello {{customerName}},

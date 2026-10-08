@@ -15,7 +15,7 @@ const PLACEHOLDERS: Record<string, string[]> = {
   scheduled: ["{{customerName}}", "{{productName}}", "{{deliveryDate}}"],
   dispatched: [
     "{{customerName}}", "{{productName}}", "{{vehicleNo}}",
-    "{{trackingLink}}", "{{lineItems}}", "{{accessories}}",
+    "{{trackingLink}}", "{{lineItems}}",
   ],
   delivered: ["{{customerName}}", "{{reviewLink}}"],
 };
@@ -42,9 +42,6 @@ Track: {{trackingLink}}
 
 Items:
 {{lineItems}}
-
-Free Accessories:
-{{accessories}}
 
 Thank you for choosing Bharath Cycle Hub!`,
 
