@@ -170,6 +170,7 @@ preserved across regeneration — but do not remove the marker comments.
 | `0310-bin-delete-multi-category-rules-and-transfer-directions-plan.md` | approved 3 Oct 2026 with Q1–Q8 answered and the Q9–Q14 defaults accepted; building Part A first. |
 | `0310-prod-to-test-sync-plan.md` | approved 3 Oct 2026; `npm run db:sync:test` built, verified locally, run on test 3 Oct (production copied, credentials wiped). |
 | `0510-audit-apply-bulk-unit-codes-plan.md` | approved 5 Oct 2026 ("ok implemnt the implementation"); built and verified on a local restore of production (§6). Not committed; test-database pass (§4.1–4.2) and the browser pass are the owner's. |
+| `0510-remove-free-accessories-plan.md` | §1 answered 5 Oct 2026; **release 1 built 8 Oct 2026** (every use removed, column `@ignore`d, no migration). Release 2, the `DROP COLUMN`, waits until release 1 is live. Browser pass is the owner's. |
 | `2209-transfer-and-outward-by-bin-plan.md` | written 22 Sep 2026; **waiting for the owner's answers to §1 and the go-ahead.** |
 | `2309-app-name-per-environment-plan.md` | written 23 Sep 2026. **Every question in §1 is answered (§1.1). Waiting for the |
 | `2309-dark-mode-visibility-plan.md` | **plan only.** The owner answered Q1, Q2, Q3, Q6 and Q7 on 23 Sep 2026 (§1.1) |

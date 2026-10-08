@@ -21,7 +21,6 @@ import { LineItemsCard } from "../[id]/_components/line-items-card";
 import { DeliveryDetailsCard } from "../[id]/_components/delivery-details-card";
 import { DeliveryDateEditor } from "../[id]/_components/delivery-date-editor";
 import { CourierInfoCard } from "../[id]/_components/courier-info-card";
-import { FreeAccessoriesEditor } from "../[id]/_components/free-accessories-editor";
 import { WhatsAppActions } from "../[id]/_components/whatsapp-actions";
 import { SelfFillLinkButton } from "../[id]/_components/self-fill-link-button";
 import { DetailActions } from "../[id]/_components/detail-actions";
@@ -210,7 +209,6 @@ export function DeliveryDetail({ id, backHref }: DeliveryDetailProps) {
           <DeliveryDetailsCard data={data} deliveryId={id} onSaved={handleRefetch} onError={setActionError} />
           <DeliveryDateEditor data={data} deliveryId={id} onSaved={handleRefetch} onError={setActionError} />
           <CourierInfoCard data={data} deliveryId={id} onSaved={handleRefetch} onError={setActionError} />
-          <FreeAccessoriesEditor data={data} deliveryId={id} onSaved={handleRefetch} onError={setActionError} />
           <WhatsAppActions data={data} deliveryId={id} templates={templates} onSent={handleRefetch} />
         </>
       )}

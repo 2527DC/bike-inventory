@@ -53,11 +53,10 @@ export function CourierInfoCard({ data, deliveryId, onSaved, onError }: CourierI
     if (!data.customerPhone) return;
     const productName = data.lineItems?.map((item) => item.name).join(", ") || "your order";
     const lineItemsText = data.lineItems?.map((item) => `- ${item.name} (Qty: ${item.quantity})`).join("\n") || "";
-    const accessories = data.freeAccessories || "None";
     const trackingLink = data.courierTrackingNo || courierTrackingNo;
     const vNo = data.vehicleNo;
 
-    const msg = `Hello ${data.customerName},\n\nYour ${productName} is on the way!${vNo ? `\n\nVehicle No: ${vNo}` : ""}${trackingLink ? `\nTrack: ${trackingLink}` : ""}\n\nItems:\n${lineItemsText}\n\nFree Accessories:\n${accessories}\n\nThank you for choosing Bharath Cycle Hub!`;
+    const msg = `Hello ${data.customerName},\n\nYour ${productName} is on the way!${vNo ? `\n\nVehicle No: ${vNo}` : ""}${trackingLink ? `\nTrack: ${trackingLink}` : ""}\n\nItems:\n${lineItemsText}\n\nThank you for choosing Bharath Cycle Hub!`;
     const digits = whatsappDigits(data.customerPhone);
     if (!digits) {
       log.warn("dispatched WhatsApp not opened: the phone has no digits", { deliveryId });

@@ -53,7 +53,6 @@ export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCance
   const [editAddress, setEditAddress] = useState(data.customerAddress || "");
   const [editAltPhone, setEditAltPhone] = useState(data.alternatePhone || "");
   const [delNotes, setDelNotes] = useState(data.deliveryNotes || "");
-  const [freeAccessories, setFreeAccessories] = useState(data.freeAccessories || "");
   const [reversePickup, setReversePickup] = useState(data.reversePickup || false);
   const [mapsLink, setMapsLink] = useState(data.mapsLink || "");
   const [loading, setLoading] = useState(false);
@@ -79,7 +78,6 @@ export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCance
         deliveryZone: isOutstation ? "OUTSTATION" : "BANGALORE",
         isOutstation,
         alternatePhone: editAltPhone.trim() || undefined,
-        freeAccessories: freeAccessories.trim() || undefined,
         mapsLink: mapsLink.trim() || undefined,
         ...(isOutstation
           ? { customerAddress: editAddress.trim() || undefined }
@@ -192,15 +190,6 @@ export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCance
                 <p className="text-[11px] text-red-500 mt-0.5">Must be 6 digits</p>
               )}
             </div>
-            <div>
-              <label className="text-xs text-slate-500">Free Accessories</label>
-              <Input
-                value={freeAccessories}
-                onChange={(e) => setFreeAccessories(e.target.value)}
-                placeholder="e.g. Lock, Bell, Pump, Toolkit"
-                className="text-xs"
-              />
-            </div>
             <label className="flex items-center gap-2 py-1 cursor-pointer">
               <input
                 type="checkbox"
@@ -226,15 +215,6 @@ export function ScheduleForm({ data, deliveryId, templates, onScheduled, onCance
                 placeholder="House no, street, area, city, state, pincode"
                 className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-slate-300 resize-none"
                 rows={2}
-              />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500">Free Accessories</label>
-              <Input
-                value={freeAccessories}
-                onChange={(e) => setFreeAccessories(e.target.value)}
-                placeholder="e.g. Lock, Bell, Pump, Toolkit"
-                className="text-xs"
               />
             </div>
           </>

@@ -86,7 +86,6 @@ export function WhatsAppActions({ data, deliveryId, templates, onSent }: WhatsAp
   const sendDispatchedWhatsApp = () => {
     const productName = getProductName();
     const lineItemsText = getLineItemsText();
-    const accessories = data.freeAccessories || "None";
     const vNo = data.vehicleNo;
     const trackingLink = data.courierTrackingNo;
 
@@ -97,9 +96,8 @@ export function WhatsAppActions({ data, deliveryId, templates, onSent }: WhatsAp
           vehicleNo: vNo || "",
           trackingLink: trackingLink || "",
           lineItems: lineItemsText,
-          accessories,
         })
-      : `Hello ${data.customerName},\n\nYour ${productName} is on the way!${vNo ? `\n\nVehicle No: ${vNo}` : ""}${trackingLink ? `\nTrack: ${trackingLink}` : ""}\n\nItems:\n${lineItemsText}\n\nFree Accessories:\n${accessories}\n\nThank you for choosing Bharath Cycle Hub!`;
+      : `Hello ${data.customerName},\n\nYour ${productName} is on the way!${vNo ? `\n\nVehicle No: ${vNo}` : ""}${trackingLink ? `\nTrack: ${trackingLink}` : ""}\n\nItems:\n${lineItemsText}\n\nThank you for choosing Bharath Cycle Hub!`;
     void send("whatsAppDispatchedSent", msg);
   };
 

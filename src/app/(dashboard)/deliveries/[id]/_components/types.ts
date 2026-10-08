@@ -36,7 +36,6 @@ export interface DeliveryData {
   whatsAppScheduledSent: boolean;
   whatsAppDispatchedSent: boolean;
   whatsAppDeliveredSent: boolean;
-  freeAccessories: string | null;
   reversePickup: boolean;
   googleReviewLink: string | null;
   invoiceType: string | null;
