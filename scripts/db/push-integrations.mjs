@@ -90,12 +90,18 @@ const src = parse("SOURCE_DATABASE_URL", SOURCE);
 const tgt = parse("TARGET_DATABASE_URL", TARGET);
 
 const name = (u) => decodeURIComponent(u.pathname.replace(/^\//, "")) || "postgres";
+const user = (u) => decodeURIComponent(u.username);
+const port = (u) => u.port || "5432";
 const LOCAL_HOSTS = ["localhost", "127.0.0.1", "::1"];
 
-console.log(`source: ${name(src)} at ${src.hostname}:${src.port || 5432}`);
-console.log(`target: ${name(tgt)} at ${tgt.hostname}:${tgt.port || 5432}`);
+// The user is printed because on Supabase's pooler it is the only part that names the project.
+console.log(`source: ${user(src)} / ${name(src)} at ${src.hostname}:${port(src)}`);
+console.log(`target: ${user(tgt)} / ${name(tgt)} at ${tgt.hostname}:${port(tgt)}`);
 
-if (src.hostname === tgt.hostname && name(src) === name(tgt)) {
+// One database is host + port + user + name. Supabase's shared pooler serves every project from
+// the same host and the same database name (`postgres`) and tells them apart only by the user
+// (`postgres.<project-ref>`), so leaving the user out made production and test look identical.
+if (src.hostname === tgt.hostname && port(src) === port(tgt) && user(src) === user(tgt) && name(src) === name(tgt)) {
   console.error("\npush-integrations: source and target are the same database — nothing to do.");
   process.exit(1);
 }
