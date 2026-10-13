@@ -81,6 +81,8 @@ name: Deploy to VPS
 # Variables (Settings ▸ Secrets and variables ▸ Actions ▸ *Variables* tab) — not secret, so
 # they print in the run log, which is what you want for a port or a path:
 #
+#   APP_URL        REQUIRED                          the public address, e.g. https://bicyclecare.in
+#                                                    — written into the VPS .env as NEXTAUTH_URL
 #   APP_PORT       default 3000                     the port next start listens on
 #   DEPLOY_PATH    default /var/www/bch-management   where the build lands
 #   PM2_APP_NAME   default bch-management            the pm2 process name
@@ -93,9 +95,23 @@ name: Deploy to VPS
 #   VPS_PASSWORD          required   that user's password (sshpass reads it from $SSHPASS)
 #   ENV_FILE              required   the entire .env, pasted in — see the write step
 #   NEXT_PUBLIC_LOG_LEVEL optional   build-time log threshold, defaults to 2 (warn)
-#   NEXTAUTH_URL          optional   defaults to http://localhost:3001 — next-auth/react parses it
-#                                    with new URL() at module load, and an UNSET secret renders
-#                                    as '' which throws; the real value comes from ENV_FILE
+#   NEXTAUTH_URL          NOT READ any more — the APP_URL variable replaced it (13 Oct 2026)
+#
+# ─── WHY APP_URL EXISTS (13 Oct 2026) ────────────────────────────────────────────────────
+#
+# Logging out of https://bicyclecare.in landed on http://localhost:3000/login. NextAuth v4
+# builds every redirect from NEXTAUTH_URL at RUNTIME; with it unset it falls back to
+# http://localhost:3000 (node_modules/next-auth/utils/parse-url.js). Vercel never shows
+# this because it sets VERCEL=1, which makes NextAuth trust the request's host; the VPS
+# does not. ENV_FILE was the only place the value could come from, and nothing checked it.
+#
+# So the public address is now a plain repo VARIABLE, visible in every run log:
+#   * the build job refuses to start without it, or with an http:// / localhost value;
+#   * both "Write .env" steps drop any NEXTAUTH_URL line ENV_FILE carries and write
+#     NEXTAUTH_URL=$APP_URL — APP_URL is the single source of truth, like APP_PORT;
+#   * the health check asks the running app which address NextAuth uses
+#     (/api/auth/providers) and fails the run unless it is APP_URL.
+# Push-notification links (src/lib/notify/push.ts) need the same https NEXTAUTH_URL.
 #
 # APP_PORT is the single source of truth for the port. It is exported AFTER .env is sourced,
 # so it wins over any PORT line in ENV_FILE, and the health check reads the same variable
@@ -126,6 +142,7 @@ permissions:
   contents: read
 
 env:
+  APP_URL: ${{ vars.APP_URL }}
   APP_PORT: ${{ vars.APP_PORT || '3000' }}
   DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/var/www/bch-management' }}
   PM2_APP_NAME: ${{ vars.PM2_APP_NAME || 'bch-management' }}
@@ -155,6 +172,26 @@ jobs:
           echo "pm2 name:    $PM2_APP_NAME"
           echo "app port:    $APP_PORT"
           echo "ssh port:    $SSH_PORT"
+          echo "app url:     ${APP_URL:-(not set)}"
+
+      # NextAuth builds login, logout and callback links from this at runtime. Wrong here is
+      # wrong for every user, so the deploy stops before building anything.
+      - name: Refuse a missing or local APP_URL
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ]; then
+            echo "::error::The APP_URL variable is not set. Settings ▸ Secrets and variables ▸ Actions ▸ Variables ▸ New: APP_URL = https://bicyclecare.in"
+            exit 1
+          fi
+          if ! printf '%s' "$APP_URL" | grep -Eq '^https://[A-Za-z0-9.-]+(:[0-9]+)?$'; then
+            echo "::error::APP_URL must be the bare https address, like https://bicyclecare.in — no path, no trailing slash. Got: $APP_URL"
+            exit 1
+          fi
+          if printf '%s' "$APP_URL" | grep -Eqi '(localhost|127\.0\.0\.1|0\.0\.0\.0)'; then
+            echo "::error::APP_URL points at this machine ($APP_URL). Users would be sent there on logout."
+            exit 1
+          fi
+          echo "APP_URL ok: $APP_URL"
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -185,7 +222,7 @@ jobs:
         env:
           NEXT_PUBLIC_LOG_LEVEL: ${{ secrets.NEXT_PUBLIC_LOG_LEVEL || '2' }}
           NEXTAUTH_SECRET: build-time-placeholder-not-used-at-runtime
-          NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL || 'http://localhost:3001' }}
+          NEXTAUTH_URL: ${{ vars.APP_URL }}
 
       - name: Check the build produced something
         run: |
@@ -336,7 +373,13 @@ jobs:
 
           sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" "mkdir -p '$DEPLOY_PATH'"
 
-          printf '%s\n' "$ENV_FILE" > env.deploy
+          # APP_URL is the single source of truth for NEXTAUTH_URL: drop whatever ENV_FILE says
+          # (the count is logged, never the value) and append the variable.
+          old=$(printf '%s\n' "$ENV_FILE" | grep -Ec '^[[:space:]]*(export[[:space:]]+)?NEXTAUTH_URL=' || true)
+          { printf '%s\n' "$ENV_FILE" | grep -Ev '^[[:space:]]*(export[[:space:]]+)?NEXTAUTH_URL=' || true; } > env.deploy
+          printf 'NEXTAUTH_URL=%s\n' "$APP_URL" >> env.deploy
+          echo "ENV_FILE carried $old NEXTAUTH_URL line(s); .env gets NEXTAUTH_URL=$APP_URL"
+
           sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
             "umask 077 && cat > '$DEPLOY_PATH/.env'" < env.deploy
           rm -f env.deploy
@@ -538,7 +581,13 @@ jobs:
 
           sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" "mkdir -p '$DEPLOY_PATH'"
 
-          printf '%s\n' "$ENV_FILE" > env.deploy
+          # APP_URL is the single source of truth for NEXTAUTH_URL: drop whatever ENV_FILE says
+          # (the count is logged, never the value) and append the variable.
+          old=$(printf '%s\n' "$ENV_FILE" | grep -Ec '^[[:space:]]*(export[[:space:]]+)?NEXTAUTH_URL=' || true)
+          { printf '%s\n' "$ENV_FILE" | grep -Ev '^[[:space:]]*(export[[:space:]]+)?NEXTAUTH_URL=' || true; } > env.deploy
+          printf 'NEXTAUTH_URL=%s\n' "$APP_URL" >> env.deploy
+          echo "ENV_FILE carried $old NEXTAUTH_URL line(s); .env gets NEXTAUTH_URL=$APP_URL"
+
           sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
             "umask 077 && cat > '$DEPLOY_PATH/.env'" < env.deploy
           rm -f env.deploy
@@ -664,23 +713,41 @@ jobs:
           set -euo pipefail
 
           sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
-            "PM2_APP_NAME='$PM2_APP_NAME' APP_PORT='$APP_PORT' bash -s" <<'REMOTE'
+            "PM2_APP_NAME='$PM2_APP_NAME' APP_PORT='$APP_PORT' APP_URL='$APP_URL' bash -s" <<'REMOTE'
           set -uo pipefail
           code=000
+          answered=0
 
           for attempt in $(seq 1 20); do
             code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
               "http://127.0.0.1:${APP_PORT}/" || echo 000)
             if [ "$code" != "000" ] && [ "$code" -lt 500 ]; then
               echo "app answered HTTP $code on port $APP_PORT after ${attempt}s"
-              exit 0
+              answered=1
+              break
             fi
             sleep 1
           done
 
-          echo "::error::app did not answer on port ${APP_PORT} (last code: ${code})"
-          pm2 logs "$PM2_APP_NAME" --lines 40 --nostream || true
-          exit 1
+          if [ "$answered" != 1 ]; then
+            echo "::error::app did not answer on port ${APP_PORT} (last code: ${code})"
+            pm2 logs "$PM2_APP_NAME" --lines 40 --nostream || true
+            exit 1
+          fi
+
+          # The address NextAuth puts in login / logout / callback links. Public endpoint, no
+          # session needed. It was http://localhost:3000 until 13 Oct 2026 (see APP_URL above).
+          signin=$(curl -s --max-time 5 "http://127.0.0.1:${APP_PORT}/api/auth/providers" \
+            | grep -o '"signinUrl":"[^"]*"' | head -1 | cut -d'"' -f4)
+          case "$signin" in
+            "$APP_URL"/*)
+              echo "NextAuth base URL ok: ${signin%%/api/*}"
+              ;;
+            *)
+              echo "::error::NextAuth reports '${signin:-nothing}', expected $APP_URL/… — logout and sign-in would send users there. Check NEXTAUTH_URL in $PWD/.env and the pm2 process env."
+              exit 1
+              ;;
+          esac
           REMOTE
 
       # LAST. This is what gate 1 of the next run diffs against, so it is written only after
