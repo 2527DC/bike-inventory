@@ -171,6 +171,14 @@ preserved across regeneration — but do not remove the marker comments.
 | `0310-prod-to-test-sync-plan.md` | approved 3 Oct 2026; `npm run db:sync:test` built, verified locally, run on test 3 Oct (production copied, credentials wiped). |
 | `0510-audit-apply-bulk-unit-codes-plan.md` | approved 5 Oct 2026 ("ok implemnt the implementation"); built and verified on a local restore of production (§6). Not committed; test-database pass (§4.1–4.2) and the browser pass are the owner's. |
 | `0510-remove-free-accessories-plan.md` | §1 answered 5 Oct 2026; **release 1 built 8 Oct 2026** (every use removed, column `@ignore`d, no migration). Release 2, the `DROP COLUMN`, waits until release 1 is live. Browser pass is the owner's. |
+| `1210-bank-accounts-and-suspense-plan.md` | written 12 Oct 2026; plan only, nothing built — waiting for the owner's answers to §1 (Q1–Q6 block the build). |
+| `1210-eway-bills-through-zoho-plan.md` | written 12 Oct 2026; Phase 1 (record + warnings, no Zoho) builds once Q4 and Q6 are answered; generation (Phases 2–4) is blocked on Q1, Q2, Q3, Q5 and the Phase 0 checks. |
+| `1210-expense-store-department-and-payer-plan.md` | approved and built 12 Oct 2026 (§6); `npm run build` passes. Migration `20261012104052_expense_store_and_payer` applied to a local database only — apply it to test before the code is exercised there. Browser pass is the owner's. |
+| `1210-fast-mover-stock-out-alerts-plan.md` | written 12 Oct 2026; plan only, nothing built. Q1–Q4 block the build; the rest run on their defaults. |
+| `1210-hsn-gst-catalogue-audit-plan.md` | written 12 Oct 2026; plan only, nothing built — waiting for the owner's answer to Q1 (and Q2 before Part C). |
+| `1210-settlement-per-store-and-receivables-plan.md` | written 12 Oct 2026; plan only, nothing built. Q1 and Q2 block the build; the rest run on their stated defaults unless answered. |
+| `1210-zoho-credit-notes-and-payables-plan.md` | written 12 Oct 2026; plan only, nothing built. Q1 (where a credit note is applied to a bill) blocks Parts 3–6; Q2 blocks only the store backfill; Part 1 can start now. |
+| `1210-zoho-vendor-payment-push-and-bill-approval-plan.md` | written 12 Oct 2026; plan only, nothing built. Blocked on Q1, Q2, Q9, Q14 and on plan B's `VendorBill.zohoBillId` (both parts) and plan D's `BankAccount` (Part A). |
 | `2209-transfer-and-outward-by-bin-plan.md` | written 22 Sep 2026; **waiting for the owner's answers to §1 and the go-ahead.** |
 | `2309-app-name-per-environment-plan.md` | written 23 Sep 2026. **Every question in §1 is answered (§1.1). Waiting for the |
 | `2309-dark-mode-visibility-plan.md` | **plan only.** The owner answered Q1, Q2, Q3, Q6 and Q7 on 23 Sep 2026 (§1.1) |
