@@ -1,109 +1,77 @@
 export const dynamic = "force-dynamic";
 
+// GET /api/vendors/[id]/ledger?storeId&page&pageSize&all=1 — one supplier's ledger.
+// Plan 1210 credit notes and payables, Part 6.2. The rules (D9, Q8, Q14) live in
+// src/lib/payables/ledger.ts; this route only validates the query and shapes errors.
+//
+//   storeId   a Store id, "none" for rows with no store, omitted for every store
+//   page      1-based, newest rows first; the balance column is continuous across pages
+//   pageSize  1–200, default 50
+//   all=1     every row up to 5,000, for the Excel export (page/pageSize ignored)
+
 import { NextRequest } from "next/server";
-import { prisma } from "@/lib/db";
+import { z } from "zod";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { createLogger } from "@/lib/logger";
+import {
+  vendorLedger,
+  LedgerNotFoundError,
+  LEDGER_DEFAULT_PAGE_SIZE,
+  LEDGER_MAX_PAGE_SIZE,
+} from "@/lib/payables/ledger";
 
-export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+const log = createLogger("payables:ledger");
+
+const querySchema = z.object({
+  storeId: z.string().trim().min(1).max(64).optional(),
+  page: z.coerce.number().int("Page must be a whole number").min(1, "Page starts at 1").max(100_000).default(1),
+  pageSize: z.coerce
+    .number()
+    .int("Page size must be a whole number")
+    .min(1, "Page size must be at least 1")
+    .max(LEDGER_MAX_PAGE_SIZE, `Page size can be at most ${LEDGER_MAX_PAGE_SIZE}`)
+    .default(LEDGER_DEFAULT_PAGE_SIZE),
+  all: z.enum(["1", "true", "0", "false"]).optional(),
+});
+
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let vendorId: string | undefined;
   try {
     await requireFeature("vendors", "view");
-    const { id } = await params;
+    vendorId = (await params).id;
 
-    const vendor = await prisma.vendor.findUnique({
-      where: { id },
-      select: { id: true, name: true, code: true, openingBalance: true },
+    const sp = req.nextUrl.searchParams;
+    const parsed = querySchema.safeParse({
+      storeId: sp.get("storeId") || undefined,
+      page: sp.get("page") || undefined,
+      pageSize: sp.get("pageSize") || undefined,
+      all: sp.get("all") || undefined,
     });
-    if (!vendor) return errorResponse("Vendor not found", 404);
-
-    // Fetch bills and payments, sorted by date
-    const [bills, payments] = await Promise.all([
-      prisma.vendorBill.findMany({
-        where: { vendorId: id },
-        orderBy: { billDate: "desc" },
-        take: 50,
-        select: {
-          id: true, billNo: true, billDate: true, amount: true,
-          paidAmount: true, status: true, dueDate: true,
-        },
-      }),
-      prisma.vendorPayment.findMany({
-        where: { vendorId: id },
-        orderBy: { paymentDate: "desc" },
-        take: 50,
-        select: {
-          id: true, amount: true, paymentDate: true, paymentMode: true,
-          referenceNo: true, notes: true, cdDiscountAmount: true,
-          bill: { select: { billNo: true } },
-        },
-      }),
-    ]);
-
-    // Merge into a single timeline sorted by date desc
-    type LedgerEntry = {
-      id: string;
-      date: string;
-      type: "BILL" | "PAYMENT";
-      description: string;
-      debit: number;  // bill amount (what we owe)
-      credit: number; // payment amount (what we paid)
-      reference: string;
-      status?: string;
-    };
-
-    const entries: LedgerEntry[] = [];
-
-    for (const bill of bills) {
-      entries.push({
-        id: bill.id,
-        date: bill.billDate.toISOString(),
-        type: "BILL",
-        description: `Bill ${bill.billNo}`,
-        debit: bill.amount,
-        credit: 0,
-        reference: bill.billNo,
-        status: bill.status,
-      });
+    if (!parsed.success) {
+      const message = parsed.error.issues[0]?.message ?? "Invalid ledger query";
+      log.warn("ledger query refused", { vendorId, message });
+      return errorResponse(message, 400);
     }
+    const q = parsed.data;
 
-    for (const payment of payments) {
-      entries.push({
-        id: payment.id,
-        date: payment.paymentDate.toISOString(),
-        type: "PAYMENT",
-        description: `Payment${payment.bill ? ` for ${payment.bill.billNo}` : ""} via ${payment.paymentMode}`,
-        debit: 0,
-        credit: payment.amount + payment.cdDiscountAmount,
-        reference: payment.referenceNo || payment.paymentMode,
-      });
-    }
-
-    // Sort by date ascending (chronological from opening balance)
-    entries.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-    // Calculate running balance (from opening balance forward)
-    let runningBalance = vendor.openingBalance;
-    const withBalance = entries.map((entry) => {
-      runningBalance += entry.debit - entry.credit;
-      return { ...entry, balance: runningBalance };
+    const ledger = await vendorLedger(vendorId, {
+      storeId: q.storeId,
+      page: q.page,
+      pageSize: q.pageSize,
+      all: q.all === "1" || q.all === "true",
     });
-
-    // Summary
-    const totalBills = bills.reduce((s, b) => s + b.amount, 0);
-    const totalPayments = payments.reduce((s, p) => s + p.amount + p.cdDiscountAmount, 0);
-    const currentBalance = vendor.openingBalance + totalBills - totalPayments;
-
-    return successResponse({
-      vendor: { id: vendor.id, name: vendor.name, code: vendor.code },
-      openingBalance: vendor.openingBalance,
-      totalBills,
-      totalPayments,
-      currentBalance,
-      entries: withBalance.slice(0, 20),
-      totalEntries: withBalance.length,
-    });
+    return successResponse(ledger);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed to fetch ledger", 500);
+    if (error instanceof LedgerNotFoundError) {
+      log.warn("ledger not found", { vendorId, message: error.message });
+      return errorResponse(error.message, 404);
+    }
+    log.error("ledger failed", {
+      vendorId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return errorResponse("Could not load the supplier ledger. Try again.", 500);
   }
 }

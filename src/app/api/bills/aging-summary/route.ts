@@ -1,90 +1,135 @@
 export const dynamic = "force-dynamic";
 
+// GET /api/bills/aging-summary?storeId — the aging cards and CD deadlines on /bills.
+// Plan 1210 credit notes and payables, Part 7.4 (F6, X10, Q5).
+//
+// Buckets are the owner's cuts by days past the bill's STORED due date (Q5 = a), the same four
+// keys `GET /api/bills?aging=` filters by — src/lib/payables/cash-discount.ts defines both, so a
+// card's count and the list it opens agree:
+//
+//   notDue · pastDue1to30 · pastDue31to45 · pastDueOver45
+//
+// Unpaid includes OVERDUE: a bill set to OVERDUE by hand used to drop out of the payables total
+// (X10). DISPUTED stays out, as on the priority list, where it is listed apart as "on hold".
+//
+//   storeId   a Store id, or "none" for bills with no store; omitted = every store
+
+import { NextRequest } from "next/server";
+import { z } from "zod";
+import type { BillStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { createLogger } from "@/lib/logger";
+import {
+  AGING_BUCKETS,
+  agingBucketFor,
+  cashDiscountFor,
+  istDayNumber,
+  istDayToDate,
+  openAmountOf,
+  todayIstDayNumber,
+  type AgingBucket,
+} from "@/lib/payables/cash-discount";
 
-export async function GET() {
+const log = createLogger("payables:aging");
+
+const UNPAID: BillStatus[] = ["PENDING", "PARTIALLY_PAID", "OVERDUE"];
+/** CD deadlines shown: the coming week, and the last three days of a missed one. */
+const CD_WARN_FROM = -3;
+const CD_WARN_TO = 7;
+
+const querySchema = z.object({
+  storeId: z.string().trim().min(1).max(64).optional(),
+});
+
+export async function GET(req: NextRequest) {
+  let storeId: string | undefined;
   try {
     await requireFeature("bills", "view");
 
-    const now = new Date();
-
-    // Aging buckets for unpaid bills
-    const unpaidBills = await prisma.vendorBill.findMany({
-      where: { status: { in: ["PENDING", "PARTIALLY_PAID"] } },
-      select: { id: true, amount: true, paidAmount: true, dueDate: true, billDate: true, vendorId: true },
-    });
-
-    const buckets = { current: { count: 0, amount: 0 }, days30: { count: 0, amount: 0 }, days60: { count: 0, amount: 0 }, days90plus: { count: 0, amount: 0 } };
-
-    for (const bill of unpaidBills) {
-      const balance = bill.amount - bill.paidAmount;
-      if (balance <= 0) continue;
-
-      const daysOverdue = Math.floor((now.getTime() - new Date(bill.dueDate).getTime()) / (1000 * 60 * 60 * 24));
-
-      if (daysOverdue <= 0) {
-        buckets.current.count++;
-        buckets.current.amount += balance;
-      } else if (daysOverdue <= 30) {
-        buckets.days30.count++;
-        buckets.days30.amount += balance;
-      } else if (daysOverdue <= 60) {
-        buckets.days60.count++;
-        buckets.days60.amount += balance;
-      } else {
-        buckets.days90plus.count++;
-        buckets.days90plus.amount += balance;
-      }
+    const parsed = querySchema.safeParse({ storeId: req.nextUrl.searchParams.get("storeId") || undefined });
+    if (!parsed.success) {
+      const message = parsed.error.issues[0]?.message ?? "Invalid filter";
+      log.warn("aging query refused", { message });
+      return errorResponse(message, 400);
     }
+    storeId = parsed.data.storeId;
 
-    // CD (Cash Discount) deadline warnings — bills where CD is still claimable
-    const vendorsWithCD = await prisma.vendor.findMany({
-      where: { cdTermsDays: { not: null }, cdPercentage: { gt: 0 } },
-      select: { id: true, name: true, cdTermsDays: true, cdPercentage: true },
+    const unpaidBills = await prisma.vendorBill.findMany({
+      where: {
+        status: { in: UNPAID },
+        paidAmount: { lt: prisma.vendorBill.fields.amount },
+        ...(storeId === "none" ? { storeId: null } : storeId ? { storeId } : {}),
+      },
+      select: {
+        id: true,
+        billNo: true,
+        amount: true,
+        paidAmount: true,
+        dueDate: true,
+        billDate: true,
+        vendor: { select: { name: true, cdTermsDays: true, cdPercentage: true } },
+      },
     });
 
-    const cdVendorMap = new Map(vendorsWithCD.map((v) => [v.id, v]));
-    const cdWarnings: Array<{ billId: string; vendorName: string; cdDeadline: string; cdPercentage: number; balance: number; daysLeft: number }> = [];
+    const todayDay = todayIstDayNumber();
+    const today = istDayToDate(todayDay);
+
+    const buckets = Object.fromEntries(AGING_BUCKETS.map((k) => [k, { count: 0, amount: 0 }])) as Record<
+      AgingBucket,
+      { count: number; amount: number }
+    >;
+    const cdWarnings: Array<{
+      billId: string;
+      billNo: string;
+      vendorName: string;
+      cdDeadline: Date;
+      cdPercentage: number;
+      /** ₹ the discount is worth (bill total × CD%, Q15 = a). */
+      discount: number;
+      /** What is still owed on the bill. */
+      balance: number;
+      daysLeft: number;
+      claimable: boolean;
+    }> = [];
 
     for (const bill of unpaidBills) {
-      const vendor = cdVendorMap.get(bill.vendorId);
-      if (!vendor || !vendor.cdTermsDays) continue;
-
-      const balance = bill.amount - bill.paidAmount;
+      const balance = openAmountOf(bill);
       if (balance <= 0) continue;
 
-      const cdDeadline = new Date(bill.billDate);
-      cdDeadline.setDate(cdDeadline.getDate() + vendor.cdTermsDays);
-      const daysLeft = Math.floor((cdDeadline.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      const bucket = buckets[agingBucketFor(todayDay - istDayNumber(bill.dueDate))];
+      bucket.count++;
+      bucket.amount += balance;
 
-      // Show warning if CD is still claimable (within next 7 days or already passed within 3 days)
-      if (daysLeft >= -3 && daysLeft <= 7) {
+      const cd = cashDiscountFor(bill, bill.vendor, today);
+      if (cd && cd.daysLeft >= CD_WARN_FROM && cd.daysLeft <= CD_WARN_TO) {
         cdWarnings.push({
           billId: bill.id,
-          vendorName: vendor.name,
-          cdDeadline: cdDeadline.toISOString(),
-          cdPercentage: vendor.cdPercentage!,
+          billNo: bill.billNo,
+          vendorName: bill.vendor.name,
+          cdDeadline: cd.deadline,
+          cdPercentage: bill.vendor.cdPercentage as number,
+          discount: cd.amount,
           balance,
-          daysLeft,
+          daysLeft: cd.daysLeft,
+          claimable: cd.claimable,
         });
       }
     }
 
-    cdWarnings.sort((a, b) => a.daysLeft - b.daysLeft);
+    for (const k of AGING_BUCKETS) buckets[k].amount = Math.round(buckets[k].amount * 100) / 100;
+    cdWarnings.sort((a, b) => a.daysLeft - b.daysLeft || b.discount - a.discount);
 
-    const totalOutstanding = buckets.current.amount + buckets.days30.amount + buckets.days60.amount + buckets.days90plus.amount;
-    const totalCount = buckets.current.count + buckets.days30.count + buckets.days60.count + buckets.days90plus.count;
+    const totalOutstanding = Math.round(AGING_BUCKETS.reduce((s, k) => s + buckets[k].amount, 0) * 100) / 100;
+    const totalCount = AGING_BUCKETS.reduce((s, k) => s + buckets[k].count, 0);
 
-    return successResponse({
-      buckets,
-      totalOutstanding,
-      totalCount,
-      cdWarnings,
-    });
+    log.debug("aging computed", { storeId, bills: totalCount, cdWarnings: cdWarnings.length });
+
+    return successResponse({ buckets, totalOutstanding, totalCount, cdWarnings });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed to compute aging", 500);
+    log.error("aging failed", { storeId, error: error instanceof Error ? error.message : String(error) });
+    return errorResponse("Could not compute payables aging. Try again.", 500);
   }
 }

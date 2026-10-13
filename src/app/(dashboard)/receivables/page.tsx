@@ -10,6 +10,7 @@ import { useDebounce } from "@/hooks/use-debounce";
 import { type DateRangeKey } from "@/components/date-filter";
 import { FilterSheet } from "@/components/filter-sheet";
 import { usePermissions } from "@/lib/use-permissions";
+import { ZohoCreditFetch } from "@/components/zoho-credit-fetch";
 
 interface InvoiceItem {
   id: string;
@@ -261,14 +262,19 @@ export default function ReceivablesPage() {
     <div className="pb-24">
       <div className="flex items-center justify-between mb-3">
         <h1 className="text-lg font-bold text-slate-900">Receivables</h1>
-        {canFetch && fetchStep !== "pickDate" && (
-          <button onClick={() => setFetchStep("pickDate")}
-            disabled={fetchStep === "fetching" || fetchStep === "importing"}
-            className="flex items-center gap-1.5 bg-slate-900 text-white px-3 py-2 rounded-lg text-xs font-medium disabled:opacity-50">
-            {fetchStep === "fetching" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Cloud className="h-3.5 w-3.5" />}
-            {fetchStep === "fetching" ? "Fetching..." : "Fetch Receivables"}
-          </button>
-        )}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {/* Customer credit notes from Zoho Books (plan 1210, Part 8.3). Renders nothing
+              without zoho.fetch; how a note shows against an invoice is plan E's. */}
+          <ZohoCreditFetch kind="creditnote" />
+          {canFetch && fetchStep !== "pickDate" && (
+            <button onClick={() => setFetchStep("pickDate")}
+              disabled={fetchStep === "fetching" || fetchStep === "importing"}
+              className="flex items-center gap-1.5 bg-slate-900 text-white px-3 py-2 rounded-lg text-xs font-medium disabled:opacity-50">
+              {fetchStep === "fetching" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Cloud className="h-3.5 w-3.5" />}
+              {fetchStep === "fetching" ? "Fetching..." : "Fetch Receivables"}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Fetch Date Picker */}

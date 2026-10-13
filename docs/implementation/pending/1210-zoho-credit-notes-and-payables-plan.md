@@ -1,6 +1,6 @@
 # Credit notes come from Zoho, the supplier ledger splits by store, and /bills gets a "pay these first" list
 
-Status: pending — §1 answered 13 Oct 2026. Re-issued for Q1 = (b): credits are applied in this app (§1.1, parts marked "13 Oct"). Waiting for the owner's go-ahead; nothing built.
+Status: in-progress — all nine parts built 13 Oct 2026 on `feat/1210-credit-notes-and-payables` (§7); `tsc`, `eslint`, `npm run build` pass; a 36-check end-to-end run against the local database passed. Not yet on `test`: migrations M1 and M2 must be applied to the test database first. Credit-note pulls wait for Zoho Books to be reconnected with `ZohoBooks.debitnotes.READ` and `ZohoBooks.creditnotes.READ`. The browser pass is the owner's.
 Branch: **`feat/1210-credit-notes-and-payables`** — create it with exactly this name, off `test` (feature → `test` → `main`; CLAUDE.md "Branches and deployments").
 
 Every `file:line` below was read from disk on 12 Oct 2026 (branch `fix/1210-push-integrations-same-db-check`, tip `d878426`). Zoho API facts come from Zoho's public API documentation and are cited by URL; nothing in this plan called Zoho or touched a database. Check rather than trust.
@@ -696,6 +696,20 @@ No role name anywhere; screens use `usePermissions()` only and every route re-ch
 | 6 | Part 8 — customer credit notes | Q10–Q12; Phase 3's pull code | PR-2 |
 | 7 | Part 9 — issue link | Q13 | PR-2 |
 
+**Phase 0 — done 13 Oct 2026.** Every check was read-only.
+
+- **Databases.**
+  - Production was **not** read: the session's permission check refused a production query, and Claude did not work around it.
+  - The test database is a copy of production as of 3 Oct, and it was read instead. It has **0** `VendorBill`, **0** `VendorCredit` and **0** `VendorPayment` rows. All 83 vendors have no `zohoVendorId`.
+  - It has **1** `Store` row: `BCH1` "BCH", with no GSTIN. Bharath Cycle Centre is not in the app (as the expense plan also found).
+  - So there is nothing to backfill. The store backfills in M2 were omitted (see the migration's header), and **no code assumes a store code**: stores come from a Zoho location linked on `/stores`, or from a person.
+- **Zoho Books** (four `GET`s with the connection stored in the test database; the access token was refreshed first, which mints a new token and revokes none):
+  - Granted scopes: `settings.READ`, `bills.READ`, `bills.CREATE`, `invoices.READ`, `contacts.READ`, `customerpayments.READ`.
+  - `GET /vendorcredits` and `GET /creditnotes` → **401, code 57, "You are not authorized to perform this operation"**. **The credit-note pulls (Parts 3 and 8) cannot run until Zoho Books is reconnected with `ZohoBooks.debitnotes.READ` and `ZohoBooks.creditnotes.READ` added.** The code turns that refusal into a sentence on the screen.
+  - `GET /bills?per_page=10` → 10 of 10 rows carry `location_id`. **Q2 is answered: Zoho uses Locations.**
+  - `GET /locations` → `BHARATH CYCLE HUB` (primary), `bharath cycle centre`, a warehouse sub-location under each (`parent_location_id`), and GODOWN 1–3. `storeIdForLocation()` resolves a sub-location through its parent.
+- **`last_modified_time` format:** unconfirmed, because the credit lists are refused. The client sends the form the contacts call already uses successfully (`YYYY-MM-DDT00:00:00+0530`).
+
 **Sibling plans.**
 - **C** (payment push, bill approval) reads `VendorBill.zohoBillId` (PR-1) and edits `api/payments/route.ts` and `/payments/new` after Part 5. Its `VendorPayment` migration runs after M2, to keep migration order linear.
 - **D** (bank accounts) owns `api/bank-statements/*`: it fixes L3 (X13) and stamps `VendorPayment.storeId` on bank-confirmed payments with `storeIdForPayment()` from Part 2. Until D lands, a bill settled by **bulk** bank confirmation still looks unpaid on the priority list; §4 step 19 records it so a tester does not report it as this plan's bug. Recommended order: D's L3 fix before Phase 5 here.
@@ -834,3 +848,72 @@ Defined but never called: `BooksClient.createItem`, `createContact`, `createInvo
 - **Row 7** checks no response status (only a network error is logged), carries the refresh token in the URL, and is missing from `OAUTH_ENDPOINTS` in `endpoints.ts`.
 - **Row 1** sends `product.zohoItemId` to the **Books** API. That is correct only if Books and Inventory share one organisation and item ids. D2 says one Books organisation; Inventory sharing it is not verified.
 - **Outside the app:** `scripts/zoho-probe.sh` (one token call, then reads) and the Postman collection in `docs/postman/`, which contains `POST`/`PUT` requests a person can run by hand.
+
+---
+
+## 7. Build record — 13 Oct 2026
+
+Built on `feat/1210-credit-notes-and-payables` (from `test` @ `368e4d6`), against the local database `bch_dev_1210`.
+
+- **Shared layer, written by the lead before the split:** the schema, migrations M1 and M2, the Zoho reads in `books.ts`/`endpoints.ts`/`base.ts`, the zod schemas in `validations.ts`, `src/lib/payables/store.ts` and `src/types`.
+- **The four parts, built in parallel on disjoint files:**
+  - **A, Zoho pipeline:** Parts 1.2–1.4, 3.3–3.5, 8.2–8.3.
+  - **B, credits, Apply/Remove, payments, stores, bill detail:** Parts 2.3, 4, 5.
+  - **C, ledger, vendor page, issue link:** Parts 6, 9.
+  - **D, Pay first, aging, cash discount, `/bills`:** Part 7 and the `/bills` halves of 2.4 and 3.5.
+- **The lead's own additions:** the code-57 refusal (`base.ts`) is no longer retried with a token refresh, and the `/vendors` list shows open credit.
+
+**Migrations** (generated with `prisma migrate diff` against the local database and applied with `migrate deploy`, because `migrate dev` refuses a non-interactive shell). Both are additive only:
+
+- `20261013073219_vendor_bill_zoho_id_and_credit_links`
+- `20261013073357_payables_store_and_zoho_credits` — its header records why the plan's two backfill `UPDATE`s were left out.
+
+**Applied to the local database only. Not to test, not to production.**
+
+**Checks run:**
+
+- `npx tsc --noEmit` is clean.
+- `eslint` on all 54 changed files: 0 errors (3 warnings that were already there).
+- No `console.log`, no role-name comparison, and no new raw `fetch().json()`.
+- `npm run build` exit 0, with every new route listed.
+- Each engineer ran their own checks against the local database inside transactions that were rolled back:
+  - ledger paging and store sums;
+  - the order of the priority list and the plan's examples;
+  - the credit sync is idempotent, honours APP applications, flags over-application and handles void credits;
+  - race tests: two people applying the last ₹500, and two ₹700 payments on a ₹1,000 bill.
+- The lead ran **36 end-to-end checks** with the built app on localhost and a session for the local admin. They cover the credits section, apply 1,200, refusing an over-apply, the bill detail, the ledger (2 BILL + 1 CREDIT, no application line, closing 12,000), the priority list (8,800 open; "50 days old · 20 days past due"), payment refusals (`creditId`, an already-settled bill), a payment stamped with the bill's store, remove (everything restored to the paisa; removing twice → 404), aging, the CD report, customer credit notes, the zoho-link dry run, and eight pages answering 200. All passed, and the seeded rows were deleted.
+
+**Not run:**
+
+- The signed-in browser pass at 375 px (§4) — no browser tool in this session.
+- Any credit pull against real Zoho — the token lacks the scope (Phase 0).
+
+**Decisions the engineers took beyond the plan, and kept:**
+
+1. **Payments.**
+   - The ticked bills must add up to the payment amount (±₹0.01) — the old route silently lost any excess.
+   - A cash discount is accepted only on a payment for exactly one bill.
+   - Every money write keeps `DISPUTED`, and keeps a hand-set `OVERDUE` while money is still owed (the plan's `CASE` would have cleared both).
+   - Bills are locked in id order so two payments cannot deadlock.
+   - OVERDUE bills can now be paid from `/payments/new`.
+2. **A bill is no longer imported without its Zoho detail.** Without it, the credit share of `paidAmount` is unknown, and the next credit pull would subtract it twice. The preview stays pending and is retried on the next import.
+3. **Bill import and waiting applications.**
+   - Waiting applications are adopted per application row, not by a blanket `updateMany`.
+   - A credit that is void in Zoho and was never imported is skipped.
+   - A store already set on a credit is never overwritten by a pull.
+   - The missing-scope refusal answers **409** with the reconnect sentence, not 502.
+4. **Open credit is clamped at 0 for each credit** (priority list, `/vendors`), so one over-applied credit cannot hide another credit's open amount. It is grouped by store, because Apply credit refuses to use one store's credit on another store's bill.
+5. **Cash discount.** `cd-eligibility` answers "Bill already settled" for a settled bill instead of "CD expired". The CD report counts a settled bill with no payment recorded here as "date unknown".
+6. **Stores.**
+   - Linking a store to a Zoho location also fills sub-locations and the payments of the bills it fills.
+   - A bill's or a credit's store is refused if it clashes with what is already linked to it.
+   - The `/bills` import panel requires a store pick only when there are two or more stores.
+7. `GET /api/bills/[id]` carries the open credits that fit the bill's store, so someone with `bills.view` but not `vendors.view` can still apply one.
+8. Zoho pull-review export: an old one-column shift in the bill CSV rows was fixed.
+
+**Open, not done here:**
+
+- `PATCH /api/vendor-issues/[id]/reference` (brand change) does not unlink a credit linked to the old brand. The issue page warns; the PUT route handles it.
+- The vendor page's Bills tab still lists the 10 bills with the earliest due date, which are often already paid.
+- `vendor-credits.tsx`, `bills/[id]/page.tsx`, `payments/new/page.tsx` and `apply-credit-sheet.tsx` are each 480–710 lines (frontend-engineer red flag). They are split into sub-components inside each file.
+- `/receivables` keeps one old raw `fetch().json()` (`:171`) — plan E's screen.

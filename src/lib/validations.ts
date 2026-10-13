@@ -595,29 +595,51 @@ export const vendorBillSchema = z.object({
   notes: z.string().optional(),
 });
 
+// A vendor payment (plan 1210 credit notes, Part 5). Credit notes are NOT a payment: they are
+// applied from the bill or the vendor's Credits tab (D18), so creditId and CREDIT_ADJUSTMENT
+// are gone from this body — POST /api/payments refuses a body that still carries creditId.
+// No billAllocations = an advance (Q9): storeId is then required by the route.
 export const vendorPaymentSchema = z.object({
   vendorId: z.string().min(1, "Vendor is required"),
   billId: z.string().optional(),
   billAllocations: z.array(z.object({
-    billId: z.string(),
+    billId: z.string().min(1),
     amount: z.number().min(0.01),
-  })).optional(),
+  })).optional()
+    .refine((a) => !a || new Set(a.map((x) => x.billId)).size === a.length, "Each bill can appear only once"),
   amount: z.number().min(0.01, "Amount must be positive"),
   cdDiscountAmount: z.number().min(0).optional(),
-  paymentMode: z.enum(["CASH", "CHEQUE", "NEFT", "RTGS", "UPI", "CREDIT_ADJUSTMENT"]),
+  paymentMode: z.enum(["CASH", "CHEQUE", "NEFT", "RTGS", "UPI"]),
   paymentDate: z.string().min(1, "Payment date is required"),
   referenceNo: z.string().optional(),
-  creditId: z.string().optional(),
+  storeId: z.string().min(1).optional(),
   notes: z.string().optional(),
 });
 
-export const vendorCreditSchema = z.object({
-  vendorId: z.string().min(1, "Vendor is required"),
-  creditNoteNo: z.string().min(1, "Credit note number is required"),
+// PUT /api/bills/[id] (plan 1210 credit notes, Part 2.4). storeId null clears it.
+export const vendorBillUpdateSchema = z.object({
+  status: z.enum(["PENDING", "PARTIALLY_PAID", "PAID", "OVERDUE", "DISPUTED"]).optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  storeId: z.string().min(1).nullable().optional(),
+});
+
+// POST /api/vendor-credits/[id]/apply — Apply credit (plan 1210 credit notes, Part 4, D18).
+export const vendorCreditApplySchema = z.object({
+  billId: z.string().min(1, "Pick a bill"),
   amount: z.number().min(0.01, "Amount must be positive"),
-  reason: z.string().optional(),
-  creditDate: z.string().min(1, "Credit date is required"),
-  notes: z.string().optional(),
+  note: z.string().trim().max(500).optional(),
+});
+
+// PUT /api/vendor-credits/[id] — the one local field on a pulled credit (Part 2.2).
+export const vendorCreditUpdateSchema = z.object({
+  storeId: z.string().min(1).nullable(),
+});
+
+// POST /api/bills/zoho-link — link bills already in the app to their Zoho bill (Part 1.4).
+export const billZohoLinkSchema = z.object({
+  mode: z.enum(["dry-run", "apply"]),
+  cursor: z.string().optional(),
+  batch: z.number().int().min(1).max(40).optional(),
 });
 
 // ---- Expenses ----
@@ -742,6 +764,8 @@ export const vendorIssueUpdateSchema = z.object({
   ticketNo: z.string().optional(),
   serviceLocation: z.enum(["IN_STORE", "CUSTOMER"]).optional(),
   vendorId: z.string().optional(), // admin-only: reassign an issue to the correct brand
+  // The credit note that settles this issue (plan 1210 credit notes, Part 9). null unlinks it.
+  vendorCreditId: z.string().min(1).nullable().optional(),
 });
 
 export const vendorIssueNoteSchema = z.object({
@@ -1245,6 +1269,8 @@ export const storeSchema = z.object({
 
 export const storeUpdateSchema = storeSchema.partial().extend({
   isActive: z.boolean().optional(),
+  // Zoho Books location_id this store books under (plan 1210 credit notes, Part 2.3). null unlinks.
+  zohoLocationId: z.string().min(1).nullable().optional(),
 });
 
 export const warehouseSchema = z.object({
@@ -1279,7 +1305,7 @@ export const warehouseUpdateSchema = warehouseSchema.partial().extend({
  * decision rather than an invisible drop.
  */
 export const zohoPullSchema = z.object({
-  step: z.enum(["init", "bills", "invoices", "finalize"]),
+  step: z.enum(["init", "bills", "invoices", "vendorcredits", "creditnotes", "finalize"]),
   pullId: z.string().optional(),
   /** Rolling window INCLUDING today. Ignored when fromDate is given. */
   days: z.number().int().min(1).max(400).optional(),
@@ -1293,8 +1319,25 @@ export const zohoPullSchema = z.object({
   contactsNew: z.number().int().min(0).optional(),
   billsNew: z.number().int().min(0).optional(),
   invoicesNew: z.number().int().min(0).optional(),
+  vendorCreditsNew: z.number().int().min(0).optional(),
+  creditNotesNew: z.number().int().min(0).optional(),
   apiCalls: z.number().int().min(0).optional(),
   allErrors: z.array(z.string()).optional(),
+});
+
+/**
+ * The body of POST /api/zoho/pull-review/approve (plan 1210 credit notes, X11). It was a bare
+ * cast, so a wrong entityType silently approved nothing.
+ */
+export const zohoApproveSchema = z.object({
+  pullId: z.string().min(1, "pullId is required"),
+  action: z.enum(["approve", "reject"]),
+  entityType: z.enum(["bill", "invoice", "vendorcredit", "creditnote"]).optional(),
+  previewIds: z.array(z.string().min(1)).max(2000).optional(),
+  // "accounting" = /bills (financial only); "inventory" = /inbound (also builds the shipment).
+  source: z.enum(["accounting", "inventory"]).optional(),
+  /** The importer's store for bills whose Zoho location is not linked to a store (Part 2.2). */
+  storeId: z.string().min(1).optional(),
 });
 
 // ─── Assembly & Cycle Complaints ─────────────────────────────────────────────

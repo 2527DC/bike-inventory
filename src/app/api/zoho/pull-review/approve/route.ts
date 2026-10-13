@@ -2,14 +2,20 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60; // Approve step now fetches bill details from Zoho
 
 import { NextRequest } from "next/server";
+import { Prisma, type VendorBill } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { createLogger } from "@/lib/logger";
 import { PLACEHOLDER_CATEGORY } from "@/lib/import-placeholders";
+import { zohoApproveSchema } from "@/lib/validations";
 // Type-only. The clients themselves are still loaded through a dynamic import inside the
 // handler, so importing the type here adds nothing to the module graph at runtime.
-import type { BooksClient } from "@/lib/integrations";
+import type { BooksClient, IntegrationClient } from "@/lib/integrations";
+import type { ZohoLocation } from "@/lib/integrations/books";
+import { storeIdForLocation } from "@/lib/payables/store";
+import { syncVendorCredit, toMoney, zohoDate, round2 } from "@/lib/payables/sync-vendor-credit";
+import { syncCustomerCreditNote } from "@/lib/receivables/sync-credit-note";
 import {
   floorWarehouseForInvoice,
   listFloorWarehousesWithPrefix,
@@ -85,37 +91,72 @@ export async function POST(req: NextRequest) {
   const startedAt = Date.now();
   try {
     const user = await requireFeature("zoho", "approve");
-    const body = await req.json();
-    const { pullId, action, entityType, previewIds, source } = body as {
-      pullId: string; action: "approve" | "reject"; entityType?: string; previewIds?: string[]; source?: string;
-    };
 
-    if (!pullId || !["approve", "reject"].includes(action)) {
-      return errorResponse("pullId and action (approve/reject) required", 400);
+    // ZOD AT THE BOUNDARY (plan 1210 credit notes, X11). This was a bare cast, so a misspelt
+    // `entityType` matched no preview and the import "succeeded" having done nothing.
+    let raw: unknown;
+    try {
+      raw = await req.json();
+    } catch (e) {
+      log.warn("approve body is not JSON", { message: e instanceof Error ? e.message : String(e) });
+      return errorResponse("The request body must be JSON.", 400);
+    }
+    const parsed = zohoApproveSchema.safeParse(raw);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      const message = issue ? `${issue.path.length ? `${issue.path.join(".")}: ` : ""}${issue.message}` : "Invalid request";
+      log.warn("approve body refused", { message });
+      return errorResponse(message, 400);
+    }
+    const { pullId, action, entityType, previewIds, source, storeId: pickedStoreId } = parsed.data;
+
+    // The importer's store for bills whose Zoho location is not linked to a store (Part 2.2).
+    // Checked once here so a stale pick is one clear 400, not a foreign-key error per bill.
+    if (pickedStoreId) {
+      const picked = await prisma.store.findUnique({ where: { id: pickedStoreId }, select: { id: true } });
+      if (!picked) {
+        log.warn("approve refused — picked store does not exist", { pullId, storeId: pickedStoreId });
+        return errorResponse("The store picked for these bills no longer exists. Reload and pick again.", 400);
+      }
     }
 
     // Find or auto-create pullLog (handles case where finalize step failed)
     let pullLog = await prisma.zohoPullLog.findUnique({ where: { pullId } });
     if (!pullLog) {
       // Check that previews exist for this pullId before creating log
-      const previewCount = await prisma.zohoPullPreview.count({ where: { pullId } });
+      const byType = await prisma.zohoPullPreview.groupBy({
+        by: ["entityType"],
+        where: { pullId },
+        _count: { _all: true },
+      });
+      const countOf = (t: string) => byType.find((g) => g.entityType === t)?._count._all ?? 0;
+      const previewCount = byType.reduce((s, g) => s + g._count._all, 0);
       if (previewCount === 0) return errorResponse("Pull not found", 404);
+      log.warn("pull log missing — created from its previews (finalize did not run)", { pullId, previews: previewCount });
       pullLog = await prisma.zohoPullLog.create({
-        data: { pullId, billsNew: previewCount, apiCallsUsed: 0 },
+        data: {
+          pullId,
+          // Credit previews are counted as what they are, not as bills (plan 1210).
+          billsNew: previewCount - countOf("vendorcredit") - countOf("creditnote") - countOf("invoice"),
+          invoicesNew: countOf("invoice"),
+          vendorCreditsNew: countOf("vendorcredit"),
+          creditNotesNew: countOf("creditnote"),
+          apiCallsUsed: 0,
+        },
       });
     }
     if (pullLog.status !== "PENDING_REVIEW" && pullLog.status !== "PARTIAL") {
       return errorResponse(`Pull already ${pullLog.status.toLowerCase()}`, 400);
     }
 
-    // Filter: specific IDs > entity type > all pending
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let previewFilter: any = { pullId, status: "PENDING" };
-    if (previewIds && previewIds.length > 0) {
-      previewFilter = { pullId, status: "PENDING", id: { in: previewIds } };
-    } else if (entityType) {
-      previewFilter.entityType = entityType;
-    }
+    // Filter: specific IDs and/or entity type, else all pending. When both are sent they must
+    // BOTH hold — a credit-note import cannot approve a stray bill id, and vice versa.
+    const previewFilter: Prisma.ZohoPullPreviewWhereInput = {
+      pullId,
+      status: "PENDING",
+      ...(previewIds && previewIds.length > 0 ? { id: { in: previewIds } } : {}),
+      ...(entityType ? { entityType } : {}),
+    };
 
     const previews = await prisma.zohoPullPreview.findMany({ where: previewFilter });
 
@@ -150,7 +191,41 @@ export async function POST(req: NextRequest) {
     // match and was filed under a placeholder. They used to be pushed into `errors`, where a
     // successful import read as a failed one and, worse, left the pull stuck at PARTIAL.
     // `errors` keeps its meaning exactly: the record did not import.
-    const results = { contacts: 0, items: 0, bills: 0, invoices: 0, skipped: 0, errors: [] as string[], notices: [] as string[] };
+    // `vendorCredits` / `creditNotes`: notes written or updated by this approve (plan 1210).
+    const results = {
+      contacts: 0, items: 0, bills: 0, invoices: 0, vendorCredits: 0, creditNotes: 0,
+      skipped: 0, errors: [] as string[], notices: [] as string[],
+    };
+
+    // ONE Books client and AT MOST ONE location list per approve run. The locations are needed
+    // only to resolve a warehouse sub-location to its parent store (storeIdForLocation), so they
+    // are read lazily, and a failure falls back to exact location matches — it never fails an
+    // import. Zakya is reached only for a bill a Zakya fetch found.
+    let booksPromise: Promise<BooksClient | null> | null = null;
+    const books = () =>
+      (booksPromise ??= import("@/lib/integrations").then((m) => m.getBooks()));
+    let locationsPromise: Promise<ZohoLocation[] | undefined> | null = null;
+    const zohoLocations = () =>
+      (locationsPromise ??= (async () => {
+        const client = await books();
+        if (!client) return undefined;
+        try {
+          const res = await client.listLocations();
+          log.debug("locations read for store resolution", { pullId, locations: res.locations?.length ?? 0 });
+          return res.locations ?? [];
+        } catch (e) {
+          log.warn("Zoho locations unavailable — stores resolve by exact location only", {
+            pullId,
+            message: e instanceof Error ? e.message : String(e),
+          });
+          return undefined;
+        }
+      })());
+    /** The store linked to a Zoho location, its parent's store, else null. */
+    const storeForLocation = async (locationId: string | null): Promise<string | null> => {
+      if (!locationId) return null;
+      return (await storeIdForLocation(locationId)) ?? (await storeIdForLocation(locationId, await zohoLocations()));
+    };
 
     // Every active FLOOR warehouse carrying a prefix, for invoice attribution (plan
     // 1609-deliveries, T1). Loaded once, not per record — and only when this batch holds an
@@ -167,60 +242,128 @@ export async function POST(req: NextRequest) {
     });
     const systemUserId = adminUser?.id || user.id;
 
+    // Bills that came in with no store (Part 2.2), reported once after the loop rather than once
+    // per bill: until a store is linked to its Zoho location on /stores, every bill would say it.
+    const billsWithoutStore: string[] = [];
+    const unlinkedLocations = new Set<string>();
+
     for (const preview of previews) {
       const d = preview.data as Record<string, unknown>;
       try {
         if (preview.entityType === "bill") {
-          // Fetch line items from Zoho if not in preview data
-          let lineItems = (d.lineItems as Array<{ name: string; sku: string; quantity: number; rate: number; itemTotal: number }>) || [];
-          if (lineItems.length === 0 && preview.zohoId) {
-            try {
-              // getBooks(), not `new BooksClient()` + init(). This sits INSIDE the
-              // per-preview loop, so the old form paid one IntegrationConfig read — and a
-              // token refresh whenever the token was near expiry — for every bill in the
-              // batch. getBooks is request-scoped, so the whole approve now pays once.
-              const { getBooks } = await import("@/lib/integrations");
-              const zoho = await getBooks();
-              if (zoho) {
-                const detail = await zoho.getBill(preview.zohoId);
-                lineItems = (detail.bill?.line_items || []).map((li) => ({
-                  name: li.name, sku: li.sku || "", quantity: li.quantity, rate: li.rate, itemTotal: li.item_total, item_id: li.item_id,
-                }));
-              }
-            } catch (e) {
-              results.errors.push(`Bill ${d.billNumber}: failed to fetch details — ${e instanceof Error ? e.message : "Unknown"}`);
-            }
-          }
+          const billNo = String(d.billNumber);
+          const zohoBillId = preview.zohoId || null;
+          const zohoVendorId = typeof d.vendorId === "string" && d.vendorId ? d.vendorId : null;
+          const vendorSource = typeof d.vendorSource === "string" ? d.vendorSource : null;
 
-          // Dedup: skip if shipment already exists for this bill. Before the vendor is resolved,
-          // so an already-imported bill never costs a Zoho contact read or creates a vendor.
-          const existsShipment = await prisma.inboundShipment.findFirst({
-            where: { billNo: String(d.billNumber) },
-            select: { id: true, shipmentNo: true },
-          });
+          // ── Dedup FIRST: an existing shipment (plan 1210 Part 1.2, X2) ──
+          // Before the detail read and before the vendor is resolved, so an already-received bill
+          // never costs a Zoho read or creates a vendor. Matched by Zoho's bill id — on the
+          // shipment, or on its bill — else by bill number AND vendor, never by number alone: two
+          // suppliers' bill "1024" are two bills. The vendor is only LOOKED UP here, not created.
+          const knownVendor = zohoVendorId
+            ? await prisma.vendor.findUnique({ where: { zohoVendorId }, select: { id: true } })
+            : null;
+          const shipmentMatch: Prisma.InboundShipmentWhereInput[] = [
+            ...(zohoBillId ? [{ zohoBillId }, { vendorBill: { zohoBillId } }] : []),
+            ...(knownVendor ? [{ billNo, vendorBill: { vendorId: knownVendor.id } }] : []),
+          ];
+          const existsShipment = shipmentMatch.length
+            ? await prisma.inboundShipment.findFirst({ where: { OR: shipmentMatch }, select: { id: true, shipmentNo: true } })
+            : null;
           if (existsShipment) {
             // Not an error — a re-fetched window whose bills are already in is normal.
             results.skipped++;
-            log.debug("bill already has a shipment", { billNo: String(d.billNumber), shipmentNo: existsShipment.shipmentNo });
+            log.debug("bill already has a shipment", { billNo, zohoBillId, shipmentNo: existsShipment.shipmentNo });
             await prisma.zohoPullPreview.update({ where: { id: preview.id }, data: { status: "APPROVED", reviewedAt: new Date(), reviewedById: user.id } });
             continue;
           }
 
+          // ── The bill's detail, ALWAYS (Part 1.2) ──
+          // Line items, the credits Zoho applied to it, and where it was booked all come from
+          // here. A bill is NOT imported without it: `paidAmount = total − balance` already holds
+          // any credit applied in Zoho, and only the detail says how much of it was credit. Without
+          // that, the first credit pull would subtract the same credit a second time. The
+          // preview stays PENDING, so importing again retries. The same provider that found the
+          // bill is asked — Books and Zakya ids are separate spaces.
+          let billClient: IntegrationClient | null;
+          if (vendorSource === "pos") {
+            const { getZakya } = await import("@/lib/integrations");
+            billClient = await getZakya();
+          } else {
+            billClient = await books();
+          }
+          if (!billClient || !zohoBillId) {
+            throw new Error(
+              `Bill ${billNo}: ${vendorSource === "pos" ? "Zakya POS" : "Zoho Books"} is not connected, so its details cannot be read. Reconnect it and import again.`
+            );
+          }
+          let detail;
+          try {
+            detail = (await billClient.getBill(zohoBillId)).bill;
+          } catch (e) {
+            const message = e instanceof Error ? e.message : String(e);
+            log.warn("bill detail fetch failed", { pullId, previewId: preview.id, zohoBillId, message });
+            throw new Error(`Bill ${billNo}: could not read its details from Zoho (${message}). Import it again.`);
+          }
+          if (!detail) throw new Error(`Bill ${billNo}: Zoho returned no detail for it. Import it again.`);
+
+          const lineItems = (detail.line_items || []).map((li) => ({
+            name: li.name, sku: li.sku || "", quantity: li.quantity, rate: li.rate, itemTotal: li.item_total, item_id: li.item_id,
+          }));
+          const locationId =
+            (typeof detail.location_id === "string" && detail.location_id) ||
+            (typeof d.locationId === "string" && d.locationId) ||
+            null;
+          // Credits applied to this bill in Zoho. `null` = the detail carries no list at all.
+          const detailApps = Array.isArray(detail.vendor_credits)
+            ? detail.vendor_credits.filter((a) => a && a.vendor_credit_bill_id && a.vendor_credit_id)
+            : null;
+
           // Vendor by Zoho vendor id, never by name (plan 2409). Created once, with its Zoho
           // details, the first time an id is seen; a throw lands in this bill's catch below.
           const { vendor, notice: vendorNotice } = await resolveBillVendor({
-            billNo: String(d.billNumber),
+            billNo,
             vendorName: String(d.vendorName || ""),
-            vendorId: typeof d.vendorId === "string" && d.vendorId ? d.vendorId : null,
-            vendorSource: typeof d.vendorSource === "string" ? d.vendorSource : null,
+            vendorId: zohoVendorId,
+            vendorSource,
           });
           if (vendorNotice) results.notices.push(vendorNotice);
 
-          // Reuse existing VendorBill if it exists (e.g. from accounting import), or create new
-          const existingVB = await prisma.vendorBill.findFirst({ where: { billNo: String(d.billNumber) } });
+          // ── An existing bill (e.g. from an accounting import): by Zoho's bill id, else by the
+          //    compound unique (vendor, bill number) — after the vendor is resolved (X2) ──
+          let existingVB: VendorBill | null = zohoBillId
+            ? await prisma.vendorBill.findUnique({ where: { zohoBillId } })
+            : null;
+          if (!existingVB) {
+            const sameNumber = await prisma.vendorBill.findUnique({
+              where: { vendorId_billNo: { vendorId: vendor.id, billNo } },
+            });
+            if (sameNumber?.zohoBillId && sameNumber.zohoBillId !== zohoBillId) {
+              log.warn("bill number already linked to a different Zoho bill", {
+                billNo, vendorId: vendor.id, vendorBillId: sameNumber.id, zohoBillId,
+              });
+              throw new Error(
+                `Bill ${billNo} of ${vendor.name} is already in the app, linked to a different Zoho bill. Check both in Zoho before importing.`
+              );
+            }
+            existingVB = sameNumber;
+          }
 
-          const total = Number(d.total || 0);
-          const balance = Number(d.balance || 0);
+          // Store (Part 2.2): the Zoho location's store → the importer's pick → not set.
+          const storeId = (await storeForLocation(locationId)) ?? pickedStoreId ?? null;
+
+          // Total and balance from the DETAIL, the same snapshot creditAppliedAmount is read from.
+          // The preview's figures are from fetch time: a credit applied in Zoho in between would be
+          // inside the detail's credit total but not inside a paidAmount built from the preview's
+          // balance — and the bill would stay short-settled for ever. The preview stands in only
+          // when the detail leaves a figure out.
+          const fromDetail = (v: unknown, fallback: unknown) => {
+            const n = v === null || v === undefined || v === "" ? NaN : Number(v);
+            return Number.isFinite(n) ? n : Number(fallback || 0);
+          };
+          const total = fromDetail(detail.total, d.total);
+          const balance = fromDetail(detail.balance, d.balance);
 
           // Match products for line items — auto-create if not found.
           // Accounting (Bills & Payments) imports are FINANCIAL-ONLY: they must never
@@ -291,8 +434,7 @@ export async function POST(req: NextRequest) {
           // eslint-disable that suppressed the complaint is no longer needed.
           let zohoForItems: BooksClient | null = null;
           try {
-            const { getBooks } = await import("@/lib/integrations");
-            zohoForItems = await getBooks();
+            zohoForItems = await books();
           } catch (e) {
             // Best effort — a missing item detail costs category and HSN, not the import.
             // But a swallowed error with no log is a bug, so say what was lost.
@@ -439,21 +581,42 @@ export async function POST(req: NextRequest) {
             dueDate.setDate(dueDate.getDate() + (vendor.paymentTermDays || 30));
           }
 
-          const vendorBill = existingVB || await prisma.vendorBill.create({
-            data: {
-              billNo: String(d.billNumber),
-              vendorId: vendor.id,
-              billDate,
-              dueDate,
-              amount: total,
-              paidAmount: total - balance,
-              status: balance === 0 ? "PAID" : balance < total ? "PARTIALLY_PAID" : "PENDING",
-            },
-          });
+          let vendorBill: VendorBill;
+          let reusedExisting = !!existingVB;
+          if (existingVB) {
+            // ── Already here: stamp only what is missing (Part 1.3). Never the money: a bill
+            //    typed on /bills carries payments recorded here, and those are not in Zoho yet. ──
+            vendorBill = await stampExistingBill(existingVB, { zohoBillId, locationId, storeId });
+          } else {
+            try {
+              vendorBill = await createImportedBill({
+                billNo, vendorId: vendor.id, billDate, dueDate, total, balance,
+                zohoBillId, locationId, storeId, detailApps,
+                vendorCreditsApplied: detail.vendor_credits_applied,
+              });
+            } catch (e) {
+              // A second approve of the same bill won the race: use its row as the existing bill.
+              if (!(e instanceof Prisma.PrismaClientKnownRequestError) || e.code !== "P2002") throw e;
+              const raced =
+                (await prisma.vendorBill.findUnique({ where: { zohoBillId } })) ??
+                (await prisma.vendorBill.findUnique({ where: { vendorId_billNo: { vendorId: vendor.id, billNo } } }));
+              if (!raced) throw e;
+              log.warn("bill create raced — using the row created concurrently", { billNo, zohoBillId, vendorBillId: raced.id });
+              vendorBill = raced;
+              reusedExisting = true;
+            }
+          }
+          if (!storeId && !vendorBill.storeId) {
+            billsWithoutStore.push(billNo);
+            if (locationId) unlinkedLocations.add(String(detail.location_name || locationId));
+          }
 
           // ─── Create InboundShipment (only from inventory/inbound flow, not accounting) ───
           if (source === "accounting") {
-            results.bills++;
+            // A bill already in Bills, approved from /bills, only got its Zoho link: a skip, not
+            // an import (Part 1.3).
+            if (reusedExisting) results.skipped++;
+            else results.bills++;
             await prisma.zohoPullPreview.update({
               where: { id: preview.id },
               data: { status: "APPROVED", reviewedAt: new Date(), reviewedById: user.id },
@@ -513,7 +676,7 @@ export async function POST(req: NextRequest) {
               totalItems: matchedProducts.length,
               createdById: systemUserId,
               vendorBillId: vendorBill.id,
-              zohoBillId: preview.zohoId || null,
+              zohoBillId,
               lineItems: {
                 create: matchedProducts.map(({ li, product }) => {
                   const preBookMatch = waitingPreBookings.find((pb) =>
@@ -660,6 +823,32 @@ export async function POST(req: NextRequest) {
             },
           });
           results.invoices++;
+        } else if (preview.entityType === "vendorcredit" || preview.entityType === "creditnote") {
+          // ─── Vendor credit / customer credit note (plan 1210, Parts 3.4 and 8.2) ───
+          // One detail read and one transaction per note, in the lib files: the rules there are
+          // the part that must be exactly right (nothing subtracted twice from a bill).
+          const client = await books();
+          if (!client) {
+            throw new Error("Zoho Books is not connected, so this credit note cannot be read. Reconnect it and import again.");
+          }
+          if (preview.entityType === "vendorcredit") {
+            const r = await syncVendorCredit(preview.zohoId, { books: client, locations: await zohoLocations() });
+            results.notices.push(...r.notices);
+            if (r.outcome === "skipped") results.skipped++;
+            else results.vendorCredits++;
+          } else {
+            const r = await syncCustomerCreditNote(preview.zohoId, { books: client, locations: await zohoLocations() });
+            results.notices.push(...r.notices);
+            if (r.outcome === "skipped") results.skipped++;
+            else results.creditNotes++;
+          }
+        } else {
+          // zod admits only the four types above, but a preview row can carry an old type
+          // ("contact", "item") from before those imports were removed. Say so rather than
+          // marking it approved having done nothing.
+          log.warn("preview of an unsupported type", { pullId, previewId: preview.id, entityType: preview.entityType });
+          results.errors.push(`${preview.entityType} ${preview.zohoId}: this kind of record is no longer imported — reject it.`);
+          continue;
         }
 
         await prisma.zohoPullPreview.update({
@@ -673,6 +862,16 @@ export async function POST(req: NextRequest) {
         });
         results.errors.push(`${preview.entityType} ${preview.zohoId}: ${e instanceof Error ? e.message : "Unknown"}`);
       }
+    }
+
+    if (billsWithoutStore.length > 0) {
+      const shown = billsWithoutStore.slice(0, 5).join(", ") + (billsWithoutStore.length > 5 ? ` and ${billsWithoutStore.length - 5} more` : "");
+      results.notices.push(
+        `${billsWithoutStore.length} bill${billsWithoutStore.length === 1 ? " has" : "s have"} no store (${shown}). ` +
+          (unlinkedLocations.size > 0
+            ? `Link the Zoho location${unlinkedLocations.size === 1 ? "" : "s"} ${Array.from(unlinkedLocations).join(", ")} to a store on /stores, or pick the store when importing.`
+            : "Pick the store when importing, or set it on each bill.")
+      );
     }
 
     // Check if any previews are still pending (partial approval by entity type)
@@ -696,6 +895,8 @@ export async function POST(req: NextRequest) {
       items: results.items,
       bills: results.bills,
       invoices: results.invoices,
+      vendorCredits: results.vendorCredits,
+      creditNotes: results.creditNotes,
       skipped: results.skipped,
       errors: results.errors.length,
       notices: results.notices.length,
@@ -706,7 +907,10 @@ export async function POST(req: NextRequest) {
 
     await logActivity(prisma, {
       module: "zoho", action: "imported", entityType: "ZohoPull", entityId: pullId, entityRef: pullId,
-      details: `${results.invoices} deliveries, ${results.bills} shipments, ${results.skipped} skipped`,
+      details:
+        `${results.invoices} deliveries, ${results.bills} bills, ${results.skipped} skipped` +
+        (results.vendorCredits > 0 ? `, ${results.vendorCredits} vendor credits` : "") +
+        (results.creditNotes > 0 ? `, ${results.creditNotes} customer credit notes` : ""),
       userId: user.id, userName: user.name,
     });
 
@@ -722,4 +926,154 @@ export async function POST(req: NextRequest) {
     log.error("approve failed", { message });
     return errorResponse(message, 500);
   }
+}
+
+// ─── The bill writes (plan 1210 credit notes, Parts 1.2 and 1.3) ───────────────────────────
+
+type DetailCredit = { vendor_credit_id: string; vendor_credit_bill_id: string; date: string; amount: number };
+
+/**
+ * A bill already in the app, met again by an import: fill in only what it is missing — Zoho's
+ * bill id, its location, its store. Money is never touched here (Part 1.3): a bill typed on /bills
+ * carries payments recorded here that Zoho has not seen, so "correcting" it to Zoho's balance would
+ * erase them.
+ */
+async function stampExistingBill(
+  bill: VendorBill,
+  { zohoBillId, locationId, storeId }: { zohoBillId: string | null; locationId: string | null; storeId: string | null },
+): Promise<VendorBill> {
+  const data: Prisma.VendorBillUncheckedUpdateInput = {};
+  if (!bill.zohoBillId && zohoBillId) data.zohoBillId = zohoBillId;
+  if (!bill.zohoLocationId && locationId) data.zohoLocationId = locationId;
+  if (!bill.storeId && storeId) data.storeId = storeId;
+  if (Object.keys(data).length === 0) return bill;
+  const updated = await prisma.vendorBill.update({ where: { id: bill.id }, data });
+  log.info("existing bill linked to Zoho", {
+    vendorBillId: bill.id,
+    zohoBillId,
+    stampedId: "zohoBillId" in data,
+    stampedLocation: "zohoLocationId" in data,
+    stampedStore: "storeId" in data,
+  });
+  return updated;
+}
+
+/**
+ * Create a bill from Zoho, in one transaction with the credit applications Zoho shows on it.
+ *
+ * `paidAmount = total − balance` already holds every credit applied in Zoho before this import,
+ * and `creditAppliedAmount` records how much of it that is. Both come from the SAME bill detail,
+ * so they agree, and the first credit sync afterwards moves `paidAmount` by zero (Part 3.4).
+ */
+async function createImportedBill(input: {
+  billNo: string;
+  vendorId: string;
+  billDate: Date;
+  dueDate: Date;
+  total: number;
+  balance: number;
+  zohoBillId: string | null;
+  locationId: string | null;
+  storeId: string | null;
+  detailApps: DetailCredit[] | null;
+  vendorCreditsApplied: unknown;
+}): Promise<VendorBill> {
+  const { billNo, vendorId, billDate, dueDate, total, balance, zohoBillId, locationId, storeId, detailApps } = input;
+
+  return prisma.$transaction(
+    async (tx) => {
+      // Applications a credit pull left waiting for this bill (Part 1.2). When the detail lists
+      // the bill's credits, the upsert below links exactly those by Zoho's application id; a
+      // waiting row NOT in the list was removed in Zoho since that pull, is not inside Zoho's
+      // balance, and is left for the next credit fetch to prune — linking it would make the
+      // bill's credit total disagree with paidAmount. Only when the detail carries no list at
+      // all are the waiting rows the best record there is, and they are adopted.
+      const waiting = zohoBillId
+        ? await tx.vendorCreditApplication.findMany({
+            where: { zohoBillId, billId: null },
+            select: { id: true, zohoVendorCreditBillId: true, amount: true },
+          })
+        : [];
+      const listed = new Set((detailApps ?? []).map((a) => a.vendor_credit_bill_id));
+      const adopt = detailApps === null ? waiting : [];
+      const stale = detailApps === null ? [] : waiting.filter((w) => !w.zohoVendorCreditBillId || !listed.has(w.zohoVendorCreditBillId));
+
+      const rowsTotal = round2(
+        detailApps !== null
+          ? detailApps.reduce((s, a) => s + (Number(a.amount) || 0), 0)
+          : adopt.reduce((s, a) => s + Number(a.amount), 0),
+      );
+      const zohoApplied = Number(input.vendorCreditsApplied);
+      const creditApplied = Number.isFinite(zohoApplied) && input.vendorCreditsApplied !== null && input.vendorCreditsApplied !== undefined
+        ? round2(zohoApplied)
+        : rowsTotal;
+      if (Math.abs(creditApplied - rowsTotal) > 0.01) {
+        log.warn("bill's applied-credit total disagrees with its applications", {
+          billNo, zohoBillId, vendorCreditsApplied: creditApplied, applications: rowsTotal,
+        });
+      }
+
+      const created = await tx.vendorBill.create({
+        data: {
+          billNo,
+          vendorId,
+          billDate,
+          dueDate,
+          amount: total,
+          paidAmount: total - balance,
+          status: balance === 0 ? "PAID" : balance < total ? "PARTIALLY_PAID" : "PENDING",
+          zohoBillId,
+          zohoLocationId: locationId,
+          storeId,
+          creditAppliedAmount: toMoney(creditApplied),
+        },
+      });
+
+      if (detailApps && detailApps.length > 0) {
+        // The credit rows already here, in one read — a credit pulled before its bill.
+        const credits = await tx.vendorCredit.findMany({
+          where: { zohoVendorCreditId: { in: Array.from(new Set(detailApps.map((a) => a.vendor_credit_id))) } },
+          select: { id: true, zohoVendorCreditId: true },
+        });
+        const creditByZohoId = new Map(credits.map((c) => [c.zohoVendorCreditId as string, c.id]));
+        for (const a of detailApps) {
+          const vendorCreditId = creditByZohoId.get(a.vendor_credit_id) ?? null;
+          const row = {
+            zohoVendorCreditId: a.vendor_credit_id,
+            zohoBillId,
+            billId: created.id,
+            amount: toMoney(a.amount),
+            appliedDate: zohoDate(a.date, `Bill ${billNo}'s credit application`),
+          };
+          await tx.vendorCreditApplication.upsert({
+            where: { zohoVendorCreditBillId: a.vendor_credit_bill_id },
+            create: { ...row, source: "ZOHO", vendorCreditId, zohoVendorCreditBillId: a.vendor_credit_bill_id },
+            // A credit sync may have linked the credit already; never unlink it here.
+            update: { ...row, ...(vendorCreditId ? { vendorCreditId } : {}) },
+          });
+        }
+      }
+      if (adopt.length > 0) {
+        await tx.vendorCreditApplication.updateMany({
+          where: { id: { in: adopt.map((a) => a.id) }, billId: null },
+          data: { billId: created.id },
+        });
+      }
+      if (stale.length > 0) {
+        log.warn("waiting credit applications not on Zoho's bill — left for the next credit fetch", {
+          billNo, zohoBillId, count: stale.length,
+        });
+      }
+
+      log.info("bill imported from Zoho", {
+        vendorBillId: created.id,
+        zohoBillId,
+        storeId,
+        creditApplied,
+        applications: detailApps?.length ?? adopt.length,
+      });
+      return created;
+    },
+    { timeout: 20_000, maxWait: 10_000 },
+  );
 }

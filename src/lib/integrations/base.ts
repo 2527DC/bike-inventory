@@ -50,6 +50,18 @@ export interface IntegrationBill {
   total: number;
   balance: number;
   status: string;
+  /** Present when Zoho Locations is on (plan 1210 credit notes, Phase 0: every bill carries it). */
+  location_id?: string;
+  location_name?: string;
+}
+
+/** One application of a vendor credit to a bill, as the bill detail lists it. */
+export interface IntegrationBillCreditApplied {
+  vendor_credit_id: string;
+  vendor_credit_bill_id: string;
+  vendor_credit_number?: string;
+  date: string;
+  amount: number;
 }
 
 /** A Zoho contact (vendor) as `GET /contacts/{id}` returns it — only the fields we copy. */
@@ -323,6 +335,23 @@ export abstract class IntegrationClient {
     });
     const res = await fetch(url, options);
 
+    // A 401 with Zoho code 57 is "You are not authorized to perform this operation": the
+    // token is valid but lacks the SCOPE for this endpoint (plan 1210 Phase 0: vendor credits
+    // and credit notes). Refreshing cannot fix a missing scope — it only mints another token —
+    // so surface Zoho's sentence at once. Any other 401 is an expired token, handled below.
+    if (res.status === 401) {
+      const peek = await res
+        .clone()
+        .json()
+        .catch(() => null) as { code?: number; message?: string } | null;
+      if (peek?.code === 57) {
+        log.warn(`<- ${this.label} ${key ?? endpoint} 401 code 57 — token lacks the scope for this call`, {
+          ms: Date.now() - started,
+        });
+        throw new Error(peek.message || "You are not authorized to perform this operation");
+      }
+    }
+
     // Token expired mid-request — refresh once and retry.
     if (res.status === 401 && _attempt === 0) {
       log.warn(`<- ${this.label} ${endpoint} 401 — access token expired, refreshing`, {
@@ -405,7 +434,16 @@ export abstract class IntegrationClient {
   }
 
   async getBill(billId: string) {
-    return this.apiCall<{ bill?: { line_items?: LineItem[] } & Record<string, unknown> }>(
+    return this.apiCall<{
+      bill?: {
+        line_items?: LineItem[];
+        // Credits applied to this bill in Zoho, and where it was booked (plan 1210 credit notes).
+        vendor_credits?: IntegrationBillCreditApplied[];
+        vendor_credits_applied?: number;
+        location_id?: string;
+        location_name?: string;
+      } & Record<string, unknown>;
+    }>(
       "GET",
       `/bills/${billId}`,
       undefined,

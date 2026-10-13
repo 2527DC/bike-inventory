@@ -183,7 +183,7 @@ preserved across regeneration — but do not remove the marker comments.
 | `1210-hsn-gst-catalogue-audit-plan.md` | written 12 Oct 2026; plan only, nothing built — waiting for the owner's answer to Q1 (and Q2 before Part C). |
 | `1210-settlement-per-store-and-receivables-plan.md` | written 12 Oct 2026; plan only, nothing built. Q1 and Q2 block the build; the rest run on their stated defaults unless answered. |
 | `1210-test-branch-vercel-and-vps-main-plan.md` | Phase A built 13 Oct 2026 on `test`; Phase B (Vercel switch, PR `test` → `main`) follows with the owner's approval. |
-| `1210-zoho-credit-notes-and-payables-plan.md` | §1 answered 13 Oct 2026 — Q1 = (b): credits are applied in this app and Zoho is not told (accepted violation of the accounting-consultant rule); re-issued; §6 lists every Zoho write. Waiting for the go-ahead; nothing built. |
+| `1210-zoho-credit-notes-and-payables-plan.md` | **built 13 Oct 2026** on `feat/1210-credit-notes-and-payables` (§7): credits pulled from Zoho, applied here (Q1 = b), ledger, Pay first, payments fixed. Build and 36-check local end-to-end pass. Waiting for M1 and M2 on test, and for the Zoho credit scopes. |
 | `1210-zoho-vendor-payment-push-and-bill-approval-plan.md` | written 12 Oct 2026; plan only, nothing built. Blocked on Q1, Q2, Q9, Q14 and on plan B's `VendorBill.zohoBillId` (both parts) and plan D's `BankAccount` (Part A). |
 | `2209-transfer-and-outward-by-bin-plan.md` | written 22 Sep 2026; **waiting for the owner's answers to §1 and the go-ahead.** |
 | `2309-app-name-per-environment-plan.md` | written 23 Sep 2026. **Every question in §1 is answered (§1.1). Waiting for the |

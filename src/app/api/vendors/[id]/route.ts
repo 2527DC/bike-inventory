@@ -7,21 +7,28 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { vendorUpdateSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { createLogger } from "@/lib/logger";
+import { vendorBalance } from "@/lib/payables/ledger";
 
 const log = createLogger("vendors:detail");
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let vendorId: string | undefined;
   try {
     await requireFeature("vendors", "view");
     const { id } = await params;
-    const vendor = await prisma.vendor.findUnique({
+    vendorId = id;
+    // The balance is the ledger's own figure over ALL history (plan 1210 Part 6, X9) — opening
+    // + bills − payments − CD − credit notes + refunds — not a sum of the 10 bills below.
+    const vendorQuery = prisma.vendor.findUnique({
       where: { id },
       include: {
         // No `contacts`: the vendor's one contact is on the Vendor row itself since plan 2109
         // R28 (contactPerson / contactDesignation / phone / email / whatsappNumber).
         purchaseOrders: { orderBy: { createdAt: "desc" }, take: 10, include: { items: true } },
+        // The Bills tab's first 10; `_count.bills` below is the real count (X9).
         bills: { orderBy: { dueDate: "asc" }, take: 10, include: { payments: true } },
-        credits: { orderBy: { creditDate: "desc" }, take: 10 },
+        // No `credits` include (plan 1210 Part 4): the Credits tab reads every credit, with its
+        // applications and refunds, from GET /api/vendors/[id]/credits. Only the count is here.
         // The brands this vendor supplies. Read by the "Brands supplied" chips on
         // /vendors/[id], and the reason vendor resolution tiers 2 and 3 have any data at all.
         // Shaped like the ledger routes already shape it (api/ledger/vendors/route.ts) so the
@@ -30,15 +37,16 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
           select: { isPrimary: true, brand: { select: { id: true, name: true } } },
           orderBy: { brand: { name: "asc" } },
         },
-        _count: { select: { issues: true } },
+        _count: { select: { issues: true, credits: true, bills: true } },
       },
     });
+    const [vendor, balance] = await Promise.all([vendorQuery, vendorBalance(id)]);
 
     if (!vendor) return errorResponse("Vendor not found", 404);
-    return successResponse(vendor);
+    return successResponse({ ...vendor, balance });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    log.error("vendor fetch failed", { error: error instanceof Error ? error.message : String(error) });
+    log.error("vendor fetch failed", { vendorId, error: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Failed to fetch vendor", 500);
   }
 }

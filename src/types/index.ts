@@ -308,6 +308,13 @@ export interface VendorCredit {
   creditDate: string;
   notes?: string;
   createdAt: string;
+  // Plan 1210 credit notes: pulled from Zoho, applied here or in Zoho.
+  zohoVendorCreditId?: string | null;
+  referenceNo?: string | null;
+  status?: "OPEN" | "CLOSED" | "VOID";
+  storeId?: string | null;
+  zohoLocationId?: string | null;
+  lastSyncedAt?: string | null;
 }
 
 export interface Expense {

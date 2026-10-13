@@ -42,6 +42,8 @@ interface VendorItem {
   /** Carried-forward balance as of 1 Apr 2026. Not the same number as outstandingBalance. */
   openingBalance: number;
   outstandingBalance: number;
+  /** Credit notes from this supplier not yet applied to a bill (plan 1210 credit notes, Part 6.1). */
+  openCredit?: number;
   _count: { purchaseOrders: number; bills: number };
 }
 
@@ -211,6 +213,9 @@ export default function VendorsPage() {
             { header: "Outstanding", cell: (v) => v.outstandingBalance > 0
               ? <span className="font-medium text-red-600 tabular-nums">₹{v.outstandingBalance.toLocaleString("en-IN")}</span>
               : <span className="text-slate-400">—</span>, className: "text-right" },
+            { header: "Open credit", cell: (v) => (v.openCredit ?? 0) > 0
+              ? <span className="font-medium text-violet-700 tabular-nums">₹{(v.openCredit ?? 0).toLocaleString("en-IN")}</span>
+              : <span className="text-slate-400">—</span>, className: "text-right" },
             { header: "", cell: (v) => v.phone
               ? <a href={`tel:${v.phone}`} onClick={(e) => e.stopPropagation()} className="inline-flex p-1.5 rounded-full hover:bg-slate-100"><Phone className="h-4 w-4 text-slate-500" /></a>
               : null, className: "w-12" },
@@ -268,6 +273,11 @@ export default function VendorsPage() {
                       {v.openingBalance !== 0 && (
                         <span className="text-xs text-slate-600 tabular-nums">
                           ₹{v.openingBalance.toLocaleString("en-IN")} opening
+                        </span>
+                      )}
+                      {(v.openCredit ?? 0) > 0 && (
+                        <span className="text-xs font-medium text-violet-700 tabular-nums">
+                          ₹{(v.openCredit ?? 0).toLocaleString("en-IN")} credit
                         </span>
                       )}
                     </div>

@@ -8,6 +8,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SkeletonList } from "@/components/ui/skeleton";
+import { apiFetch, apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+import { usePermissions } from "@/lib/use-permissions";
+import { SettledByCredit, type LinkedCredit } from "./_components/settled-by-credit";
+
+const log = createLogger("vendor-issues:detail");
+
+const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 interface IssueNote {
   id: string;
@@ -44,6 +52,8 @@ interface IssueDetail {
   clientName?: string;
   clientPhone?: string;
   bill?: { id: string; billNo: string; amount: number } | null;
+  /** The credit note that settles this issue (plan 1210 Part 9). Picked by a person, never automatic. */
+  vendorCredit?: LinkedCredit | null;
   createdBy: { id: string; name: string };
   notes?: IssueNote[];
 }
@@ -88,6 +98,8 @@ export default function VendorIssueDetailPage({
 }) {
   const { id } = use(params);
   const router = useRouter();
+  // Cosmetic gate for "Settled by credit note"; PUT /api/vendor-issues/[id] re-checks vendor_issues.edit.
+  const { canEdit } = usePermissions();
   // Go back exactly one step (preserving the previous list's filters/scroll); fall back to the list.
   const goBack = () => {
     if (typeof window !== "undefined" && window.history.length > 1) router.back();
@@ -103,6 +115,8 @@ export default function VendorIssueDetailPage({
   const [resolutionText, setResolutionText] = useState("");
   const [noteText, setNoteText] = useState("");
   const [addingNote, setAddingNote] = useState(false);
+  const [noteError, setNoteError] = useState<string | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
   // Admin-only brand (vendor) reassignment
   const [brandEditing, setBrandEditing] = useState(false);
   const [vendorOptions, setVendorOptions] = useState<{ id: string; name: string; code: string }[]>([]);
@@ -127,18 +141,16 @@ export default function VendorIssueDetailPage({
     setSavingRef(true);
     setRefError(null);
     try {
-      const res = await fetch(`/api/vendor-issues/${id}/reference`, {
+      const updated = await apiFetch<IssueDetail>(`/api/vendor-issues/${id}/reference`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticketNo: ticketDraft.trim(), serviceLocation: serviceDraft || "" }),
+        json: { ticketNo: ticketDraft.trim(), serviceLocation: serviceDraft || "" },
       });
-      const json = await res.json();
-      if (json.success) {
-        setIssue(json.data);
-        setRefEditing(false);
-        showToast("✓ Completed");
-      } else setRefError(json.error || "Failed to save");
+      // The reference route does not return the credit link; keep the one already shown.
+      setIssue((prev) => ({ ...updated, vendorCredit: prev?.vendorCredit ?? null }));
+      setRefEditing(false);
+      showToast("✓ Completed");
     } catch (e) {
+      log.warn("issue reference save failed", { issueId: id, error: errText(e) });
       setRefError(e instanceof Error ? e.message : "Failed to save");
     }
     setSavingRef(false);
@@ -149,13 +161,13 @@ export default function VendorIssueDetailPage({
     setSelectedVendorId(issue?.vendor?.id || "");
     setBrandEditing(true);
     if (vendorOptions.length === 0) {
-      try {
-        const res = await fetch("/api/vendors?limit=500");
-        const json = await res.json();
-        if (json.success && Array.isArray(json.data)) {
-          setVendorOptions(json.data.map((v: { id: string; name: string; code: string }) => ({ id: v.id, name: v.name, code: v.code })));
-        }
-      } catch { /* ignore */ }
+      const { data, error } = await apiTry<Array<{ id: string; name: string; code: string }>>("/api/vendors?limit=500");
+      if (error || !data) {
+        log.warn("brand list failed to load", { issueId: id, error });
+        setBrandError(error || "Could not load brands");
+      } else {
+        setVendorOptions(data.map((v) => ({ id: v.id, name: v.name, code: v.code })));
+      }
     }
   }
 
@@ -164,15 +176,19 @@ export default function VendorIssueDetailPage({
     setSavingBrand(true);
     setBrandError(null);
     try {
-      const res = await fetch(`/api/vendor-issues/${id}/reference`, {
+      const updated = await apiFetch<IssueDetail>(`/api/vendor-issues/${id}/reference`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vendorId: selectedVendorId }),
+        json: { vendorId: selectedVendorId },
       });
-      const json = await res.json();
-      if (json.success) { setIssue(json.data); setBrandEditing(false); showToast("✓ Completed"); }
-      else setBrandError(json.error || "Failed to change brand");
+      // Re-read: the reference route does not return the credit link, and a brand change can
+      // leave a linked credit pointing at the previous brand (shown as a warning).
+      const { data: fresh, error: reloadError } = await apiTry<IssueDetail>(`/api/vendor-issues/${id}`);
+      if (reloadError) log.warn("issue reload after brand change failed", { issueId: id, error: reloadError });
+      setIssue(fresh ?? { ...updated, vendorCredit: issue?.vendorCredit ?? null });
+      setBrandEditing(false);
+      showToast("✓ Completed");
     } catch (e) {
+      log.warn("issue brand change failed", { issueId: id, error: errText(e) });
       setBrandError(e instanceof Error ? e.message : "Failed to change brand");
     }
     setSavingBrand(false);
@@ -182,73 +198,86 @@ export default function VendorIssueDetailPage({
   async function markIssueShared() {
     if (!issue || issue.status !== "OPEN") return;
     try {
-      const res = await fetch("/api/vendor-issues/mark-shared", {
+      const res = await apiFetch<{ updatedIds?: string[] }>("/api/vendor-issues/mark-shared", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: [issue.id] }),
+        json: { ids: [issue.id] },
       });
-      const json = await res.json();
-      if (json.success && (json.data?.updatedIds || []).length) {
+      if ((res?.updatedIds || []).length) {
         // Refetch so the status AND the auto-logged action note show in the activity log.
-        const r2 = await fetch(`/api/vendor-issues/${id}`);
-        const j2 = await r2.json();
-        if (j2.success) setIssue(j2.data);
-        else setIssue((prev) => (prev ? { ...prev, status: "IN_PROGRESS" } : prev));
+        const { data: fresh, error } = await apiTry<IssueDetail>(`/api/vendor-issues/${id}`);
+        if (fresh) setIssue(fresh);
+        else {
+          log.warn("issue reload after share failed", { issueId: id, error });
+          setIssue((prev) => (prev ? { ...prev, status: "IN_PROGRESS" } : prev));
+        }
       }
-    } catch { /* ignore — the share itself still worked */ }
+    } catch (e) {
+      // The share itself still worked; only the OPEN → IN PROGRESS move did not.
+      log.warn("mark shared failed", { issueId: id, error: errText(e) });
+    }
   }
 
   async function addNote() {
     if (!issue || !noteText.trim()) return;
     setAddingNote(true);
+    setNoteError(null);
     try {
-      const res = await fetch(`/api/vendor-issues/${id}/notes`, {
+      const note = await apiFetch<IssueNote>(`/api/vendor-issues/${id}/notes`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: noteText.trim() }),
+        json: { text: noteText.trim() },
       });
-      const data = await res.json();
-      if (data.success) {
-        setIssue((prev) => (prev ? { ...prev, notes: [data.data, ...(prev.notes || [])] } : prev));
-        setNoteText("");
-      }
-    } catch {
-      /* ignore */
+      setIssue((prev) => (prev ? { ...prev, notes: [note, ...(prev.notes || [])] } : prev));
+      setNoteText("");
+    } catch (e) {
+      log.warn("add note failed", { issueId: id, error: errText(e) });
+      setNoteError(e instanceof Error ? e.message : "Could not add the note");
     }
     setAddingNote(false);
   }
 
   useEffect(() => {
-    fetch(`/api/vendor-issues/${id}`)
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.success) setIssue(res.data);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    apiTry<IssueDetail>(`/api/vendor-issues/${id}`).then(({ data, error, status }) => {
+      if (data) setIssue(data);
+      else log.warn("issue failed to load", { issueId: id, status, error });
+      setLoading(false);
+    });
   }, [id]);
 
   async function updateStatus(newStatus: string, resolution?: string) {
     setUpdating(true);
+    setStatusError(null);
     try {
       const body: Record<string, string> = { status: newStatus };
       if (resolution) body.resolution = resolution;
-      const res = await fetch(`/api/vendor-issues/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setIssue(data.data);
-        setShowResolution(false);
-        setResolutionText("");
-        showToast("✓ Completed");
-      }
-    } catch {
-      // silent
+      const updated = await apiFetch<IssueDetail>(`/api/vendor-issues/${id}`, { method: "PUT", json: body });
+      setIssue(updated);
+      setShowResolution(false);
+      setResolutionText("");
+      showToast("✓ Completed");
+    } catch (e) {
+      log.warn("issue status change failed", { issueId: id, status: newStatus, error: errText(e) });
+      setStatusError(e instanceof Error ? e.message : "Could not update the issue");
     }
     setUpdating(false);
+  }
+
+  // "Settled by credit note" (plan 1210 Part 9). Returns the API's sentence on failure.
+  async function saveCredit(vendorCreditId: string | null): Promise<string | null> {
+    try {
+      const updated = await apiFetch<IssueDetail>(`/api/vendor-issues/${id}`, { method: "PUT", json: { vendorCreditId } });
+      setIssue(updated);
+      showToast(vendorCreditId ? "✓ Credit note linked" : "✓ Credit note unlinked");
+      return null;
+    } catch (e) {
+      log.warn("issue credit link failed", { issueId: id, vendorCreditId, error: errText(e) });
+      return e instanceof Error ? e.message : "Could not save the credit note";
+    }
+  }
+
+  // Never automatic: opens the existing resolution form, pre-filled, for the person to confirm.
+  function offerResolve(text: string) {
+    setResolutionText(text);
+    setShowResolution(true);
   }
 
   // Resolve the contact number to open the chat with: the brand's (vendor) WhatsApp/phone for a
@@ -322,7 +351,10 @@ export default function VendorIssueDetailPage({
           await navigator.share({ text, files });
           return;
         }
-      } catch { /* fall through */ }
+      } catch (e) {
+        // Falls through to the link-only share below.
+        log.warn("native share with photos failed", { issueId: id, error: errText(e) });
+      }
     }
 
     if (imageUrls.length > 0) {
@@ -509,6 +541,19 @@ export default function VendorIssueDetailPage({
               </Link>
             </div>
           )}
+          {issue.issueSource !== "CLIENT" && issue.vendor && (
+            <SettledByCredit
+              issueId={issue.id}
+              vendorId={issue.vendor.id}
+              billId={issue.bill?.id ?? null}
+              billNo={issue.bill?.billNo ?? null}
+              linked={issue.vendorCredit ?? null}
+              canEdit={canEdit("vendor_issues")}
+              canOfferResolve={issue.status === "OPEN" || issue.status === "IN_PROGRESS"}
+              onSave={saveCredit}
+              onOfferResolve={offerResolve}
+            />
+          )}
           {issue.docLink && (
             <div>
               <span className="text-xs text-slate-500">Document:</span>
@@ -657,6 +702,9 @@ export default function VendorIssueDetailPage({
         </Card>
       )}
 
+      {statusError && (
+        <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg p-2 mb-2">{statusError}</p>
+      )}
       {/* Status transition buttons */}
       {issue.status !== "CLOSED" && !showResolution && (
         <div className="space-y-2 mb-4">
@@ -711,6 +759,7 @@ export default function VendorIssueDetailPage({
             placeholder="Add a follow-up note (e.g. Called Lux, will replace by Fri)…"
             className="flex w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900 mb-2"
           />
+          {noteError && <p className="text-xs text-red-600 mb-2">{noteError}</p>}
           <Button
             size="sm"
             onClick={addNote}

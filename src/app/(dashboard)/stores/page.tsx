@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  Building2, Warehouse, Plus, Pencil, Trash2, X, Check, Boxes,
+  Building2, Warehouse, Plus, Pencil, Trash2, X, Check, Boxes, Link2, RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,7 @@ import type { WarehouseKind } from "@/hooks/use-sites";
 import { BinsManager } from "@/components/bins/bins-manager";
 
 const log = createLogger("stores");
+const zohoLog = createLogger("stores:zoho-location");
 
 /** What each kind is called on screen. FLOOR is the shop, GODOWN is storage (D2). */
 const KIND_LABEL: Record<WarehouseKind, string> = { FLOOR: "Floor", GODOWN: "Godown" };
@@ -45,6 +46,29 @@ interface StoreRow {
   warehouses: WarehouseRow[];
 }
 
+/** GET /api/stores/zoho-locations (plan 1210 credit notes, Part 2.3). */
+interface ZohoLocationRow {
+  id: string;
+  name: string;
+  primary: boolean;
+  active: boolean;
+  parentId: string | null;
+  linkedStore: { id: string; code: string; name: string } | null;
+}
+interface ZohoLocations {
+  locations: ZohoLocationRow[];
+  /** Stores linked to a location Zoho no longer lists. */
+  orphanLinks: Array<{ storeId: string; storeName: string; zohoLocationId: string }>;
+}
+/** What PUT /api/stores/[id] reports when a location link filled stores on payables. */
+interface ZohoLinkFill {
+  billsUpdated: number;
+  creditsUpdated: number;
+  creditNotesUpdated: number;
+  paymentsUpdated: number;
+  subLocationsChecked: boolean;
+}
+
 /** Both DELETE endpoints answer with this. `deleted: false` is a refusal, not a failure. */
 interface DeleteOutcome {
   deleted: boolean;
@@ -56,7 +80,11 @@ interface DeleteOutcome {
 // of the same name on Warehouse. The column is carried as `warehouseKind` in this state so
 // the two never collide; the API field is still `kind`.
 type Draft =
-  | { kind: "store"; id: string | null; code: string; name: string; address: string; phone: string }
+  | {
+      kind: "store"; id: string | null; code: string; name: string; address: string; phone: string;
+      // The Zoho location picked in this form; null = untouched (the current link stands).
+      zohoLocationId: string | null;
+    }
   | {
       kind: "warehouse"; id: string | null; storeId: string; code: string; name: string; warehouseKind: WarehouseKind;
       // FLOOR-only. Kept in the draft while the kind is toggled so flipping Godown → Floor does
@@ -186,6 +214,38 @@ function SitesPanel({ view }: { view: "stores" | "warehouses" }) {
   // reloads the list.
   const [saveError, setSaveError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<DeleteOutcome | null>(null);
+  // A save that linked a Zoho location says what it filled in.
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // Zoho locations, read only when a stores.edit user opens a store's form — one Zoho call, not
+  // one per visit to this screen.
+  const mayLinkZoho = canEdit("stores");
+  const [zohoLocs, setZohoLocs] = useState<ZohoLocations | null>(null);
+  const [zohoLocsLoading, setZohoLocsLoading] = useState(false);
+  const [zohoLocsError, setZohoLocsError] = useState<string | null>(null);
+
+  const loadZohoLocations = useCallback(async () => {
+    setZohoLocsLoading(true);
+    setZohoLocsError(null);
+    const { data, error: err, status } = await apiTry<ZohoLocations>("/api/stores/zoho-locations", { timeoutMs: 30_000 });
+    setZohoLocsLoading(false);
+    if (err || !data) {
+      zohoLog.warn("zoho locations failed to load", { status, message: err });
+      setZohoLocsError(err ?? "Could not load Zoho locations.");
+      return;
+    }
+    setZohoLocs(data);
+  }, []);
+
+  /** The location a store is linked to now, from the locations list ("" = none, or not known yet). */
+  const currentZohoLink = (storeId: string | null): string => {
+    if (!storeId || !zohoLocs) return "";
+    return (
+      zohoLocs.locations.find((l) => l.linkedStore?.id === storeId)?.id ??
+      zohoLocs.orphanLinks.find((o) => o.storeId === storeId)?.zohoLocationId ??
+      ""
+    );
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -211,12 +271,42 @@ function SitesPanel({ view }: { view: "stores" | "warehouses" }) {
     setSaveError(null);
     try {
       if (draft.kind === "store") {
+        // Sent only once the current link is known — otherwise a form saved before the
+        // locations arrived would unlink the store. A standing link is sent too: the server
+        // re-applies it, filling the store on rows fetched since it was set.
+        const current = currentZohoLink(draft.id);
+        const chosen = draft.zohoLocationId ?? current;
+        const known = draft.id !== null && zohoLocs !== null;
+        const linkChanged = known && chosen !== current;
         const body = {
           code: draft.code, name: draft.name,
           address: draft.address || undefined, phone: draft.phone || undefined,
+          ...(known && (linkChanged || chosen) ? { zohoLocationId: chosen || null } : {}),
         };
-        if (draft.id) await apiFetch(`/api/stores/${draft.id}`, { method: "PUT", json: body });
-        else await apiFetch("/api/stores", { method: "POST", json: body });
+        if (draft.id) {
+          const saved = await apiFetch<{ name: string; zohoLink?: ZohoLinkFill }>(`/api/stores/${draft.id}`, { method: "PUT", json: body });
+          const f = saved.zohoLink;
+          const filledLine = f
+            ? ` Took this store: ${f.billsUpdated} bill(s), ${f.creditsUpdated} vendor credit(s), ${f.creditNotesUpdated} customer credit note(s), ${f.paymentsUpdated} payment(s).` +
+              (f.subLocationsChecked ? "" : " Zoho's sub-locations could not be checked — save the store again later to include them.")
+            : "";
+          if (linkChanged) {
+            const loc = zohoLocs?.locations.find((l) => l.id === chosen);
+            zohoLog.info("store zoho location saved", { storeId: draft.id, zohoLocationId: chosen || null, ...(f ?? {}) });
+            setNotice(
+              chosen
+                ? `${saved.name} is linked to Zoho location ${loc?.name ?? ""}.${filledLine}`
+                : `${saved.name} is no longer linked to a Zoho location. Records already set to it keep it.`
+            );
+            // The list's "linked to …" labels changed.
+            void loadZohoLocations();
+          } else if (f && (f.billsUpdated + f.creditsUpdated + f.creditNotesUpdated + f.paymentsUpdated > 0 || !f.subLocationsChecked)) {
+            zohoLog.info("store zoho location re-applied", { storeId: draft.id, ...f });
+            setNotice(`${saved.name}'s Zoho location was applied again.${filledLine}`);
+          }
+        } else {
+          await apiFetch("/api/stores", { method: "POST", json: body });
+        }
       } else {
         const isFloor = draft.warehouseKind === "FLOOR";
         const body = {
@@ -275,7 +365,7 @@ function SitesPanel({ view }: { view: "stores" | "warehouses" }) {
           <Button
             size="sm"
             className="bg-blue-600 hover:bg-blue-700"
-            onClick={() => { setSaveError(null); setDraft({ kind: "store", id: null, code: "", name: "", address: "", phone: "" }); }}
+            onClick={() => { setSaveError(null); setDraft({ kind: "store", id: null, code: "", name: "", address: "", phone: "", zohoLocationId: null }); }}
           >
             <Plus className="h-3.5 w-3.5 mr-1" />New store
           </Button>
@@ -283,6 +373,15 @@ function SitesPanel({ view }: { view: "stores" | "warehouses" }) {
       </div>
 
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
+      {notice && (
+        <div role="status" className="mb-3 flex items-start gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2">
+          <Link2 className="h-4 w-4 text-green-700 shrink-0 mt-0.5" />
+          <p className="text-xs text-green-800 flex-1">{notice}</p>
+          <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss" className="min-h-[32px] min-w-[32px] flex items-center justify-center text-green-700">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {draft && (
         <Card className="mb-3 border-blue-200">
@@ -349,6 +448,18 @@ function SitesPanel({ view }: { view: "stores" | "warehouses" }) {
                 </>
               )}
             </div>
+            {draft.kind === "store" && mayLinkZoho && (
+              <ZohoLocationField
+                storeId={draft.id}
+                value={draft.zohoLocationId ?? currentZohoLink(draft.id)}
+                data={zohoLocs}
+                loading={zohoLocsLoading}
+                error={zohoLocsError}
+                disabled={busy}
+                onRetry={() => void loadZohoLocations()}
+                onChange={(v) => setDraft({ ...draft, zohoLocationId: v })}
+              />
+            )}
             {draft.kind === "warehouse" && draft.warehouseKind === "FLOOR" && (
               // Shown only for a floor: a godown sells nothing, so it has no prefix and cannot be
               // the store's primary floor (plan 1609, R30–R33).
@@ -443,10 +554,12 @@ function SitesPanel({ view }: { view: "stores" | "warehouses" }) {
                           label={`Edit ${s.name}`}
                           onClick={() => {
                             setSaveError(null);
+                            setNotice(null);
                             setDraft({
                               kind: "store", id: s.id, code: s.code, name: s.name,
-                              address: s.address ?? "", phone: s.phone ?? "",
+                              address: s.address ?? "", phone: s.phone ?? "", zohoLocationId: null,
                             });
+                            if (mayLinkZoho && !zohoLocs && !zohoLocsLoading) void loadZohoLocations();
                           }}
                         >
                           <Pencil className="h-3.5 w-3.5" />
@@ -562,6 +675,88 @@ function SitesPanel({ view }: { view: "stores" | "warehouses" }) {
           details={outcome.message}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * The store's Zoho Books location (plan 1210 credit notes, Part 2.3). A bill or credit note Zoho
+ * books under this location — or under one of its warehouse sub-locations — takes this store.
+ * Sub-locations are listed under their parent; a location already linked to another store is
+ * shown but cannot be picked (one location books to one store).
+ */
+function ZohoLocationField({
+  storeId, value, data, loading, error, disabled, onRetry, onChange,
+}: {
+  storeId: string | null;
+  value: string;
+  data: ZohoLocations | null;
+  loading: boolean;
+  error: string | null;
+  disabled: boolean;
+  onRetry: () => void;
+  onChange: (zohoLocationId: string) => void;
+}) {
+  const labelCls = "block text-[11px] font-semibold text-slate-700 mb-1";
+  if (!storeId) {
+    return (
+      <p className="text-[11px] text-slate-500">
+        Zoho location: save the store first, then edit it to link the location its bills are booked under.
+      </p>
+    );
+  }
+  if (loading && !data) return <p className="text-[11px] text-slate-500">Loading Zoho locations…</p>;
+  if (error && !data) {
+    return (
+      <div className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5">
+        <p className="text-[11px] text-amber-800">Zoho location: {error}</p>
+        <button type="button" onClick={onRetry} className="mt-1 inline-flex items-center gap-1 min-h-[32px] text-[11px] font-medium text-amber-800">
+          <RefreshCw className="h-3 w-3" /> Retry
+        </button>
+      </div>
+    );
+  }
+  if (!data) return null;
+
+  // Parents first (primary on top), each followed by its sub-locations.
+  const ids = new Set(data.locations.map((l) => l.id));
+  const parents = data.locations
+    .filter((l) => !l.parentId || !ids.has(l.parentId))
+    .sort((a, b) => Number(b.primary) - Number(a.primary) || a.name.localeCompare(b.name));
+  const childrenOf = (id: string) =>
+    data.locations.filter((l) => l.parentId === id).sort((a, b) => a.name.localeCompare(b.name));
+  const orphan = data.orphanLinks.find((o) => o.storeId === storeId);
+  const label = (l: ZohoLocationRow) =>
+    `${l.name}${l.primary ? " (primary)" : ""}${l.active ? "" : " (inactive)"}${
+      l.linkedStore && l.linkedStore.id !== storeId ? ` — linked to ${l.linkedStore.name}` : ""
+    }`;
+  const taken = (l: ZohoLocationRow) => Boolean(l.linkedStore && l.linkedStore.id !== storeId);
+
+  return (
+    <div>
+      <label htmlFor="store-zoho-location" className={labelCls}>Zoho location</label>
+      <select
+        id="store-zoho-location"
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full min-h-[44px] rounded-lg border border-slate-300 bg-white px-2 text-sm disabled:opacity-60"
+      >
+        <option value="">Not linked</option>
+        {orphan && (
+          <option value={orphan.zohoLocationId}>Linked to a location Zoho no longer lists</option>
+        )}
+        {parents.map((p) => [
+          <option key={p.id} value={p.id} disabled={taken(p)}>{label(p)}</option>,
+          ...childrenOf(p.id).map((c) => (
+            <option key={c.id} value={c.id} disabled={taken(c)}>{`\u00a0\u00a0\u21b3 ${label(c)}`}</option>
+          )),
+        ])}
+      </select>
+      <p className="text-[11px] text-slate-500 mt-1">
+        Bills and credit notes Zoho books under this location — or its warehouse sub-locations — take this store.
+        Saving fills it on the ones already fetched that have no store.
+      </p>
     </div>
   );
 }

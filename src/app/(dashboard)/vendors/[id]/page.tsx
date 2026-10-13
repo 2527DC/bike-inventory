@@ -7,12 +7,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SkeletonList } from "@/components/ui/skeleton";
-import type { Vendor, PurchaseOrder, VendorBill, VendorCredit } from "@/types";
+import type { Vendor, PurchaseOrder, VendorBill } from "@/types";
 import { usePermissions } from "@/lib/use-permissions";
 import { apiFetch } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 import { VendorBrands } from "./_components/vendor-brands";
 import { VendorContact } from "./_components/vendor-contact";
+import { VendorCredits } from "./_components/vendor-credits";
+import { VendorLedgerTab } from "./_components/vendor-ledger-tab";
 
 const log = createLogger("vendors:detail");
 
@@ -22,9 +24,11 @@ function formatCurrency(amount: number) {
 
 type VendorDetail = Vendor & {
   purchaseOrders: PurchaseOrder[];
+  /** The first 10 by due date — `_count.bills` is the real count. */
   bills: (VendorBill & { payments: Array<{ amount: number }> })[];
-  credits: VendorCredit[];
-  _count?: { issues: number };
+  /** What we owe this supplier over all history, from the ledger (plan 1210 Part 6, X9). */
+  balance: number;
+  _count?: { issues: number; credits: number; bills: number };
   /** Zoho's vendor id. Written only by the Zoho bill import; read-only here, never sent on PUT. */
   zohoVendorId?: string | null;
 };
@@ -39,8 +43,6 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   const [vendor, setVendor] = useState<VendorDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"overview" | "pos" | "bills" | "credits" | "issues" | "ledger">("overview");
-  const [ledger, setLedger] = useState<{ openingBalance: number; currentBalance: number; entries: Array<{ id: string; date: string; type: string; description: string; debit: number; credit: number; balance: number }> } | null>(null);
-  const [ledgerLoading, setLedgerLoading] = useState(false);
   const [editingBalance, setEditingBalance] = useState(false);
   const [balanceValue, setBalanceValue] = useState("");
   const [savingBalance, setSavingBalance] = useState(false);
@@ -65,17 +67,6 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   }, [id]);
 
   useEffect(() => { loadVendor(); }, [loadVendor]);
-
-  // Load ledger when tab is selected
-  useEffect(() => {
-    if (tab === "ledger" && !ledger) {
-      setLedgerLoading(true);
-      apiFetch<NonNullable<typeof ledger>>(`/api/vendors/${id}/ledger`)
-        .then((res) => setLedger(res))
-        .catch((e) => log.warn("vendor ledger failed to load", { vendorId: id, error: e instanceof Error ? e.message : String(e) }))
-        .finally(() => setLedgerLoading(false));
-    }
-  }, [tab, id, ledger]);
 
   // Refetch when tab becomes visible (another user may have updated)
   useEffect(() => {
@@ -107,17 +98,22 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
     ? `https://wa.me/91${vendor.whatsappNumber.replace(/\D/g, "").slice(-10)}`
     : null;
 
-  const totalOutstanding = vendor.bills
-    .filter((b) => b.status !== "PAID")
-    .reduce((sum, b) => sum + (b.amount - b.paidAmount), 0);
+  // The ledger balance over ALL history (opening + bills − payments − CD − credit notes +
+  // refunds), computed by the API with vendorBalance() — not a sum of the 10 bills on this page.
+  const balance = vendor.balance ?? 0;
+  // A bill due today is not overdue yet; one due yesterday is.
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
 
   const issueCount = vendor._count?.issues ?? 0;
+  const billCount = vendor._count?.bills ?? vendor.bills.length;
+  const creditCount = vendor._count?.credits ?? 0;
 
   const tabs = [
     { key: "overview", label: "Overview" },
     { key: "pos", label: `POs (${vendor.purchaseOrders.length})` },
-    { key: "bills", label: `Bills (${vendor.bills.length})` },
-    { key: "credits", label: `Credits (${vendor.credits.length})` },
+    { key: "bills", label: `Bills (${billCount})` },
+    { key: "credits", label: `Credits (${creditCount})` },
     { key: "issues", label: `Issues (${issueCount})` },
     { key: "ledger", label: "Ledger" },
   ] as const;
@@ -193,12 +189,17 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
         )}
       </div>
 
-      {/* Outstanding Card */}
-      {totalOutstanding > 0 && (
-        <Card className="bg-red-50 border-red-200 mb-4">
+      {/* Balance card — the ledger's closing figure (plan 1210 Part 6, X9) */}
+      {Math.abs(balance) >= 1 && (
+        <Card className={`mb-4 ${balance > 0 ? "bg-red-50 border-red-200" : "bg-green-50 border-green-200"}`}>
           <CardContent className="p-3 flex items-center justify-between">
-            <span className="text-sm font-medium text-red-700">Outstanding</span>
-            <span className="text-lg font-bold text-red-700 tabular-nums">{formatCurrency(totalOutstanding)}</span>
+            <span className={`text-sm font-medium ${balance > 0 ? "text-red-700" : "text-green-700"}`}>
+              {balance > 0 ? "Balance we owe" : "Supplier owes us"}
+              <span className="block text-[11px] font-normal text-slate-500">All bills, payments and credit notes, from the ledger</span>
+            </span>
+            <span className={`text-lg font-bold tabular-nums ${balance > 0 ? "text-red-700" : "text-green-700"}`}>
+              {formatCurrency(Math.abs(balance))}
+            </span>
           </CardContent>
         </Card>
       )}
@@ -472,12 +473,18 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
       {/* Bills Tab */}
       {tab === "bills" && (
         <div className="space-y-2">
+          {billCount > vendor.bills.length && (
+            <p className="text-[11px] text-slate-500">
+              Showing {vendor.bills.length} of {billCount} bills, earliest due date first. The Ledger tab lists every bill.
+            </p>
+          )}
           {vendor.bills.map((bill) => {
             const remaining = bill.amount - bill.paidAmount;
-            // Calculate due date from billDate + vendor's payment terms (app controls overdue)
-            const appDueDate = new Date(bill.billDate);
-            appDueDate.setDate(appDueDate.getDate() + (vendor.paymentTermDays || 30));
-            const isOverdue = appDueDate < new Date() && remaining > 0;
+            // The bill's STORED due date (plan 1210 Q5): what the supplier's invoice says, or bill
+            // date + the terms in force when it was imported. Changing the vendor's terms today
+            // must not re-age old bills, so it is never recomputed here.
+            const dueDate = new Date(bill.dueDate);
+            const isOverdue = dueDate < startOfToday && remaining > 0.01 && bill.status !== "PAID";
             return (
               <Link key={bill.id} href={`/bills/${bill.id}`}>
                 <Card className={`hover:border-slate-300 mb-2 ${isOverdue ? "border-red-200" : ""}`}>
@@ -485,7 +492,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                     <div>
                       <p className="text-sm font-medium text-slate-900 tabular-nums">{bill.billNo}</p>
                       <p className="text-xs text-slate-500 tabular-nums">
-                        {new Date(bill.billDate).toLocaleDateString("en-IN")} · Due: {appDueDate.toLocaleDateString("en-IN")}
+                        {new Date(bill.billDate).toLocaleDateString("en-IN")} · Due: {dueDate.toLocaleDateString("en-IN")}
                       </p>
                     </div>
                     <div className="text-right">
@@ -505,27 +512,8 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
         </div>
       )}
 
-      {/* Credits Tab */}
-      {tab === "credits" && (
-        <div className="space-y-2">
-          {vendor.credits.map((credit) => (
-            <Card key={credit.id} className="mb-2">
-              <CardContent className="p-3 flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-slate-900 tabular-nums">{credit.creditNoteNo}</p>
-                  <p className="text-xs text-slate-500 tabular-nums">{new Date(credit.creditDate).toLocaleDateString("en-IN")}</p>
-                  {credit.reason && <p className="text-xs text-slate-400 mt-0.5">{credit.reason}</p>}
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-bold text-slate-900 tabular-nums">{formatCurrency(credit.amount)}</p>
-                  <p className="text-xs text-slate-500 tabular-nums">Used: {formatCurrency(credit.usedAmount)}</p>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-          {vendor.credits.length === 0 && <p className="text-sm text-slate-400 text-center py-4">No credit notes</p>}
-        </div>
-      )}
+      {/* Credits Tab — every credit note, its applications and refunds (plan 1210 Part 4) */}
+      {tab === "credits" && <VendorCredits vendorId={id} onChanged={loadVendor} />}
 
       {/* Issues Tab */}
       {tab === "issues" && (
@@ -551,58 +539,8 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
         </div>
       )}
 
-      {/* Ledger Tab */}
-      {tab === "ledger" && (
-        <div>
-          {ledgerLoading ? (
-            <div className="flex justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
-            </div>
-          ) : ledger ? (
-            <>
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <p className="text-[11px] text-slate-500">Opening Balance</p>
-                  <p className="text-sm font-medium text-slate-700 tabular-nums">{formatCurrency(ledger.openingBalance)}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-[11px] text-slate-500">Current Balance</p>
-                  <p className={`text-sm font-bold tabular-nums ${ledger.currentBalance > 0 ? "text-red-600" : "text-green-600"}`}>
-                    {formatCurrency(ledger.currentBalance)}
-                  </p>
-                </div>
-              </div>
-              <div className="border rounded-lg overflow-hidden">
-                <div className="grid grid-cols-12 gap-0 bg-slate-100 px-2 py-1.5 text-[11px] font-semibold text-slate-600">
-                  <div className="col-span-3">Date</div>
-                  <div className="col-span-4">Description</div>
-                  <div className="col-span-2 text-right">Debit</div>
-                  <div className="col-span-3 text-right">Balance</div>
-                </div>
-                {ledger.entries.map((entry) => (
-                  <div key={entry.id} className={`grid grid-cols-12 gap-0 px-2 py-2 border-t border-slate-100 text-xs ${entry.type === "PAYMENT" ? "bg-green-50/50" : ""}`}>
-                    <div className="col-span-3 text-slate-500 tabular-nums">{new Date(entry.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</div>
-                    <div className="col-span-4 text-slate-900 truncate">{entry.description}</div>
-                    <div className="col-span-2 text-right tabular-nums">
-                      {entry.type === "BILL" ? (
-                        <span className="text-red-600">{formatCurrency(entry.debit)}</span>
-                      ) : (
-                        <span className="text-green-600">-{formatCurrency(entry.credit)}</span>
-                      )}
-                    </div>
-                    <div className="col-span-3 text-right font-medium tabular-nums">{formatCurrency(entry.balance)}</div>
-                  </div>
-                ))}
-                {ledger.entries.length === 0 && (
-                  <p className="text-sm text-slate-400 text-center py-4">No transactions</p>
-                )}
-              </div>
-            </>
-          ) : (
-            <p className="text-sm text-slate-400 text-center py-8">Could not load ledger</p>
-          )}
-        </div>
-      )}
+      {/* Ledger Tab — whole-history running balance, by store (plan 1210 Part 6) */}
+      {tab === "ledger" && <VendorLedgerTab vendorId={id} />}
     </div>
   );
 }

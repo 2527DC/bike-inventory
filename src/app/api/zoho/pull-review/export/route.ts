@@ -4,13 +4,16 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("zoho:pull-review-export");
 
 // GET — download pull preview as CSV (simple, works everywhere)
 export async function GET(req: NextRequest) {
+  const pullId = new URL(req.url).searchParams.get("pullId");
   try {
     await requireFeature("zoho", "view");
 
-    const pullId = new URL(req.url).searchParams.get("pullId");
     if (!pullId) return errorResponse("pullId required", 400);
 
     const previews = await prisma.zohoPullPreview.findMany({
@@ -48,12 +51,24 @@ export async function GET(req: NextRequest) {
             lines.push(`bill,"${esc(d.billNumber)}","${esc(d.date)}","${esc(d.vendorName)}",,"${esc(li.name)}","${esc(li.sku)}",${li.quantity},${li.rate},${li.itemTotal},${d.total},${d.status}`);
           }
         } else {
-          lines.push(`bill,"${esc(d.billNumber)}","${esc(d.date)}","${esc(d.vendorName)}",,,,,,${d.total},${d.status}`);
+          // Seven commas after the vendor: Sales Person and the five item columns are empty. It was
+          // six, which put every bill's total under "Item Total" — and every bill preview has no
+          // line items, so every bill row was shifted.
+          lines.push(`bill,"${esc(d.billNumber)}","${esc(d.date)}","${esc(d.vendorName)}",,,,,,,${d.total},${d.status}`);
         }
+      } else if (p.entityType === "vendorcredit" || p.entityType === "creditnote") {
+        // Plan 1210 credit notes: one row per note. No line items; the Status column also says
+        // what the import would do (new / update / void) and how much of the note is still open.
+        const isVendor = p.entityType === "vendorcredit";
+        const number = isVendor ? d.creditNumber : d.creditNoteNumber;
+        const party = isVendor ? d.vendorName : d.customerName;
+        const status = `${esc(d.status)} (${esc(p.action)}; open ${esc(d.balance ?? 0)})`;
+        lines.push(`${isVendor ? "vendor credit" : "credit note"},"${esc(number)}","${esc(d.date)}","${esc(party)}",,,,,,,${Number(d.total) || 0},"${status}"`);
       }
     }
 
     const csv = lines.join("\n");
+    log.debug("pull exported", { pullId, previews: previews.length, rows: lines.length - 1 });
 
     return new Response(csv, {
       headers: {
@@ -63,6 +78,8 @@ export async function GET(req: NextRequest) {
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Export failed", 500);
+    const message = error instanceof Error ? error.message : String(error);
+    log.error("pull export failed", { pullId, message });
+    return errorResponse("Export failed. Try again.", 500);
   }
 }

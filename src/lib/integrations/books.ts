@@ -1,6 +1,77 @@
 // Zoho Books. Everything shared lives in IntegrationClient; this file holds only what is
 // genuinely specific to Books — contacts, and the write endpoints.
-import { IntegrationClient, type ProviderKey } from "./base";
+import { IntegrationClient, type IntegrationBill, type ProviderKey } from "./base";
+
+/** Zoho's last_modified_time filter, in the form the contacts call already sends successfully. */
+function modifiedSince(date?: string) {
+  return date ? `&last_modified_time=${encodeURIComponent(date + "T00:00:00+0530")}` : "";
+}
+
+/** A vendor credit as `GET /vendorcredits` lists it — the fields the pull reads. */
+export interface ZohoVendorCreditRow {
+  vendor_credit_id: string;
+  vendor_credit_number: string;
+  reference_number?: string;
+  status: string; // open | closed | void | draft
+  date: string;
+  total: number;
+  balance: number;
+  vendor_id: string;
+  vendor_name: string;
+  last_modified_time?: string;
+  location_id?: string;
+}
+
+/** One vendor credit as `GET /vendorcredits/{id}` returns it. */
+export interface ZohoVendorCreditDetail extends ZohoVendorCreditRow {
+  notes?: string;
+  location_name?: string;
+  total_credits_used?: number;
+  total_refunded_amount?: number;
+  bills_credited?: Array<{
+    bill_id: string;
+    vendor_credit_bill_id: string;
+    bill_number?: string;
+    date: string;
+    amount: number;
+  }>;
+  vendor_credit_refunds?: Array<{
+    vendor_credit_refund_id: string;
+    date: string;
+    amount_bcy?: number;
+    amount?: number;
+    refund_mode?: string;
+    reference_number?: string;
+  }>;
+}
+
+/** A customer credit note as `GET /creditnotes` lists it. */
+export interface ZohoCreditNoteRow {
+  creditnote_id: string;
+  creditnote_number: string;
+  reference_number?: string;
+  status: string;
+  date: string;
+  total: number;
+  balance: number;
+  customer_id: string;
+  customer_name: string;
+  location_id?: string;
+  last_modified_time?: string;
+}
+
+/** One customer credit note as `GET /creditnotes/{id}` returns it. */
+export interface ZohoCreditNoteDetail extends ZohoCreditNoteRow {
+  invoices?: Array<{ invoice_id: string; invoice_number: string; amount?: number; amount_applied?: number }>;
+}
+
+export interface ZohoLocation {
+  location_id: string;
+  location_name: string;
+  is_primary_location?: boolean;
+  is_location_active?: boolean;
+  parent_location_id?: string;
+}
 
 export class BooksClient extends IntegrationClient {
   protected readonly provider: ProviderKey = "ZOHO_BOOKS";
@@ -152,6 +223,83 @@ export class BooksClient extends IntegrationClient {
       page++;
     }
     return all;
+  }
+
+  // ─── Vendor credits, customer credit notes, locations (plan 1210, all reads) ──
+  // The token needs ZohoBooks.debitnotes.READ and ZohoBooks.creditnotes.READ for the first two.
+  // Without them Zoho answers 401 code 57 "You are not authorized to perform this operation"
+  // (Phase 0, 13 Oct 2026), which apiCall surfaces as that sentence.
+
+  async listVendorCredits(page = 1, modifiedFrom?: string, searchText?: string) {
+    const search = searchText ? `&search_text=${encodeURIComponent(searchText)}` : "";
+    return this.apiCall<{ vendorcredits: ZohoVendorCreditRow[]; page_context?: { has_more_page: boolean } }>(
+      "GET",
+      `/vendorcredits?page=${page}&per_page=200${modifiedSince(modifiedFrom)}${search}`,
+      undefined,
+      "vendorcredits.list"
+    );
+  }
+
+  async listAllVendorCredits(modifiedFrom?: string, searchText?: string) {
+    const all: ZohoVendorCreditRow[] = [];
+    for (let page = 1; ; page++) {
+      const data = await this.listVendorCredits(page, modifiedFrom, searchText);
+      all.push(...(data.vendorcredits || []));
+      if (!data.page_context?.has_more_page) break;
+    }
+    return all;
+  }
+
+  async getVendorCredit(vendorCreditId: string) {
+    return this.apiCall<{ vendor_credit?: ZohoVendorCreditDetail }>(
+      "GET",
+      `/vendorcredits/${encodeURIComponent(vendorCreditId)}`,
+      undefined,
+      "vendorcredits.get"
+    );
+  }
+
+  async listCreditNotes(page = 1, modifiedFrom?: string, searchText?: string) {
+    const search = searchText ? `&search_text=${encodeURIComponent(searchText)}` : "";
+    return this.apiCall<{ creditnotes: ZohoCreditNoteRow[]; page_context?: { has_more_page: boolean } }>(
+      "GET",
+      `/creditnotes?page=${page}&per_page=200${modifiedSince(modifiedFrom)}${search}`,
+      undefined,
+      "creditnotes.list"
+    );
+  }
+
+  async listAllCreditNotes(modifiedFrom?: string, searchText?: string) {
+    const all: ZohoCreditNoteRow[] = [];
+    for (let page = 1; ; page++) {
+      const data = await this.listCreditNotes(page, modifiedFrom, searchText);
+      all.push(...(data.creditnotes || []));
+      if (!data.page_context?.has_more_page) break;
+    }
+    return all;
+  }
+
+  async getCreditNote(creditNoteId: string) {
+    return this.apiCall<{ creditnote?: ZohoCreditNoteDetail }>(
+      "GET",
+      `/creditnotes/${encodeURIComponent(creditNoteId)}`,
+      undefined,
+      "creditnotes.get"
+    );
+  }
+
+  /** A bill by vendor and number — the link backfill's lookup (Part 1.4). */
+  async findBill(zohoVendorId: string, billNumber: string) {
+    return this.apiCall<{ bills: IntegrationBill[] }>(
+      "GET",
+      `/bills?vendor_id=${encodeURIComponent(zohoVendorId)}&bill_number=${encodeURIComponent(billNumber)}`,
+      undefined,
+      "bills.find"
+    );
+  }
+
+  async listLocations() {
+    return this.apiCall<{ locations: ZohoLocation[] }>("GET", "/locations", undefined, "locations.list");
   }
 
   // ─── Writes back to Zoho ───────────────────────────────────────────────────

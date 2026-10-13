@@ -298,6 +298,15 @@ model Store {
 
   // Expenses paid from this store's money. Restrict: a store with expense history is not deletable.
   expenses Expense[] @relation("ExpenseStore")
+
+  // Zoho Books location_id for this store, when Zoho Locations is on (plan 1210 credit notes,
+  // Q2). Set on /stores. A bill or credit carrying this location takes this store.
+  zohoLocationId      String?              @unique
+  // Payables and credit notes booked to this store. Restrict: financial history keeps the store.
+  vendorBills         VendorBill[]
+  vendorPayments      VendorPayment[]
+  vendorCredits       VendorCredit[]
+  customerCreditNotes CustomerCreditNote[]
 }
 
 /// What kind of place a warehouse is. FLOOR is the shop — where a customer sees the bike;
@@ -404,23 +413,24 @@ model User {
   transactions InventoryTransaction[]
   stockCounts  StockCount[]
 
-  createdPOs               PurchaseOrder[]   @relation("POCreatedBy")
-  approvedPOs              PurchaseOrder[]   @relation("POApprovedBy")
+  createdPOs               PurchaseOrder[]           @relation("POCreatedBy")
+  approvedPOs              PurchaseOrder[]           @relation("POApprovedBy")
   // Only for PurchaseOrder.sentBy, the denormalised "who sent it last" on the header.
   // PurchaseOrderSend.sentById deliberately has NO relation — a send trail outlives its user.
-  sentPOs                  PurchaseOrder[]   @relation("POSentBy")
-  recordedPayments         VendorPayment[]   @relation("PaymentRecordedBy")
-  recordedExpenses         Expense[]         @relation("ExpenseRecordedBy")
-  paidExpenses             Expense[]         @relation("ExpensePaidBy")
-  recordedCustomerPayments CustomerPayment[] @relation("CustomerPaymentRecordedBy")
-  createdIssues            VendorIssue[]     @relation("IssueCreatedBy")
-  issueNotes               VendorIssueNote[] @relation("IssueNoteAuthor")
-  navTabs                  String[]          @default([]) // admin-chosen bottom-nav hrefs (empty = role default)
-  approvedStockCounts      StockCount[]      @relation("StockCountApprovedBy")
-  verifiedDeliveries       Delivery[]        @relation("DeliveryVerifiedBy")
-  uploadedStatements       BankStatement[]   @relation("StatementUploader")
-  ledgerUploads            LedgerUpload[]    @relation("LedgerUploadedBy")
-  ledgerAiRuns             LedgerAiRun[]     @relation("LedgerAiRunCreatedBy")
+  sentPOs                  PurchaseOrder[]           @relation("POSentBy")
+  recordedPayments         VendorPayment[]           @relation("PaymentRecordedBy")
+  appliedVendorCredits     VendorCreditApplication[] @relation("CreditApplicationAppliedBy")
+  recordedExpenses         Expense[]                 @relation("ExpenseRecordedBy")
+  paidExpenses             Expense[]                 @relation("ExpensePaidBy")
+  recordedCustomerPayments CustomerPayment[]         @relation("CustomerPaymentRecordedBy")
+  createdIssues            VendorIssue[]             @relation("IssueCreatedBy")
+  issueNotes               VendorIssueNote[]         @relation("IssueNoteAuthor")
+  navTabs                  String[]                  @default([]) // admin-chosen bottom-nav hrefs (empty = role default)
+  approvedStockCounts      StockCount[]              @relation("StockCountApprovedBy")
+  verifiedDeliveries       Delivery[]                @relation("DeliveryVerifiedBy")
+  uploadedStatements       BankStatement[]           @relation("StatementUploader")
+  ledgerUploads            LedgerUpload[]            @relation("LedgerUploadedBy")
+  ledgerAiRuns             LedgerAiRun[]             @relation("LedgerAiRunCreatedBy")
 
   // Service / workshop (merged from bch-service)
   assignedJobs       ServiceJob[]  @relation("ServiceJobMechanic")
@@ -1095,39 +1105,39 @@ model StockCountItem {
 }
 
 model Vendor {
-  id              String   @id @default(cuid())
-  name            String   @unique
-  code            String   @unique
-  gstin           String?
-  pan             String?
-  addressLine1    String?
-  addressLine2    String?
-  city            String?
-  state           String?
-  pincode         String?
-  phone           String?
-  email           String?
-  whatsappNumber  String?
+  id                 String   @id @default(cuid())
+  name               String   @unique
+  code               String   @unique
+  gstin              String?
+  pan                String?
+  addressLine1       String?
+  addressLine2       String?
+  city               String?
+  state              String?
+  pincode            String?
+  phone              String?
+  email              String?
+  whatsappNumber     String?
   // The vendor's one contact person (plan 2109 R28, Q17a). Phone / email / WhatsApp above are
   // that person's. Replaces VendorContact, which is kept (unused by the vendor screen) until a
   // later release drops it — rule 7. Nullable: many vendors have no named contact.
   contactPerson      String?
   contactDesignation String?
-  waGroupName     String? // Ops Issues: WhatsApp group this brand's issues are shared to
-  waGroupCode     String? // Ops Issues: human routing label for the group (e.g. "#1234")
-  paymentTermDays Int      @default(30)
-  creditLimit     Float    @default(0)
-  cdTermsDays     Int?
-  cdPercentage    Float?
-  openingBalance  Float    @default(0) // As of 2026-04-01
-  isActive        Boolean  @default(true)
-  notes           String?
+  waGroupName        String? // Ops Issues: WhatsApp group this brand's issues are shared to
+  waGroupCode        String? // Ops Issues: human routing label for the group (e.g. "#1234")
+  paymentTermDays    Int      @default(30)
+  creditLimit        Float    @default(0)
+  cdTermsDays        Int?
+  cdPercentage       Float?
+  openingBalance     Float    @default(0) // As of 2026-04-01
+  isActive           Boolean  @default(true)
+  notes              String?
   // Zoho's `vendor_id` (its contact_id) — the vendor's identity on the Zoho side, and what the
   // bill import resolves by (plan 2409-zoho-vendor-id). Written only by the import, never by the
   // vendor forms. Nullable: a vendor created by hand on /vendors has none.
-  zohoVendorId    String?  @unique
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  zohoVendorId       String?  @unique
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   contacts          VendorContact[]
   purchaseOrders    PurchaseOrder[]
@@ -1293,35 +1303,53 @@ model PurchaseOrderItem {
 }
 
 model VendorBill {
-  id               String         @id @default(cuid())
-  vendorId         String
-  vendor           Vendor         @relation(fields: [vendorId], references: [id])
-  purchaseOrderId  String?
-  purchaseOrder    PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
-  billNo           String
-  billDate         DateTime
-  dueDate          DateTime
-  amount           Float
-  paidAmount       Float          @default(0)
-  status           BillStatus     @default(PENDING)
-  lastFollowedUp   DateTime?
-  nextFollowUpDate DateTime?
-  followUpNotes    String?
-  notes            String?
-  billedTo         String? // "HUB" or "CENTRE"
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  id                  String         @id @default(cuid())
+  vendorId            String
+  vendor              Vendor         @relation(fields: [vendorId], references: [id])
+  purchaseOrderId     String?
+  purchaseOrder       PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  billNo              String
+  billDate            DateTime
+  dueDate             DateTime
+  amount              Float
+  paidAmount          Float          @default(0)
+  status              BillStatus     @default(PENDING)
+  lastFollowedUp      DateTime?
+  nextFollowUpDate    DateTime?
+  followUpNotes       String?
+  notes               String?
+  billedTo            String? // "HUB" or "CENTRE"
+  // Zoho Books' bill_id. Written only by the Zoho import and the link backfill (plan 1210
+  // credit notes, Part 1), never by a form. Null for a bill typed on /bills. The unique index
+  // is the lookup.
+  zohoBillId          String?        @unique
+  // Zoho's location_id for the bill, kept raw so the store can be (re)derived (Part 2).
+  zohoLocationId      String?
+  // INVARIANT: the part of paidAmount that is credit notes applied to this bill — in Zoho
+  // (pulled) or here (Apply credit). Always equals the sum of its VendorCreditApplication rows.
+  // paidAmount keeps meaning "settled" (payments + CD + credits), so every reader of
+  // amount − paidAmount stays correct; this column lets a credit sync move paidAmount by the
+  // difference only, never twice.
+  creditAppliedAmount Decimal        @default(0) @db.Decimal(12, 2)
+  // The store whose books this bill is in. Nullable: a bill can arrive without proof of its store
+  // (no Zoho location linked yet) and is set later on /bills/[id]. Restrict: see Store.
+  storeId             String?
+  store               Store?         @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
 
-  payments          VendorPayment[]
-  issues            VendorIssue[]
-  suggestedBankTxns BankTransaction[]  @relation("SuggestedBillTxn")
-  inboundShipment   InboundShipment?
-  ledgerEntries     BrandLedgerEntry[] // brand statement rows matched to this bill
+  payments           VendorPayment[]
+  creditApplications VendorCreditApplication[]
+  issues             VendorIssue[]
+  suggestedBankTxns  BankTransaction[]         @relation("SuggestedBillTxn")
+  inboundShipment    InboundShipment?
+  ledgerEntries      BrandLedgerEntry[] // brand statement rows matched to this bill
 
   @@unique([vendorId, billNo])
   @@index([vendorId])
   @@index([status])
   @@index([dueDate])
+  @@index([storeId, status])
 }
 
 model VendorPayment {
@@ -1340,6 +1368,10 @@ model VendorPayment {
   credit           VendorCredit? @relation(fields: [creditId], references: [id])
   recordedById     String
   recordedBy       User          @relation("PaymentRecordedBy", fields: [recordedById], references: [id])
+  // The store of the bills it pays (one store per payment), or picked by hand for an advance.
+  // Nullable: payments recorded before plan 1210 have none. Restrict: see Store.
+  storeId          String?
+  store            Store?        @relation(fields: [storeId], references: [id], onDelete: Restrict)
   createdAt        DateTime      @default(now())
 
   ledgerEntries BrandLedgerEntry[] // brand statement rows matched to this payment
@@ -1347,26 +1379,106 @@ model VendorPayment {
   @@index([vendorId])
   @@index([billId])
   @@index([paymentDate])
+  @@index([storeId])
 }
 
 model VendorCredit {
-  id           String   @id @default(cuid())
-  vendorId     String
-  vendor       Vendor   @relation(fields: [vendorId], references: [id])
-  creditNoteNo String
-  amount       Float
-  usedAmount   Float    @default(0)
-  reason       String?
-  creditDate   DateTime
-  notes        String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                 String             @id @default(cuid())
+  vendorId           String
+  vendor             Vendor             @relation(fields: [vendorId], references: [id])
+  creditNoteNo       String
+  amount             Float
+  usedAmount         Float              @default(0)
+  reason             String?
+  creditDate         DateTime
+  notes              String?
+  // Zoho Books' vendor_credit_id. Written only by the credit pull; null for a hand-typed row
+  // until the first pull stamps it (plan 1210 credit notes, Q14).
+  zohoVendorCreditId String?            @unique
+  // The supplier's own credit-note number, as typed into Zoho.
+  referenceNo        String?
+  status             VendorCreditStatus @default(OPEN)
+  // Nullable: from the Zoho location, the bills it is applied to, or set by hand. Restrict: see Store.
+  storeId            String?
+  store              Store?             @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  zohoLocationId     String?
+  // Zoho's last_modified_time — decides "update" on the next fetch.
+  zohoLastModifiedAt DateTime?
+  lastSyncedAt       DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
 
   payments      VendorPayment[]
   ledgerEntries BrandLedgerEntry[] // brand statement rows matched to this credit note
+  applications  VendorCreditApplication[]
+  refunds       VendorCreditRefund[]
+  issues        VendorIssue[] // shortage / damage issues this credit settles (Part 9)
 
   @@unique([vendorId, creditNoteNo])
   @@index([vendorId])
+  @@index([storeId])
+  @@index([status])
+}
+
+// Zoho's statuses for a vendor credit. Drafts are not imported (Q10).
+enum VendorCreditStatus {
+  OPEN
+  CLOSED
+  VOID
+}
+
+// Cash the supplier paid back against a credit, instead of letting us apply it. Pulled from Zoho.
+model VendorCreditRefund {
+  id             String       @id @default(cuid())
+  zohoRefundId   String       @unique
+  vendorCreditId String
+  vendorCredit   VendorCredit @relation(fields: [vendorCreditId], references: [id], onDelete: Cascade)
+  refundDate     DateTime
+  amount         Decimal      @db.Decimal(12, 2)
+  refundMode     String?
+  referenceNo    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([vendorCreditId])
+}
+
+// Where an application of a credit note to a bill came from (plan 1210 credit notes, 13 Oct
+// 2026). ZOHO: pulled from Zoho Books. APP: made here with Apply credit — Zoho is never told.
+enum CreditApplicationSource {
+  ZOHO
+  APP
+}
+
+// One application of one vendor credit to one bill.
+// ZOHO rows are pulled: either side can arrive first (a bill imported before its credit, or a
+// credit pulled before its bill), so both foreign keys are nullable and are filled in when the
+// other side arrives; the Zoho ids are always present on them.
+// APP rows are made here by Apply credit: both foreign keys set, no Zoho ids, appliedById names
+// the person. A Zoho pull never writes or prunes an APP row.
+model VendorCreditApplication {
+  id                     String                  @id @default(cuid())
+  source                 CreditApplicationSource @default(ZOHO)
+  zohoVendorCreditBillId String?                 @unique // Zoho's id for this application — the de-dup key (ZOHO only)
+  zohoVendorCreditId     String?
+  zohoBillId             String?
+  vendorCreditId         String?
+  vendorCredit           VendorCredit?           @relation(fields: [vendorCreditId], references: [id], onDelete: SetNull)
+  billId                 String?
+  bill                   VendorBill?             @relation(fields: [billId], references: [id], onDelete: SetNull)
+  amount                 Decimal                 @db.Decimal(12, 2)
+  appliedDate            DateTime
+  // APP only — who pressed Apply credit. SetNull: removing a user keeps the money history.
+  appliedById            String?
+  appliedBy              User?                   @relation("CreditApplicationAppliedBy", fields: [appliedById], references: [id], onDelete: SetNull)
+  note                   String?
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+
+  @@index([vendorCreditId])
+  @@index([billId])
+  @@index([zohoBillId]) // a bill arriving later links its waiting applications by this
+  @@index([zohoVendorCreditId]) // a credit sync replaces its own applications by this
 }
 
 model Expense {
@@ -1849,8 +1961,9 @@ model Customer {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
-  invoices CustomerInvoice[]
-  payments CustomerPayment[]
+  invoices    CustomerInvoice[]
+  creditNotes CustomerCreditNote[]
+  payments    CustomerPayment[]
 
   // Service side
   serviceJobs    ServiceJob[]
@@ -1883,11 +1996,73 @@ model CustomerInvoice {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
-  payments CustomerPayment[]
+  payments               CustomerPayment[]
+  creditNoteApplications CustomerCreditNoteApplication[]
 
   @@index([customerId])
   @@index([status])
   @@index([dueDate])
+}
+
+// Zoho Books' statuses for a customer credit note. Drafts are not imported (Q10).
+enum CustomerCreditNoteStatus {
+  OPEN
+  CLOSED
+  VOID
+}
+
+// A credit note WE gave a customer (a return, a price correction), pulled from Zoho Books
+// (plan 1210 credit notes, Part 8). Read-only here: it does not change CustomerInvoice.paidAmount
+// or Delivery.zohoBalance — how receivables show it is plan E's decision.
+model CustomerCreditNote {
+  id                 String                   @id @default(cuid())
+  zohoCreditNoteId   String                   @unique
+  creditNoteNo       String                   @unique // Zoho's creditnote_number, unique in the organisation
+  referenceNo        String?
+  date               DateTime
+  zohoCustomerId     String
+  customerName       String
+  // Linked through the invoice this note credits (Q11); null when it credits none we know.
+  customerId         String?
+  customer           Customer?                @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  // From the credited invoice's delivery, else the Zoho location, else null. Restrict: see Store.
+  storeId            String?
+  store              Store?                   @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  total              Decimal                  @db.Decimal(12, 2)
+  balance            Decimal                  @db.Decimal(12, 2)
+  status             CustomerCreditNoteStatus @default(OPEN)
+  zohoLocationId     String?
+  zohoLastModifiedAt DateTime?
+  lastSyncedAt       DateTime?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  applications CustomerCreditNoteApplication[]
+
+  @@index([customerId])
+  @@index([storeId])
+  @@index([date])
+}
+
+// One invoice a customer credit note was applied to, in Zoho. Delivery / CustomerInvoice are
+// linked by invoice number when the app has them; nullable because the invoice may not be here.
+model CustomerCreditNoteApplication {
+  id                String             @id @default(cuid())
+  creditNoteId      String
+  creditNote        CustomerCreditNote @relation(fields: [creditNoteId], references: [id], onDelete: Cascade)
+  zohoInvoiceId     String
+  invoiceNo         String
+  amount            Decimal            @db.Decimal(12, 2)
+  deliveryId        String?
+  delivery          Delivery?          @relation(fields: [deliveryId], references: [id], onDelete: SetNull)
+  customerInvoiceId String?
+  customerInvoice   CustomerInvoice?   @relation(fields: [customerInvoiceId], references: [id], onDelete: SetNull)
+  createdAt         DateTime           @default(now())
+
+  @@unique([creditNoteId, zohoInvoiceId]) // Zoho's invoices[] carries no per-application id
+  @@index([invoiceNo])
+  @@index([deliveryId])
+  @@index([customerInvoiceId])
 }
 
 model CustomerPayment {
@@ -1928,6 +2103,10 @@ model VendorIssue {
   priority            IssuePriority     @default(MEDIUM)
   billId              String?
   bill                VendorBill?       @relation(fields: [billId], references: [id])
+  // The credit note that settles this issue, picked by a person (plan 1210 credit notes, Part 9).
+  // Nullable: an issue is raised long before any credit exists. Never set automatically.
+  vendorCreditId      String?
+  vendorCredit        VendorCredit?     @relation(fields: [vendorCreditId], references: [id], onDelete: SetNull)
   photoUrls           String[]
   docLink             String? // optional supporting document/spreadsheet link for the brand to verify
   suggestedResolution String?
@@ -1944,6 +2123,7 @@ model VendorIssue {
   @@index([priority])
   @@index([createdAt])
   @@index([issueSource])
+  @@index([vendorCreditId])
 }
 
 // Append-only follow-up log on an issue — Hamsa/Suma add a timestamped note each time they chase
@@ -2111,8 +2291,9 @@ model Delivery {
   updatedAt DateTime @updatedAt
 
   // Units held for this outward by ★ (R16), and Find-stock transfers raised for it (R45, P16).
-  reservedUnits  InventoryUnit[]
-  transferOrders TransferOrder[]
+  reservedUnits          InventoryUnit[]
+  transferOrders         TransferOrder[]
+  creditNoteApplications CustomerCreditNoteApplication[]
 
   @@index([status])
   @@index([invoiceDate])
@@ -2166,17 +2347,19 @@ model ZohoPullPreview {
 }
 
 model ZohoPullLog {
-  id           String    @id @default(cuid())
-  pullId       String    @unique
-  status       String    @default("PENDING_REVIEW") // PENDING_REVIEW, APPROVED, REJECTED, PARTIAL
-  contactsNew  Int       @default(0)
-  itemsNew     Int       @default(0)
-  billsNew     Int       @default(0)
-  invoicesNew  Int       @default(0)
-  errors       String?
-  apiCallsUsed Int       @default(0)
-  createdAt    DateTime  @default(now())
-  approvedAt   DateTime?
+  id               String    @id @default(cuid())
+  pullId           String    @unique
+  status           String    @default("PENDING_REVIEW") // PENDING_REVIEW, APPROVED, REJECTED, PARTIAL
+  contactsNew      Int       @default(0)
+  itemsNew         Int       @default(0)
+  billsNew         Int       @default(0)
+  invoicesNew      Int       @default(0)
+  vendorCreditsNew Int       @default(0)
+  creditNotesNew   Int       @default(0)
+  errors           String?
+  apiCallsUsed     Int       @default(0)
+  createdAt        DateTime  @default(now())
+  approvedAt       DateTime?
 
   @@index([status])
   @@index([createdAt])
