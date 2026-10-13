@@ -1,14 +1,18 @@
 name: Deploy to VPS
 
-# ─── MANUAL ONLY ─────────────────────────────────────────────────────────────────────────
+# ─── MANUAL ONLY, AND FROM main ONLY ─────────────────────────────────────────────────────
 #
 # There is no `push:` trigger on purpose. This runs when a person clicks it:
-#   Actions ▸ "Deploy to VPS" ▸ Run workflow ▸ pick the branch ▸ Run.
-# The branch chosen in that dropdown is what gets built and shipped.
+#   Actions ▸ "Deploy to VPS" ▸ Run workflow ▸ branch: main ▸ Run.
+# main is production. The first step of the build job refuses every other branch, so a run
+# started from `test` or a feature branch fails before anything is built, migrated or shipped.
+# Gap, accepted 12 Oct 2026: the dropdown runs the workflow file AS IT IS ON THE CHOSEN
+# BRANCH, so a branch cut before that step existed carries the old file without it.
+# See docs/implementation/pending/1210-test-branch-vercel-and-vps-main-plan.md §2.3.
 #
-# Vercel is untouched by this file. Vercel stays the testing/staging deploy with its own
-# vercel.json and scripts/vercel-build.mjs; this is production. A push triggers Vercel and
-# never triggers this, so the two cannot race.
+# Vercel is untouched by this file. Vercel is the test stage: it builds the `test` branch
+# only (vercel.json `git.deploymentEnabled`) with scripts/vercel-build.mjs; this is
+# production. A push to `test` triggers Vercel and never triggers this, so the two cannot race.
 #
 # ─── THREE JOBS, EACH WAITS FOR THE ONE BEFORE ───────────────────────────────────────────
 #
@@ -144,6 +148,18 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      # main is production; nothing else reaches the VPS. A failed step rather than an `if:`
+      # on the job: a skipped run reads as green in the Actions list. Failing here stops
+      # migrate and deploy through their `needs:`, so the database and the server are never
+      # touched.
+      - name: Refuse any branch but main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::VPS deploys run from main only. This run was started from '$GITHUB_REF_NAME'. Run it again with branch: main."
+            exit 1
+          fi
+          echo "branch is main — continuing"
+
       - name: Check out the selected branch
         uses: actions/checkout@v4
 
