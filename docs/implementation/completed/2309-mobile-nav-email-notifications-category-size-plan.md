@@ -1,7 +1,6 @@
 # Bottom bar without "More"; no email notifications; a notifications inbox with an icon count
 
-Status: pending — rewritten 23 Sep 2026 after the owner answered the questions one by one (§1.1).
-**Every question is answered** (§1.1, last round 23 Sep 2026). Waiting for the owner's approval. Nothing is built. The owner said "dont implment it".
+Status: completed — 13 Oct 2026, built and merged 24 Sep in PR #60 (`8cb48c7`): bottom bar without More, email removed from notifications, a notifications inbox.
 Branch: `feat/2309-bottom-nav-no-more-email-removal`, created from `main` on 23 Sep 2026 on the
 owner's instruction. Nothing is committed.
 

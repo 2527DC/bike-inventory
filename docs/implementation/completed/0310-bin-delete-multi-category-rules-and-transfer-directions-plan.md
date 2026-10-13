@@ -1,6 +1,6 @@
 # Bins can be deleted when empty; a home-bin rule takes many categories; transfers run Floor/Godown in four directions
 
-Status: in-progress — Parts A–D built 3 Oct 2026, tsc + eslint + `npm run build` green; migration applied to the `.env` database; pushed and merged by PR on the owner's instruction without the §4 browser walk, which is still owed (§6).
+Status: completed — 13 Oct 2026, Parts A–D merged 3 Oct in PR #70. The §4 browser walk is still owed (§6).
 Branch: **`feat/0310-bins-rules-transfer-directions`** — create it with exactly this name, off `main`.
 
 Every `file:line` below was read from disk on 3 Oct 2026 on `feat/stock-zoho-fetch-active-products`

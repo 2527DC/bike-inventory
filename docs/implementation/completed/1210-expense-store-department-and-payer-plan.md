@@ -1,6 +1,6 @@
 # Every expense names its store and who paid, can be deleted, and one report answers "how much did this person spend, at this store, this month"
 
-Status: in-progress — approved and built 12 Oct 2026 (§6); `npm run build` passes; not committed; the browser pass (§4) is the owner's.
+Status: completed — 13 Oct 2026, built 12 Oct, committed `02705a6`, merged into `test` (`d3ae966`) and live on the Vercel test site; migration applied to the test database 13 Oct. Not yet on `main`; the browser pass (§4) is the owner's.
 Branch: **`feat/1210-expense-store-department`** — create it with exactly this name, off `origin/main` (local `main` is 11 commits behind).
 
 The file name keeps "department" so links from the feature map and the README index stay valid;

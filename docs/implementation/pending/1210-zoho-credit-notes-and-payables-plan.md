@@ -1,7 +1,7 @@
 # Credit notes come from Zoho, the supplier ledger splits by store, and /bills gets a "pay these first" list
 
-Status: pending — written 12 Oct 2026; plan only, nothing built. Q1 (where a credit note is applied to a bill) blocks Parts 3–6; Q2 blocks only the store backfill; Part 1 can start now.
-Branch: **`feat/1210-credit-notes-and-payables`** — create it with exactly this name, off `main`.
+Status: pending — §1 answered 13 Oct 2026. Re-issued for Q1 = (b): credits are applied in this app (§1.1, parts marked "13 Oct"). Waiting for the owner's go-ahead; nothing built.
+Branch: **`feat/1210-credit-notes-and-payables`** — create it with exactly this name, off `test` (feature → `test` → `main`; CLAUDE.md "Branches and deployments").
 
 Every `file:line` below was read from disk on 12 Oct 2026 (branch `fix/1210-push-integrations-same-db-check`, tip `d878426`). Zoho API facts come from Zoho's public API documentation and are cited by URL; nothing in this plan called Zoho or touched a database. Check rather than trust.
 
@@ -70,28 +70,41 @@ Answered in session, 12 Oct 2026.
 | D8 | The overdue supplier list shows both days since bill date and days past due date (the owner's >30 / >45 cuts). | Part 7. |
 | D9 | A credit note reduces the supplier balance on the day it is received; applying it to a bill later only links it — never subtracted twice. | Part 6's ledger rules. |
 | D10 | Zoho bill approval is switched on (bills sit as draft / pending approval). | Context only: approval is plan C's. This plan stamps `zohoBillId` on every imported bill whatever its Zoho status. |
-| D11 | Vendor payment → Zoho by an explicit "Push to Zoho" button after save; a Zoho failure never blocks saving. | Plan C's. If Q1 is answered (c), applying a credit here follows the same rule. |
+| D11 | Vendor payment → Zoho by an explicit "Push to Zoho" button after save; a Zoho failure never blocks saving. | Plan C's. Q1 = (b) (13 Oct): applying a credit here is **not** pushed to Zoho. |
 | D16 | Bank statements and suspense lines get their own permission module, separate from `bills`. | Plan D owns `api/bank-statements/*`, so finding L3 and the store stamp on bank-confirmed payments are plan D's edits (§3 dependencies). |
+
+Answered 13 Oct 2026, in session.
+
+| # | Decision | What it does to this plan |
+|---|---|---|
+| **Q1 = (b)** | Credit notes are **applied to bills in this app**, and Zoho is not told. Asked to choose between "apply here, push to Zoho", "apply here only" and "apply in Zoho only", the owner chose **"Apply here only"**. | Re-issues Parts 3.4, 4, 5 and 7.3 (marked "13 Oct"). **Known consequence, accepted:** a credit applied here stays open in Zoho, and the bill stays unpaid there by that amount. Zoho and the app disagree for that credit until someone applies it in Zoho too. The accounting-consultant flags this (§3 Board of agents). This plan makes **no Zoho write** (§6). |
+| D17 | A credit **also** applied in Zoho is honoured: the pull records Zoho's application and settles the bill here too. A credit applied for more than its total, across both places together, is flagged in red and never hidden. | Part 3.4: every application carries a `source` (`ZOHO` / `APP`), and a pull prunes only `ZOHO` rows. Part 4: the over-applied flag. |
+| D18 | **Apply credit** is on `/bills/[id]` and on each open credit on the vendor's Credits tab. The amount is capped at the smaller of the credit's open amount and the bill's remaining amount. It is **not a payment**: no `VendorPayment` row is written. | Part 4 (new routes). Part 5: `creditId` and `CREDIT_ADJUSTMENT` leave the payment route. Part 6: D9 unchanged. |
+| D19 | Applying needs `bills.create`, the permission that already records a payment. A mistaken application can be **removed** by `bills.edit`. Removing reopens the bill and the credit by exactly that amount, and the activity log records who did it. Only applications made here can be removed here; Zoho's are removed in Zoho. | RBAC table; Part 4. |
+| Q2 | Check Zoho first: the Phase 0 read-only calls show whether Zoho bills carry a `location_id`. | Build (a) and the import picker (c), as recommended. The backfill rule for existing bills waits for Phase 0's answer. |
+| Q4 = (a) | A cash discount arrives as a supplier CD credit note. | No CD field on `/payments/new`. |
+| Q9 = (a) | Advances are allowed, with the store picked by hand. One payment pays one store's bills. | Part 5 as written. |
+| Q3, Q5–Q8, Q10–Q15 | Not answered one by one. On 13 Oct the owner was told the recommended default is used unless they say otherwise, and did not object. | Built on the "Recommended default" column. |
 
 ### 1.2 Open questions
 
 | # | Question | Why it changes the build | Options | Recommended default | Blocks | **Answer** |
 |---|---|---|---|---|---|---|
-| **Q1** | **Where is a credit note applied to a bill — in Zoho Books, or here?** | Today the only "apply" is a `CREDIT_ADJUSTMENT` payment here (`api/payments/route.ts:71-78, 135-144`) and Zoho never hears of it. Zoho then keeps the vendor credit open and the bill unpaid by that amount, so the two books disagree for ever — against "Zoho is the source of truth for financials" (`docs/agents/accounting-consultant.md`, Integration Notes). The answer decides whether `/payments/new` gets an "Apply credit" choice, whether `POST /api/payments` keeps `creditId`, and whether this plan writes to Zoho at all. | **(a)** In Zoho ("Apply to bills" on the vendor credit). The pull brings back each application (`bills_credited`) and the bill's remaining amount here drops by it. The app never applies. **(b)** Here only, as today. **(c)** Here, then pushed to Zoho with `POST /vendorcredits/{id}/bills` (`bills: [{ bill_id, amount_applied }]`), under plan C's "Push to Zoho" rule. | **(a).** The credit note is already typed in Zoho (D3); applying it is one more click on the same Zoho screen. No Zoho write, no second copy of the truth, nothing to reconcile. (b) is rejected — it is the defect. (c) is a later add-on to plan C if the accountant wants to apply from here. | **Parts 3–6** | |
-| **Q2** | **Which store does a supplier bill belong to, and how do we know?** On 4 Sep you said **BCH buys for both stores** (`0409-unified-purchasing-transfers-cleanup-plan.md`, O9). Do some suppliers bill **BCC directly**, under BCC's GSTIN? And does your Zoho Books use **Locations** (Hub and Centre as two locations)? | `billedTo` has never been written by any code (§2.5), so there is nothing to backfill from. The store must come from Zoho's `location_id` on each bill, from a person, or from a default. | **(a)** Zoho uses Locations → link each store to its Zoho location once on `/stores`; every bill and credit takes its store from Zoho. **(b)** No Locations, all bills are BCH's → every bill defaults to BCH Store; a person changes the odd BCC bill. **(c)** No Locations, mixed → the importer picks the store in the `/bills` import panel; old bills stay "Store not set" until someone sets them. | Build (a) **and** the picker in (c); the Phase 0 dry run (§3, Part 1.4) shows whether Zoho bills carry a `location_id`. For the **backfill of existing bills**: use (a) where Zoho has a location; otherwise BCH Store **only if you confirm (b)**. | Store backfill only (Part 2.5) | |
-| Q3 | `POST /api/credits` has no caller anywhere in `src/` (F3). With D3, keep it or remove it? | A live create route contradicts D3 and invites a second, un-Zoho'd copy of a credit note. | (a) Delete the whole route file (GET has no caller either); (b) keep GET, delete POST; (c) keep both | (a) — the new `GET /api/vendors/[id]/credits` (Part 4) replaces the read | — | |
-| Q4 | **How does a cash discount reach Zoho today?** (a) The supplier sends a CD credit note, which you type in Zoho as a vendor credit; (b) you short-pay and record the discount on the payment; (c) a journal entry. | If (a), the app must **not** also record `cdDiscountAmount` on the payment — the CD would be subtracted twice: once on the payment, once by the pulled credit note. If (b), `/payments/new` needs a "CD taken" field it does not have today (§2.3) and plan C must carry the discount to Zoho. | (a), (b), (c) | **(a)** — the usual pattern with brands; no CD input is added to `/payments/new`; the priority list shows what CD to claim; the ledger flags any bill that ends up over-settled. | Part 5's CD field only | |
-| Q5 | **Which due date counts?** The API uses the stored `VendorBill.dueDate` (Zoho's due date, or bill date + vendor terms when Zoho's is blank — `approve/route.ts:434-440`); four screens recompute bill date + the vendor's *current* `paymentTermDays` instead (§2.7). | Decides "days past due" and every OVERDUE badge. Today the aging cards and the badges under them can disagree. | (a) Stored `dueDate` everywhere; (b) bill date + current vendor terms everywhere | (a) — it is what the supplier's invoice says, and changing a vendor's terms should not silently re-age old bills | — | |
-| Q6 | The **>30 / >45 cuts** — on days since bill date, or days past due? | Decides what the two filter chips select. D8 shows both numbers either way. | (a) days since bill date; (b) days past due; (c) a chip for each | (a) for the chips (supplier terms run from the invoice date); days past due drives the sort | — | |
-| Q7 | **What goes to the top of the priority list?** | The sort is the feature. | See Part 7.3 for the tiers | Claimable CD first (soonest deadline), then past due >45, 31–45, 1–30, then due within 7 days, then the rest by due date. Disputed bills listed apart as "on hold". | — | |
-| Q8 | **Opening balance per store.** `Vendor.openingBalance` (as of 1 Apr 2026) is one number per supplier, not split by store. | A per-store ledger needs a per-store opening figure or none. | (a) Opening shown only on the all-stores view; a store view starts at 0 with a note; (b) add a per-store opening balance (new table) | (a) | — | |
-| Q9 | **Advance payments and mixed-store payments.** `/payments/new` says "No bills selected — payment will be recorded as advance" (`payments/new/page.tsx:398`) but the API refuses exactly that (`api/payments/route.ts:53-55`). And one payment can today cover bills of both stores. | Decides the payment rules in Part 5. | (a) Allow an advance (no bill) with the store picked by hand; refuse one payment across two stores; (b) keep refusing advances | (a) | — | |
-| Q10 | **Draft notes in Zoho.** Vendor credits and customer credit notes can be `draft`. | Whether a draft appears here. | (a) Skip drafts until opened in Zoho; (b) import them marked draft | (a) — a draft is not yet in Zoho's books either | — | |
-| Q11 | **Customer credit notes: which customer and which store?** Zoho sends a Zoho customer id and name; the app's `Customer` has no Zoho id and is identified by phone. | Decides the link columns on the new table. | (a) Take the customer and store from the invoice the note credits (`Delivery` / `CustomerInvoice` by invoice number); else keep the Zoho name only; (b) add `Customer.zohoCustomerId` and match by it | (a) — no change to `Customer`; plan E can add (b) later | — | |
-| Q12 | **Customer credit notes are typed in Zoho Books, or in Zakya POS?** Sales invoices are fetched from Zakya first, Books second (`trigger-pull/route.ts:415-422`). | Which client the sales-side pull calls. | (a) Books; (b) Zakya; (c) both | (a) — Books is the accounting system and D2 names one Books organisation | — | |
-| Q13 | **Link a shortage or damage issue to the credit note that settles it?** | Adds one nullable column and a picker (Part 9). | (a) Yes — a person picks the credit note on the issue; never automatic; (b) leave out | (a) | — | |
-| Q14 | **Rows typed before this plan.** Any `VendorCredit` created through the API, and any `CREDIT_ADJUSTMENT` payment. | Decides the one-time handling; counts come from Phase 0. | (a) At the first pull, link a manual credit to its Zoho twin by vendor + number; a `CREDIT_ADJUSTMENT` payment that names a credit is shown on the ledger as a link only; one that names no credit stays a payment line; (b) delete them | (a); if Phase 0 counts zero, nothing to do | — | |
-| Q15 | **CD base.** Today CD = bill total × % (`cd-eligibility/route.ts:58`), i.e. GST included. | Changes every CD amount. | (a) Keep; (b) on the taxable value | (a) — keep, and confirm with the CA (see the GST check in §3) | — | |
+| **Q1** | **Where is a credit note applied to a bill — in Zoho Books, or here?** | Today the only "apply" is a `CREDIT_ADJUSTMENT` payment here (`api/payments/route.ts:71-78, 135-144`) and Zoho never hears of it. Zoho then keeps the vendor credit open and the bill unpaid by that amount, so the two books disagree for ever — against "Zoho is the source of truth for financials" (`docs/agents/accounting-consultant.md`, Integration Notes). The answer decides whether `/payments/new` gets an "Apply credit" choice, whether `POST /api/payments` keeps `creditId`, and whether this plan writes to Zoho at all. | **(a)** In Zoho ("Apply to bills" on the vendor credit). The pull brings back each application (`bills_credited`) and the bill's remaining amount here drops by it. The app never applies. **(b)** Here only, as today. **(c)** Here, then pushed to Zoho with `POST /vendorcredits/{id}/bills` (`bills: [{ bill_id, amount_applied }]`), under plan C's "Push to Zoho" rule. | **(a).** The credit note is already typed in Zoho (D3); applying it is one more click on the same Zoho screen. No Zoho write, no second copy of the truth, nothing to reconcile. (b) is rejected — it is the defect. (c) is a later add-on to plan C if the accountant wants to apply from here. | **Parts 3–6** | **(b)** apply here — 13 Oct (§1.1) |
+| **Q2** | **Which store does a supplier bill belong to, and how do we know?** On 4 Sep you said **BCH buys for both stores** (`0409-unified-purchasing-transfers-cleanup-plan.md`, O9). Do some suppliers bill **BCC directly**, under BCC's GSTIN? And does your Zoho Books use **Locations** (Hub and Centre as two locations)? | `billedTo` has never been written by any code (§2.5), so there is nothing to backfill from. The store must come from Zoho's `location_id` on each bill, from a person, or from a default. | **(a)** Zoho uses Locations → link each store to its Zoho location once on `/stores`; every bill and credit takes its store from Zoho. **(b)** No Locations, all bills are BCH's → every bill defaults to BCH Store; a person changes the odd BCC bill. **(c)** No Locations, mixed → the importer picks the store in the `/bills` import panel; old bills stay "Store not set" until someone sets them. | Build (a) **and** the picker in (c); the Phase 0 dry run (§3, Part 1.4) shows whether Zoho bills carry a `location_id`. For the **backfill of existing bills**: use (a) where Zoho has a location; otherwise BCH Store **only if you confirm (b)**. | Store backfill only (Part 2.5) | Phase 0 first — 13 Oct |
+| Q3 | `POST /api/credits` has no caller anywhere in `src/` (F3). With D3, keep it or remove it? | A live create route contradicts D3 and invites a second, un-Zoho'd copy of a credit note. | (a) Delete the whole route file (GET has no caller either); (b) keep GET, delete POST; (c) keep both | (a) — the new `GET /api/vendors/[id]/credits` (Part 4) replaces the read | — | default (a) |
+| Q4 | **How does a cash discount reach Zoho today?** (a) The supplier sends a CD credit note, which you type in Zoho as a vendor credit; (b) you short-pay and record the discount on the payment; (c) a journal entry. | If (a), the app must **not** also record `cdDiscountAmount` on the payment — the CD would be subtracted twice: once on the payment, once by the pulled credit note. If (b), `/payments/new` needs a "CD taken" field it does not have today (§2.3) and plan C must carry the discount to Zoho. | (a), (b), (c) | **(a)** — the usual pattern with brands; no CD input is added to `/payments/new`; the priority list shows what CD to claim; the ledger flags any bill that ends up over-settled. | Part 5's CD field only | **(a)** — 13 Oct |
+| Q5 | **Which due date counts?** The API uses the stored `VendorBill.dueDate` (Zoho's due date, or bill date + vendor terms when Zoho's is blank — `approve/route.ts:434-440`); four screens recompute bill date + the vendor's *current* `paymentTermDays` instead (§2.7). | Decides "days past due" and every OVERDUE badge. Today the aging cards and the badges under them can disagree. | (a) Stored `dueDate` everywhere; (b) bill date + current vendor terms everywhere | (a) — it is what the supplier's invoice says, and changing a vendor's terms should not silently re-age old bills | — | default (a) |
+| Q6 | The **>30 / >45 cuts** — on days since bill date, or days past due? | Decides what the two filter chips select. D8 shows both numbers either way. | (a) days since bill date; (b) days past due; (c) a chip for each | (a) for the chips (supplier terms run from the invoice date); days past due drives the sort | — | default (a) |
+| Q7 | **What goes to the top of the priority list?** | The sort is the feature. | See Part 7.3 for the tiers | Claimable CD first (soonest deadline), then past due >45, 31–45, 1–30, then due within 7 days, then the rest by due date. Disputed bills listed apart as "on hold". | — | default |
+| Q8 | **Opening balance per store.** `Vendor.openingBalance` (as of 1 Apr 2026) is one number per supplier, not split by store. | A per-store ledger needs a per-store opening figure or none. | (a) Opening shown only on the all-stores view; a store view starts at 0 with a note; (b) add a per-store opening balance (new table) | (a) | — | default (a) |
+| Q9 | **Advance payments and mixed-store payments.** `/payments/new` says "No bills selected — payment will be recorded as advance" (`payments/new/page.tsx:398`) but the API refuses exactly that (`api/payments/route.ts:53-55`). And one payment can today cover bills of both stores. | Decides the payment rules in Part 5. | (a) Allow an advance (no bill) with the store picked by hand; refuse one payment across two stores; (b) keep refusing advances | (a) | — | **(a)** — 13 Oct |
+| Q10 | **Draft notes in Zoho.** Vendor credits and customer credit notes can be `draft`. | Whether a draft appears here. | (a) Skip drafts until opened in Zoho; (b) import them marked draft | (a) — a draft is not yet in Zoho's books either | — | default (a) |
+| Q11 | **Customer credit notes: which customer and which store?** Zoho sends a Zoho customer id and name; the app's `Customer` has no Zoho id and is identified by phone. | Decides the link columns on the new table. | (a) Take the customer and store from the invoice the note credits (`Delivery` / `CustomerInvoice` by invoice number); else keep the Zoho name only; (b) add `Customer.zohoCustomerId` and match by it | (a) — no change to `Customer`; plan E can add (b) later | — | default (a) |
+| Q12 | **Customer credit notes are typed in Zoho Books, or in Zakya POS?** Sales invoices are fetched from Zakya first, Books second (`trigger-pull/route.ts:415-422`). | Which client the sales-side pull calls. | (a) Books; (b) Zakya; (c) both | (a) — Books is the accounting system and D2 names one Books organisation | — | default (a) |
+| Q13 | **Link a shortage or damage issue to the credit note that settles it?** | Adds one nullable column and a picker (Part 9). | (a) Yes — a person picks the credit note on the issue; never automatic; (b) leave out | (a) | — | default (a) |
+| Q14 | **Rows typed before this plan.** Any `VendorCredit` created through the API, and any `CREDIT_ADJUSTMENT` payment. | Decides the one-time handling; counts come from Phase 0. | (a) At the first pull, link a manual credit to its Zoho twin by vendor + number; a `CREDIT_ADJUSTMENT` payment that names a credit is shown on the ledger as a link only; one that names no credit stays a payment line; (b) delete them | (a); if Phase 0 counts zero, nothing to do | — | default (a) |
+| Q15 | **CD base.** Today CD = bill total × % (`cd-eligibility/route.ts:58`), i.e. GST included. | Changes every CD amount. | (a) Keep; (b) on the taxable value | (a) — keep, and confirm with the CA (see the GST check in §3) | — | default (a) |
 
 ---
 
@@ -224,14 +237,14 @@ POST /api/zoho/trigger-pull { step: "finalize", counts }     -> ZohoPullLog
 
 ## 3. Implementation plan
 
-Nine parts, two migrations, two pull requests. **No new permission module or action** — every route uses an existing `requireFeature(module, action)`. **No Zoho write** under the recommended Q1 answer. **No cron, timer or polling.**
+Nine parts, two migrations, two pull requests. **No new permission module or action** — every route uses an existing `requireFeature(module, action)`. **No Zoho write**: Q1 = (b) applies credits here and tells Zoho nothing (§6). **No cron, timer or polling.**
 
 | Part | What | Requirement |
 |---|---|---|
 | 1 | `VendorBill.zohoBillId` — the column, stamped at import, fetch de-duplicated by it, backfill for existing bills | R6 |
 | 2 | Store on bills, payments, credits; Zoho location link | R9 |
 | 3 | Vendor credit pull | R2, R3, R5 |
-| 4 | Credits section on `/vendors/[id]` and `/bills/[id]`; `POST /api/credits` retired | R1, R2, R11 |
+| 4 | Credits section on `/vendors/[id]` and `/bills/[id]`; **Apply credit / Remove** (13 Oct, D18–D19); `POST /api/credits` retired | R1, R2, R11 |
 | 5 | Payments route made correct (F4) | R13 |
 | 6 | Ledger rebuilt (F5, L14, D9) with store filter | R7, R8, R9 |
 | 7 | Payment priority list; CD in one place; aging buckets (F6) | R10, R11, R12 |
@@ -250,7 +263,8 @@ model VendorBill {
   zohoBillId          String?  @unique
   // Zoho's location_id for the bill, kept raw so the store can be (re)derived (Part 2).
   zohoLocationId      String?
-  // INVARIANT: the part of paidAmount that is credit notes applied to this bill in Zoho.
+  // INVARIANT: the part of paidAmount that is credit notes applied to this bill — in Zoho
+  // (pulled) or here (Apply credit, 13 Oct). Always equals Σ VendorCreditApplication.amount.
   // paidAmount keeps meaning "settled" (payments + CD + credits), so every reader of
   // amount − paidAmount stays correct; this column lets a credit sync move paidAmount by the
   // difference only, never twice (Part 3.4).
@@ -258,20 +272,28 @@ model VendorBill {
   creditApplications  VendorCreditApplication[]
 }
 
-// One application of one Zoho vendor credit to one Zoho bill. Either side can arrive first —
-// a bill imported before its credit, or a credit pulled before its bill — so both foreign keys
-// are nullable and are filled in when the other side arrives. The Zoho ids are always present.
+enum CreditApplicationSource { ZOHO APP }   // 13 Oct: pulled from Zoho, or made here (D17, D18)
+
+// One application of one vendor credit to one bill. Source ZOHO: pulled — either side can
+// arrive first (a bill imported before its credit, or a credit pulled before its bill), so both
+// foreign keys are nullable and filled in when the other side arrives; the Zoho ids are always
+// present. Source APP: made here by Apply credit — both foreign keys set, no Zoho ids (Zoho is
+// never told, Q1 = b), appliedById names the person. A pull never touches an APP row.
 model VendorCreditApplication {
   id                     String        @id @default(cuid())
-  zohoVendorCreditBillId String        @unique   // Zoho's id for this application — the de-dup key
-  zohoVendorCreditId     String
-  zohoBillId             String
+  source                 CreditApplicationSource @default(ZOHO)
+  zohoVendorCreditBillId String?       @unique   // Zoho's id for this application — the de-dup key (ZOHO only)
+  zohoVendorCreditId     String?
+  zohoBillId             String?
   vendorCreditId         String?
   vendorCredit           VendorCredit? @relation(fields: [vendorCreditId], references: [id], onDelete: SetNull)
   billId                 String?
   bill                   VendorBill?   @relation(fields: [billId], references: [id], onDelete: SetNull)
   amount                 Decimal       @db.Decimal(12, 2)
   appliedDate            DateTime
+  appliedById            String?       // APP only — who pressed Apply credit
+  appliedBy              User?         @relation(fields: [appliedById], references: [id], onDelete: SetNull)
+  note                   String?
   createdAt              DateTime      @default(now())
   updatedAt              DateTime      @updatedAt
 
@@ -375,7 +397,7 @@ UPDATE "VendorPayment" p SET "storeId" = b."storeId"
 | `locations.list` | `GET /locations` | `listLocations` (Part 2.3) |
 | `creditnotes.list` / `creditnotes.get` | `GET /creditnotes…`, `GET /creditnotes/{creditnote_id}` | Part 8 |
 
-All `BOOKS_ONLY`, all reads. If Q1 = (c), add `vendorcredits.apply` (`POST /vendorcredits/{id}/bills`) and `vendorcredits.unapply` (`DELETE …/bills/{vendor_credit_bill_id}`) and widen `EndpointSpec.method` (`endpoints.ts:36`) to include `DELETE`.
+All `BOOKS_ONLY`, all reads. Q1 = (b) adds **no** Zoho endpoint: an application made here is not sent to Zoho (§6).
 
 **3.2 Schema (M2).**
 
@@ -383,7 +405,7 @@ All `BOOKS_ONLY`, all reads. If Q1 = (c), add `vendorcredits.apply` (`POST /vend
 enum VendorCreditStatus { OPEN CLOSED VOID }   // Zoho's statuses; drafts are not imported (Q10)
 
 model VendorCredit {
-  …                                             // amount = Zoho total, usedAmount = total − balance (existing Float columns, written from Zoho)
+  …                                             // amount = Zoho total; usedAmount = (total − Zoho balance) + Σ APP applications (13 Oct — Zoho's balance never sees an application made here). Existing Float columns.
   zohoVendorCreditId String?            @unique
   referenceNo        String?            // the supplier's own credit-note number, as typed into Zoho
   status             VendorCreditStatus @default(OPEN)
@@ -430,8 +452,8 @@ For each credit:
 1. `getVendorCredit(zohoId)` — one read.
 2. The vendor by `resolveBillVendor` (`resolve-zoho-vendor.ts:41`) — the plan-2409 resolver, which creates a vendor once, with its Zoho details, if Zoho knows one the app has not met.
 3. **One `prisma.$transaction`:**
-   - a. Upsert `VendorCredit` by `zohoVendorCreditId`. If none has it but a row with the same `(vendorId, creditNoteNo)` and no Zoho id exists (a hand-typed one — Q14), stamp the id on it once. Write `creditNoteNo = vendor_credit_number`, `referenceNo`, `amount = total`, `usedAmount = total − balance`, `status`, `creditDate`, `notes`, `zohoLocationId`, `storeId` (§2.2), `zohoLastModifiedAt`, `lastSyncedAt`. Zoho wins every financial field (integration-architect principle 4).
-   - b. Applications: upsert one row per `bills_credited[]` by `zohoVendorCreditBillId`, `billId` from `VendorBill.zohoBillId` (null when that bill is not imported yet); delete this credit's rows (by `zohoVendorCreditId`) that Zoho no longer lists.
+   - a. Upsert `VendorCredit` by `zohoVendorCreditId`. If none has it but a row with the same `(vendorId, creditNoteNo)` and no Zoho id exists (a hand-typed one — Q14), stamp the id on it once. Write `creditNoteNo = vendor_credit_number`, `referenceNo`, `amount = total`, `usedAmount = (total − balance) + Σ this credit's APP applications` (13 Oct, Q1 = b), `status`, `creditDate`, `notes`, `zohoLocationId`, `storeId` (§2.2), `zohoLastModifiedAt`, `lastSyncedAt`. Zoho wins every financial field (integration-architect principle 4).
+   - b. Applications: upsert one row per `bills_credited[]` by `zohoVendorCreditBillId`, `billId` from `VendorBill.zohoBillId` (null when that bill is not imported yet); delete this credit's rows (by `zohoVendorCreditId`) that Zoho no longer lists — **`source = ZOHO` rows only**. An APP application is never written or pruned by a pull (13 Oct, D17).
    - c. Refunds: the same upsert-and-prune by `zohoRefundId`.
    - d. **For every bill touched, before or after** — `S` = sum of `VendorCreditApplication.amount` where `billId` = the bill. If `S ≠ creditAppliedAmount`:
      ```sql
@@ -447,9 +469,10 @@ For each credit:
       WHERE id = ${billId} AND "creditAppliedAmount" = ${oldS}
      ```
      The right-hand sides all read the row's values from before the update, as SQL requires. Zero rows → re-read once and retry; still zero → this credit fails with a sentence and its transaction rolls back, nothing half-written.
-4. `results.notices`: "Credit DN-00012 is applied to bill 4567, which is not in the app yet — fetch it on /bills"; "Credit DN-00009 is void in Zoho — removed from the ledger"; "Store not known for DN-00015 — set it on the vendor's Credits tab".
+   - e. **Over-applied check (13 Oct, D17).** After the writes, if `usedAmount > amount + 0.01` the credit has been applied for more than its total across Zoho and here together. The transaction still commits, because Zoho's application is a fact and is honoured. The notice and a `warn` name both parts, and the credit card shows it in red (Part 4).
+4. `results.notices`: "Credit DN-00012 is applied to bill 4567, which is not in the app yet — fetch it on /bills"; "Credit DN-00009 is void in Zoho — removed from the ledger"; "Store not known for DN-00015 — set it on the vendor's Credits tab"; "DN-00012 is applied ₹A here and ₹B in Zoho — ₹C more than its ₹T total. Remove one of them".
 
-**Why nothing is ever subtracted twice from a bill.** `paidAmount` keeps its meaning ("settled", which every reader of `amount − paidAmount` depends on — 17 files). `creditAppliedAmount` records how much of it is credit notes. A bill imported from Zoho sets both from the same Zoho detail; a credit sync moves `paidAmount` only by the change in `S`. Running the same sync twice changes nothing; a credit un-applied in Zoho lowers `S` and re-opens the bill by exactly that amount.
+**Why nothing is ever subtracted twice from a bill.** `paidAmount` keeps its meaning ("settled", which every reader of `amount − paidAmount` depends on — 17 files). `creditAppliedAmount` records how much of it is credit notes. A bill imported from Zoho sets both from the same Zoho detail; a credit sync moves `paidAmount` only by the change in `S`. Running the same sync twice changes nothing; a credit un-applied in Zoho lowers `S` and re-opens the bill by exactly that amount. An application made here (Part 4) moves `paidAmount` and `creditAppliedAmount` together in one statement, so the next sync's `S` already includes it and moves nothing.
 
 `pull-review/route.ts:39-42` groups gain `vendorCredits` and `creditNotes`; `pull-review/export/route.ts:30-55` writes a row for each; `approve` results gain `vendorCredits` and `creditNotes`; the finalize notification text (`trigger-pull/route.ts:645`) names them.
 
@@ -460,14 +483,25 @@ For each credit:
 - **`GET /api/vendors/[id]/credits?status=open|all`** (`vendors.view`; zod for the query): every credit for the vendor — not 10 — with store, status, `amount`, applied (Σ applications), refunded (Σ refunds), open (`amount − usedAmount`), each application (bill number, `billId` when imported, amount, date) and each refund; plus totals. `createLogger("payables:credits")`.
 - `GET /api/vendors/[id]` (`:23-24`): `credits` include replaced by `_count.credits`; the page's only use of the list moves to the new route. (Bills stay `take: 10` for the Bills tab; the Overview's outstanding figure comes from `vendorBalance()`, Part 6, X9.)
 - **`vendors/[id]/_components/vendor-credits.tsx`** (new; the page is 608 lines, frontend-engineer's >300 rule): a strip "Open credit ₹X across N notes · credit notes are entered in Zoho Books" with a **Fetch credit notes** link for `canFetch("zoho")`; chips Open / All; one card per credit — Zoho number and the supplier's reference, date, store chip (a select for `bills.edit` when not set), status badge, Total / Applied / Refunded / **Open**; "Applied to: bill 4567 · ₹2,000 · 12 Oct" (a link to `/bills/[id]` when the bill is in the app, "not in the app yet" when not); refunds; "Settles ISS-…" (Part 9). Skeleton while loading, an error line with retry, an empty state that says where credit notes come from.
-- **`/bills/[id]`** gains a "Credit notes applied" card (this bill's applications) and, when the vendor has open credit, "₹X open credit with this vendor — apply it to this bill in Zoho Books, then fetch credit notes" (Q1 = a).
+- **`/bills/[id]`** gains a "Credit notes applied" card listing this bill's applications, each marked *applied here* or *applied in Zoho*, with **Remove** on the ones made here for `bills.edit`. When the vendor has open credit and the bill has money left, it shows **Apply credit** for `bills.create` (13 Oct, D18).
+- **Apply and remove — 13 Oct 2026, Q1 = (b), D18–D19.**
+  - **`POST /api/vendor-credits/[id]/apply`** `{ billId, amount, note? }` (zod; `requireFeature("bills", "create")`). Refused with a 400 before any write if: the credit and the bill belong to different vendors; both have a store and the stores differ ("DN-00012 is BCH's; bill 4567 is BCC's"); or the amount is ≤ 0. Then **one `prisma.$transaction`** runs three statements. In each conditional update the guard and the write are the same statement, so two people applying at once cannot both pass:
+    1. `UPDATE "VendorCredit" SET "usedAmount" = "usedAmount" + ${amt} WHERE id = ${creditId} AND "vendorId" = ${vendorId} AND status = 'OPEN' AND amount - "usedAmount" + 0.01 >= ${amt}` — 0 rows → 409 "Credit DN-00012 has only ₹Y open now. Reload."
+    2. `UPDATE "VendorBill" SET "paidAmount" = "paidAmount" + ${amt}, "creditAppliedAmount" = "creditAppliedAmount" + ${amt}, status = (CASE WHEN "paidAmount" + ${amt} >= amount - 0.01 THEN 'PAID' ELSE 'PARTIALLY_PAID' END)::"BillStatus", "updatedAt" = now() WHERE id = ${billId} AND "vendorId" = ${vendorId} AND status <> 'DISPUTED' AND amount - "paidAmount" + 0.01 >= ${amt}` — 0 rows → 409 with the bill's remaining amount, or "Bill 4567 is disputed".
+    3. Insert `VendorCreditApplication { source: APP, vendorCreditId, billId, amount, appliedDate: today (IST), appliedById, note }`.
+
+    `logActivity(module: "bills", action: "credit_applied")` with the ids and amount.
+  - **`DELETE /api/vendor-credits/applications/[id]`** (`requireFeature("bills", "edit")`). Only `source = APP`; a ZOHO row → 409 "Applied in Zoho — remove it there, then fetch credit notes." The same three statements in reverse, inside one transaction and conditional on the application row still existing. `logActivity(action: "credit_application_removed")`.
+  - The vendor's Credits tab opens the same **Apply credit** sheet from the credit's side: pick an open bill of the same vendor (and store, when both are known). The sheet pre-fills the largest allowed amount, and Apply is disabled while busy.
+  - Each credit card splits its applications into "here" and "in Zoho". An **over-applied** credit (open below zero, D17) is red: "Applied ₹X more than its total — ₹A here, ₹B in Zoho. Remove one."
+  - `createLogger("payables:credit-apply")`: `info` "credit applied" / "credit application removed" `{ applicationId, vendorCreditId, billId, amount, userId }`; `warn` on every 400/409 with the ids and the reason; `error` in the catch. Client `vendors:credit-apply`: `warn` with the API sentence on every failed call.
 - **`api/credits/route.ts` is deleted** (Q3 = a); `vendorCreditSchema` (`validations.ts:614-621`) goes with it; `src/types/index.ts:300` `VendorCredit` gains the new fields.
 
 ### Part 5 — Recording a vendor payment correctly (R13; F4)
 
-Under **Q1 = (a)**:
+Under **Q1 = (b) with D18** (13 Oct): an application is not a payment, so the payment route stops handling credits altogether:
 
-- `vendorPaymentSchema` (`validations.ts:597-612`): `creditId` removed; `paymentMode` loses `CREDIT_ADJUSTMENT` (the expense list `:632` keeps its own); `storeId` optional; `billAllocations` bill ids unique. A request still carrying `creditId` gets 400 "Credit notes are applied in Zoho Books and fetched here."
+- `vendorPaymentSchema` (`validations.ts:597-612`): `creditId` removed; `paymentMode` loses `CREDIT_ADJUSTMENT` (the expense list `:632` keeps its own); `storeId` optional; `billAllocations` bill ids unique. A request still carrying `creditId` gets 400 "Credit notes are applied from the bill or the vendor's Credits tab, not as a payment."
 - `POST /api/payments` (`:40-154`) rewritten as validate → read → guard-and-write:
   1. Load the allocation bills once. Each must belong to `data.vendorId` (400 "Bill 4567 belongs to Hero Cycles, not Aoki") and all must share one store (400 "One payment pays one store's bills"); `payment.storeId` = that store. No bills → an advance (Q9), `storeId` required.
   2. Per allocation, **one conditional update** — the guard and the write are the same statement, so two simultaneous payments cannot both pass (Postgres re-checks the `WHERE` against the newest row version):
@@ -484,9 +518,9 @@ Under **Q1 = (a)**:
 - `GET /api/payments` (`:9-38`): `AuthError` branch, `storeId` filter, a logged catch.
 - `createLogger("payables:payments")`: `info` "vendor payment recorded" `{ paymentIds, vendorId, billIds, storeId, total }`; `warn` on every 400/409 with the ids and the reason; `error` in the catch.
 - `src/lib/payables/store.ts` `storeIdForPayment()` (Part 2.2) is what plan D calls for bank-confirmed payments.
-- **`/payments/new`**: `apiFetch`/`apiTry` instead of raw `fetch` (`:78, 97-98, 244`); the store shown, derived from the ticked bills, or picked for an advance; a refusal when ticked bills span two stores; the advance hint (`:398`) becomes true; a line "₹X open credit with this vendor — apply it in Zoho Books before paying" from Part 4's route. **No credit field. No CD field** unless Q4 = (b) — then a "CD taken" input pre-filled from the shared CD function when the deadline has not passed, sent as `cdDiscountAmount`.
+- **`/payments/new`**: `apiFetch`/`apiTry` instead of raw `fetch` (`:78, 97-98, 244`); the store shown, derived from the ticked bills, or picked for an advance; a refusal when ticked bills span two stores; the advance hint (`:398`) becomes true; a line "₹X open credit with this vendor — apply it on the bill before paying" from Part 4's route, linking to the bill. **No credit field. No CD field** unless Q4 = (b) — then a "CD taken" input pre-filled from the shared CD function when the deadline has not passed, sent as `cdDiscountAmount`.
 
-If **Q1 = (b) or (c)** instead: `creditId` stays, with a zod rule `creditId ⇔ paymentMode = CREDIT_ADJUSTMENT` and allocations required; the credit must be `OPEN` and the payment's vendor's; `usedAmount` moves by a conditional update (`WHERE "vendorId" = … AND status = 'OPEN' AND amount - "usedAmount" + 0.01 >= ${amt}`); the payment creates a `VendorCreditApplication` (its `zohoVendorCreditBillId` becomes nullable, plus a `source` column); `/payments/new` gains "Apply credit"; for (c), plan C's push button carries it to Zoho. This plan is re-issued with that section if Q1 ≠ (a).
+*(13 Oct)* The alternative this paragraph used to describe was a `CREDIT_ADJUSTMENT` payment carrying `creditId`. It was offered under Q1 as "As a payment mode" and **not chosen** (D18). Applications live in Part 4's routes; the payment route never sees a credit.
 
 Plan C adds "Push to Zoho" to the same screen and route; **Part 5 lands first** and C builds on it.
 
@@ -524,7 +558,7 @@ SELECT *, ${opening} + SUM(dr - cr) OVER (ORDER BY d, ord, "createdAt", id) AS b
  LIMIT ${pageSize} OFFSET ${offset}
 ```
 
-- **D9, stated as a rule:** a credit note is subtracted once, on its own date, by its CREDIT NOTE line. Applying it to a bill is **not a line** — it appears on the credit as "applied to 4567". The only other way a credit could be subtracted is a `CREDIT_ADJUSTMENT` payment that names it, and those are excluded by `creditId IS NULL`. A credit-adjustment payment that names no credit (Q14) stays a payment line — it is the only record of that credit.
+- **D9, stated as a rule:** a credit note is subtracted once, on its own date, by its CREDIT NOTE line. Applying it to a bill, here or in Zoho, is **not a line**; it appears on the credit as "applied to 4567". The only other way a credit could be subtracted is a `CREDIT_ADJUSTMENT` payment that names it, and those are excluded by `creditId IS NULL`. A credit-adjustment payment that names no credit (Q14) stays a payment line — it is the only record of that credit.
 - **Opening:** `vendor.openingBalance` on the all-stores view; on a store view 0, with "Opening balance (₹X, 1 Apr 2026) is not split by store" (Q8 = a).
 - Response: `{ vendor, store, opening, closing, totals: { bills, payments, cd, credits, refunds }, entries, page, pageSize, totalEntries, overSettledBills }` — `overSettledBills` lists bills with `paidAmount > amount + 0.01` (the trace of a CD taken twice, Q4).
 - `vendorBalance()` replaces the private formulas at `api/bills/[id]/route.ts:23-31` and feeds the vendor page's Overview (X9). `/vendors`' "Outstanding" (`api/vendors/route.ts:49-53`) keeps meaning "unpaid bills" (the 0809 plan kept them apart deliberately) and gains `openCredit` (one `groupBy` per page).
@@ -548,7 +582,7 @@ SELECT *, ${opening} + SUM(dr - cr) OVER (ORDER BY d, ord, "createdAt", id) AS b
 5. **Due in the next 7 days.**
 6. Everything else, by due date.
 
-A bill whose supplier has open credit covering it carries **"Use credit first"** in whatever tier it falls — under Q1 = (a), apply the credit in Zoho and fetch, and the bill leaves the list.
+A bill whose supplier has open credit covering it carries **"Use credit first"** in whatever tier it falls. Pressing **Apply credit** on the bill (13 Oct, D18) takes it off the list, or lowers its amount by what was applied.
 
 **7.4 Screen and aging (F6).** `/bills` gets a top tab bar **Bills | Pay first** (`?view=priority`); `bills/_components/payment-priority.tsx` (new). Phone (375 px): one card per bill — supplier, store chip, open amount; "44 days old · 14 days past due"; a CD chip "2% · ₹1,240 · 3 days left"; badges "Use credit first", "ITC at risk"; a **Pay** button (44 px) to `/payments/new?billId=…&vendorId=…`. Desktop: `DesktopTable` with the same columns. Tier headings with their totals; chips **>30 days old**, **>45 days old** (Q6), Store; Export through `exportToExcel`. Loading skeleton, error line with retry, empty state "Nothing owed".
 
@@ -624,7 +658,7 @@ A shortage found at the door (`/inbound/[id]` → Report Issue) is usually settl
 
 | Migration | Tables touched | Populated? | Rule 3 / rule 7 |
 |---|---|---|---|
-| **M1** `vendor_bill_zoho_id_and_credit_links` (PR-1) | `VendorBill` +3 columns, +1 unique index; new `VendorCreditApplication` | `VendorBill` yes | only `ADD COLUMN` (nullable, or `NOT NULL` with a constant default) and new objects; old code never reads them |
+| **M1** `vendor_bill_zoho_id_and_credit_links` (PR-1) | `VendorBill` +3 columns, +1 unique index; new `VendorCreditApplication` (with `source`, nullable Zoho ids, `appliedById` → `User`) and enum `CreditApplicationSource` (13 Oct) | `VendorBill` yes | only `ADD COLUMN` (nullable, or `NOT NULL` with a constant default) and new objects; old code never reads them |
 | **M2** `payables_store_and_zoho_credits` (PR-2) | `Store` +1 unique column; `VendorBill`, `VendorPayment` +`storeId` with FK and index; `VendorCredit` +7 columns, +1 enum; `ZohoPullLog` +2 counts; new `VendorCreditRefund`, `CustomerCreditNote`, `CustomerCreditNoteApplication`, 2 enums; `VendorIssue` +`vendorCreditId` (if Q13 = a); two hand-added backfill `UPDATE`s (Part 2.1) | yes — all additive | the same; `billedTo` kept and dropped a release later |
 
 Each migration: written by `migrate dev` on a localhost restore of production (rules 2, 10); SQL read before commit (rule 3); `npm run db:snapshot` before its PR merges (rule 9); applied by hand — `npx prisma migrate status`, then `npx prisma migrate deploy` — **before** the code that needs it goes live (rule 4). M1 must be live before plan C's code that reads `zohoBillId`.
@@ -641,6 +675,8 @@ Each migration: written by `migrate dev` on a localhost restore of production (r
 | `GET /api/vendors/[id]/credits`, `GET /api/vendors/[id]/ledger` | `vendors.view` |
 | `GET /api/bills/priority`, `GET /api/reports/cd-summary` | `bills.view` |
 | store on a bill or credit | `bills.edit` |
+| `POST /api/vendor-credits/[id]/apply` — Apply credit (13 Oct, D19) | `bills.create` (the guard of `POST /api/payments`, `api/payments/route.ts:42`) |
+| `DELETE /api/vendor-credits/applications/[id]` — Remove an application made here | `bills.edit` |
 | `GET /api/stores/zoho-locations`, store ↔ location | `stores.edit` |
 | `GET /api/customer-credit-notes` | `customers.view` |
 | issue ↔ credit link | `vendor_issues.edit` |
@@ -687,7 +723,7 @@ Identifiers and counts only — never a Zoho payload, a token, or a bank referen
 
 ### Board of agents — checked
 
-- **accounting-consultant** — *"Zoho is the source of truth for financials"*: Q1 = (a) keeps every credit application in Zoho and pulls it back; **(b) is flagged as a violation** and not recommended. *Accrual*: a credit note reduces the payable on its own date (D9) ✓. *"Always distinguish a timing difference from an error"*: the backfill reports app-vs-Zoho drift without "correcting" it, because until plan C pushes payments the difference is timing, not error ✓. *Red flag "purchase bill paid without 3-way match"* — unchanged by this plan, out of scope. **Flag: CD double-counting** — if CD is both recorded on the payment and received as a credit note, the payable is understated; Q4 asks, and the ledger's `overSettledBills` catches it.
+- **accounting-consultant** — *"Zoho is the source of truth for financials"*: **Q1 = (b) was chosen on 13 Oct 2026 and is a named violation, accepted by the owner.** A credit applied here is not in Zoho. Zoho's balance for that credit, the bill and the vendor therefore differ from the app's by every credit applied here, until someone applies the same credit in Zoho. Mitigations built in: every application here names who made it and is logged (D19); applications made in Zoho are still honoured, and a credit used twice across the two places is flagged red (D17); the ledger shows each credit once (D9); and this plan writes nothing to Zoho, so it cannot make Zoho wrong (§6). *Accrual*: a credit note reduces the payable on its own date (D9) ✓. *"Always distinguish a timing difference from an error"*: the backfill reports app-vs-Zoho drift without "correcting" it, because until plan C pushes payments the difference is timing, not error ✓. *Red flag "purchase bill paid without 3-way match"* — unchanged by this plan, out of scope. **Flag: CD double-counting** — if CD is both recorded on the payment and received as a credit note, the payable is understated; Q4 asks, and the ledger's `overSettledBills` catches it.
 - **gst-consultant** — the app creates no credit note (D3), so the statutory deadline for issuing one ("same financial year or September following") and the requirement to reference the original invoice stay with Zoho and the CA ✓. *Red flag "vendor payment made after 180 days without ITC reversal"*: the priority list marks bills ≥ 150 days old "ITC at risk" so they are paid before the 180-day reversal (CGST Act s.16(2), second proviso) — a badge only; no ITC is computed here (D22). **Flag to the CA (Q15):** a cash discount given by a credit note **with** GST requires the buyer to reverse the matching input tax credit; one given **without** GST does not reduce the taxable value. The app only shows the CD figure; the treatment is Zoho's and the CA's.
 - **integration-architect** — *Pull → preview → approve* for both note types ✓. *Idempotent, Zoho ids as de-dup keys*: `zohoVendorCreditId`, `zohoVendorCreditBillId`, `zohoRefundId`, `zohoCreditNoteId`, `zohoBillId` all `@unique` ✓; the bill de-dup by number alone (X2) was this red flag and is fixed. *"Overwriting local operational data"*: the fetch's delete-and-recreate (X1) destroyed local links and is removed ✓. *Zoho wins financial fields, local wins operational*: amounts, balances and status come from Zoho; store and the issue link are local ✓. *`lastSyncedAt`* on both note tables ✓. *Rate limits*: one detail read per approved note and two per backfilled bill, batches ≤ 40 ✓.
 - **database-architect** — every new money column `Decimal(12, 2)`, no new `Float` ✓ (mixed `Float`/`Decimal` arithmetic in the ledger query is cast to `numeric`, in JS through `Number()`). Additive migrations, constant defaults, no `SET NOT NULL` ✓. Every nullable FK has its "linked later" reason in a schema comment ✓. Indexes for every new filter (`storeId, status`, `status`, the Zoho id lookups) ✓. Multi-table writes in one transaction, re-read through conditional updates ✓. No JSON for queried data ✓. Every query that touches `VendorBill` was listed (§2.1) and checked against the new columns ✓.
@@ -701,7 +737,7 @@ Identifiers and counts only — never a Zoho payload, a token, or a bank referen
 
 **Before any click.** `npx tsc --noEmit` and `npx eslint` on touched files; `npm run build` must pass (Postgres running — three Staff LMS pages prerender against it). Each migration's SQL read and matched to §3's summary; `npx prisma migrate status` clean on local.
 
-**⚠ The test database holds production's live Zoho credentials (since 12 Oct 2026).** Under Q1 = (a) this plan makes **no Zoho write** — every call is a `GET` — so the pulls and the backfill dry run are safe to run on test; they create rows only in the test database. They do spend the production organisation's daily API allowance, so run small windows. **Never press Settings › Integrations › Disconnect on test**: it revokes production's token. If Q1 = (c) is chosen, the apply-to-bill push must **not** be exercised on test against live books: use a Zoho Books sandbox or trial organisation connected only to a local database, or — with the owner's written sign-off — apply ₹1 of one real open credit to one real bill and immediately remove it with `DELETE /vendorcredits/{id}/bills/{vendor_credit_bill_id}`, noting both ids.
+**⚠ The test database holds production's live Zoho credentials (since 12 Oct 2026).** This plan makes **no Zoho write** (Q1 = b, §6); every call is a `GET`. The pulls and the backfill dry run are therefore safe to run on test, and Apply credit / Remove touch only the test database. They do spend the production organisation's daily API allowance, so run small windows. **Never press Settings › Integrations › Disconnect on test**: it revokes production's token (§6, row 7).
 
 **Part 1**
 1. `/bills` → Link bills to Zoho → Dry run: counts appear; nothing changed (`SELECT count(*) FROM "VendorBill" WHERE "zohoBillId" IS NOT NULL` unchanged). The report says what share of bills carry a Zoho location (Q2).
@@ -716,10 +752,18 @@ Identifiers and counts only — never a Zoho payload, a token, or a bank referen
 8. A credit voided in Zoho since the last pull → shows **Void** → Import → it leaves the ledger and any bill it was applied to re-opens by that amount.
 9. `curl -X POST /api/credits` → 404 (route gone).
 
+**Part 4 — Apply and remove (13 Oct)**
+9a. `/bills/[id]` for a vendor with open credit → Apply credit ₹500. The bill's remaining amount drops by 500, the credit's open amount drops by 500, and one application shows "applied here" with your name. The ledger is unchanged apart from "applied to …" under the credit (D9).
+9b. Two tabs apply the last ₹500 of one credit to two different bills at the same moment → one succeeds, the other gets the 409 sentence; the credit's open amount is exactly 0.
+9c. Remove that application as a user with `bills.edit` → the bill and the credit are back to the paisa, and the activity log names you. A user without `bills.edit` sees no Remove, and the API answers 403. Removing an "applied in Zoho" row → 409.
+9d. A credit of BCH applied to a bill of BCC → 400. To another vendor's bill → 400. More than the credit's open amount or the bill's remaining amount → refused.
+9e. A credit already applied here, then also applied in Zoho for the rest and more, then fetched → the import commits, and the credit card is red with both amounts and the notice (D17).
+9f. Sign in to Zoho Books after 9a: the credit is still open there, and the bill still owes the ₹500. That is the accepted consequence of Q1 = (b), not a bug.
+
 **Part 5**
 10. Two browser tabs, same bill with ₹1,000 left, each pays ₹700 at the same moment → one succeeds, the other gets the 409 sentence; `paidAmount` = 700.
 11. Pay a bill of supplier A with supplier B selected → 400. Tick bills of two stores → refused. No bill ticked → advance recorded with the chosen store.
-12. Send `creditId` in the body → 400 with the Zoho sentence.
+12. Send `creditId` in the body → 400 saying credits are applied from the bill or the Credits tab.
 
 **Part 6**
 13. A supplier with more than 50 bills: the ledger's closing balance equals `opening + Σ bills − Σ payments − Σ CD − Σ credits + Σ refunds` from SQL over all rows; page 1 shows the newest rows; Load more continues without a jump in the balance column.
@@ -743,7 +787,7 @@ Identifiers and counts only — never a Zoho payload, a token, or a bank referen
 ## 5. Out of scope, deliberately
 
 - **Pushing payments to Zoho and approving bills in Zoho** (map R2, R10) — plan C. This plan only gives it `zohoBillId`.
-- **Applying a credit note to a bill from this app** — only if Q1 = (c), and then as part of plan C's push framework.
+- **Sending an application made here to Zoho** — Q1 = (b) chose not to. If it is wanted later, it is `POST /vendorcredits/{id}/bills` under plan C's "Push to Zoho" rule.
 - **Creating or editing a credit note here** — D3.
 - **Zoho's sales-side "debit notes"** (an invoice raised to charge a customer more) — D4 names vendor credits and customer credit notes only; a sales debit note arrives as an invoice through the existing pull.
 - **How receivables show a customer credit note**, and the receivables import that also creates deliveries (X14) — plan E.
@@ -756,3 +800,37 @@ Identifiers and counts only — never a Zoho payload, a token, or a bank referen
 - **Per-store opening balances** — Q8 (b), only if asked.
 - **A reminder when a CD deadline approaches** — the app has no scheduler; the priority list is opened by a person.
 - **GST and ITC computation** — D22; the "ITC at risk" badge is a date check only.
+
+---
+
+## 6. Writes to Zoho — asked for by the owner, 13 Oct 2026
+
+> at the final i need to know what are the wight aoperation done by application in this application
+> … write operation happenig on zoho
+
+### 6.1 This plan
+
+**None.** Every Zoho call this plan adds is a `GET`: `vendorcredits.list/get`, `creditnotes.list/get`, `bills.find`, `locations.list` (Part 3.1). Apply credit and Remove (Part 4) write only to this app's database; Q1 = (b) means Zoho is not told. Reads still refresh the access token when it is near expiry (row 6 below). That changes no business data.
+
+### 6.2 The whole application today (branch `test`, `d3ae966`, read 13 Oct 2026)
+
+Every Zoho call goes through one method, `IntegrationClient.apiCall` (`src/lib/integrations/base.ts:292`, `protected`), which sends a body only for `POST`/`PUT` (`:312`). No `PATCH` or `DELETE` exists. The client methods that write are `BooksClient.createItem`, `updateItem`, `createContact`, `createInvoice`, `createBill` (`books.ts:13, 46, 79, 159, 179`) and `InventoryClient.createItem` (`inventory.ts:97`). `ZakyaClient` has none. Their callers were found by grep and each one read:
+
+| # | Zoho | Call | What it changes | Made by | Who triggers it | Guard | When |
+|---|---|---|---|---|---|---|---|
+| 1 | Books | `PUT /items/{item_id}` | Overwrites the item's `purchase_rate` with the corrected cost price — the only write that changes an existing Zoho record | `api/stock/price-check/[productId]/route.ts:80` | **Save** on `/price-correction` | `stock.edit` | On Save, only when the product has a `zohoItemId`; a Zoho error is returned, the save still stands |
+| 2 | Books | `POST /bills` | Creates a purchase bill (vendor by brand **name**, no `vendor_id`; due = bill date + 30) | `src/lib/inbound/complete-shipment.ts:195`, scheduled from `api/inbound/[id]/route.ts:453` | **Receive** on the last line of a shipment on `/inbound/[id]` | `inbound.edit` | **Automatic**, after the response, when the last line is received — skipped when the shipment already has a `zohoBillId` (it came from the Zoho import). Errors only reach the log |
+| 3 | Inventory | `POST /items` | Creates a Zoho Inventory item `SH \| <name> - <condition>`, SKU `SH-0001…` | `api/second-hand/route.ts:124` | **Add Second-Hand Cycle** on `/second-hand/new` | `second_hand.create` | **Automatic** side effect of creating the cycle; errors swallowed |
+| 4 | Inventory | `POST /items` | Creates an item `Inbound: <brand> - <billNo>` | `api/inbound/route.ts:348` | No screen calls `POST /api/inbound` — reachable only by calling the API | `inbound.create` | Automatic side effect of a manual shipment |
+| 5 | OAuth | `POST /oauth/v2/token` (authorization code) | Exchanges the one-time grant code for a refresh token | `api/integrations/[provider]/connect/route.ts:52` | **Connect** on Settings › Integrations | `zoho.edit` | Button |
+| 6 | OAuth | `POST /oauth/v2/token` (refresh) | Mints a new access token. No business data changes | `base.ts:215` | Any Zoho call when the token has under 5 minutes left, or after a 401 | the caller's | Automatic |
+| 7 | OAuth | `POST /oauth/v2/token/revoke` | **Revokes the refresh token at Zoho.** On test it kills production's Zoho connection | `api/integrations/[provider]/disconnect/route.ts:28-31` | **Disconnect** on Settings › Integrations (no confirm dialog) | `zoho.edit` | Button |
+
+Defined but never called: `BooksClient.createItem`, `createContact`, `createInvoice`. **No code writes vendor payments, credit notes, inventory adjustments, transfer orders, sales orders or e-way bills to Zoho.** Plans C and F would add the first two kinds of these.
+
+### 6.3 Worth knowing, not changed by this plan
+
+- **Row 2 is the one automatic bill write.** It names the vendor by the brand name, not by `vendor_id`, so Zoho may match the wrong vendor. It is skipped only when the shipment's `zohoBillId` is set, so an imported shipment with a null `zohoBillId` would be pushed back to Books as a duplicate. Part 1 makes `zohoBillId` reliable on bills; the push itself is §5's "manual-shipment bill push".
+- **Row 7** checks no response status (only a network error is logged), carries the refresh token in the URL, and is missing from `OAUTH_ENDPOINTS` in `endpoints.ts`.
+- **Row 1** sends `product.zohoItemId` to the **Books** API. That is correct only if Books and Inventory share one organisation and item ids. D2 says one Books organisation; Inventory sharing it is not verified.
+- **Outside the app:** `scripts/zoho-probe.sh` (one token call, then reads) and the Postman collection in `docs/postman/`, which contains `POST`/`PUT` requests a person can run by hand.

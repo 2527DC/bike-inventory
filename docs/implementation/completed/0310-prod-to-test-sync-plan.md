@@ -1,6 +1,6 @@
 # Production data overrides the test database — `npm run db:sync:test`
 
-Status: pending — approved 3 Oct 2026 by the owner's answers (secrets wiped in test; npm script on the laptop); building.
+Status: completed — 13 Oct 2026, `npm run db:sync:test` merged 3 Oct in PR #72 and run on test the same day (§4.1).
 Branch: `fix/0310-audit-delete-reversal` (the 0310 repair is rehearsed on the result, R2).
 
 ---

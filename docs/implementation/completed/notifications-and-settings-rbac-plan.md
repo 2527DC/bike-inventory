@@ -5,7 +5,7 @@
 > switch. The email parts of this plan (Phase 4 / Part C as a notification channel, and Q14) are
 > **closed without being built**. See `2309-mobile-nav-email-notifications-category-size-plan.md`.
 
-Status: pending
+Status: completed — 13 Oct 2026, merged 2–4 Sep in PRs #30 and #31. The email channel was withdrawn 23 Sep and closed unbuilt; the Expo app's device registration is built outside this repository.
 Branch: **`feat/notifications-and-settings-rbac`** — create it with exactly this name, off `main`.
 
 **Companion documents:**

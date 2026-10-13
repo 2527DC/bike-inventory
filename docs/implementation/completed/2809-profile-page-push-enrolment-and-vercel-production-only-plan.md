@@ -1,6 +1,6 @@
 # A profile page where every user turns on push; the app asks for permission itself; Vercel builds production only
 
-Status: pending — **built 28 Sep 2026** on `feat/2809-profile-push-enrolment`; `tsc`, `eslint`, `npm run build` pass. Not yet clicked through on a phone. Old Vercel previews: owner deletes in the dashboard (Q2).
+Status: completed — 13 Oct 2026, merged 28 Sep in PR #66 (and #67). Vercel builds Production only — from `test` since plan 1210. The phone click-through is the owner's.
 Branch: `feat/2809-profile-push-enrolment` (from `main` @ `e3ede04`).
 
 Every `file:line` below was read from disk on 28 Sep 2026.

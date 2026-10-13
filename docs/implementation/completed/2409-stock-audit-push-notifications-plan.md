@@ -1,6 +1,6 @@
 # Push notifications for stock audits (assigned, waiting for approval, approved / rejected) and assembly assignment
 
-Status: pending — **built 24 Sep 2026** on `feat/audit-assembly-push` (from `origin/main` @ `045c89d`). `tsc`, `eslint`, `npm run build` pass. **Not yet tested with real pushes** — §4 step 2 needs push configured on the test site.
+Status: completed — 13 Oct 2026, merged 24 Sep in PR #63. A real push on a phone (§4 step 2) is still the owner's.
 Branch: `feat/audit-assembly-push`. Helper: `src/lib/notify/stock-audit.ts`.
 
 Every `file:line` below was read from disk on 24 Sep 2026.

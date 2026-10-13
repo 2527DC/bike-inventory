@@ -1,6 +1,6 @@
 # Deleting a completed stock audit reverses a DIFFERENT, approved audit — 7002 shows 0 with 6 bicycles on the shelf
 
-Status: pending — approved 3 Oct 2026 (Q1a, Q2a, Q3a, Q4b); building.
+Status: completed — 13 Oct 2026, the fix merged 3 Oct in PR #72: deleting an audit reverses only its own rows; the stock repair was rehearsed on test (0310 sync plan R2). The repair on production has not been run.
 Branch: **`fix/0310-audit-delete-reversal`**, cut from `origin/main` at `06dde05`.
 
 Every `file:line` below was read from disk on 3 Oct 2026. Every production figure was read from the
