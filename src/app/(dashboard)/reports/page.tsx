@@ -28,7 +28,7 @@ const reports = [
   },
   {
     title: "Expense Summary",
-    description: "Category-wise expense breakdown",
+    description: "By who paid, store and category",
     href: "/reports/expense-summary",
     icon: Receipt,
     iconBg: "bg-orange-100 text-orange-600",
