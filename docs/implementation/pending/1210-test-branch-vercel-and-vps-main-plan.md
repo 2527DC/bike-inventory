@@ -1,6 +1,6 @@
 # A `test` branch deploys to Vercel (the test stage); `main` deploys to the VPS (production), by hand only
 
-Status: in-progress — Phase A built 13 Oct 2026 on `test`; Phase B (Vercel switch, PR `test` → `main`) follows with the owner's approval.
+Status: in-progress — 13 Oct 2026: Phase A on `test` (`e110beb`), Vercel's Production Branch is `test` (B1–B3 done, §3.1). Left: B4, the PR `test` → `main`.
 Branch: **`test`** — cut from `origin/main` (`1bb6c5a`) on 13 Oct 2026, at the owner's instruction. Reaches `main` by a PR from `test`.
 
 Every `file:line` below was read from disk on 12 Oct 2026. The Vercel and GitHub facts were read
@@ -151,6 +151,21 @@ harmless, but the owner deleted every Preview on 28 Sep, so Claude offers to rem
 **No forced redeploy.** `test` equals `main` plus Phase A, which changes no app code. The live
 test site already runs the same app. The first Production build from `test` happens on the next
 push to it after B2.
+
+### 3.1 Done, 13 Oct 2026
+
+- **B1** — `e110beb` pushed as the new remote branch `test`, tracking `origin/test`. The
+  `npm run build` before it passed. Vercel built it once as a Preview
+  (`dpl_CG2QdWKMUpLtu3nSJGazp8Pk234W`, READY), as predicted.
+- **B2** — the owner approved: *"change the branch … from main to test for the production
+  branch"*. The public API cannot do it: the cached OpenAPI spec's `PATCH /v9/projects/{idOrName}`
+  has no `productionBranch` field. The endpoint the dashboard uses did it:
+  `vercel api /v9/projects/testing-bch-ops/branch -X PATCH -f branch=test`. It returned
+  `productionBranch: "test"`.
+- **B3** — `vercel api /v9/projects/testing-bch-ops` read back `link.productionBranch: "test"`.
+- Vercel's environment is *called* Production, but it is the **test stage** (owner, 13 Oct
+  2026). Production for the business is the VPS, deployed from `main`.
+- **B4** — not started.
 
 ---
 
