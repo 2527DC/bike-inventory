@@ -215,6 +215,9 @@ export async function GET(req: NextRequest) {
       customers: { category: "MASTER_DATA", label: "Customer" },
       purchase_orders: { category: "PO", label: "PO" },
       transfers: { category: "TRANSFER", label: "Transfer" },
+      // Plan 1210-expense-store: DELETE /api/expenses/[id] logs "deleted". Not in the
+      // de-duplication below — a deleted expense has no row left for the inferred feed to show.
+      expenses: { category: "EXPENSE", label: "Expense" },
     };
 
     // Six of the seven inferred sources above describe the same events the log now records, so

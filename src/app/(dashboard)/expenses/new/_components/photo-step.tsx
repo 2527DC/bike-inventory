@@ -1,10 +1,11 @@
 "use client";
 
-// Step 5 — the receipt photo (plan Part D). One image per expense, from the camera or the
-// gallery, uploaded HERE rather than at Submit so the review screen shows a real thumbnail
-// and a slow upload never sits inside the batch transaction.
+// Step 5 — the receipt photo, and Submit. One image per expense, from the camera or the
+// gallery, uploaded HERE rather than at Submit so the thumbnail is real and a slow upload never
+// sits inside the save. Submit stays disabled, with a sentence saying why, until the store and
+// who paid are both set (plan 1210-expense-store-department-and-payer, Part C).
 import { useRef, useState } from "react";
-import { Camera, Image as ImageIcon, Loader2, X } from "lucide-react";
+import { AlertTriangle, Camera, Image as ImageIcon, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { uploadMedia } from "@/lib/media-upload";
@@ -24,9 +25,11 @@ interface PhotoStepProps {
   onChange: (url: string | null) => void;
   onSubmit: () => void;
   submitting?: boolean;
+  /** What must be set before Submit is allowed, as a sentence; null when nothing is missing. */
+  missing?: string | null;
 }
 
-export function PhotoStep({ value, onChange, onSubmit, submitting }: PhotoStepProps) {
+export function PhotoStep({ value, onChange, onSubmit, submitting, missing }: PhotoStepProps) {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -124,12 +127,19 @@ export function PhotoStep({ value, onChange, onSubmit, submitting }: PhotoStepPr
         </Button>
       </div>
 
+      {missing && (
+        <p className="mt-6 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+          <span>{missing}</span>
+        </p>
+      )}
+
       <Button
         type="button"
         size="lg"
         onClick={onSubmit}
-        disabled={uploading || submitting}
-        className="w-full min-h-[52px] mt-6 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-base"
+        disabled={uploading || submitting || !!missing}
+        className={`w-full min-h-[52px] ${missing ? "mt-3" : "mt-6"} bg-blue-600 hover:bg-blue-700 text-white font-semibold text-base`}
       >
         {submitting ? (
           <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> Recording expense…</>

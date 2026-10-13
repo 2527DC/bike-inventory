@@ -1,117 +1,112 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useSession } from "next-auth/react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { Paperclip, Plus, Receipt, Search } from "lucide-react";
-import { type DateRangeKey } from "@/components/date-filter";
+import { Plus, Search, X } from "lucide-react";
 import { FilterSheet } from "@/components/filter-sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { DesktopTable } from "@/components/desktop-table";
-import { usePermissions } from "@/lib/use-permissions";
 import { SkeletonList } from "@/components/ui/skeleton";
+import { usePermissions } from "@/lib/use-permissions";
 import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+import { ExpenseList } from "./_components/expense-list";
+import { TotalsCard } from "./_components/totals-card";
+import { DeleteExpenseSheet } from "./_components/delete-expense-sheet";
+import { payerFilterLabel, storeFilterOptions, useExpenseFilters } from "./_components/use-expense-filters";
+import { CATEGORY_LABELS, CATEGORY_ORDER, categoryLabel, dayLabel, payerName, type ExpenseRow, type StoreOption } from "./_components/types";
 
-interface ExpenseItem {
-  id: string;
-  date: string;
-  amount: number;
-  category: string;
-  description: string;
-  paidBy: string;
-  paymentMode: string;
-  /** The receipt photo, when one was attached at entry. */
-  receiptUrl?: string | null;
-  recordedBy: { name: string };
-}
+const log = createLogger("expenses:list");
 
-/** A paperclip that opens the receipt photo; nothing when the row has none. */
-function ReceiptLink({ url, className = "" }: { url?: string | null; className?: string }) {
-  if (!url) return null;
+/** The list shows the latest this-many; the total card counts every match (L9). */
+const PAGE_SIZE = 50;
+
+/**
+ * Expenses, filtered by store, category and date — and by payer when the report sends one
+ * (plan 1210-expense-store-department-and-payer, Part D). Filters arrive in the URL.
+ *
+ * `useSearchParams` in a Client Component must sit under a Suspense boundary, or the production
+ * build fails prerendering this page ("Missing Suspense boundary with useSearchParams" —
+ * node_modules/next/dist/docs/01-app/03-api-reference/04-functions/use-search-params.md).
+ */
+export default function ExpensesPage() {
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      onClick={(e) => e.stopPropagation()}
-      aria-label="View receipt photo"
-      title="View receipt photo"
-      className={`inline-flex items-center justify-center rounded-md text-blue-600 hover:bg-blue-50 ${className}`}
-    >
-      <Paperclip className="h-4 w-4" />
-    </a>
+    <Suspense fallback={<SkeletonList count={6} type="card" />}>
+      <ExpensesScreen />
+    </Suspense>
   );
 }
 
-const CATEGORY_FILTERS = ["ALL", "DELIVERY", "TRANSPORT", "SHOP_MAINTENANCE", "UTILITIES", "SALARY_ADVANCE", "FOOD_TEA", "STATIONERY", "MISCELLANEOUS"];
-
-function formatCurrency(amount: number) {
-  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
-}
-
-const CATEGORY_COLORS: Record<string, string> = {
-  DELIVERY: "bg-blue-100 text-blue-700",
-  TRANSPORT: "bg-purple-100 text-purple-700",
-  SHOP_MAINTENANCE: "bg-orange-100 text-orange-700",
-  UTILITIES: "bg-cyan-100 text-cyan-700",
-  SALARY_ADVANCE: "bg-pink-100 text-pink-700",
-  FOOD_TEA: "bg-amber-100 text-amber-700",
-  STATIONERY: "bg-indigo-100 text-indigo-700",
-  MISCELLANEOUS: "bg-slate-100 text-slate-700",
-};
-
-export default function ExpensesPage() {
-  const { status: sessionStatus } = useSession();
-  const { canView } = usePermissions();
+function ExpensesScreen() {
+  const { canView, canDelete, loading: permsLoading } = usePermissions();
   const canAccess = canView("expenses");
+  const mayDelete = canDelete("expenses");
+  // Nothing is fetched until the grants are known: a request sent before then is refused for a
+  // user who may well hold the permission.
+  const enabled = !permsLoading && canAccess;
 
-  const [expenses, setExpenses] = useState<ExpenseItem[]>([]);
-  const [filter, setFilter] = useState("ALL");
-  const [totalAmount, setTotalAmount] = useState(0);
+  const { filters, query, update } = useExpenseFilters();
+  const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
+  const [stores, setStores] = useState<StoreOption[]>([]);
   const [searchText, setSearchText] = useState("");
-  const [dateFilter, setDateFilter] = useState<DateRangeKey>("all");
-  const [dateFrom, setDateFrom] = useState<string | undefined>();
-  const [dateTo, setDateTo] = useState<string | undefined>();
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [totalsKey, setTotalsKey] = useState(0);
+  const [deleting, setDeleting] = useState<ExpenseRow | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
   // `loading` is derived, not set: the list is loading whenever the filters (or a retry) name
   // a request whose answer has not landed yet. Keeps every setState inside the response
   // callback, where the react-hooks lint wants it, instead of at the top of the effect.
-  const requestKey = `${filter}|${dateFrom ?? ""}|${dateTo ?? ""}|${reloadKey}`;
+  const requestKey = `${query}|${reloadKey}`;
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const loading = loadedFor !== requestKey;
 
   useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
-    const params = new URLSearchParams({ limit: "50" });
-    if (filter !== "ALL") params.set("category", filter);
-    if (dateFrom) params.set("dateFrom", dateFrom);
-    if (dateTo) params.set("dateTo", dateTo);
+    const params = new URLSearchParams(query);
+    params.set("limit", String(PAGE_SIZE));
 
     // apiTry, not fetch().json(): an expired session answers with the login page as HTML and
     // status 200, which res.json() turns into "Unexpected token '<'" (CLAUDE.md).
-    apiTry<ExpenseItem[]>(`/api/expenses?${params}`).then(({ data, error }) => {
+    apiTry<ExpenseRow[]>(`/api/expenses?${params}`).then(({ data, error, status }) => {
       if (cancelled) return;
       if (error || !data) {
+        log.error("load failed", { status, message: error });
         setLoadError(error || "Failed to load expenses");
         setExpenses([]);
-        setTotalAmount(0);
       } else {
         setLoadError(null);
         setExpenses(data);
-        setTotalAmount(data.reduce((sum, e) => sum + e.amount, 0));
       }
       setLoadedFor(requestKey);
     });
     return () => {
       cancelled = true;
     };
-  }, [filter, dateFrom, dateTo, requestKey]);
+  }, [enabled, query, requestKey]);
 
-  if (sessionStatus === "loading") {
+  // The Store filter's chips. GET /api/stores is readable by anyone signed in — it feeds every
+  // location dropdown — so this works whether or not the viewer may create expenses. If it
+  // fails, the chips fall back to the stores on the loaded rows.
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    apiTry<StoreOption[]>("/api/stores").then(({ data, error, status }) => {
+      if (cancelled) return;
+      if (error || !data) {
+        log.warn("store list unavailable; store filter uses the loaded rows", { status, message: error });
+        return;
+      }
+      setStores(data.map(({ id, code, name }) => ({ id, code, name })));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled]);
+
+  if (permsLoading) {
     return (
       <div className="flex items-center justify-center py-12">
         <div className="h-6 w-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
@@ -128,15 +123,36 @@ export default function ExpensesPage() {
     );
   }
 
-  const visibleExpenses = expenses.filter((exp) => {
-    if (!searchText) return true;
-    const q = searchText.toLowerCase();
-    return (
-      (exp.description && exp.description.toLowerCase().includes(q)) ||
-      exp.category.toLowerCase().includes(q) ||
-      exp.paidBy.toLowerCase().includes(q)
+  const q = searchText.trim().toLowerCase();
+  const visibleExpenses = q
+    ? expenses.filter((exp) =>
+        [exp.description, categoryLabel(exp.category), payerName(exp), exp.store?.name ?? ""].some((s) =>
+          s.toLowerCase().includes(q)
+        )
+      )
+    : expenses;
+
+  const filtered = query !== "";
+  const emptyText = expenses.length > 0
+    ? "No expenses match your search"
+    : filtered ? "No expenses match these filters" : "No expenses found";
+
+  const windowLabel =
+    filters.dateFrom && filters.dateTo ? `${dayLabel(filters.dateFrom)} – ${dayLabel(filters.dateTo)}`
+    : filters.dateFrom ? `From ${dayLabel(filters.dateFrom)}`
+    : filters.dateTo ? `Up to ${dayLabel(filters.dateTo)}`
+    : undefined;
+
+  const onDeleted = (id: string, bankLinesReopened: number) => {
+    setDeleting(null);
+    setExpenses((rows) => rows.filter((r) => r.id !== id));
+    setTotalsKey((k) => k + 1);
+    setFlash(
+      bankLinesReopened === 0 ? "Expense deleted."
+      : bankLinesReopened === 1 ? "Expense deleted. Its bank statement line is back in 'to review'."
+      : `Expense deleted. ${bankLinesReopened} bank statement lines are back in 'to review'.`
     );
-  });
+  };
 
   return (
     <div>
@@ -149,39 +165,68 @@ export default function ExpensesPage() {
         </Link>
       </div>
 
-      {/* Search */}
+      {/* Search — narrows the rows on screen only; the total below counts every match. */}
       <div className="relative mb-3">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
         <Input
-          placeholder="Search description, paid by..."
+          placeholder="Search description, paid by, store..."
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
           className="pl-9"
         />
       </div>
 
-      {/* Total */}
-      {expenses.length > 0 && (
-        <Card className="bg-slate-50 mb-3">
-          <CardContent className="p-3 flex items-center justify-between">
-            <span className="text-sm text-slate-500">Total shown</span>
-            <span className="text-xl font-bold text-slate-900 tabular-nums">{formatCurrency(totalAmount)}</span>
-          </CardContent>
-        </Card>
+      {flash && (
+        <div className="mb-3 rounded-xl border border-green-200 bg-green-50 px-3 py-1 flex items-center justify-between gap-3">
+          <p role="status" className="text-xs text-green-800">{flash}</p>
+          <button
+            onClick={() => setFlash(null)}
+            className="shrink-0 min-h-[44px] px-1 text-[11px] font-medium text-green-700 hover:text-green-900 focus-ring rounded"
+          >
+            Dismiss
+          </button>
+        </div>
       )}
 
+      <TotalsCard query={query} reloadKey={totalsKey} shown={expenses.length} windowLabel={windowLabel} />
+
       <FilterSheet
-        className="mb-4"
-        dateValue={dateFilter}
-        onDateChange={(key, from, to) => { setDateFilter(key); setDateFrom(from); setDateTo(to); }}
-        groups={[{
-          label: "Category",
-          value: filter,
-          defaultValue: "ALL",
-          options: CATEGORY_FILTERS.map((c) => ({ key: c, label: c === "ALL" ? "All" : c.replace(/_/g, " ") })),
-          onChange: (key) => setFilter(key),
-        }]}
+        className={filters.payer ? "mb-2" : "mb-4"}
+        dateValue={filters.dateKey}
+        onDateChange={(key, from, to) => update({ dateKey: key, dateFrom: from, dateTo: to })}
+        groups={[
+          {
+            label: "Category",
+            value: filters.category,
+            defaultValue: "ALL",
+            options: [{ key: "ALL", label: "All" }, ...CATEGORY_ORDER.map((c) => ({ key: c, label: CATEGORY_LABELS[c] }))],
+            onChange: (key) => update({ category: key }),
+          },
+          {
+            label: "Store",
+            value: filters.storeId,
+            defaultValue: "ALL",
+            options: storeFilterOptions(stores, expenses, filters.storeId),
+            onChange: (key) => update({ storeId: key }),
+          },
+        ]}
       />
+
+      {/* The payer filter only arrives from the report's links; here it can only be removed. */}
+      {filters.payer && (
+        <div className="mb-3 flex items-center gap-2">
+          <span className="text-xs text-slate-500">Paid by</span>
+          <button
+            type="button"
+            onClick={() => update({ payer: null })}
+            aria-label={`Remove the filter: paid by ${payerFilterLabel(filters.payer, expenses)}`}
+            className="inline-flex min-h-[44px] max-w-full items-center gap-1.5 rounded-full bg-slate-900 px-3.5 text-sm font-medium text-white hover:bg-slate-800 focus-ring"
+          >
+            <span className="truncate">{payerFilterLabel(filters.payer, expenses)}</span>
+            <X className="h-4 w-4 shrink-0" aria-hidden />
+          </button>
+        </div>
+      )}
 
       {loadError && !loading && (
         <ErrorBanner message={loadError} onRetry={() => setReloadKey((k) => k + 1)} />
@@ -189,57 +234,12 @@ export default function ExpensesPage() {
 
       {loading ? (
         <SkeletonList count={6} type="card" />
-      ) : (
-        <>
-        <DesktopTable
-          className="hidden lg:block"
-          rows={visibleExpenses}
-          rowKey={(exp) => exp.id}
-          emptyText="No expenses found"
-          columns={[
-            { header: "Description", cell: (exp) => <span className="font-medium text-slate-900">{exp.description || exp.category.replace(/_/g, " ")}</span> },
-            { header: "Date", cell: (exp) => new Date(exp.date).toLocaleDateString("en-IN"), className: "whitespace-nowrap text-slate-500" },
-            { header: "Paid By", cell: (exp) => exp.paidBy },
-            { header: "Mode", cell: (exp) => <span className="text-slate-500">{exp.paymentMode}</span> },
-            { header: "Category", cell: (exp) => <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${CATEGORY_COLORS[exp.category] || "bg-slate-100 text-slate-700"}`}>{exp.category.replace(/_/g, " ")}</span> },
-            { header: "Receipt", cell: (exp) => <ReceiptLink url={exp.receiptUrl} className="h-8 w-8" />, className: "text-center" },
-            { header: "Amount", cell: (exp) => <span className="font-semibold text-slate-900 tabular-nums">{formatCurrency(exp.amount)}</span>, className: "text-right whitespace-nowrap" },
-          ]}
-        />
-        <div className="space-y-2 lg:hidden">
-          {visibleExpenses.map((exp) => (
-            <div
-              key={exp.id}
-              className="block rounded-xl border border-slate-200 border-l-4 border-l-slate-200 bg-white shadow-sm"
-            >
-              <div className="p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-slate-900 truncate">{exp.description || exp.category.replace(/_/g, " ")}</p>
-                    <p className="text-xs text-slate-500 tabular-nums mt-0.5 truncate">
-                      {new Date(exp.date).toLocaleDateString("en-IN")} · {exp.paidBy} · {exp.paymentMode}
-                    </p>
-                    <span className={`inline-block mt-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full ${CATEGORY_COLORS[exp.category] || "bg-slate-100 text-slate-700"}`}>
-                      {exp.category.replace(/_/g, " ")}
-                    </span>
-                  </div>
-                  <div className="flex flex-col items-end gap-1 shrink-0">
-                    <p className="text-sm font-bold text-slate-900 tabular-nums">{formatCurrency(exp.amount)}</p>
-                    <ReceiptLink url={exp.receiptUrl} className="h-11 w-11 -mr-2 -mb-2" />
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
+      ) : loadError ? null : (
+        <ExpenseList rows={visibleExpenses} mayDelete={mayDelete} onDelete={setDeleting} emptyText={emptyText} />
+      )}
 
-          {expenses.length === 0 && (
-            <div className="text-center py-12">
-              <Receipt className="h-8 w-8 text-slate-300 mx-auto mb-2" />
-              <p className="text-sm text-slate-400">No expenses found</p>
-            </div>
-          )}
-        </div>
-        </>
+      {deleting && (
+        <DeleteExpenseSheet row={deleting} onClose={() => setDeleting(null)} onDeleted={onDeleted} />
       )}
     </div>
   );
