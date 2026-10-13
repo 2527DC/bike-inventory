@@ -1,7 +1,7 @@
 # Bank accounts as data, a weekly reconciliation tile, and a suspense register for bank lines
 
-Status: pending — written 12 Oct 2026; plan only, nothing built — waiting for the owner's answers to §1 (Q1–Q6 block the build).
-Branch: **`feat/1210-bank-accounts-suspense`** — create it with exactly this name, off `main`.
+Status: in-progress — all six parts built 13 Oct 2026 (§6). `tsc`, `eslint` and `npm run build` pass, and a 39-check end-to-end run against the local database passed. Not yet on `test`: the bank migration, and the credit-notes migrations it sits on, must be applied there first, then `npm run db:seed:rbac`. The browser pass is the owner's.
+Branch: **`feat/1210-bank-accounts-suspense`** — off `feat/1210-credit-notes-and-payables` (13 Oct 2026): it uses that branch's `storeIdForPayment()`, `VendorPayment.storeId` and migrations, so it cannot sit on `test` before them.
 
 Covers the owner's points 16 and 17 of the 8 Oct list (feature map
 `docs/implementation/requiremnts/accounts-and-compliance-feature-map.md`, map R16 and R17) and
@@ -69,6 +69,19 @@ bear on this plan.
 | D16 | "Bank statements and suspense lines get their own permission module, separate from `bills`." | Part A. |
 | D17 | "Weekly reconciliation = a status tile on /accounts per bank account ("reconciled up to <date>", unmatched/suspense counts, red when older than 7 days). No reminder (no scheduler in this app)." | Part E. |
 | D19 | "Suspense line assignee: a staff user or a typed name for outsiders (e.g. the external accountant Deekshith), plus a notes trail and resolved date." | Part D. |
+
+Answered 13 Oct 2026, in session (owner's choices; each is the recommended option unless marked):
+
+| # | Answer | What it does to this plan |
+|---|---|---|
+| Q1, Q2 | **Nobody loses access.** `bills.view` → `bank_recon.view`; `bills.create` → `view` + `create` + `edit`; `approve` (write off, manage accounts) starts with ADMIN only. Grants are copied by the seeder; `npm run db:seed:rbac` runs before the guards switch. | Part A as written. |
+| Q3 | **Yes, both permissions** — `bank_recon.edit` plus `bills.create` (payment) or `expenses.create` (expense). | Part C guards. |
+| Q4 | **Type the statement period** on every upload, plus an optional per-account "reconcile from" date. | Part B upload form, Part E definition. |
+| Q5 | **Recorded / Explained / Written off**, explained and written-off lines can be reopened with a note. | Part D enum and buttons. |
+| Q6 | **Skip the repeats** by fingerprint; an all-duplicate file is refused. | Part B1 columns and unique index. |
+| Q7–Q14 | **Recommended defaults**, as listed in §1.2. | As written. |
+| **Store of an account (changes R2 / D1)** | Production has ONE store, `BCH1`; Bharath Cycle Centre is not in the app. **`BankAccount.storeId` is nullable**: HDFC Centre shows "Store not set" until the owner creates the Centre store on /stores and picks it. **ICICI and Dhanlaxmi: store left unset for now** (owner). HDFC Hub → `BCH1`. No store code is assumed anywhere. | Part B1 schema, the account screen, Part E tile grouping. |
+| Account details | Last four digits and Zoho Books account ids are **not known yet** — fields optional, filled on the account screen later. No Dhanlaxmi sample statement yet — generic parser hints until one arrives. | Part B. |
 
 ### 1.2 Open questions
 
@@ -1124,3 +1137,110 @@ account number anywhere.
 - **The full account number** — last four digits only.
 - **Settlement filtered by store's accounts, per-store settlement** — plan E, on the columns
   this plan adds.
+
+---
+
+## 6. Build record — 13 Oct 2026
+
+Built on `feat/1210-bank-accounts-suspense`, which is off `feat/1210-credit-notes-and-payables` @ `1827b30` (see the Branch line), against the local database `bch_dev_1210`.
+
+**Who built what.**
+
+- The lead built the shared layer first:
+  - Part A: the `bank_recon` catalog entry with `inheritGrantsFrom`, the seeder's once-only grant copy (step 2b), and the `Landmark` icon.
+  - B1: the schema and the migration.
+  - The zod schemas, and `src/lib/bank-recon/lines.ts` — the only code that changes a line's state. It holds `claimLine`, `closeCaseAsRecorded`, `releaseLine`, `parkLine`, `assignCase`, `resolveCase` and `reopenCase`.
+- Then three engineers worked in parallel on disjoint files:
+  1. B2–B6: bank accounts, the upload, and statement assignment.
+  2. C2–C3 and Part F: the review route, the candidates route and the reconcile screen.
+  3. D2–D5 and Part E: suspense, the person-or-name picker, the tile and the release hooks.
+- The lead then added two fixes:
+  - Every catch in `pos/settlement` and `pos/sessions` now logs, including a bare `catch {}` that hid Zakya failures.
+  - The expense-delete message now says whether the line went back to suspense or to review.
+
+**Migration** `20261013092006_bank_accounts_and_suspense`.
+
+- Generated with `prisma migrate diff` and applied with `migrate deploy` (`migrate dev` refuses a non-interactive shell).
+- **`.env` pointed at the test database during this build** — it was changed at 14:22 by someone other than Claude. Every Prisma command and every test therefore passed the local URL explicitly. A read-only `migrate diff` was the only command that touched test.
+- Additive only, including the plan's two hand-added data statements.
+- **Applied to the local database only.**
+- Phase 0: the test copy of production (3 Oct) holds 0 bank statements and 0 lines.
+  - **Q10:** nothing to repair.
+  - **Q7:** no old statements to assign.
+  - **Duplicate links:** none, so the new unique indexes are safe. Production has not been read (the session's permission check refuses production reads). **Run §4 step 0 before `migrate deploy` there.**
+
+**Owner's decisions as built:**
+
+- `BankAccount.storeId` and `accountLast4` are nullable or optional.
+- No store code is assumed anywhere.
+- The four accounts are **not** created by the build. Add them on `/accounts/bank-accounts`: ICICI, HDFC Hub (store BCH), HDFC Centre (no store), Dhanlaxmi.
+
+**Checks run.**
+
+- `npx tsc --noEmit` is clean.
+- `eslint` on all 61 changed files gives 0 problems.
+- No `console.log` in `src/`, no role-name comparison, no new raw `fetch().json()`, no bare `catch {}`.
+- `npm run build` exits 0 and lists every new route and page.
+
+**RBAC seeding tested locally.**
+
+- The first run creates the four `bank_recon` permissions and grants ADMIN all four.
+- A throwaway role holding only `bills.create` received `view`, `create` and `edit`, but **not** `approve`.
+- A second run copies nothing. The throwaway role was then removed.
+
+**Engineers' tests** (local database, rows removed):
+
+- Fingerprints: identical lines inside one file both land; an overlapping file is skipped line by line.
+- `computeStatus`: 19 cases, including 7 days → green and 8 → red.
+- Suspense and hook queries: 27 checks.
+- The real review route with auth stubbed: 56 checks, including concurrent confirms, the L3 bulk result, the Q3 permission sentences, linking, and parking.
+
+**The lead's end-to-end run** — 39 checks against the built app on localhost, with a session for the local admin. All passed, and every seeded row was deleted:
+
+- **Accounts:** an account is created with a store and without one (HDFC Centre); a duplicate name → 409.
+- **Review:** the review screen loads.
+- **Payment:** confirming a debit pays its bill and stamps the store; a second confirm → 409.
+- **Expense:** confirming a debit as an expense works.
+- **Credit lines:** a payment on a credit → 400. Parking a credit for "Deekshith" works; skipping a parked line → 409.
+- **Link:** linking a debit to an existing payment creates nothing new.
+- **Skip:** skipping a bank charge works.
+- **Suspense:** the suspense list works, and so do explain → IGNORED, reopen → FLAGGED, adding a note, and write-off. The case trail holds 6 notes.
+- **Tile:** green and "reconciled up to the statement end" when every line is handled; an account with no statement → red. Deleting the expense sends its line back to review, and the tile drops to the day before it.
+- **Old statement:** assigning one moves its lines too.
+- **Pages:** five pages answer 200.
+
+**Not run:**
+
+- The signed-in browser pass at 375 px — no browser tool in this session.
+- A real upload — it calls the paid AI parser. The parser hints, the period check and the fingerprints are covered above; the AI call itself is unchanged.
+
+**Decisions the engineers took beyond the plan, and kept:**
+
+1. **Upload.**
+   - `#n` is added to the fingerprint in both modes (a same-day debit, its reversal and a retry share date, amount and balance).
+   - A period ending after today is refused.
+   - An AI row with no real date, amount or debit/credit refuses the whole file — a line is never dropped silently.
+   - The AI's suggestions are validated against what it was shown.
+   - The file name is no longer logged (exports are often named after the account number).
+   - An account's bank cannot change once it has statements.
+2. **Review.**
+   - The single-confirm bill guard is now one conditional `UPDATE`, as in `api/payments`. It refuses another vendor's bill, and it keeps `DISPUTED` and `OVERDUE`.
+   - Bulk expense and bulk skip run one transaction per line, answering `{ processed, refused }`.
+   - Bulk payment uses a suggested bill only if that bill is open.
+   - Part F suggestions leave cash expenses and credit-note payments out; the manual picker offers cash expenses.
+   - `maxDuration = 60` on the review route.
+3. **Suspense and tile.**
+   - Closed cases are listed newest-closed first.
+   - Notes are ordered by `[createdAt, id]`, because `parkLine` writes two notes with one timestamp.
+   - Explain, write-off and reopen are written to the activity log.
+   - The tile's Review button opens the first open line (`?txn=`).
+   - A forced POS re-pull uses one transaction per settlement (Prisma's 5-second limit).
+   - Each line is released once per settlement.
+
+**Release sequence** (plan §3 A5), when this goes to `test` and later `main`:
+
+1. `npm run db:snapshot`.
+2. `migrate status`, then `migrate deploy` — which also brings the two credit-notes migrations this branch sits on.
+3. `npm run db:seed:rbac` **before** the code goes live; read the "inherited" lines it prints.
+4. Merge and deploy.
+5. Grant `bank_recon.approve` on `/team/permissions` to whoever should write off lines and manage accounts.

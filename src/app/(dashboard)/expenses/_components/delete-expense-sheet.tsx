@@ -8,22 +8,28 @@ import { categoryLabel, formatCurrency, looksBankCreated, payerName, shortDate, 
 
 const log = createLogger("expenses:list");
 
+/** Where the bank line behind a deleted expense went (plan 1210 bank, Q12): back to suspense
+ *  when it came from there, else back to "to review"; null when no line was behind it. */
+export type BankLineReleasedTo = "suspense" | "review" | null;
+
 interface DeleteResult {
   deleted: boolean;
   bankLinesReopened: number;
+  bankLineReleasedTo?: BankLineReleasedTo;
 }
 
 interface DeleteExpenseSheetProps {
   row: ExpenseRow;
   onClose: () => void;
   /** Called once the server has deleted the row. */
-  onDeleted: (id: string, bankLinesReopened: number) => void;
+  onDeleted: (id: string, releasedTo: BankLineReleasedTo) => void;
 }
 
 /**
  * Confirm, then hard-delete one expense (plan 1210, R5 / E9). Shown only to holders of
  * Expenses › Delete — cosmetic: DELETE /api/expenses/[id] re-checks the grant, writes the
- * activity-log entry and sends any bank statement line back to "to review".
+ * activity-log entry and sends any bank statement line back to "to review" — or to suspense,
+ * when that is where it came from.
  *
  * A bottom sheet on a phone, a centred dialog on a wide screen (the hold-sheet pattern).
  */
@@ -59,8 +65,9 @@ export function DeleteExpenseSheet({ row, onClose, onDeleted }: DeleteExpenseShe
       setBusy(false);
       return;
     }
-    log.info("expense deleted", { expenseId: row.id, bankLinesReopened: data.bankLinesReopened });
-    onDeleted(row.id, data.bankLinesReopened ?? 0);
+    const releasedTo: BankLineReleasedTo = data.bankLineReleasedTo ?? (data.bankLinesReopened ? "review" : null);
+    log.info("expense deleted", { expenseId: row.id, bankLineReleasedTo: releasedTo });
+    onDeleted(row.id, releasedTo);
   }
 
   const fromBank = looksBankCreated(row);
@@ -98,7 +105,7 @@ export function DeleteExpenseSheet({ row, onClose, onDeleted }: DeleteExpenseShe
             Delete <strong className="tabular-nums">{formatCurrency(row.amount, 2)}</strong> {categoryLabel(row.category)},{" "}
             {shortDate(row.date)}, paid by {payerName(row)}? This cannot be undone.
           </p>
-          {fromBank && <p className="text-amber-800">Its bank statement line goes back to &lsquo;to review&rsquo;.</p>}
+          {fromBank && <p className="text-amber-800">Its bank statement line is reopened — back to &lsquo;to review&rsquo;, or to suspense if it was parked there.</p>}
           {row.receiptUrl && <p className="text-slate-500">Its receipt photo is deleted too.</p>}
         </div>
 

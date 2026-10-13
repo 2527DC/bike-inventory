@@ -1387,3 +1387,124 @@ export const assemblyTaskCreateSchema = z.object({
   notes: z.string().max(1000).optional(),
 });
 
+
+// ─── Bank reconciliation (plan 1210-bank-accounts-and-suspense) ───────────────
+
+const BANK_ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * POST /api/bank-accounts. accountLast4 and storeId are optional by the owner's decision
+ * (13 Oct 2026): the digits are not known yet, and HDFC Centre / ICICI / Dhanlaxmi have no
+ * store until Bharath Cycle Centre is set up.
+ */
+export const bankAccountWriteSchema = z.object({
+  name: z.string().trim().min(2, "Name the account, e.g. HDFC Hub").max(60),
+  bank: z.enum(["ICICI", "HDFC", "DHANLAXMI", "OTHER"]),
+  accountLast4: z.string().regex(/^\d{4}$/, "The last 4 digits of the account number").nullable().optional(),
+  storeId: z.string().min(1).nullable().optional(),
+  zohoAccountId: z.string().trim().min(1).max(40).nullable().optional(),
+  reconcileFrom: z.string().regex(BANK_ISO_DATE, "A date, YYYY-MM-DD").nullable().optional(),
+  sortOrder: z.number().int().min(0).max(999).optional(),
+});
+
+/** PATCH /api/bank-accounts/[id] — edit or retire. No DELETE: an account with statements is Restrict. */
+export const bankAccountUpdateSchema = bankAccountWriteSchema.partial().extend({
+  isActive: z.boolean().optional(),
+});
+
+/** POST /api/bank-statements (multipart fields). The period is the one printed on the statement (Q4). */
+export const bankStatementUploadSchema = z
+  .object({
+    bankAccountId: z.string().min(1, "Pick the bank account this statement is for"),
+    periodFrom: z.string().regex(BANK_ISO_DATE, "Statement from: a date, YYYY-MM-DD"),
+    periodTo: z.string().regex(BANK_ISO_DATE, "Statement to: a date, YYYY-MM-DD"),
+  })
+  .refine((v) => v.periodFrom <= v.periodTo, {
+    message: "The statement's From date is after its To date",
+    path: ["periodTo"],
+  })
+  .refine(
+    (v) => (Date.parse(v.periodTo) - Date.parse(v.periodFrom)) / 86_400_000 <= 92,
+    { message: "Upload at most three months at a time — a week is ideal", path: ["periodTo"] }
+  );
+
+/** PATCH /api/bank-statements/[id] — give an old statement its account (Q7, B5). */
+export const bankStatementAssignSchema = z.object({
+  bankAccountId: z.string().min(1, "Pick the bank account"),
+});
+
+const bankLineTargets = {
+  txnId: z.string().min(1).optional(),
+  txnIds: z.array(z.string().min(1)).min(1).max(200).optional(),
+};
+
+/**
+ * POST /api/bank-statements/[id]/review (plan §3 C2). One body per action, so a field an
+ * action does not take is a visible error, not a silent drop.
+ */
+export const bankReviewActionSchema = z
+  .discriminatedUnion("action", [
+    z.object({
+      action: z.literal("confirm_payment"),
+      ...bankLineTargets,
+      vendorId: z.string().min(1, "Pick the vendor"),
+      billId: z.string().min(1).optional(),
+    }),
+    z.object({
+      action: z.literal("confirm_expense"),
+      ...bankLineTargets,
+      // Every expense names its store (plan 1210 expense, R2); whether it is real is the route's call.
+      storeId: z.string({ error: "Pick the store this expense belongs to." }).trim().min(1, "Pick the store this expense belongs to."),
+      category: z.string().optional(),
+    }),
+    z.object({ action: z.literal("link_payment"), txnId: z.string().min(1), paymentId: z.string().min(1) }),
+    z.object({ action: z.literal("link_expense"), txnId: z.string().min(1), expenseId: z.string().min(1) }),
+    z.object({ action: z.literal("ignore"), ...bankLineTargets }),
+    z.object({
+      action: z.literal("flag"),
+      txnId: z.string().min(1),
+      reason: z.string().trim().min(3, "Say why the line is parked").max(500),
+      assigneeId: z.string().min(1).optional(),
+      assigneeName: z.string().trim().min(1).max(80).optional(),
+    }),
+  ])
+  .superRefine((v, ctx) => {
+    // The three actions that work one line or many take exactly one of txnId / txnIds.
+    if (v.action === "confirm_payment" || v.action === "confirm_expense" || v.action === "ignore") {
+      if (!v.txnId === !v.txnIds) {
+        ctx.addIssue({ code: "custom", message: "Send txnId or txnIds, not both and not neither", path: ["txnId"] });
+      }
+    }
+    if (v.action === "flag" && v.assigneeId && v.assigneeName) {
+      ctx.addIssue({ code: "custom", message: "Assign to a staff member or type a name — not both", path: ["assigneeName"] });
+    }
+  });
+export type BankReviewAction = z.infer<typeof bankReviewActionSchema>;
+
+/** Who chases a suspense line: a staff user, a typed outsider name, or nobody yet (D19). */
+const bankSuspenseAssignee = z
+  .object({
+    assigneeId: z.string().min(1).nullable().optional(),
+    assigneeName: z.string().trim().min(1).max(80).nullable().optional(),
+  })
+  .refine((a) => !(a.assigneeId && a.assigneeName), {
+    message: "Assign to a staff member or type a name — not both",
+    path: ["assigneeName"],
+  });
+
+/** PATCH /api/bank-suspense/[id] — exactly one of assign / resolve / reopen (Q5, D1). */
+export const bankSuspenseUpdateSchema = z.union([
+  z.object({ assign: bankSuspenseAssignee }).strict(),
+  z
+    .object({
+      resolve: z.enum(["EXPLAINED", "WRITTEN_OFF"]),
+      note: z.string().trim().min(5, "Write what it was (at least 5 characters)").max(500),
+    })
+    .strict(),
+  z.object({ reopen: z.literal(true), note: z.string().trim().min(5, "Say why it is reopened").max(500) }).strict(),
+]);
+
+/** POST /api/bank-suspense/[id]/notes */
+export const bankSuspenseNoteSchema = z.object({
+  text: z.string().trim().min(1, "Write a note").max(1000),
+});

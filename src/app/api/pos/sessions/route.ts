@@ -2,9 +2,13 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { successResponse, errorResponse } from "@/lib/api-utils";
+import { successResponse, errorResponse, failure } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { getBooks, getZakya } from "@/lib/integrations";
+import { createLogger } from "@/lib/logger";
+import { releaseLine } from "@/lib/bank-recon/lines";
+
+const log = createLogger("pos:sessions");
 
 // GET — List POS sessions (from DB)
 export async function GET(req: NextRequest) {
@@ -31,14 +35,14 @@ export async function GET(req: NextRequest) {
     return successResponse(sessions);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed", 500);
+    return failure(error, { scope: "pos:sessions", step: "list" });
   }
 }
 
 // POST — Fetch POS sessions from Zakya and save to DB
 export async function POST(req: NextRequest) {
   try {
-    await requireFeature("pos", "create");
+    const user = await requireFeature("pos", "create");
     const body = await req.json();
     const { dateFrom, dateTo, force } = body as { dateFrom: string; dateTo: string; force?: boolean };
 
@@ -59,9 +63,25 @@ export async function POST(req: NextRequest) {
         // Delete linked settlements first
         const settlementIds = [...new Set(existingSessions.filter(s => s.settlementId).map(s => s.settlementId!))];
         for (const sid of settlementIds) {
-          await prisma.settlementMatch.deleteMany({ where: { settlementId: sid } });
-          await prisma.posSession.updateMany({ where: { settlementId: sid }, data: { settlementId: null } });
-          await prisma.dailySettlement.delete({ where: { id: sid } });
+          // One transaction per settlement (plan 1210 bank, D5 / finding D10): its matched bank
+          // lines are released BEFORE the matches are deleted — back to review, or back into
+          // suspense if that is where they came from — so no line is left MATCHED with nothing
+          // behind it. Once per line, even if two matches share one (old double use, L13).
+          const released = await prisma.$transaction(async (tx) => {
+            const matches = await tx.settlementMatch.findMany({
+              where: { settlementId: sid, bankTxnId: { not: null } },
+              select: { bankTxnId: true },
+            });
+            const txnIds = [...new Set(matches.map((m) => m.bankTxnId as string))];
+            for (const txnId of txnIds) {
+              await releaseLine(tx, txnId, user.id, `POS sessions re-fetched for ${dateFrom} – ${dateTo}; settlement removed`);
+            }
+            await tx.settlementMatch.deleteMany({ where: { settlementId: sid } });
+            await tx.posSession.updateMany({ where: { settlementId: sid }, data: { settlementId: null } });
+            await tx.dailySettlement.delete({ where: { id: sid } });
+            return txnIds.length;
+          });
+          log.info("settlement removed by force re-fetch", { settlementId: sid, bankLinesReleased: released });
         }
         await prisma.posSession.deleteMany({
           where: { id: { in: existingSessions.map(s => s.id) } },
@@ -91,6 +111,7 @@ export async function POST(req: NextRequest) {
         paymentSource = "zoho-books";
       } catch (err) {
         paymentError = `Zoho Books: ${err instanceof Error ? err.message : String(err)}`;
+        log.warn("customer payments from Zoho Books failed; trying Zakya", { dateFrom, dateTo, reason: paymentError });
       }
     } else {
       paymentError = "Zoho Books not connected";
@@ -105,8 +126,9 @@ export async function POST(req: NextRequest) {
           paymentSource = "zakya";
           paymentError = null;
         }
-      } catch {
-        // Zakya payments not authorized — already know this, skip
+      } catch (err) {
+        // Zakya payments not authorized — already known from the Books attempt; logged, not surfaced.
+        log.warn("customer payments from Zakya failed", { dateFrom, dateTo, reason: err instanceof Error ? err.message : String(err) });
       }
     }
 
@@ -206,6 +228,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed to fetch POS sessions", 500);
+    return failure(error, { scope: "pos:sessions", step: "fetch" });
   }
 }

@@ -57,6 +57,14 @@ export interface ModuleSeed {
    * R28, P5).
    */
   dividerBefore?: boolean;
+  /**
+   * When `<module>.<action>` is CREATED by a seed run, every non-system role already holding
+   * any of the listed permission keys is granted it in the same run. Never re-applied once the
+   * permission exists, so an admin's later revocation is never undone. Permission keys only —
+   * never role names (CLAUDE.md rule 1). First used by `bank_recon` (plan 1210 bank accounts,
+   * Q1/Q2): the bank screens move off `bills` without anyone losing access on the day.
+   */
+  inheritGrantsFrom?: Partial<Record<ActionKey, string[]>>;
 }
 
 // Sidebar group order is NOT declared anywhere — it falls out of `sortOrder` below.
@@ -519,6 +527,32 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     group: "Accounts",
     sortOrder: 310,
     actions: ["view", "create", "edit", "delete", "approve"],
+  },
+  {
+    // Bank statements, bank lines and the suspense register (plan 1210-bank-accounts-and-suspense,
+    // D16, owner 12 Oct 2026). These screens were guarded by `bills` until now.
+    //   view    = statements, lines, the suspense list and its notes, the weekly status tile
+    //   create  = upload a statement (runs the AI parse, which costs money)
+    //   edit    = work the lines: confirm / link / skip, park in suspense, assign, add notes,
+    //             mark explained, assign an account to an old statement
+    //   approve = write a suspense line off; add, edit or retire a bank account
+    // ⚠ RUN npm run db:seed:rbac — BEFORE the merge deploys (plan §3 A5), so the copied grants
+    //   exist before the new guards do.
+    key: "bank_recon",
+    label: "Bank Reconciliation",
+    description: "Bank accounts, statements, line matching and the suspense register",
+    icon: "Landmark",
+    route: "/accounts/bank-upload", // Q14
+    group: "Accounts",
+    sortOrder: 320,
+    actions: ["view", "create", "edit", "approve"],
+    inheritGrantsFrom: {
+      // Q2 (owner, 13 Oct 2026: "nobody loses access") — applied ONCE, when the permission is created.
+      view: ["bills.view", "bills.create"],
+      create: ["bills.create"],
+      edit: ["bills.create"],
+      // approve is not inherited: write-off and the account list start with ADMIN only.
+    },
   },
   {
     // Cost price is purchase-side financial data that used to be gated by a hardcoded

@@ -13,7 +13,7 @@ import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 import { ExpenseList } from "./_components/expense-list";
 import { TotalsCard } from "./_components/totals-card";
-import { DeleteExpenseSheet } from "./_components/delete-expense-sheet";
+import { DeleteExpenseSheet, type BankLineReleasedTo } from "./_components/delete-expense-sheet";
 import { payerFilterLabel, storeFilterOptions, useExpenseFilters } from "./_components/use-expense-filters";
 import { CATEGORY_LABELS, CATEGORY_ORDER, categoryLabel, dayLabel, payerName, type ExpenseRow, type StoreOption } from "./_components/types";
 
@@ -143,14 +143,14 @@ function ExpensesScreen() {
     : filters.dateTo ? `Up to ${dayLabel(filters.dateTo)}`
     : undefined;
 
-  const onDeleted = (id: string, bankLinesReopened: number) => {
+  const onDeleted = (id: string, releasedTo: BankLineReleasedTo) => {
     setDeleting(null);
     setExpenses((rows) => rows.filter((r) => r.id !== id));
     setTotalsKey((k) => k + 1);
     setFlash(
-      bankLinesReopened === 0 ? "Expense deleted."
-      : bankLinesReopened === 1 ? "Expense deleted. Its bank statement line is back in 'to review'."
-      : `Expense deleted. ${bankLinesReopened} bank statement lines are back in 'to review'.`
+      releasedTo === "suspense" ? "Expense deleted. Its bank statement line is back in suspense."
+      : releasedTo === "review" ? "Expense deleted. Its bank statement line is back in 'to review'."
+      : "Expense deleted."
     );
   };
 

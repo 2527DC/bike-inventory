@@ -18,6 +18,9 @@ import {
   FileSpreadsheet,
   BookOpen,
   Calculator,
+  Landmark,
+  CircleHelp,
+  type LucideIcon,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { SkeletonDashboard } from "@/components/ui/skeleton";
@@ -25,6 +28,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { usePermissions } from "@/lib/use-permissions";
 import { apiFetch } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
+import { BankStatusTile } from "./_components/bank-status-tile";
 
 const log = createLogger("accounts:hub");
 
@@ -58,6 +62,13 @@ interface AccountsSummary {
   }>;
 }
 
+interface QuickLink {
+  label: string;
+  href: string;
+  icon: LucideIcon;
+  count?: number;
+}
+
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
 }
@@ -68,6 +79,9 @@ export default function AccountsPage() {
   // This hub has its own module now, so it is no longer gated on `bills.view`. Cosmetic
   // either way — /api/accounts/summary re-checks `accounts.view`.
   const canAccess = canView("accounts");
+  // Bank statements, the suspense register and the weekly tile are their own module (plan
+  // 1210-bank-accounts-and-suspense, D16). Cosmetic — each of their APIs re-checks bank_recon.
+  const canBank = canView("bank_recon");
 
   const [data, setData] = useState<AccountsSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -117,9 +131,17 @@ export default function AccountsPage() {
 
   const s = data?.stats;
 
-  const quickLinks = [
+  const bankLinks: QuickLink[] = canBank
+    ? [
+        { label: "Bank Statement", href: "/accounts/bank-upload", icon: FileSpreadsheet },
+        { label: "Bank accounts", href: "/accounts/bank-accounts", icon: Landmark },
+        { label: "Suspense", href: "/accounts/suspense", icon: CircleHelp },
+      ]
+    : [];
+
+  const quickLinks: QuickLink[] = [
     { label: "Vendor Ledger", href: "/accounts/vendor-ledger", icon: BookOpen },
-    { label: "Bank Statement", href: "/accounts/bank-upload", icon: FileSpreadsheet },
+    ...bankLinks,
     { label: "Vendors", href: "/vendors", icon: Building2, count: s?.activeVendors },
     { label: "Bills", href: "/bills", icon: FileText, count: s?.pendingBills },
     { label: "Purchase Orders", href: "/purchase-orders", icon: ShoppingCart, count: s?.pendingPOs },
@@ -222,6 +244,9 @@ export default function AccountsPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Weekly bank reconciliation (D17) — its own request, so it never blanks the hub. */}
+      {canBank && <BankStatusTile />}
 
       {/* Quick Links */}
       <div className="space-y-1 mb-4">

@@ -218,6 +218,9 @@ export async function GET(req: NextRequest) {
       // Plan 1210-expense-store: DELETE /api/expenses/[id] logs "deleted". Not in the
       // de-duplication below — a deleted expense has no row left for the inferred feed to show.
       expenses: { category: "EXPENSE", label: "Expense" },
+      // Plan 1210-bank-accounts-and-suspense, C2: every action on a bank line (recorded, linked,
+      // skipped, parked) — the "who skipped this?" trail Q13 relies on.
+      bank_recon: { category: "PAYMENT", label: "Bank" },
     };
 
     // Six of the seven inferred sources above describe the same events the log now records, so

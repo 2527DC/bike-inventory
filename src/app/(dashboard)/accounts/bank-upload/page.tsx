@@ -1,327 +1,355 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import {
-  ArrowLeft, Upload, FileSpreadsheet, Loader2, CheckCircle2,
-  AlertTriangle, Eye, ChevronDown, ChevronUp,
-} from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { ArrowLeft, Landmark, Plus } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { SkeletonList } from "@/components/ui/skeleton";
+import { ErrorBanner } from "@/components/ui/error-banner";
+import { usePermissions } from "@/lib/use-permissions";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+import { UploadCard } from "./_components/upload-card";
+import { UploadError, UploadSuccess } from "./_components/upload-messages";
+import { PastUploads } from "./_components/past-uploads";
+import { AssignSection } from "./_components/assign-section";
+import {
+  successSentence,
+  type BankAccountRow, type Diagnostics, type StatementRow, type UploadResult, type UploadStep,
+} from "./_components/types";
 
-interface StatementItem {
-  id: string;
-  bank: string;
-  fileName: string;
-  fromDate: string | null;
-  toDate: string | null;
-  totalCredits: number;
-  totalDebits: number;
-  txnCount: number;
-  matchedCount: number;
-  flaggedCount: number;
-  createdAt: string;
-  uploadedBy: { name: string };
+const log = createLogger("accounts:bank-upload");
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** The diagnostics a refused upload carries in `data.diagnostics` (apiTry's errorData). */
+function readDiagnostics(errorData: unknown): Diagnostics | null {
+  if (!errorData || typeof errorData !== "object" || !("diagnostics" in errorData)) return null;
+  const d = (errorData as { diagnostics?: unknown }).diagnostics;
+  return d && typeof d === "object" ? (d as Diagnostics) : null;
 }
 
-interface Diagnostics {
-  step?: string;
-  fileStats?: { name: string; size: string; lines: number; chars: number };
-  filePreview?: string;
-  aiResponse?: string;
-  hint?: string;
-}
-
-type UploadStep = "idle" | "reading" | "parsing" | "matching" | "done" | "error";
-
-const STEPS: { key: UploadStep; label: string }[] = [
-  { key: "reading", label: "Reading file" },
-  { key: "parsing", label: "AI parsing transactions" },
-  { key: "matching", label: "Matching vendors & bills" },
-  { key: "done", label: "Complete" },
-];
-
-function formatCurrency(amount: number) {
-  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
-}
-
+/**
+ * Upload a bank statement for one of the bank accounts, and see how far each upload has got
+ * (plan 1210-bank-accounts-and-suspense, §3 B6).
+ *
+ * `useSearchParams` (for `?account=<id>`, which the weekly tile links with) must sit under a
+ * Suspense boundary, or the production build fails prerendering the page.
+ */
 export default function BankUploadPage() {
-  const [statements, setStatements] = useState<StatementItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  return (
+    <Suspense fallback={<SkeletonList count={4} type="card" />}>
+      <BankUploadScreen />
+    </Suspense>
+  );
+}
+
+function BankUploadScreen() {
+  const wanted = useSearchParams().get("account");
+  const { canView, canCreate, canEdit, loading: permsLoading } = usePermissions();
+  const mayView = canView("bank_recon");
+  const mayUpload = canCreate("bank_recon");
+  const mayAssign = canEdit("bank_recon");
+  // Nothing is fetched until the grants are known — a request sent earlier is refused for a
+  // person who may well hold the permission.
+  const enabled = !permsLoading && mayView;
+
+  // ── The accounts (active only) — the chips, and the Assign selects. ──
+  const [accounts, setAccounts] = useState<BankAccountRow[]>([]);
+  const [accountsError, setAccountsError] = useState<string | null>(null);
+  const [accountsKey, setAccountsKey] = useState(0);
+  const [accountsLoadedFor, setAccountsLoadedFor] = useState<number | null>(null);
+  const accountsLoading = accountsLoadedFor !== accountsKey;
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    apiTry<BankAccountRow[]>("/api/bank-accounts").then(({ data, error, status }) => {
+      if (cancelled) return;
+      if (error || !data) {
+        log.error("accounts load failed", { status, message: error });
+        setAccountsError(error || "Could not load the bank accounts.");
+        setAccounts([]);
+      } else {
+        setAccountsError(null);
+        setAccounts(data);
+      }
+      setAccountsLoadedFor(accountsKey);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, accountsKey]);
+
+  // The chosen account: a tap wins; else ?account=<id>; else the only account there is.
+  const [picked, setPicked] = useState<string | null>(null);
+  const selectedId = useMemo(() => {
+    if (picked && accounts.some((a) => a.id === picked)) return picked;
+    if (wanted && accounts.some((a) => a.id === wanted)) return wanted;
+    return accounts.length === 1 ? accounts[0].id : null;
+  }, [picked, wanted, accounts]);
+  const selected = accounts.find((a) => a.id === selectedId) ?? null;
+  const wantedMissing = !!wanted && !accountsLoading && !accountsError && !accounts.some((a) => a.id === wanted);
+
+  const [periodFrom, setPeriodFrom] = useState("");
+  const [periodTo, setPeriodTo] = useState("");
+
+  // ── Past uploads — follow the chosen account unless "All accounts". ──
+  const [showAll, setShowAll] = useState(false);
+  const listAccountId = selected && !showAll ? selected.id : null;
+  const [listKey, setListKey] = useState(0);
+  const listRequest = `${listAccountId ?? "all"}|${listKey}`;
+  const [statements, setStatements] = useState<StatementRow[]>([]);
+  const [listError, setListError] = useState<string | null>(null);
+  const [listLoadedFor, setListLoadedFor] = useState<string | null>(null);
+  const listLoading = listLoadedFor !== listRequest;
+
+  useEffect(() => {
+    // After the accounts, so the list follows the default selection without a wasted fetch.
+    if (!enabled || accountsLoading) return;
+    let cancelled = false;
+    const qs = new URLSearchParams({ take: "50" });
+    if (listAccountId) qs.set("bankAccountId", listAccountId);
+    apiTry<StatementRow[]>(`/api/bank-statements?${qs}`).then(({ data, error, status }) => {
+      if (cancelled) return;
+      if (error || !data) {
+        log.error("statements load failed", { status, bankAccountId: listAccountId, message: error });
+        setListError(error || "Could not load past uploads.");
+        setStatements([]);
+      } else {
+        setListError(null);
+        setStatements(data);
+      }
+      setListLoadedFor(listRequest);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, accountsLoading, listAccountId, listRequest]);
+
+  // ── Statements from before accounts existed (Q7) — only for someone who can assign them. ──
+  const [unassigned, setUnassigned] = useState<StatementRow[]>([]);
+  const [unassignedError, setUnassignedError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!enabled || !mayAssign) return;
+    let cancelled = false;
+    apiTry<StatementRow[]>(`/api/bank-statements?unassigned=1&take=200`).then(({ data, error, status }) => {
+      if (cancelled) return;
+      if (error || !data) {
+        log.error("unassigned statements load failed", { status, message: error });
+        setUnassignedError(error || "Could not load the statements waiting for an account.");
+        setUnassigned([]);
+      } else {
+        setUnassignedError(null);
+        setUnassigned(data);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, mayAssign, listKey]);
+
+  // End of the latest period already on file for the chosen account — offers "start the next day".
+  const lastEnded = useMemo(() => {
+    if (!selected) return null;
+    const ends = statements
+      .filter((s) => s.bankAccount?.id === selected.id && s.toDate)
+      .map((s) => (s.toDate as string).slice(0, 10))
+      .sort();
+    return ends.length ? ends[ends.length - 1] : null;
+  }, [statements, selected]);
+
+  // ── The upload ──
   const [uploading, setUploading] = useState(false);
-  const [bank, setBank] = useState("HDFC");
-  const [error, setError] = useState("");
-  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
-  const [showDiag, setShowDiag] = useState(false);
-  const [success, setSuccess] = useState("");
   const [step, setStep] = useState<UploadStep>("idle");
+  const [error, setError] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+  const [success, setSuccess] = useState<{ message: string; statementId: string | null } | null>(null);
 
-  const fetchStatements = () => {
-    setLoading(true);
-    fetch("/api/bank-statements")
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setStatements(res.data); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => { fetchStatements(); }, []);
-
-  const handleUpload = async (file: File) => {
+  async function handleUpload(file: File) {
+    if (!selected || !periodFrom || !periodTo || uploading) return;
     setUploading(true);
-    setError("");
-    setSuccess("");
+    setError(null);
+    setSuccess(null);
     setDiagnostics(null);
-    setShowDiag(false);
     setStep("reading");
 
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("bank", bank);
+    const form = new FormData();
+    form.append("file", file);
+    form.append("bankAccountId", selected.id);
+    form.append("periodFrom", periodFrom);
+    form.append("periodTo", periodTo);
 
-    try {
-      // Simulate reading step briefly then move to parsing
-      await new Promise((r) => setTimeout(r, 400));
-      setStep("parsing");
+    await sleep(400);
+    setStep("parsing");
+    const { data, error: err, errorData, status } = await apiTry<UploadResult>("/api/bank-statements", {
+      method: "POST",
+      body: form,
+    });
 
-      const res = await fetch("/api/bank-statements", { method: "POST", body: formData });
-      const data = await res.json();
-
-      if (!data.success) {
-        setStep("error");
-        setError(data.error || "Upload failed");
-        if (data.diagnostics) setDiagnostics(data.diagnostics);
-      } else {
-        setStep("matching");
-        await new Promise((r) => setTimeout(r, 300));
-        setStep("done");
-        setSuccess(
-          `Processed ${data.data.txnCount} transactions. ${data.data.matchedCount} matched, ${data.data.flaggedCount} flagged.`
-        );
-        fetchStatements();
-      }
-    } catch {
+    if (err || !data) {
+      // The server's sentence as it came — "already uploaded", "outside the period", "too long".
+      log.error("upload failed", { bankAccountId: selected.id, status, message: err });
       setStep("error");
-      setError("Upload failed — check your connection");
-    } finally {
+      setError(err || "Upload failed");
+      setDiagnostics(readDiagnostics(errorData));
       setUploading(false);
+      return;
     }
-  };
 
-  const stepIndex = STEPS.findIndex((s) => s.key === step);
-  const progressPct = step === "error" ? stepIndex >= 0 ? (stepIndex / STEPS.length) * 100 : 25
-    : step === "done" ? 100
-    : step === "idle" ? 0
-    : ((stepIndex + 0.5) / STEPS.length) * 100;
+    setStep("matching");
+    await sleep(300);
+    setStep("done");
+    log.info("statement uploaded", {
+      statementId: data.id,
+      bankAccountId: data.bankAccountId,
+      lines: data.txnCount,
+      duplicatesSkipped: data.duplicatesSkipped,
+    });
+    setSuccess({ message: successSentence(data), statementId: data.id });
+    // The next statement has its own dates; "Start <day>" offers the one after this period.
+    setPeriodFrom("");
+    setPeriodTo("");
+    setUploading(false);
+    setListKey((k) => k + 1);
+  }
+
+  function handleAssigned(message: string) {
+    setSuccess({ message, statementId: null });
+    setError(null);
+    setListKey((k) => k + 1);
+  }
+
+  if (!permsLoading && !mayView) {
+    return (
+      <div>
+        <Header />
+        <p className="text-sm text-slate-500 py-8 text-center">
+          You do not have access to bank statements. Ask an admin for View on Bank Reconciliation.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/accounts" className="p-1"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
-        <h1 className="text-lg font-bold text-slate-900">Bank Statement</h1>
-      </div>
+      <Header />
 
-      {/* Upload Card */}
-      <Card className="mb-4 border-dashed border-2 border-slate-300">
-        <CardContent className="p-4">
-          <div className="text-center mb-3">
-            <FileSpreadsheet className="h-8 w-8 text-slate-400 mx-auto mb-1" />
-            <p className="text-sm font-medium text-slate-700">Upload Bank Statement</p>
-            <p className="text-[10px] text-slate-400">CSV or XLS from HDFC / ICICI</p>
-          </div>
+      {accountsError && (
+        <ErrorBanner
+          message={accountsError}
+          onRetry={() => setAccountsKey((k) => k + 1)}
+        />
+      )}
 
-          {/* Bank Selector */}
-          <div className="flex gap-2 justify-center mb-3">
-            {["HDFC", "ICICI"].map((b) => (
-              <button
-                key={b}
-                onClick={() => setBank(b)}
-                className={`px-4 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                  bank === b ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
-                }`}
+      {mayUpload &&
+        (accountsLoading ? (
+          <div className="mb-4"><SkeletonList count={1} type="card" /></div>
+        ) : accounts.length === 0 && !accountsError ? (
+          <Card className="mb-4 border-dashed border-2 border-slate-300">
+            <CardContent className="p-5 text-center">
+              <Landmark className="h-8 w-8 text-slate-300 mx-auto mb-2" />
+              <p className="text-sm font-medium text-slate-700">No bank accounts yet</p>
+              <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                Every upload names its account, so HDFC Hub can be told from HDFC Centre. Add the accounts first.
+              </p>
+              <Link
+                href="/accounts/bank-accounts"
+                className="mt-3 inline-flex items-center gap-1 min-h-[44px] px-4 rounded-lg bg-blue-600 text-white text-sm font-medium focus-ring"
               >
-                {b}
-              </button>
-            ))}
-          </div>
-
-          {/* File Input */}
-          <label className={`flex items-center justify-center gap-2 w-full py-3 rounded-lg text-sm font-medium cursor-pointer transition-colors ${
-            uploading ? "bg-slate-100 text-slate-400" : "bg-blue-600 text-white hover:bg-blue-700"
-          }`}>
-            {uploading ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Processing...
-              </>
-            ) : (
-              <>
-                <Upload className="h-4 w-4" />
-                Choose File & Upload
-              </>
+                <Plus className="h-4 w-4" />Add bank accounts
+              </Link>
+            </CardContent>
+          </Card>
+        ) : accounts.length > 0 ? (
+          <>
+            {wantedMissing && (
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-2">
+                The account in the link is retired or no longer exists — pick one below.
+              </p>
             )}
-            <input
-              type="file"
-              accept=".csv,.xls,.xlsx,.txt"
-              className="hidden"
-              disabled={uploading}
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleUpload(file);
-                e.target.value = "";
+            <UploadCard
+              accounts={accounts}
+              selectedId={selectedId}
+              onSelect={(id) => {
+                setPicked(id);
+                setShowAll(false);
               }}
+              periodFrom={periodFrom}
+              periodTo={periodTo}
+              onPeriodFrom={setPeriodFrom}
+              onPeriodTo={setPeriodTo}
+              lastEnded={lastEnded}
+              uploading={uploading}
+              step={step}
+              onFile={(f) => void handleUpload(f)}
             />
-          </label>
+          </>
+        ) : null)}
 
-          {/* Progress Bar */}
-          {step !== "idle" && (
-            <div className="mt-3">
-              <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                <div
-                  className={`h-full rounded-full transition-all duration-500 ${
-                    step === "error" ? "bg-red-500" : step === "done" ? "bg-green-500" : "bg-blue-500"
-                  }`}
-                  style={{ width: `${progressPct}%` }}
-                />
-              </div>
-              <div className="flex justify-between mt-1.5">
-                {STEPS.map((s, i) => {
-                  const isActive = s.key === step;
-                  const isPast = stepIndex > i || step === "done";
-                  const isFailed = step === "error" && stepIndex === i;
-                  return (
-                    <div key={s.key} className="flex items-center gap-1">
-                      {isPast ? (
-                        <CheckCircle2 className="h-3 w-3 text-green-500" />
-                      ) : isFailed ? (
-                        <AlertTriangle className="h-3 w-3 text-red-500" />
-                      ) : isActive ? (
-                        <Loader2 className="h-3 w-3 text-blue-500 animate-spin" />
-                      ) : (
-                        <div className="h-3 w-3 rounded-full border border-slate-300" />
-                      )}
-                      <span className={`text-[10px] ${isPast ? "text-green-600" : isFailed ? "text-red-600" : isActive ? "text-blue-600 font-medium" : "text-slate-400"}`}>
-                        {s.label}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Error with diagnostics */}
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-3">
-          <div className="flex items-start gap-2 text-xs text-red-700">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <p className="font-medium">{error}</p>
-              {diagnostics && (
-                <button
-                  onClick={() => setShowDiag(!showDiag)}
-                  className="flex items-center gap-1 mt-1 text-red-500 hover:text-red-700"
-                >
-                  {showDiag ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                  {showDiag ? "Hide" : "Show"} debug info
-                </button>
-              )}
-              {diagnostics && showDiag && (
-                <div className="mt-2 bg-red-100/50 rounded p-2 space-y-1.5 text-[10px] font-mono">
-                  {diagnostics.step && (
-                    <p><span className="font-semibold">Failed at:</span> {diagnostics.step}</p>
-                  )}
-                  {diagnostics.hint && (
-                    <p><span className="font-semibold">Hint:</span> {diagnostics.hint}</p>
-                  )}
-                  {diagnostics.fileStats && (
-                    <p><span className="font-semibold">File:</span> {diagnostics.fileStats.name} ({diagnostics.fileStats.size}, {diagnostics.fileStats.lines} lines, {diagnostics.fileStats.chars} chars)</p>
-                  )}
-                  {diagnostics.filePreview && (
-                    <div>
-                      <p className="font-semibold mb-0.5">File preview (first 10 lines):</p>
-                      <pre className="whitespace-pre-wrap text-[9px] bg-white/50 rounded p-1.5 max-h-32 overflow-y-auto border border-red-200">
-                        {diagnostics.filePreview}
-                      </pre>
-                    </div>
-                  )}
-                  {diagnostics.aiResponse && (
-                    <div>
-                      <p className="font-semibold mb-0.5">AI response:</p>
-                      <pre className="whitespace-pre-wrap text-[9px] bg-white/50 rounded p-1.5 max-h-32 overflow-y-auto border border-red-200">
-                        {diagnostics.aiResponse}
-                      </pre>
-                    </div>
-                  )}
-                </div>
-              )}
-              <button onClick={() => { setError(""); setDiagnostics(null); setStep("idle"); }} className="underline mt-1">dismiss</button>
-            </div>
-          </div>
-        </div>
+        <UploadError
+          message={error}
+          diagnostics={diagnostics}
+          onDismiss={() => {
+            setError(null);
+            setDiagnostics(null);
+            setStep("idle");
+          }}
+        />
       )}
       {success && (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-2.5 mb-3 text-xs text-green-700 flex items-start gap-2">
-          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-          <div>{success} <button onClick={() => { setSuccess(""); setStep("idle"); }} className="underline ml-1">dismiss</button></div>
-        </div>
+        <UploadSuccess
+          message={success.message}
+          statementId={success.statementId}
+          onDismiss={() => {
+            setSuccess(null);
+            setStep("idle");
+          }}
+        />
       )}
 
-      {/* Past Statements */}
-      <h2 className="text-sm font-semibold text-slate-900 mb-2">Past Uploads</h2>
-
-      {loading ? (
-        <div className="flex items-center justify-center py-8">
-          <div className="h-5 w-5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
-        </div>
-      ) : statements.length === 0 ? (
-        <div className="text-center py-8">
-          <FileSpreadsheet className="h-6 w-6 text-slate-300 mx-auto mb-1" />
-          <p className="text-xs text-slate-400">No statements uploaded yet</p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {statements.map((s) => (
-            <Link key={s.id} href={`/accounts/reconcile/${s.id}`}>
-              <Card className="hover:border-slate-300 transition-colors mb-2">
-                <CardContent className="p-3">
-                  <div className="flex items-start justify-between mb-1">
-                    <div>
-                      <div className="flex items-center gap-1.5">
-                        <Badge variant="default" className="text-[10px]">{s.bank}</Badge>
-                        <span className="text-sm font-medium text-slate-900">{s.fileName}</span>
-                      </div>
-                      <p className="text-[10px] text-slate-500 mt-0.5">
-                        {s.fromDate && s.toDate
-                          ? `${new Date(s.fromDate).toLocaleDateString("en-IN")} — ${new Date(s.toDate).toLocaleDateString("en-IN")}`
-                          : new Date(s.createdAt).toLocaleDateString("en-IN")}
-                        {" | "}by {s.uploadedBy.name}
-                      </p>
-                    </div>
-                    <Eye className="h-4 w-4 text-slate-400 shrink-0" />
-                  </div>
-
-                  <div className="flex gap-3 mt-1.5 text-[10px]">
-                    <span className="text-slate-500">{s.txnCount} txns</span>
-                    <span className="text-green-600">{s.matchedCount} matched</span>
-                    {s.flaggedCount > 0 && (
-                      <span className="text-red-600">{s.flaggedCount} flagged</span>
-                    )}
-                    <span className="text-slate-400">{s.txnCount - s.matchedCount - s.flaggedCount} pending</span>
-                  </div>
-
-                  <div className="flex gap-3 mt-1 text-[10px]">
-                    <span className="text-green-600">In: {formatCurrency(s.totalCredits)}</span>
-                    <span className="text-red-600">Out: {formatCurrency(s.totalDebits)}</span>
-                  </div>
-                </CardContent>
-              </Card>
-            </Link>
-          ))}
-        </div>
+      {mayAssign && unassignedError && (
+        <ErrorBanner message={unassignedError} onRetry={() => setListKey((k) => k + 1)} />
       )}
+      {mayAssign && !accountsLoading && (
+        <AssignSection statements={unassigned} accounts={accounts} onAssigned={handleAssigned} />
+      )}
+
+      <PastUploads
+        statements={statements}
+        loading={listLoading}
+        error={listError}
+        onRetry={() => setListKey((k) => k + 1)}
+        account={selected}
+        showAll={showAll}
+        onShowAll={setShowAll}
+      />
+    </div>
+  );
+}
+
+function Header() {
+  return (
+    <div className="flex items-center justify-between gap-2 mb-4">
+      <div className="flex items-center gap-2 min-w-0">
+        <Link
+          href="/accounts"
+          aria-label="Back to Accounts"
+          className="min-h-[44px] min-w-[44px] -ml-2 inline-flex items-center justify-center rounded-lg focus-ring"
+        >
+          <ArrowLeft className="h-5 w-5 text-slate-600" />
+        </Link>
+        <h1 className="text-lg font-bold text-slate-900">Bank statements</h1>
+      </div>
+      <Link
+        href="/accounts/bank-accounts"
+        className="inline-flex items-center gap-1 min-h-[44px] px-2 text-xs text-blue-600 focus-ring rounded"
+      >
+        <Landmark className="h-3.5 w-3.5" />Accounts
+      </Link>
     </div>
   );
 }

@@ -307,6 +307,8 @@ model Store {
   vendorPayments      VendorPayment[]
   vendorCredits       VendorCredit[]
   customerCreditNotes CustomerCreditNote[]
+  // Bank accounts booked to this store (plan 1210 bank). Restrict: see BankAccount.store.
+  bankAccounts        BankAccount[]
 }
 
 /// What kind of place a warehouse is. FLOOR is the shop — where a customer sees the bike;
@@ -420,6 +422,10 @@ model User {
   sentPOs                  PurchaseOrder[]           @relation("POSentBy")
   recordedPayments         VendorPayment[]           @relation("PaymentRecordedBy")
   appliedVendorCredits     VendorCreditApplication[] @relation("CreditApplicationAppliedBy")
+  bankSuspenseAssigned     BankSuspense[]            @relation("BankSuspenseAssignee")
+  bankSuspenseParked       BankSuspense[]            @relation("BankSuspenseParkedBy")
+  bankSuspenseResolved     BankSuspense[]            @relation("BankSuspenseResolvedBy")
+  bankSuspenseNotes        BankSuspenseNote[]        @relation("BankSuspenseNoteAuthor")
   recordedExpenses         Expense[]                 @relation("ExpenseRecordedBy")
   paidExpenses             Expense[]                 @relation("ExpensePaidBy")
   recordedCustomerPayments CustomerPayment[]         @relation("CustomerPaymentRecordedBy")
@@ -1531,24 +1537,28 @@ enum BankTxnMatchStatus {
 }
 
 model BankStatement {
-  id            String    @id @default(cuid())
+  id            String       @id @default(cuid())
   bank          String // HDFC, ICICI
   accountNumber String?
   fileName      String
   fromDate      DateTime?
   toDate        DateTime?
-  totalCredits  Float     @default(0)
-  totalDebits   Float     @default(0)
-  txnCount      Int       @default(0)
-  matchedCount  Int       @default(0)
-  flaggedCount  Int       @default(0)
+  totalCredits  Float        @default(0)
+  totalDebits   Float        @default(0)
+  txnCount      Int          @default(0)
+  matchedCount  Int          @default(0)
+  flaggedCount  Int          @default(0)
   uploadedById  String
-  uploadedBy    User      @relation("StatementUploader", fields: [uploadedById], references: [id])
-  createdAt     DateTime  @default(now())
+  uploadedBy    User         @relation("StatementUploader", fields: [uploadedById], references: [id])
+  // null = uploaded before bank accounts existed; a person assigns it (plan 1210 bank, B5).
+  bankAccountId String?
+  bankAccount   BankAccount? @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  createdAt     DateTime     @default(now())
 
   transactions BankTransaction[]
 
   @@index([createdAt])
+  @@index([bankAccountId, toDate])
 }
 
 model BankTransaction {
@@ -1573,16 +1583,113 @@ model BankTransaction {
   // Confirmed matches
   confirmedVendorId  String?
   confirmedVendor    Vendor?            @relation("ConfirmedVendorTxn", fields: [confirmedVendorId], references: [id])
-  confirmedPaymentId String?
-  confirmedExpenseId String?
+  confirmedPaymentId String?            @unique // one recorded payment explains at most one bank line (plan 1210 bank, Part F)
+  confirmedExpenseId String?            @unique // one recorded expense explains at most one bank line (plan 1210 bank, Part F)
   processedAt        DateTime?
   createdAt          DateTime           @default(now())
 
   settlementMatches SettlementMatch[]
+  // Copy of statement.bankAccountId. Written by exactly two places, each inside the transaction
+  // that writes the statement's: the upload (B4) and "assign account" (B5). Exists so the
+  // duplicate guard below can be a unique index, and the status tile (E1) reads one column.
+  bankAccountId     String?
+  bankAccount       BankAccount?      @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  // Same bank line seen in an overlapping upload → same value (Q6). null before plan 1210 bank.
+  fingerprint       String?
+  suspense          BankSuspense?
 
+  @@unique([bankAccountId, fingerprint])
   @@index([statementId])
   @@index([matchStatus])
   @@index([date])
+  @@index([bankAccountId, date])
+}
+
+/// Which bank an account is at. Chooses the parser hints (src/lib/bank-recon/parse-hints.ts).
+/// OTHER = generic hints. A new bank is one value here and one hint entry.
+enum BankCode {
+  ICICI
+  HDFC
+  DHANLAXMI
+  OTHER
+}
+
+/// How a suspense line was closed (Q5). RECORDED is set by the app, never chosen by a person:
+/// the line was confirmed as a payment or expense, linked to one, or matched in a settlement.
+enum SuspenseResolution {
+  RECORDED
+  EXPLAINED
+  WRITTEN_OFF
+}
+
+/// One real bank account (plan 1210 bank, R1). The owner's four are rows, not strings in code.
+model BankAccount {
+  id            String    @id @default(cuid())
+  name          String    @unique // the owner's own names: "ICICI", "HDFC Hub", "HDFC Centre", "Dhanlaxmi"
+  bank          BankCode
+  // Last four digits only — enough to tell two HDFC accounts apart. Optional: not known yet
+  // for the owner's four (13 Oct 2026); filled on /accounts/bank-accounts.
+  accountLast4  String?
+  // The store whose books the account is in. NULLABLE by the owner's decision (13 Oct 2026):
+  // the app has one store (BCH1) and Bharath Cycle Centre is not set up, so HDFC Centre, ICICI
+  // and Dhanlaxmi show "Store not set" until picked. Restrict: an account keeps its store's history.
+  storeId       String?
+  store         Store?    @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  zohoAccountId String?   @unique // Zoho Books bank account_id; plan C sends it as paid_through_account_id
+  reconcileFrom DateTime? @db.Date // Q4 — the weekly tile ignores lines dated before this
+  isActive      Boolean   @default(true)
+  sortOrder     Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  statements   BankStatement[]
+  transactions BankTransaction[]
+
+  @@map("bank_accounts")
+}
+
+/// A bank line parked because nobody can explain it yet (R6–R9). At most one per line — re-parking
+/// a closed line reopens the same row, so its whole history stays in one notes trail.
+model BankSuspense {
+  id             String              @id @default(cuid())
+  bankTxnId      String              @unique
+  bankTxn        BankTransaction     @relation(fields: [bankTxnId], references: [id], onDelete: Cascade)
+  reason         String // why it was parked
+  // D19 — who is chasing it: a staff user OR a typed outsider name (zod allows one, the other, or neither)
+  assigneeId     String?
+  assignee       User?               @relation("BankSuspenseAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  assigneeName   String? // "Deekshith (external accountant)"
+  parkedById     String
+  parkedBy       User                @relation("BankSuspenseParkedBy", fields: [parkedById], references: [id])
+  parkedAt       DateTime            @default(now())
+  resolvedAt     DateTime? // null = open
+  resolvedById   String?
+  resolvedBy     User?               @relation("BankSuspenseResolvedBy", fields: [resolvedById], references: [id])
+  resolution     SuspenseResolution?
+  resolutionNote String? // required for EXPLAINED and WRITTEN_OFF
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  notes BankSuspenseNote[]
+
+  @@index([resolvedAt, parkedAt]) // the open list, oldest first
+  @@index([assigneeId, resolvedAt]) // "assigned to me"
+  @@map("bank_suspense")
+}
+
+/// The chase history (R8). The LedgerGapNote pattern, plus isSystem for the lines the app writes.
+model BankSuspenseNote {
+  id         String       @id @default(cuid())
+  suspenseId String
+  suspense   BankSuspense @relation(fields: [suspenseId], references: [id], onDelete: Cascade)
+  body       String
+  isSystem   Boolean      @default(false) // "Parked: …", "Assigned to …", "Explained: …", "Reopened: …"
+  authorId   String
+  author     User         @relation("BankSuspenseNoteAuthor", fields: [authorId], references: [id])
+  createdAt  DateTime     @default(now())
+
+  @@index([suspenseId, createdAt])
+  @@map("bank_suspense_notes")
 }
 
 // One row per external integration. Replaces ZohoConfig, ZakyaConfig and

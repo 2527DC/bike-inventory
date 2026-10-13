@@ -10,6 +10,7 @@ import { tryGetStorage } from "@/lib/storage";
 import { createLogger } from "@/lib/logger";
 import { logActivity } from "@/lib/activity-log";
 import { EXPENSE_INCLUDE } from "@/lib/expenses/filters";
+import { releaseLine } from "@/lib/bank-recon/lines";
 
 const log = createLogger("expenses:delete");
 const editLog = createLogger("expenses:edit");
@@ -80,9 +81,11 @@ function expenseRef(e: { category: string; amount: number; date: Date }): string
 }
 
 // DELETE /api/expenses/[id] — a hard delete (owner, 12 Oct 2026, E9), recorded in the activity
-// log. One transaction: any bank statement line this expense was created from goes back to
-// "to review" (otherwise it stays marked EXPENSE, pointing at a row that no longer exists —
-// L10), the row is deleted, and the log entry is written. Then the receipt photo is removed.
+// log. One transaction: the bank statement line this expense was created from (at most one —
+// confirmedExpenseId is unique) is released through the bank-line state machine — back to
+// "to review", or back into suspense if that is where it came from (plan 1210 bank, D5, Q12 = a;
+// otherwise it stays marked EXPENSE, pointing at a row that no longer exists — L10/D11) — the
+// row is deleted, and the log entry is written. Then the receipt photo is removed.
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const user = await requireFeature("expenses", "delete");
@@ -106,11 +109,11 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     // Row first, then the object (plan 0909 Q6b). A row that outlives its photo is a broken
     // link; a photo that outlives its row is an orphan, which is the lesser fault — and both
     // providers treat deleting an absent object as success, so a retry is safe.
-    const bankLinesReopened = await prisma.$transaction(async (tx) => {
-      const reopened = await tx.bankTransaction.updateMany({
-        where: { confirmedExpenseId: id },
-        data: { matchStatus: "UNMATCHED", confirmedExpenseId: null, processedAt: null },
-      });
+    const bankLine = await prisma.$transaction(async (tx) => {
+      const line = await tx.bankTransaction.findUnique({ where: { confirmedExpenseId: id }, select: { id: true } });
+      const releasedTo = line
+        ? await releaseLine(tx, line.id, user.id, `the expense it was recorded as (${expenseRef(existing)}) was deleted`)
+        : null;
       await tx.expense.delete({ where: { id } });
       await logActivity(tx, {
         module: "expenses",
@@ -122,22 +125,27 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
           existing.store?.name ?? "No store",
           `paid by ${existing.paidBy}`,
           `recorded by ${existing.recordedBy.name}`,
-          reopened.count ? `${reopened.count} bank line(s) back to review` : null,
+          releasedTo === "suspense" ? "bank line back in suspense" : releasedTo === "review" ? "bank line back to review" : null,
         ]
           .filter(Boolean)
           .join(" · "),
         userId: user.id,
         userName: user.name,
       });
-      return reopened.count;
+      return { bankTxnId: line?.id ?? null, releasedTo };
     });
+    if (bankLine.bankTxnId) {
+      log.warn("expense behind a bank line deleted", { expenseId: id, bankTxnId: bankLine.bankTxnId, releasedTo: bankLine.releasedTo });
+    }
+    // Kept as a count for the screen that reads it (expenses/_components/delete-expense-sheet.tsx).
+    const bankLinesReopened = bankLine.releasedTo ? 1 : 0;
 
     const hadReceipt = Boolean(existing.receiptUrl);
     log.info("row deleted", { expenseId: id, hadReceipt, bankLinesReopened, deletedById: user.id });
 
     if (existing.receiptUrl) await removeReceipt(id, existing.receiptUrl);
 
-    return successResponse({ deleted: true, bankLinesReopened });
+    return successResponse({ deleted: true, bankLinesReopened, bankLineReleasedTo: bankLine.releasedTo });
   } catch (error) {
     if (error instanceof AuthError) {
       log.warn("delete refused", { status: error.status });

@@ -2,8 +2,12 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { successResponse, errorResponse } from "@/lib/api-utils";
+import { successResponse, errorResponse, failure } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { createLogger } from "@/lib/logger";
+import { releaseLine } from "@/lib/bank-recon/lines";
+
+const log = createLogger("pos:settlement");
 
 // GET — List daily settlements
 export async function GET(req: NextRequest) {
@@ -34,7 +38,7 @@ export async function GET(req: NextRequest) {
     return successResponse(settlements);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed", 500);
+    return failure(error, { scope: "pos:settlement", step: "list" });
   }
 }
 
@@ -97,14 +101,14 @@ export async function POST(req: NextRequest) {
     return successResponse(settlement);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed to create settlement", 500);
+    return failure(error, { scope: "pos:settlement", step: "create" });
   }
 }
 
 // DELETE — Delete a settlement and its linked sessions (admin only)
 export async function DELETE(req: NextRequest) {
   try {
-    await requireFeature("pos", "delete");
+    const user = await requireFeature("pos", "delete");
     const body = await req.json();
     const { id, deleteType, sessionId } = body as { id?: string; deleteType?: "settlement" | "session"; sessionId?: string };
 
@@ -126,15 +130,16 @@ export async function DELETE(req: NextRequest) {
     });
     if (!settlement) return errorResponse("Settlement not found", 404);
 
-    await prisma.$transaction(async (tx) => {
-      // Restore matched bank transactions
-      for (const m of settlement.matches) {
-        if (m.bankTxnId) {
-          await tx.bankTransaction.update({
-            where: { id: m.bankTxnId },
-            data: { matchStatus: "UNMATCHED", processedAt: null },
-          });
-        }
+    const day = settlement.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" });
+    const released = await prisma.$transaction(async (tx) => {
+      // Release the matched bank lines (plan 1210 bank, D5): each goes back to review — or, if
+      // it came out of suspense, back into suspense with its case reopened. Once per line: two
+      // matches on one line (old double use, L13) must not release it twice, which would move a
+      // line just returned to suspense on to review and leave its case open behind it.
+      const txnIds = [...new Set(settlement.matches.map((m) => m.bankTxnId).filter((t): t is string => !!t))];
+      const to = { suspense: 0, review: 0 };
+      for (const txnId of txnIds) {
+        to[await releaseLine(tx, txnId, user.id, `settlement ${day} deleted`)]++;
       }
 
       // Delete matches
@@ -148,11 +153,13 @@ export async function DELETE(req: NextRequest) {
 
       // Delete settlement
       await tx.dailySettlement.delete({ where: { id } });
+      return to;
     });
 
+    log.info("settlement deleted", { settlementId: id, linesToReview: released.review, linesToSuspense: released.suspense });
     return successResponse({ deleted: "settlement" });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed to delete", 500);
+    return failure(error, { scope: "pos:settlement", step: "delete" });
   }
 }
