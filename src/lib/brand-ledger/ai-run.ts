@@ -37,6 +37,7 @@ import {
 import { checkBalance, classifyEntry, parseAmount, parseLedgerDate, sideForType } from "./reconcile";
 import { readLedgerFile, fileExtension, CONTENT_TYPES } from "./uploads";
 import { isoDay } from "./view-types";
+import { cellText, type SheetPlan, type SkippedRow } from "./prompted-import";
 
 const log = createLogger("ledger:ai");
 
@@ -67,6 +68,8 @@ export interface StatementRowProposal {
   direction: 1 | -1;
   type: LedgerEntryType;
   side: "VENDOR" | "BCH";
+  /** PROMPTED_IMPORT: the 1-based sheet row the figure came from (plan-applied rows only). */
+  sourceRow?: number | null;
 }
 
 export interface StatementProposals {
@@ -83,16 +86,36 @@ export interface StatementProposals {
   rows: StatementRowProposal[];
   /** Lines dropped for having no readable date or amount — shown, so a silent loss is impossible. */
   skipped: number;
-  /** "ai" for a PDF / image read, "sheet" for the deterministic workbook read. */
-  source: "ai" | "sheet";
+  /**
+   * "ai" for a PDF / image read, "sheet" for the deterministic workbook read, "plan" for the
+   * prompted import's AI plan applied in code (plan 1310).
+   */
+  source: "ai" | "sheet" | "plan";
+  // ── PROMPTED_IMPORT only (plan 1310) ──
+  /** The AI's plan for a sheet, applied in code; the review page lets a person correct it. */
+  importPlan?: SheetPlan;
+  /** What the AI understood, in plain words, for the review page. */
+  explanation?: string;
+  /** Every line dropped, with its reason — the count above stays for older readers. */
+  skippedRows?: SkippedRow[];
+  /** true when a model typed the amounts (text, image, PDF, unmappable sheet) — check each one. */
+  aiTyped?: boolean;
 }
 
 export interface ClaimsProposals {
   kind: "claims";
   claims: ClaimProposal[];
+  /** PROMPTED_IMPORT: what the AI understood. */
+  explanation?: string;
 }
 
-export type LedgerProposals = StatementProposals | ClaimsProposals;
+/** PROMPTED_IMPORT: the input is not for the ledger (a price list, a stock list…). Nothing to accept. */
+export interface NotLedgerProposals {
+  kind: "not_ledger";
+  explanation: string;
+}
+
+export type LedgerProposals = StatementProposals | ClaimsProposals | NotLedgerProposals;
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
@@ -139,7 +162,7 @@ export async function runLedgerAi(runId: string): Promise<void> {
       usageOut: outcome.usageOut,
       latencyMs: outcome.latencyMs,
       chunks: outcome.chunks,
-      proposals: outcome.proposals.kind === "statement" ? outcome.proposals.rows.length : outcome.proposals.claims.length,
+      proposals: outcome.proposals.kind === "statement" ? outcome.proposals.rows.length : outcome.proposals.kind === "claims" ? outcome.proposals.claims.length : 0,
       tiesOut: outcome.proposals.kind === "statement" ? outcome.proposals.tiesOut : null,
     });
   } catch (error) {
@@ -183,6 +206,10 @@ async function execute(
       if (!AI_DOCUMENT_EXTENSIONS.includes(ext)) throw new Error(`Claims can be read from a PDF or an image — not .${ext}`);
       return claimsFromDocument(fileName, bytes, userPrompt, ctx);
     }
+    case "PROMPTED_IMPORT":
+      // Never read from a stored file (R6): the import and re-run routes call runPromptedImport
+      // with the input in memory or from run.source.
+      throw new Error("A prompted import runs through runPromptedImport, not from a stored file");
     default:
       throw new Error(`Unknown task ${String(task)}`);
   }
@@ -229,7 +256,7 @@ function classifyRow(row: StatementReplyRow, carriedDate: string | null): Statem
   };
 }
 
-function statementProposals(reply: StatementReply, source: "ai" | "sheet"): StatementProposals {
+export function statementProposals(reply: StatementReply, source: "ai" | "sheet"): StatementProposals {
   const rows: StatementRowProposal[] = [];
   let skipped = 0;
   let carried: string | null = null;
@@ -306,19 +333,8 @@ interface SheetColumns {
   balance: number | null;
 }
 
-function cellText(v: unknown): string {
-  if (v == null) return "";
-  if (typeof v === "number") return Number.isInteger(v) ? String(v) : String(parseFloat(v.toFixed(6)));
-  // xlsx builds a Date in LOCAL time (cellDates below). Read it back with the local getters:
-  // toISOString() on an IST midnight is the previous day at 18:30Z, which shifts every date.
-  if (v instanceof Date) {
-    if (Number.isNaN(v.getTime())) return "";
-    const mm = String(v.getMonth() + 1).padStart(2, "0");
-    const dd = String(v.getDate()).padStart(2, "0");
-    return `${v.getFullYear()}-${mm}-${dd}`;
-  }
-  return String(v).trim();
-}
+// cellText is the shared one in prompted-import.ts (plan 1310): it also rounds a Date cell to the
+// nearest minute, fixing every date reading a day early when the server runs in IST.
 
 function detectColumns(header: string[]): SheetColumns {
   const find = (re: RegExp) => {

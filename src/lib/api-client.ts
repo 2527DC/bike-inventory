@@ -163,7 +163,17 @@ export async function apiFetchEnvelope<T = unknown>(
     }, timeoutMs);
   }
 
-  log.debug(`#${id} -> ${method} ${url}`, json !== undefined ? { body: json } : undefined);
+  // The body's field names and size only — never its values. A body can carry a person's prompt,
+  // ledger rows, a customer's phone (CLAUDE.md: log identifiers, never payloads).
+  log.debug(
+    `#${id} -> ${method} ${url}`,
+    json !== undefined
+      ? {
+          fields: json && typeof json === "object" && !Array.isArray(json) ? Object.keys(json as Record<string, unknown>) : typeof json,
+          bytes: typeof options.body === "string" ? options.body.length : undefined,
+        }
+      : undefined
+  );
 
   let res: Response;
   try {

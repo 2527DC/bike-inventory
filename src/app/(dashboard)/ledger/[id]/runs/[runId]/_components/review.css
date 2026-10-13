@@ -1,0 +1,97 @@
+/* The review page (plan 1310 Part C). It sits inside .bch-ledger and reuses ledger.css's tokens
+   and classes (card, chip, iconbtn, form, ltable); this file adds only what a review needs:
+   44 px touch targets, row cards and table inputs, and the sticky approve bar. Inputs are 16 px
+   on phones so iOS does not zoom into a field when it is tapped. */
+
+.bch-ledger .rv-btn { min-height: 44px; padding: 8px 14px; font-size: 14px; }
+.bch-ledger a.rv-btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.bch-ledger .rv-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.bch-ledger .rv-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.bch-ledger .rv-row > .grow { flex: 1; min-width: 0; }
+.bch-ledger .rv-muted { color: var(--muted); font-size: 12.5px; }
+.bch-ledger .rv-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 700; margin: 10px 0 3px; }
+
+/* Header */
+.bch-ledger .rv-file { font-size: 15px; font-weight: 700; word-break: break-word; }
+.bch-ledger .rv-prompt { margin-top: 6px; padding: 8px 10px; background: var(--gray-bg); border-left: 3px solid var(--line); border-radius: 6px; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+.bch-ledger .rv-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+
+/* Messages */
+.bch-ledger .rv-explain { background: var(--blue-bg); border: 1px solid #dbeafe; color: #1e3a8a; border-radius: 10px; padding: 10px 12px; font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.bch-ledger .rv-warn { background: var(--amber-bg); border: 1px solid #fde68a; color: var(--amber); border-radius: 10px; padding: 8px 12px; font-size: 13px; font-weight: 600; margin-top: 8px; }
+.bch-ledger .rv-ok { background: var(--green-bg); border: 1px solid #bbf7d0; color: var(--green); border-radius: 10px; padding: 8px 12px; font-size: 13.5px; font-weight: 700; }
+.bch-ledger .rv-bad { background: var(--red-bg); border: 1px solid #fecaca; color: var(--red); border-radius: 10px; padding: 8px 12px; font-size: 13.5px; font-weight: 600; }
+.bch-ledger .rv-err { color: var(--red); font-size: 13px; font-weight: 600; margin-top: 6px; }
+.bch-ledger .rv-rowwarn { margin-top: 6px; padding: 5px 8px; border-radius: 6px; background: var(--amber-bg); color: var(--amber); font-size: 12px; line-height: 1.4; }
+.bch-ledger .rv-text { white-space: pre-wrap; word-break: break-word; font-size: 12px; background: var(--gray-bg); border-radius: 8px; padding: 10px; max-height: 320px; overflow: auto; margin-top: 6px; }
+
+/* Inputs — phone first */
+.bch-ledger .rv-in { width: 100%; min-height: 44px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 16px; font-family: inherit; background: #fff; color: var(--ink); }
+.bch-ledger .rv-in.bad { border-color: #fca5a5; background: var(--red-bg); }
+.bch-ledger .rv-in:disabled { background: var(--gray-bg); color: var(--muted); }
+.bch-ledger .rv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.bch-ledger .rv-grid .full { grid-column: 1 / -1; }
+.bch-ledger .rv-tick { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; min-width: 44px; cursor: pointer; font-size: 13.5px; font-weight: 600; }
+.bch-ledger .rv-tick input { width: 20px; height: 20px; flex: none; }
+
+/* Dr / Cr */
+.bch-ledger .rv-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; min-height: 44px; }
+.bch-ledger .rv-seg button { border: none; background: var(--card); padding: 0 14px; min-width: 52px; font-size: 14px; font-weight: 700; color: var(--muted); cursor: pointer; }
+.bch-ledger .rv-seg button + button { border-left: 1px solid var(--line); }
+.bch-ledger .rv-seg button.dr { background: var(--red-bg); color: var(--red); }
+.bch-ledger .rv-seg button.cr { background: var(--green-bg); color: var(--green); }
+.bch-ledger .rv-seg button:disabled { cursor: default; }
+
+/* Row cards (phone) */
+.bch-ledger .rv-card { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px 10px; margin-top: 8px; background: var(--card); }
+.bch-ledger .rv-card.off { background: var(--gray-bg); }
+.bch-ledger .rv-card.off .rv-in { opacity: 0.65; }
+.bch-ledger .rv-card .rv-cardtop { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.bch-ledger .rv-card .rv-amt { margin-left: auto; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* Rows table (desktop) */
+/* At exactly lg the sidebar leaves ~620 px of card; below 860 px the table scrolls sideways. */
+.bch-ledger .rv-table { width: 100%; min-width: 860px; border-collapse: collapse; font-size: 13px; }
+.bch-ledger .rv-table th { text-align: left; padding: 8px 6px; border-bottom: 2px solid var(--ink); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; background: var(--card); }
+.bch-ledger .rv-table td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.bch-ledger .rv-table tr.off td { background: var(--gray-bg); }
+.bch-ledger .rv-table .rv-in { min-height: 36px; padding: 6px 8px; font-size: 13px; }
+.bch-ledger .rv-table .rv-seg { min-height: 36px; }
+.bch-ledger .rv-table .rv-seg button { min-width: 40px; padding: 0 10px; font-size: 13px; }
+.bch-ledger .rv-table .rv-tick { min-height: 36px; min-width: 36px; justify-content: center; }
+.bch-ledger .rv-table .num { text-align: right; }
+.bch-ledger .rv-table .rowno { color: var(--muted); font-size: 11.5px; white-space: nowrap; padding-top: 12px; }
+
+/* Mapping editor */
+.bch-ledger .rv-map { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.bch-ledger .rv-map label { font-size: 12px; font-weight: 700; color: var(--muted); display: block; margin-bottom: 3px; }
+.bch-ledger .rv-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.bch-ledger .rv-chip { display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--line); background: var(--gray-bg); border-radius: 999px; padding: 0 2px 0 12px; font-size: 13px; font-weight: 600; min-height: 44px; }
+.bch-ledger .rv-chip button { border: none; background: none; color: var(--muted); font-size: 18px; line-height: 1; min-width: 40px; min-height: 40px; cursor: pointer; }
+
+/* Skipped rows */
+.bch-ledger details.rv-details > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 700; font-size: 13.5px; }
+.bch-ledger .rv-skip { padding: 6px 0; border-top: 1px solid var(--line); font-size: 12.5px; }
+.bch-ledger .rv-skip .why { color: var(--amber); font-weight: 600; }
+.bch-ledger .rv-skip .txt { color: var(--muted); word-break: break-word; }
+
+/* Earlier runs */
+.bch-ledger .rv-sib { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); text-decoration: none; color: inherit; min-height: 44px; }
+.bch-ledger .rv-sib .grow { flex: 1; min-width: 0; }
+.bch-ledger .rv-sib .p { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 3px; font-size: 13px; word-break: break-word; }
+
+/* The approve bar stays in reach while a long statement scrolls past, above the phone nav. */
+.bch-ledger .rv-bar {
+  position: sticky; z-index: 5;
+  bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px) + 8px);
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 10px 12px; margin-top: 10px; box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
+}
+.bch-ledger .rv-bar .rv-row > button { flex: 1; }
+
+@media (min-width: 1024px) {
+  .bch-ledger .rv-in { font-size: 14px; }
+  .bch-ledger .rv-map { grid-template-columns: repeat(3, 1fr); }
+  .bch-ledger .rv-bar { bottom: 12px; }
+  .bch-ledger .rv-bar .rv-row > button { flex: 0 1 auto; min-width: 160px; }
+}

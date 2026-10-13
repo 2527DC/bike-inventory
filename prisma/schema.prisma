@@ -3819,6 +3819,9 @@ enum LedgerAiTask {
   STATEMENT_ROWS
   CLAIMS_FROM_CHAT
   CLAIMS_FROM_IMAGE
+  // Any input (sheet, text, image, PDF) with the owner's prompt; the AI decides the action from
+  // a fixed list and the file is never stored (plan 1310-ledger-prompted-import, R1–R7).
+  PROMPTED_IMPORT
 }
 
 enum LedgerAiRunStatus {
@@ -3850,6 +3853,9 @@ model LedgerAiRun {
 
   reply     Json?
   proposals Json?
+  // PROMPTED_IMPORT only: the extracted input — sheet cells or text, never the file (R6) — kept
+  // so "re-run with a new prompt" needs no upload (§1.1). Set to null on accept and discard.
+  source    Json?
   status    LedgerAiRunStatus @default(RUNNING)
   error     String?           @db.Text
 

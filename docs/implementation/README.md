@@ -185,6 +185,7 @@ preserved across regeneration — but do not remove the marker comments.
 | `1210-test-branch-vercel-and-vps-main-plan.md` | Phase A built 13 Oct 2026 on `test`; Phase B (Vercel switch, PR `test` → `main`) follows with the owner's approval. |
 | `1210-zoho-credit-notes-and-payables-plan.md` | **built 13 Oct 2026** on `feat/1210-credit-notes-and-payables` (§7): credits pulled from Zoho, applied here (Q1 = b), ledger, Pay first, payments fixed. Build and 36-check local end-to-end pass. Waiting for M1 and M2 on test, and for the Zoho credit scopes. |
 | `1210-zoho-vendor-payment-push-and-bill-approval-plan.md` | written 12 Oct 2026; plan only, nothing built. Blocked on Q1, Q2, Q9, Q14 and on plan B's `VendorBill.zohoBillId` (both parts) and plan D's `BankAccount` (Part A). |
+| `1310-ledger-prompted-import-without-file-storage-plan.md` | **built 13 Oct 2026** (§6): any input — Excel, CSV, text, chat, Word, images, PDF — with a prompt; the AI plans, code maps every row; review page; approve writes the ledger; the file is never stored. The sample ledgers tie out to the rupee. Waiting for AI to be configured on test for the first real run. |
 | `2209-transfer-and-outward-by-bin-plan.md` | written 22 Sep 2026; **waiting for the owner's answers to §1 and the go-ahead.** |
 | `2309-app-name-per-environment-plan.md` | written 23 Sep 2026. **Every question in §1 is answered (§1.1). Waiting for the |
 | `2309-dark-mode-visibility-plan.md` | **plan only.** The owner answered Q1, Q2, Q3, Q6 and Q7 on 23 Sep 2026 (§1.1) |

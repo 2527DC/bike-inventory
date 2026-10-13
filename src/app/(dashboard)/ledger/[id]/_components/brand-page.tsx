@@ -3,13 +3,14 @@
 // App.jsx:223-282 — the per-vendor screen, wrapped in `.bch-ledger` so the app's own
 // stylesheet (ledger.css) applies here and nowhere else in BCH.
 import Link from "next/link";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import type { LedgerBrandView } from "@/lib/brand-ledger/view-types";
 import { usePermissions } from "@/lib/use-permissions";
 import { Collapsible } from "./collapsible";
 import { FilesCard } from "./files-card";
 import { GapsTab } from "./gaps-tab";
 import { ImportJsonCard } from "./import-json-card";
+import { ImportNotice } from "./import-notice";
 import { LedgerTab } from "./ledger-tab";
 import { ledgerApi } from "./ledger-api";
 import { REVIEW_CADENCE_DAYS, daysSince, fmtINR, openGaps } from "./ledger-helpers";
@@ -41,7 +42,7 @@ export function BrandPage({ brand, reload }: { brand: LedgerBrandView; reload: (
         <button
           className={"iconbtn" + (tab === "files" ? " primary" : "")}
           onClick={() => setTab("files")}
-          title="Upload statements or exports and run AI extraction"
+          title="Import a file or text with AI, and see earlier files and runs"
         >
           📁 Upload &amp; AI
         </button>
@@ -58,6 +59,11 @@ export function BrandPage({ brand, reload }: { brand: LedgerBrandView; reload: (
           <span className={"iconbtn" + (due ? " primary" : "")}>{reviewLabel}</span>
         )}
       </header>
+
+      {/* The one-time line after the review page's Approve or Discard (plan 1310). */}
+      <Suspense fallback={null}>
+        <ImportNotice onOpenGaps={() => setTab("gaps")} />
+      </Suspense>
 
       <div className="card">
         <div className="smallmuted" style={{ marginBottom: 8 }}>
@@ -112,7 +118,7 @@ export function BrandPage({ brand, reload }: { brand: LedgerBrandView; reload: (
       {tab === "ledger" && <LedgerTab brand={brand} reload={reload} onOpenGap={openGapInTab} />}
       {tab === "monthly" && <MonthlyTab brand={brand} />}
       {tab === "table" && <TableTab brand={brand} reload={reload} onOpenGap={openGapInTab} />}
-      {tab === "files" && <FilesCard vendorId={brand.id} brand={brand} reload={reload} />}
+      {tab === "files" && <FilesCard vendorId={brand.id} brand={brand} />}
       {tab === "share" && <ShareTab brand={brand} />}
 
       {/* Not in the ledger app — the one-time JSON import (plan Part D) */}
@@ -120,7 +126,7 @@ export function BrandPage({ brand, reload }: { brand: LedgerBrandView; reload: (
         <ImportJsonCard vendorId={brand.id} brand={brand} reload={reload} />
       )}
       {tab !== "files" && (
-        <FilesCard vendorId={brand.id} brand={brand} reload={reload} />
+        <FilesCard vendorId={brand.id} brand={brand} />
       )}
     </div>
   );

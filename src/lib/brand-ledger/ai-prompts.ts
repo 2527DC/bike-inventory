@@ -11,12 +11,23 @@ import { LEDGER_VIEW_GAP_TYPES, type LedgerViewGapType } from "./view-types";
 
 // ─── Prompt security ──────────────────────────────────────────────────────────
 
-export const USER_PROMPT_MAX_CHARS = 500;
-
-const PROMPT_REFUSED = /\b(ignore|system prompt|override|jailbreak|developer message)\b/i;
+/**
+ * 2,000 since plan 1310 (prompted import, 13 Oct 2026): the owner's prompt now carries the whole
+ * direction — what the file is, which column means what, what to do with it. It was 500.
+ */
+export const USER_PROMPT_MAX_CHARS = 2000;
 
 /**
- * Trim, cap at 500 characters, drop newlines and `{ } [ ] < >`, then refuse anything that
+ * Narrowed in plan 1310. It refused the bare word "ignore", which blocked ordinary directions
+ * ("ignore the totals row", "ignore anything before April"). The prompt is inserted as DATA in
+ * an <instructions> block and every reply is schema-validated and reviewed before a write, so
+ * only phrases aimed at the model's own rules are refused.
+ */
+const PROMPT_REFUSED =
+  /\b(ignore|disregard|forget)\s+(all\s+|any\s+|the\s+|your\s+)?(previous|prior|above|earlier|system)\s+(instructions?|rules|prompts?)\b|\bsystem prompt\b|\bjailbreak\b|\bdeveloper message\b|\boverride\s+(the\s+|your\s+)?(instructions?|rules|system)\b/i;
+
+/**
+ * Trim, cap at USER_PROMPT_MAX_CHARS, drop newlines and `{ } [ ] < >`, then refuse anything that
  * still reads like an attempt to redirect the model. Empty → `prompt: null`.
  */
 export function sanitizeUserPrompt(raw: string | null | undefined): { prompt: string | null; refused: string | null } {
@@ -32,21 +43,22 @@ export function sanitizeUserPrompt(raw: string | null | undefined): { prompt: st
   if (PROMPT_REFUSED.test(stripped)) {
     return {
       prompt: null,
-      refused: "The prompt cannot contain the words ignore, override or system prompt. Say what to look for instead.",
+      refused:
+        "The prompt cannot ask the AI to drop its own rules (\"ignore previous instructions\", \"system prompt\"). Say what the file is and what to do with it instead.",
     };
   }
   return { prompt: stripped, refused: null };
 }
 
-function instructionsBlock(userPrompt: string | null): string[] {
+export function instructionsBlock(userPrompt: string | null): string[] {
   if (!userPrompt) return [];
   return ["", "<instructions>", userPrompt, "</instructions>"];
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
+export function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
-function str(v: unknown): string {
+export function str(v: unknown): string {
   return v == null ? "" : String(v).trim();
 }
 function num(v: unknown): number | null {
@@ -220,7 +232,7 @@ export const CLAIMS_SCHEMA: Record<string, unknown> = {
   },
 };
 
-function claimsShapeLines(): string[] {
+export function claimsShapeLines(): string[] {
   const types = (Object.keys(CLAIM_TYPE_GUIDE) as LedgerViewGapType[])
     .map((t) => `- ${t}: ${CLAIM_TYPE_GUIDE[t]}`)
     .join("\n");

@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import type { GapType, LedgerEntrySource } from "@prisma/client";
+import { Prisma, type GapType, type LedgerEntrySource } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse, failure } from "@/lib/api-utils";
 import { requireAuth, requireFeature, AuthError } from "@/lib/auth-helpers";
@@ -12,6 +12,7 @@ import type { ClaimProposal } from "@/lib/brand-ledger/ai-prompts";
 import { parseLedgerDate } from "@/lib/brand-ledger/reconcile";
 import { fileExtension } from "@/lib/brand-ledger/uploads";
 import { GAP_TYPE_FROM_VIEW, LEDGER_VIEW_GAP_TYPES, type LedgerViewGapType } from "@/lib/brand-ledger/view-types";
+import { moduleForRun } from "@/lib/brand-ledger/import-access";
 
 const log = createLogger("ledger:ai");
 
@@ -26,10 +27,12 @@ class RunAlreadyClaimedError extends Error {
   }
 }
 
-async function claimRun(tx: { ledgerAiRun: { updateMany: (a: { where: { id: string; status: "DONE" }; data: { status: "ACCEPTED"; acceptedAt: Date } }) => Promise<{ count: number }> } }, id: string) {
+async function claimRun(tx: Prisma.TransactionClient, id: string) {
+  // `source` (a prompted import's kept cells or text, plan 1310 §1.1) is dropped the moment the
+  // run is accepted: from here on the ledger rows are the record.
   const claimed = await tx.ledgerAiRun.updateMany({
     where: { id, status: "DONE" },
-    data: { status: "ACCEPTED", acceptedAt: new Date() },
+    data: { status: "ACCEPTED", acceptedAt: new Date(), source: Prisma.DbNull },
   });
   if (claimed.count === 0) throw new RunAlreadyClaimedError();
 }
@@ -64,6 +67,11 @@ const bodySchema = z.object({
   statementDate: z.string().nullable().optional(),
   rows: z.array(rowSchema).optional(),
   claims: z.array(claimSchema).optional(),
+  /**
+   * Plan 1310 Part C: the person saw the difference and accepts anyway. Recorded on the
+   * statement as "accepted with a difference of ₹X", never silent.
+   */
+  acceptDifference: z.boolean().optional(),
 });
 
 function sourceKindFor(fileName: string): LedgerEntrySource {
@@ -93,10 +101,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     });
     if (!run) return errorResponse("Run not found", 404);
 
-    const user = await requireFeature(
-      run.task === "STATEMENT_ROWS" ? "brand_ledger" : "brand_ledger_gaps",
-      "create"
-    );
+    // The permission follows what accepting would WRITE (plan 1310: a prompted import's kind
+    // is decided by the AI, so it is read off the proposals, not the task).
+    const user = await requireFeature(moduleForRun(run.task, run.proposals), "create");
 
     if (run.status === "ACCEPTED") return errorResponse("This run has already been accepted", 409);
     if (run.status === "DISCARDED") return errorResponse("This run was discarded", 409);
@@ -114,8 +121,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (!parsed.success) return errorResponse(parsed.error.issues[0]?.message ?? "Invalid body", 400);
     const body = parsed.data;
     const proposals = run.proposals as unknown as LedgerProposals;
+    if (proposals.kind === "not_ledger") {
+      return errorResponse(`Nothing to add: ${proposals.explanation || "the AI read this as not a ledger."}`, 409);
+    }
 
-    if (run.task === "STATEMENT_ROWS") {
+    if (run.task === "STATEMENT_ROWS" || (run.task === "PROMPTED_IMPORT" && proposals.kind === "statement")) {
       if (proposals.kind !== "statement") return errorResponse("The run's proposals are not statement rows", 409);
       const rows: StatementRowProposal[] = (body.rows ?? proposals.rows) as StatementRowProposal[];
       const opening = body.opening ?? proposals.opening;
@@ -124,7 +134,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
       step = "tie-out";
       const check = recheckStatement(rows, opening, claimedClosing);
-      if (!check.tiesOut) {
+      const acceptedWithDifference = !check.tiesOut && body.acceptDifference === true && claimedClosing !== null;
+      if (!check.tiesOut && !acceptedWithDifference) {
         log.warn("accept refused: statement does not tie", { runId: id, difference: check.difference, rows: rows.length });
         return errorResponse(
           claimedClosing === null
@@ -144,7 +155,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         closingEdited ? `closing edited in review: read ${proposals.claimedClosing ?? "none"}, accepted ${claimedClosing}` : null,
         openingEdited ? `opening edited in review: read ${proposals.opening}, accepted ${opening}` : null,
         body.rows ? "rows edited in review" : null,
+        acceptedWithDifference
+          ? `accepted with a difference of ${Math.abs(check.difference ?? 0).toLocaleString("en-IN")} (rows ${check.computedClosing.toLocaleString("en-IN")}, statement ${claimedClosing})`
+          : null,
+        proposals.aiTyped ? "AI-typed amounts, checked in review" : null,
       ].filter(Boolean);
+      if (acceptedWithDifference) log.warn("statement accepted with a difference", { runId: id, difference: check.difference, rows: rows.length });
 
       const statementDateRaw = body.statementDate !== undefined ? body.statementDate : proposals.statementDate;
       const statementDate = (statementDateRaw && parseLedgerDate(statementDateRaw)) || new Date();
@@ -158,8 +174,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           data: {
             vendorId: run.vendorId,
             statementDate,
-            periodFrom: (proposals.periodFrom && parseLedgerDate(proposals.periodFrom)) || null,
-            periodTo: (proposals.periodTo && parseLedgerDate(proposals.periodTo)) || null,
+            // Edited rows (a corrected mapping can widen the dates) set the period; else the read's.
+            periodFrom: body.rows
+              ? (parseLedgerDate([...rows].map((r) => r.date).sort()[0]) ?? null)
+              : (proposals.periodFrom && parseLedgerDate(proposals.periodFrom)) || null,
+            periodTo: body.rows
+              ? (parseLedgerDate([...rows].map((r) => r.date).sort().slice(-1)[0]) ?? null)
+              : (proposals.periodTo && parseLedgerDate(proposals.periodTo)) || null,
             claimedClosing,
             computedClosing: check.computedClosing,
             tiesOut: check.tiesOut,
@@ -168,7 +189,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             sourceKind: sourceKindFor(run.upload.fileName),
             extractionModel: run.model,
             extractionNote: [
-              proposals.source === "sheet" ? `Deterministic sheet read, AI run ${run.id}` : `AI run ${run.id}`,
+              proposals.source === "sheet"
+                ? `Deterministic sheet read, AI run ${run.id}`
+                : proposals.source === "plan"
+                  ? `AI plan applied in code (${proposals.importPlan?.sheet ?? "sheet"}, header row ${(proposals.importPlan?.headerRow ?? 0) + 1}), run ${run.id}`
+                  : `AI run ${run.id}`,
               ...edits,
             ].join("; "),
             importedById: user.id,
