@@ -10,6 +10,37 @@
 !.yarn/releases
 !.yarn/versions
 
+# Photos, spreadsheets and PDFs — never committed (owner, 13 Oct 2026). Bank statements,
+# ledgers, invoices, stock sheets and screenshots are business data, not project source.
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.heic
+*.heif
+*.bmp
+*.tif
+*.tiff
+*.pdf
+*.xls
+*.xlsx
+*.xlsm
+*.xlsb
+*.ods
+*.numbers
+*.csv
+# ...except the images the app itself serves: the logo, the PWA icons and the favicons.
+# Image types only — a PDF or spreadsheet dropped into public/ would be publicly downloadable.
+!/public/**/*.png
+!/public/**/*.jpg
+!/public/**/*.jpeg
+!/public/**/*.gif
+!/public/**/*.webp
+!/src/app/**/*.png
+!/src/app/**/*.jpg
+!/src/app/**/*.jpeg
+
 # testing
 /coverage
 
