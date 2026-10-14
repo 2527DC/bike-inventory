@@ -226,3 +226,39 @@ The 12 Oct data differs from §4's production examples: L3 is empty there, and D
 - **The transfer line's "Stock: 9" total.** The transfer screen shows the product's overall total instead of the source location's; that is a separate small fix, offered on 14 Oct.
 - **The admin Bins screen's drawer** lists coded units only, so stock without codes is missing there. Not changed here.
 - **Moving stock into a bin from `/stock`.** "No bin" stock is shown, not fixed, here.
+
+---
+
+## 7. Changes after the first build — 14 Oct 2026
+
+### 7.1 The owner's words, verbatim
+
+> see the '/Users/chethanr/Projects/BCH/bike-inventory/Screenshot 2026-10-14 at 5.06.20 PM.png' fix this where the fileter miust have the warehouse to it must show the warehosue of selected store and  on selecting the ware i need to see the warehouse level bin and on selcting the bin i need u to  list the bin levle products
+
+The screenshot is `localhost:3000/stock` on `main`'s code. That screen has the old Store picker and a flat "Bin / Location" list of all 23 bins, and it does not have this branch.
+
+### 7.2 Restated
+
+| # | Requirement |
+|---|---|
+| C1 | The filter has a **Warehouse** picker, and it lists only the **selected store's** warehouses. |
+| C2 | Choosing a warehouse makes the **Bin** picker list only that warehouse's bins. |
+| C3 | Choosing a bin lists only that bin's products. |
+
+### 7.3 Built
+
+- **C1:** the single Location picker (B1) is replaced by three pickers in their own row: **Store**, then **Warehouse** (that store's warehouses only), then **Bin** (that warehouse's bins only).
+  - Each picker is disabled until the one before it has a choice: "Choose a store first", "Choose a warehouse first".
+  - Changing a level clears the levels after it.
+  - On a phone the three stack; from `sm` up they sit in one row.
+  - A link that names only a warehouse still shows its store in the Store picker.
+  - A link whose store and warehouse don't belong together is shown as "no longer exists".
+- **C2, C3:** the same Bin picker and bin scope as §3: "No bin" first, then bins with what they hold now. The list shows what is physically in the chosen bin.
+- **The request sends the narrowest level chosen:** `warehouseId` (+ `binId`) when a warehouse is chosen, otherwise `storeId`. A store alone is the store scope of plan 0909, as before. No API change.
+- **Wording:** the caption and exports say "warehouse" where they said "location", e.g. "Showing what Bch warehouse holds. Quantities are that warehouse's."
+
+### 7.4 Checks — 14 Oct 2026
+
+- `tsc` is clean, `eslint` shows 0 errors (the same 2 warnings that were already on `main`), and `npm run build` exits 0.
+- The API and its parameters are unchanged, so the end-to-end results in §6 stand: picker = list on all 14 scopes.
+- Not run: a signed-in browser pass, because there is no browser in this session.
