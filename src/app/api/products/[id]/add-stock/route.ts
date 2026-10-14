@@ -10,7 +10,7 @@ import { logActivity } from "@/lib/activity-log";
 import { adjustWarehouseQty } from "@/lib/stock-location";
 import { createUnits } from "@/lib/units/create";
 import { LIVE_UNIT_STATUSES } from "@/lib/units/constants";
-import { ruleBinForLine } from "@/lib/inbound/rule-bin";
+import { resolveAddStockBin } from "@/lib/stock/add-stock-bin";
 import { quickAddStockSchema } from "@/lib/validations";
 
 // ─── Quick add to stock from /stock (plan 1410-stock-quick-add) ──────────────────────────
@@ -48,9 +48,10 @@ async function isUnitTracked(db: Pick<typeof prisma, "inventoryUnit">, productId
   return unit !== null;
 }
 
-// GET — what the add sheet needs: the product, whether it is unit-tracked, its home bin, the
-// active bins to choose from (served here so adding stock does not also need Bins › View), and
-// for each warehouse the bin a home-bin rule locks this product to.
+// GET — what the add sheet needs: the product, whether it is unit-tracked, and THE bin it goes
+// into — one bin, shown read-only (owner, 14 Oct 2026). `bin` is null when the product has none,
+// and `noBinReason` then says why Add stock cannot happen. Served here so adding stock does not
+// also need Bins › View.
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     await requireFeature(MODULE, "create");
@@ -58,44 +59,33 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
     const product = await prisma.product.findUnique({
       where: { id },
-      select: { id: true, name: true, sku: true, currentStock: true, binId: true, status: true },
+      select: {
+        id: true, name: true, sku: true, currentStock: true, binId: true, status: true,
+        brandId: true, categoryId: true,
+      },
     });
     if (!product) return errorResponse("Product not found", 404);
 
-    const [tracked, liveUnits, bins] = await Promise.all([
+    const [tracked, liveUnits, placement] = await Promise.all([
       isUnitTracked(prisma, id),
       prisma.inventoryUnit.count({
         where: { productId: id, status: { in: LIVE_UNIT_STATUSES } },
       }),
-      prisma.bin.findMany({
-        where: { isActive: true, warehouse: { isActive: true } },
-        orderBy: [{ warehouse: { name: "asc" } }, { code: "asc" }],
-        select: { id: true, code: true, name: true, nonAssemblable: true, warehouse: { select: { id: true, name: true } } },
-        take: 2000,
-      }),
+      resolveAddStockBin(prisma, product),
     ]);
-
-    const warehouseIds = [...new Set(bins.map((b) => b.warehouse.id))];
-    const ruleBins = await Promise.all(
-      warehouseIds.map(async (warehouseId) => {
-        const match = await ruleBinForLine(prisma, { productId: id, warehouseId });
-        return match ? { warehouseId, binId: match.bin.id, binCode: match.bin.code, rule: match.label } : null;
-      })
-    );
+    if (!placement.ok) log.info("add-stock context: product has no usable bin", { productId: id, homeBinId: product.binId });
 
     return successResponse({
-      product,
+      product: {
+        id: product.id, name: product.name, sku: product.sku, currentStock: product.currentStock,
+        binId: product.binId, status: product.status,
+      },
       tracked,
       withoutCodes: Math.max(0, product.currentStock - liveUnits),
-      bins: bins.map((b) => ({
-        id: b.id,
-        code: b.code,
-        name: b.name,
-        nonAssemblable: b.nonAssemblable,
-        warehouseId: b.warehouse.id,
-        warehouseName: b.warehouse.name,
-      })),
-      ruleBins: ruleBins.filter((r): r is NonNullable<typeof r> => r !== null),
+      bin: placement.ok ? placement.bin : null,
+      binSource: placement.ok ? placement.source : null,
+      binRule: placement.ok ? placement.rule : null,
+      noBinReason: placement.ok ? null : placement.reason,
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
@@ -119,27 +109,33 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const qty = input.assembled + input.unassembled;
 
     step = "check";
-    const [product, bin] = await Promise.all([
-      prisma.product.findUnique({ where: { id: productId }, select: { id: true, name: true, sku: true, status: true, binId: true } }),
-      prisma.bin.findUnique({
-        where: { id: input.binId },
-        select: { id: true, code: true, isActive: true, nonAssemblable: true, warehouse: { select: { id: true, name: true, isActive: true } } },
-      }),
-    ]);
+    const product = await prisma.product.findUnique({
+      where: { id: productId },
+      select: { id: true, name: true, sku: true, status: true, binId: true, brandId: true, categoryId: true },
+    });
     if (!product) return errorResponse("Product not found", 404);
     if (product.status !== "ACTIVE") return errorResponse(`${product.name} is not active — restore it before adding stock`, 400);
-    if (!bin || !bin.isActive) return errorResponse("That bin does not exist or is not active — pick another", 400);
-    if (!bin.warehouse.isActive) return errorResponse(`${bin.warehouse.name} is not active — pick a bin in an active warehouse`, 400);
+
+    // THE product's bin, decided here and nowhere else (owner, 14 Oct 2026): the rule's bin in
+    // its warehouse, else its home bin. No bin → no Add stock. The body's binId is only the bin
+    // the sheet showed — any other is refused, so a stale sheet cannot put stock elsewhere.
+    const placement = await resolveAddStockBin(prisma, product);
+    if (!placement.ok) {
+      log.warn("add-stock refused: no bin", { productId, homeBinId: product.binId });
+      return errorResponse(placement.reason, 409);
+    }
+    const bin = {
+      id: placement.bin.id,
+      code: placement.bin.code,
+      nonAssemblable: placement.bin.nonAssemblable,
+      warehouse: { id: placement.bin.warehouseId, name: placement.bin.warehouseName },
+    };
+    if (input.binId !== bin.id) {
+      log.warn("add-stock refused: not the product's bin", { productId, sentBinId: input.binId, binId: bin.id, source: placement.source });
+      return errorResponse(`${product.name} goes into bin ${bin.code} (${bin.warehouse.name}) — reload and add again`, 409);
+    }
     if (bin.nonAssemblable && input.assembled > 0) {
       return errorResponse(`Bin ${bin.code} holds items that are never assembled — add them without the assembled figure`, 400);
-    }
-
-    // The home-bin rule lock, as on inbound (plan 2109, R34): a product a rule places goes into
-    // the rule's bin in this warehouse, and nowhere else.
-    const rule = await ruleBinForLine(prisma, { productId, warehouseId: bin.warehouse.id });
-    if (rule && rule.bin.id !== bin.id) {
-      log.warn("add-stock refused: rule bin", { productId, binId: bin.id, ruleBinId: rule.bin.id });
-      return errorResponse(`This item's bin is set by rule ${rule.label} (bin ${rule.bin.code}). Add it to ${rule.bin.code}.`, 409);
     }
 
     step = "write";

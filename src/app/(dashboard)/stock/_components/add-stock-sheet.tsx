@@ -10,8 +10,11 @@ import { createLogger } from "@/lib/logger";
 // ─── Add stock directly from /stock (plan 1410-stock-quick-add, Part B) ──────────────────
 //
 // The owner's ask (14 Oct 2026): "GT lock has 599, add 5" — without a stock audit (R2). The
-// sheet asks for a bin, a quantity and a reason, and only asks "assembled or not" where the
-// answer means something (R3, R4, Q2, Q3):
+// sheet shows the product's OWN bin, read-only (owner, 14 Oct, plan §7: "it must show the
+// product related bin not all bin … only readable"; the route decides it — the rule's bin, else
+// the home bin), asks a quantity and a reason, and only asks "assembled or not" where the
+// answer means something (R3, R4, Q2, Q3). A product with no bin cannot take stock here at all
+// ("no bin means there can't be add stock"): the sheet says why and offers no Add.
 //
 //   - a normal bin, product with unit codes → Assembled __ + Not assembled __ (Q3);
 //   - a non-assemblable bin → one Quantity, no question (R4);
@@ -39,13 +42,6 @@ interface AddStockBin {
   warehouseName: string;
 }
 
-interface AddStockRuleBin {
-  warehouseId: string;
-  binId: string;
-  binCode: string;
-  rule: string;
-}
-
 /** GET /api/products/[id]/add-stock. */
 interface AddStockContext {
   product: { id: string; name: string; sku: string; currentStock: number; binId: string | null; status: string };
@@ -53,8 +49,14 @@ interface AddStockContext {
   tracked: boolean;
   /** Stock beyond the product's live units. */
   withoutCodes: number;
-  bins: AddStockBin[];
-  ruleBins: AddStockRuleBin[];
+  /** THE bin these go into (src/lib/stock/add-stock-bin.ts), or null — then no Add stock. */
+  bin: AddStockBin | null;
+  /** "home" = the product's home bin; "rule" = a home-bin rule's bin (the rule wins). */
+  binSource: "home" | "rule" | null;
+  /** The rule's label when a rule placed it, e.g. "Category Rule". */
+  binRule: string | null;
+  /** Why there is no bin, in words the person can act on. */
+  noBinReason: string | null;
 }
 
 /** POST /api/products/[id]/add-stock — 201, or 200 with `duplicate: true` for a repeat. */
@@ -114,56 +116,8 @@ function newRequestId(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
-interface WarehouseGroup {
-  warehouseId: string;
-  warehouseName: string;
-  rule: AddStockRuleBin | null;
-  /** The bins this product may go into here — only the rule's bin when a rule decides it. */
-  bins: AddStockBin[];
-}
-
-/** Bins by warehouse, in the API's order (warehouse name, then code), with the rule lock applied. */
-function groupBins(ctx: AddStockContext): WarehouseGroup[] {
-  const groups = new Map<string, WarehouseGroup>();
-  for (const b of ctx.bins) {
-    let g = groups.get(b.warehouseId);
-    if (!g) {
-      g = {
-        warehouseId: b.warehouseId,
-        warehouseName: b.warehouseName,
-        rule: ctx.ruleBins.find((r) => r.warehouseId === b.warehouseId) ?? null,
-        bins: [],
-      };
-      groups.set(b.warehouseId, g);
-    }
-    // A home-bin rule places this product in its bin and nowhere else in that warehouse — the
-    // inbound lock (src/lib/inbound/rule-bin.ts). The route answers 409 for any other bin.
-    if (g.rule && g.rule.binId !== b.id) continue;
-    g.bins.push(b);
-  }
-  return [...groups.values()];
-}
-
-/**
- * The bin to start on: the rule's bin in the home bin's warehouse when a rule decides it, else
- * the home bin, else nothing — the bin is required, so a guess would be worse than asking.
- * With no home bin and only one warehouse, that warehouse's rule bin is still the answer.
- */
-function initialBinId(ctx: AddStockContext, groups: WarehouseGroup[]): string {
-  const allowed = (id: string) => groups.some((g) => g.bins.some((b) => b.id === id));
-  const home = ctx.product.binId ? ctx.bins.find((b) => b.id === ctx.product.binId) : undefined;
-  const warehouseId = home?.warehouseId ?? (groups.length === 1 ? groups[0].warehouseId : null);
-  const rule = warehouseId ? ctx.ruleBins.find((r) => r.warehouseId === warehouseId) : undefined;
-  if (rule) return allowed(rule.binId) ? rule.binId : "";
-  if (home && allowed(home.id)) return home.id;
-  return "";
-}
-
-function binLabel(b: AddStockBin, homeBinId: string | null) {
-  const parts = [!b.name || b.name === b.code ? b.code : `${b.code} — ${b.name}`];
-  if (b.nonAssemblable) parts.push("no assembly");
-  if (b.id === homeBinId) parts.push("home bin");
-  return parts.join(" · ");
+function binTitle(b: AddStockBin) {
+  return !b.name || b.name === b.code ? b.code : `${b.code} — ${b.name}`;
 }
 
 export function AddStockSheet({ open, product, onClose, onAdded }: Props) {
@@ -172,7 +126,6 @@ export function AddStockSheet({ open, product, onClose, onAdded }: Props) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadNonce, setLoadNonce] = useState(0);
 
-  const [binId, setBinId] = useState("");
   // In a split, these are the two figures. With one Quantity box, `unassembled` is that box
   // and `assembled` stays empty — the route takes an uncoded or no-assembly add that way.
   const [assembled, setAssembled] = useState("");
@@ -207,7 +160,6 @@ export function AddStockSheet({ open, product, onClose, onAdded }: Props) {
       setCtx(null);
       setLoading(true);
       setLoadError(null);
-      setBinId("");
       setAssembled("");
       setUnassembled("");
       setReason("");
@@ -223,7 +175,7 @@ export function AddStockSheet({ open, product, onClose, onAdded }: Props) {
     requestIdRef.current = newRequestId();
   }, [open, productId]);
 
-  // The context: the product, whether it has unit codes, the bins and the rule locks.
+  // The context: the product, whether it has unit codes, and its one bin (or why it has none).
   useEffect(() => {
     if (!open || !productId) return;
     let cancelled = false;
@@ -231,16 +183,12 @@ export function AddStockSheet({ open, product, onClose, onAdded }: Props) {
     void apiTry<AddStockContext>(`/api/products/${productId}/add-stock`).then((res) => {
       if (cancelled) return;
       if (res.data) {
-        const groups = groupBins(res.data);
-        const start = initialBinId(res.data, groups);
         setCtx(res.data);
-        setBinId(start);
         log.debug("add-stock context loaded", {
           productId,
           tracked: res.data.tracked,
-          bins: res.data.bins.length,
-          ruleBins: res.data.ruleBins.length,
-          preselected: Boolean(start),
+          binId: res.data.bin?.id ?? null,
+          binSource: res.data.binSource,
           ms: Date.now() - started,
         });
       } else {
@@ -275,9 +223,7 @@ export function AddStockSheet({ open, product, onClose, onAdded }: Props) {
 
   if (!open || !product) return null;
 
-  const groups = ctx ? groupBins(ctx) : [];
-  const bin = ctx?.bins.find((b) => b.id === binId) ?? null;
-  const binRule = bin && ctx ? ctx.ruleBins.find((r) => r.warehouseId === bin.warehouseId) ?? null : null;
+  const bin = ctx?.bin ?? null;
   const tracked = ctx?.tracked ?? false;
   // The split is asked only where it means something: units get codes AND the bin builds.
   const split = tracked && !(bin?.nonAssemblable ?? false);
@@ -292,11 +238,9 @@ export function AddStockSheet({ open, product, onClose, onAdded }: Props) {
     ? null
     : inactive
       ? `${ctx.product.name} is not active — restore it before adding stock`
-      : ctx.bins.length === 0
-        ? "There is no active bin to add into — create one on Bins first"
-        : !bin
-          ? "Pick the bin these go into"
-          : qty < 1
+      : !bin
+        ? "No bin — stock cannot be added to this product"
+        : qty < 1
             ? "Enter how many to add"
             : qty > MAX_QTY
               ? `At most ${n(MAX_QTY)} at a time`
@@ -311,19 +255,6 @@ export function AddStockSheet({ open, product, onClose, onAdded }: Props) {
           tracked ? `${n(qty)} new unit code${qty === 1 ? "" : "s"}` : "no codes"
         }`
       : null;
-
-  function chooseBin(id: string) {
-    const next = ctx?.bins.find((b) => b.id === id) ?? null;
-    const nextSplit = tracked && !(next?.nonAssemblable ?? false);
-    // Leaving a split for one Quantity box keeps the TOTAL the person typed, in the one box.
-    if (!nextSplit && toInt(assembled) > 0) {
-      setUnassembled(String(toInt(assembled) + toInt(unassembled)));
-      setAssembled("");
-    }
-    setBinId(id);
-    setSubmitError(null);
-    log.debug("add-stock bin chosen", { productId, binId: id, nonAssemblable: next?.nonAssemblable ?? false });
-  }
 
   function retryLoad() {
     setLoadError(null);
@@ -424,7 +355,7 @@ export function AddStockSheet({ open, product, onClose, onAdded }: Props) {
             {loading ? (
               <div className="flex items-center justify-center gap-2 py-10" role="status">
                 <Loader2 className="h-5 w-5 animate-spin text-slate-400" aria-hidden />
-                <span className="text-sm text-slate-500">Loading bins and stock…</span>
+                <span className="text-sm text-slate-500">Loading bin and stock…</span>
               </div>
             ) : loadError ? (
               <div className="space-y-3">
@@ -458,166 +389,158 @@ export function AddStockSheet({ open, product, onClose, onAdded }: Props) {
                   </div>
                 )}
 
-                {/* Bin — it decides the warehouse. Grouped by warehouse; a rule-locked warehouse
-                    offers only the rule's bin. */}
+                {/* Bin — the product's own, READ-ONLY (owner, 14 Oct 2026). The route decided it and
+                    refuses any other; with none, Add stock does not happen. */}
                 <div>
-                  <label htmlFor="add-stock-bin" className="text-xs font-medium text-slate-700">Bin</label>
-                  <select
-                    id="add-stock-bin"
-                    value={binId}
-                    onChange={(e) => chooseBin(e.target.value)}
-                    disabled={submitting || inactive || ctx.bins.length === 0}
-                    className="mt-1 flex h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-slate-900 disabled:opacity-50"
-                  >
-                    <option value="" disabled>
-                      {ctx.bins.length === 0 ? "No active bins" : "Pick a bin…"}
-                    </option>
-                    {groups.map((g) => (
-                      <optgroup
-                        key={g.warehouseId}
-                        label={g.rule ? `${g.warehouseName} — set by rule ${g.rule.rule}` : g.warehouseName}
-                      >
-                        {g.bins.length === 0 ? (
-                          <option value={`unavailable:${g.warehouseId}`} disabled>
-                            Rule bin {g.rule?.binCode} is not active
-                          </option>
-                        ) : (
-                          g.bins.map((b) => (
-                            <option key={b.id} value={b.id}>
-                              {binLabel(b, ctx.product.binId)}
-                            </option>
-                          ))
-                        )}
-                      </optgroup>
-                    ))}
-                  </select>
-                  {binRule && bin && (
-                    <p className="mt-1 text-[11px] text-blue-700">
-                      Set by rule {binRule.rule} — in {bin.warehouseName} this product goes only into bin {binRule.binCode}.
-                    </p>
-                  )}
-                  {!ctx.product.binId && bin && (
-                    <p className="mt-1 text-[11px] text-slate-500">
-                      This product has no home bin yet — {bin.code} becomes its home bin.
-                    </p>
+                  <p id="add-stock-bin-label" className="text-xs font-medium text-slate-700">Bin</p>
+                  {bin ? (
+                    <div
+                      aria-labelledby="add-stock-bin-label"
+                      className="mt-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5"
+                    >
+                      <p className="text-sm font-semibold text-slate-900 break-words">{binTitle(bin)}</p>
+                      <p className="mt-0.5 text-[11px] text-slate-500 break-words">
+                        {bin.warehouseName}
+                        {bin.nonAssemblable ? " · no assembly" : ""}
+                        {" · "}
+                        {ctx.binSource === "rule" ? `set by ${ctx.binRule ?? "a home-bin rule"}` : "home bin"}
+                      </p>
+                      {!ctx.product.binId && (
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          This product has no home bin yet — {bin.code} becomes its home bin.
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="mt-1 flex items-start gap-2 p-3 rounded-lg border border-amber-200 bg-amber-50" role="alert">
+                      <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" aria-hidden />
+                      <p className="text-xs text-amber-800 break-words">
+                        {ctx.noBinReason ?? `${ctx.product.name} has no bin — stock cannot be added to it.`}
+                      </p>
+                    </div>
                   )}
                 </div>
 
-                {/* Quantity — split only where the answer means something (R3, R4, Q2, Q3). */}
-                {split ? (
-                  <fieldset disabled={submitting || inactive} className="min-w-0">
-                    <legend className="text-xs font-medium text-slate-700">Quantity</legend>
-                    <div className="mt-1 grid grid-cols-2 gap-2">
+                {/* Nothing to fill in without a bin — the add cannot happen. */}
+                {bin && (
+                  <>
+                    {/* Quantity — split only where the answer means something (R3, R4, Q2, Q3). */}
+                    {split ? (
+                      <fieldset disabled={submitting || inactive} className="min-w-0">
+                        <legend className="text-xs font-medium text-slate-700">Quantity</legend>
+                        <div className="mt-1 grid grid-cols-2 gap-2">
+                          <div>
+                            <label htmlFor="add-stock-assembled" className="text-[11px] text-slate-500">Assembled</label>
+                            <Input
+                              id="add-stock-assembled"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              autoComplete="off"
+                              placeholder="0"
+                              value={assembled}
+                              onChange={(e) => {
+                                setAssembled(digits(e.target.value));
+                                setSubmitError(null);
+                              }}
+                              className="mt-0.5 h-11 text-base sm:text-sm tabular-nums"
+                            />
+                          </div>
+                          <div>
+                            <label htmlFor="add-stock-unassembled" className="text-[11px] text-slate-500">Not assembled</label>
+                            <Input
+                              id="add-stock-unassembled"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              autoComplete="off"
+                              placeholder="0"
+                              value={unassembled}
+                              onChange={(e) => {
+                                setUnassembled(digits(e.target.value));
+                                setSubmitError(null);
+                              }}
+                              className="mt-0.5 h-11 text-base sm:text-sm tabular-nums"
+                            />
+                          </div>
+                        </div>
+                        <p className="mt-1.5 text-[11px] text-slate-500">
+                          <span className="font-semibold text-slate-700 tabular-nums">Total {n(qty)}</span>
+                          {" · "}Not-assembled units go to the assembly queue.
+                        </p>
+                      </fieldset>
+                    ) : (
                       <div>
-                        <label htmlFor="add-stock-assembled" className="text-[11px] text-slate-500">Assembled</label>
+                        <label htmlFor="add-stock-qty" className="text-xs font-medium text-slate-700">Quantity</label>
                         <Input
-                          id="add-stock-assembled"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          autoComplete="off"
-                          placeholder="0"
-                          value={assembled}
-                          onChange={(e) => {
-                            setAssembled(digits(e.target.value));
-                            setSubmitError(null);
-                          }}
-                          className="mt-0.5 h-11 text-base sm:text-sm tabular-nums"
-                        />
-                      </div>
-                      <div>
-                        <label htmlFor="add-stock-unassembled" className="text-[11px] text-slate-500">Not assembled</label>
-                        <Input
-                          id="add-stock-unassembled"
+                          id="add-stock-qty"
                           inputMode="numeric"
                           pattern="[0-9]*"
                           autoComplete="off"
                           placeholder="0"
                           value={unassembled}
+                          disabled={submitting || inactive}
                           onChange={(e) => {
                             setUnassembled(digits(e.target.value));
                             setSubmitError(null);
                           }}
-                          className="mt-0.5 h-11 text-base sm:text-sm tabular-nums"
+                          className="mt-1 h-11 text-base sm:text-sm tabular-nums"
                         />
+                        {!tracked ? (
+                          <p className="mt-1.5 text-[11px] text-slate-500">
+                            This product has no unit codes yet — it is added to the count without codes.
+                            Give codes to the whole bin with a stock audit.
+                          </p>
+                        ) : bin?.nonAssemblable ? (
+                          <p className="mt-1.5 text-[11px] text-slate-500">
+                            This bin&apos;s items are never assembled — no question to answer.
+                          </p>
+                        ) : null}
                       </div>
-                    </div>
-                    <p className="mt-1.5 text-[11px] text-slate-500">
-                      <span className="font-semibold text-slate-700 tabular-nums">Total {n(qty)}</span>
-                      {" · "}Not-assembled units go to the assembly queue.
-                    </p>
-                  </fieldset>
-                ) : (
-                  <div>
-                    <label htmlFor="add-stock-qty" className="text-xs font-medium text-slate-700">Quantity</label>
-                    <Input
-                      id="add-stock-qty"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      autoComplete="off"
-                      placeholder="0"
-                      value={unassembled}
-                      disabled={submitting || inactive}
-                      onChange={(e) => {
-                        setUnassembled(digits(e.target.value));
-                        setSubmitError(null);
-                      }}
-                      className="mt-1 h-11 text-base sm:text-sm tabular-nums"
-                    />
-                    {!tracked ? (
-                      <p className="mt-1.5 text-[11px] text-slate-500">
-                        This product has no unit codes yet — it is added to the count without codes.
-                        Give codes to the whole bin with a stock audit.
-                      </p>
-                    ) : bin?.nonAssemblable ? (
-                      <p className="mt-1.5 text-[11px] text-slate-500">
-                        This bin&apos;s items are never assembled — no question to answer.
-                      </p>
-                    ) : null}
-                  </div>
-                )}
+                    )}
 
-                {/* Reason — required; it is the only record of why the count moved. */}
-                <div>
-                  <label htmlFor="add-stock-reason" className="text-xs font-medium text-slate-700">Reason</label>
-                  <Input
-                    id="add-stock-reason"
-                    value={reason}
-                    maxLength={REASON_MAX}
-                    autoComplete="off"
-                    placeholder="e.g. found in godown"
-                    disabled={submitting || inactive}
-                    onChange={(e) => setReason(e.target.value)}
-                    className="mt-1 h-11 text-base sm:text-sm"
-                  />
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {REASON_EXAMPLES.map((r) => (
-                      <button
-                        key={r}
-                        type="button"
+                    {/* Reason — required; it is the only record of why the count moved. */}
+                    <div>
+                      <label htmlFor="add-stock-reason" className="text-xs font-medium text-slate-700">Reason</label>
+                      <Input
+                        id="add-stock-reason"
+                        value={reason}
+                        maxLength={REASON_MAX}
+                        autoComplete="off"
+                        placeholder="e.g. found in godown"
                         disabled={submitting || inactive}
-                        onClick={() => setReason(r)}
-                        className={`min-h-[44px] px-3 rounded-full border text-xs font-medium transition-colors focus-ring disabled:opacity-50 ${
-                          reason === r
-                            ? "border-slate-900 bg-slate-900 text-white"
-                            : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                        }`}
-                      >
-                        {r}
-                      </button>
-                    ))}
-                  </div>
-                  {reason.length > REASON_MAX - 50 && (
-                    <p className="mt-1 text-[11px] text-slate-400 tabular-nums">{reason.length}/{REASON_MAX}</p>
-                  )}
-                </div>
+                        onChange={(e) => setReason(e.target.value)}
+                        className="mt-1 h-11 text-base sm:text-sm"
+                      />
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {REASON_EXAMPLES.map((r) => (
+                          <button
+                            key={r}
+                            type="button"
+                            disabled={submitting || inactive}
+                            onClick={() => setReason(r)}
+                            className={`min-h-[44px] px-3 rounded-full border text-xs font-medium transition-colors focus-ring disabled:opacity-50 ${
+                              reason === r
+                                ? "border-slate-900 bg-slate-900 text-white"
+                                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                            }`}
+                          >
+                            {r}
+                          </button>
+                        ))}
+                      </div>
+                      {reason.length > REASON_MAX - 50 && (
+                        <p className="mt-1 text-[11px] text-slate-400 tabular-nums">{reason.length}/{REASON_MAX}</p>
+                      )}
+                    </div>
 
-                {preview && (
-                  <p
-                    className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800 tabular-nums break-words"
-                    aria-live="polite"
-                  >
-                    {preview}
-                  </p>
+                    {preview && (
+                      <p
+                        className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800 tabular-nums break-words"
+                        aria-live="polite"
+                      >
+                        {preview}
+                      </p>
+                    )}
+                  </>
                 )}
 
                 {submitError && (

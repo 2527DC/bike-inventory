@@ -68,9 +68,16 @@ body {
   padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
 }
 
-/* Bottom sheet safe padding — clears device safe area */
+/* Bottom sheet safe padding — clears device safe area.
+ *
+ * `max()`, never the inset alone (14 Oct 2026). Every user pairs this with its own padding
+ * (`p-3`/`p-4`/`p-5`, `py-3`), and this un-layered rule beats Tailwind's layered utilities — so
+ * `env(safe-area-inset-bottom)` alone, which is 0 on a desktop and on phones without a home bar,
+ * WIPED that bottom padding: footer buttons sat on the sheet's rounded edge and were clipped
+ * (Add stock, Reorder, Assembly level, transfers, purchase orders, deliveries — 13 places).
+ * Now: at least 1rem, or the home-bar inset when that is larger — the same as before on an iPhone. */
 .pb-safe {
-  padding-bottom: env(safe-area-inset-bottom, 8px);
+  padding-bottom: max(1rem, env(safe-area-inset-bottom, 0px));
 }
 
 /* Position fixed elements above bottom nav */

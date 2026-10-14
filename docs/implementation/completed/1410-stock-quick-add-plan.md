@@ -1,6 +1,6 @@
 # Add stock directly from /stock — a quantity, assembled or not, a reason; no stock audit
 
-Status: completed — 14 Oct 2026, released: PR #79 merged into `main` at the owner's instruction (this feature alone; `test` was not merged), then deployed to the VPS by hand from `main` (§6). No migration. Left for the owner: the browser pass (§4.3), granting `inventory_adjustments.create` beyond ADMIN, and merging this branch into `test` (Branch line).
+Status: completed — 14 Oct 2026, released: PR #79 merged into `main` at the owner's instruction (this feature alone; `test` was not merged), then deployed to the VPS by hand from `main` (§6). No migration. Left for the owner: the browser pass (§4.3), granting `inventory_adjustments.create` beyond ADMIN, and merging this branch into `test` (Branch line). **§7 follow-up, 14 Oct 2026:** the ⋮ row menu, the product's own bin read-only, no bin = no add, and the unclipped sheet footer — to `main` by its own PR from `feat/1410-stock-row-menu` (§7.5).
 Branch: **`feat/1410-stock-quick-add`** — off `origin/main` @ `e3b20bc` (owner: "it has to have a code of main branch", needed immediately). It goes to `main` by PR without the features waiting on `test`, and is merged into `test` afterwards so the two do not drift. The same branch already holds the `/stock` table fix (scrolling table, a table at every width, page numbers — 14 Oct, uncommitted).
 
 Every `file:line` below was read from disk on 14 Oct 2026 at `e3b20bc`.
@@ -207,3 +207,38 @@ On `feat/1410-stock-quick-add`, from `origin/main` @ `e3b20bc`.
 - PR #79 merged into `main` (a merge commit); its Type check and Build passed.
 - Deployed by hand: Actions ▸ Deploy to VPS ▸ `main`. No migration, so the migrate job finds nothing to apply.
 - Not done here: the browser pass, the grant, and merging this branch into `test`.
+
+## 7. Changes after the first build — 14 Oct 2026
+
+### 7.1 The owner's words, verbatim
+
+> And I need you to update the related actions button in the stock listing where I let it have three dots on pressing that we can get the related actions button.
+
+> in this add stock thing it must show the product reladed bin not all bin it should show and that bin  must be only readabel  and fix the model ui whhere  the bottom teo buttom
+
+Answers the same day: a product with no bin — *"no bin means ther cant be add stock the add stock action must not happen"*; the clipped footer — fix the shared rule (all sheets).
+
+### 7.2 Restated
+
+| # | Requirement |
+|---|---|
+| C1 | Each `/stock` row's actions sit behind one ⋮ button that opens a menu (Add stock, Reorder settings, Assembly level, Deactivate / Restore — same permissions as before). |
+| C2 | Add stock shows the product's OWN bin, read-only — not a list of all bins. |
+| C3 | A product with no bin cannot take stock: the add does not happen. |
+| C4 | The sheet's Cancel / Add buttons are no longer clipped at the bottom. |
+
+### 7.3 Built
+
+- **C1** — `stock/_components/stock-row-menu.tsx` (new), `stock-table.tsx`. Opening or choosing never opens the product; the menu sits above the table's scroll box and opens upward near the bottom; Escape / outside tap / Tab / resize / the row scrolling away close it; arrow keys, Home and End move through it.
+- **C2, C3** — `src/lib/stock/add-stock-bin.ts` (new) decides the bin once, for the GET and the POST alike: a home-bin rule's bin in the home bin's warehouse (the rule wins, as on inbound), else the home bin when it and its warehouse are active; with no home bin, the rule's bin when rules place the product in exactly one warehouse. Anything else is "no bin": the GET returns `bin: null` with the reason, the sheet shows that reason and no quantity, reason or Add; the POST answers 409 with the same reason, and 409 for any `binId` other than the product's bin. The GET no longer lists every bin (`bins`, `ruleBins` are gone from its answer). The refusal names the way out: Edit → Bin on the product's page, or a home-bin rule. Local data, 14 Oct: 187 active products have a home bin, 563 more get one from a rule, 5,052 have neither and so cannot take stock this way until they are given one.
+- **C4** — the cause was the shared `.pb-safe` rule (`globals.css`): `padding-bottom: env(safe-area-inset-bottom)` is 0 on a desktop and on phones without a home bar, and, being un-layered, it overrode each footer's own `p-4`. Now `max(1rem, env(…))`. Fixes the same clipping on all 13 users of the class; iPhones with a home bar are unchanged.
+
+### 7.4 Checks — 14 Oct 2026
+
+`tsc` clean; `eslint` 0 errors on the changed files; `npm run build` passes. Against the local database on `:3100`: a new 18-check run (one bin in the GET and no list; rule over home bin; rule-only product; no bin and inactive bin refused with a reason and nothing written; any other bin 409; non-assemblable home bin) and the original suite, updated for the three checks that assumed a picker (concurrency, double tap and refusals unchanged) — all pass, all cleaned up. Headless Chrome at 1280 and 390 px: no bin picker, the bin shown read-only, the no-bin product shows only the reason and a disabled Add, and 16–17 px clear below the footer buttons (0 before).
+
+### 7.5 Released — 14 Oct 2026
+
+- The owner, 14 Oct 2026: *"for the main branch related to the action of 3 dot related think is in local but not in the product i need u to merge that in to the main branch"*.
+- These changes were built uncommitted on `feat/1410-fetch-permissions`. They reached `main` on their own branch, `feat/1410-stock-row-menu`, cut from `main` @ `144a3bd` after PR #80. The six files are copied unchanged; their base on `main` matched byte for byte.
+- No migration and no permission change. It is deployed with the next Deploy to VPS from `main`.
