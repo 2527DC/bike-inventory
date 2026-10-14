@@ -29,22 +29,55 @@ export const ZERO_CONDITION: ConditionCounts = { assembled: 0, unassembled: 0, n
 const LIVE = LIVE_UNIT_STATUSES as string[];
 
 /**
+ * Where a unit must be to count — the scope the /stock list is showing, so the condition split
+ * beside a row describes the same stock as its Stock figure (plan 1410-stock-location-and-bin,
+ * A3). The list sends one scope at a time; the fields still compose if combined.
+ *
+ *   storeId      the store's active warehouses (plan 0909-stock-store-and-warehouse-scoping, D8)
+ *   warehouseId  one location
+ *   binId        one bin
+ *   unbinned     units in no bin, or in a deleted one — the "No bin" scope, with `warehouseId`
+ */
+export interface UnitScope {
+  storeId?: string;
+  warehouseId?: string;
+  binId?: string;
+  unbinned?: boolean;
+}
+
+/** `UnitScope` as a unit `where`, for Prisma queries. */
+function unitScopeWhere(scope: UnitScope): Prisma.InventoryUnitWhereInput {
+  return {
+    ...(scope.storeId && { warehouse: { storeId: scope.storeId, isActive: true } }),
+    ...(scope.warehouseId && { warehouseId: scope.warehouseId }),
+    ...(scope.binId && { binId: scope.binId }),
+    ...(scope.unbinned && { OR: [{ binId: null }, { bin: { isActive: false } }] }),
+  };
+}
+
+/**
  * Per-product condition counts for ONE page of products — a single grouped query keyed by the
  * page's ids, so the list costs one extra round trip however many rows it shows.
  *
- * `storeId` scopes the count to that store's active warehouses, matching the store-scoped
- * `currentStock` the list shows beside it.
+ * `scope` limits the count to the stock the list is showing (`UnitScope`), matching the scoped
+ * `currentStock` beside it. No scope counts every live unit.
  */
 export async function conditionByProduct(
   productIds: string[],
-  opts: { storeId?: string } = {}
+  scope: UnitScope = {}
 ): Promise<Map<string, ConditionCounts>> {
   const out = new Map<string, ConditionCounts>();
   if (productIds.length === 0) return out;
 
   const started = Date.now();
-  const storeJoin = opts.storeId
-    ? Prisma.sql`JOIN "Warehouse" w ON w.id = u.warehouse_id AND w."isActive" AND w."storeId" = ${opts.storeId}`
+  const storeJoin = scope.storeId
+    ? Prisma.sql`JOIN "Warehouse" w ON w.id = u.warehouse_id AND w."isActive" AND w."storeId" = ${scope.storeId}`
+    : Prisma.empty;
+  const warehouseFilter = scope.warehouseId ? Prisma.sql`AND u.warehouse_id = ${scope.warehouseId}` : Prisma.empty;
+  const binFilter = scope.binId ? Prisma.sql`AND u.bin_id = ${scope.binId}` : Prisma.empty;
+  // The same set as unitScopeWhere's `unbinned`: no bin, or a bin that has been deleted.
+  const unbinnedFilter = scope.unbinned
+    ? Prisma.sql`AND (u.bin_id IS NULL OR NOT EXISTS (SELECT 1 FROM bins b WHERE b.id = u.bin_id AND b."isActive"))`
     : Prisma.empty;
 
   const rows = await prisma.$queryRaw<
@@ -58,6 +91,9 @@ export async function conditionByProduct(
     ${storeJoin}
     WHERE u.product_id = ANY(${productIds})
       AND u.status::text = ANY(${LIVE})
+      ${warehouseFilter}
+      ${binFilter}
+      ${unbinnedFilter}
     GROUP BY u.product_id
   `;
 
@@ -71,7 +107,10 @@ export async function conditionByProduct(
   log.debug("condition by product", {
     products: productIds.length,
     withUnits: rows.length,
-    storeId: opts.storeId,
+    storeId: scope.storeId,
+    warehouseId: scope.warehouseId,
+    binId: scope.binId,
+    unbinned: scope.unbinned,
     ms: Date.now() - started,
   });
   return out;
@@ -79,15 +118,15 @@ export async function conditionByProduct(
 
 /**
  * The `where` clause for "products that hold at least one live non-assemblable unit" — the
- * No assembly chip on /stock (R42). Scoped to a store's warehouses when `storeId` is given.
+ * No assembly chip on /stock (R42). Limited to the list's scope when one is given (`UnitScope`).
  */
-export function hasNoAssemblyUnitsWhere(storeId?: string): Prisma.ProductWhereInput {
+export function hasNoAssemblyUnitsWhere(scope: UnitScope = {}): Prisma.ProductWhereInput {
   return {
     inventoryUnits: {
       some: {
         nonAssemblable: true,
         status: { in: LIVE_UNIT_STATUSES },
-        ...(storeId && { warehouse: { storeId, isActive: true } }),
+        ...unitScopeWhere(scope),
       },
     },
   };

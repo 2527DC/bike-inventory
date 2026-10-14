@@ -16,8 +16,10 @@ import { PLACEHOLDER_BRAND_NAMES_LOWER, PLACEHOLDER_CATEGORY } from "@/lib/impor
 import { storeById } from "@/lib/stores";
 import { createLogger } from "@/lib/logger";
 import { categorySubtreeIds } from "@/lib/categories/tree";
-import { conditionByProduct, hasNoAssemblyUnitsWhere, ZERO_CONDITION } from "@/lib/stock-condition";
-import { productHasNoBinWhere, productInBinWhere } from "@/lib/products/bin-filter";
+import { conditionByProduct, hasNoAssemblyUnitsWhere, ZERO_CONDITION, type UnitScope } from "@/lib/stock-condition";
+import { productHasNoBinWhere } from "@/lib/products/bin-filter";
+import { warehouseById } from "@/lib/warehouses";
+import { getBinQtyMap, getWarehouseHoldings } from "@/lib/units/bin-qty";
 import { isLowStock } from "@/lib/reorder";
 
 const log = createLogger("products:list");
@@ -33,7 +35,6 @@ export async function GET(req: NextRequest) {
     const categoryId = searchParams.get("categoryId") || undefined;
     const brandId = searchParams.get("brandId") || undefined;
     const status = searchParams.get("status") || "ACTIVE";
-    const binId = searchParams.get("binId") || undefined;
     const minStock = searchParams.get("minStock") ? parseInt(searchParams.get("minStock")!) : undefined;
     const maxStock = searchParams.get("maxStock") ? parseInt(searchParams.get("maxStock")!) : undefined;
     // "Needs details" — products the import could not describe. See the note on the clause below.
@@ -49,6 +50,61 @@ export async function GET(req: NextRequest) {
       return errorResponse("Unknown store", 400);
     }
     const storeId = store?.id;
+
+    // Location and bin scopes (plan 1410-stock-location-and-bin, A2) — the Location and Bin
+    // pickers on /stock. Same contract as the store scope: only what the scope holds is listed,
+    // and every `currentStock` is the scope's own number.
+    //   warehouseId               one location — its StockLevel quantity
+    //   binId                     one bin — what is PHYSICALLY in it (getBinQtyMap: live units,
+    //                             else the typed-in quantity), not products whose home bin merely
+    //                             points there (R3). It used to match the home bin too, and show
+    //                             the product's total everywhere.
+    //   warehouseId + binId=none  the location's stock that is in no bin (Q1)
+    // Each id is checked, and a bin must sit in the location and the store it is sent with: a
+    // mismatch is refused rather than answered with an empty list that looks like "nothing here".
+    const warehouseIdParam = searchParams.get("warehouseId") || undefined;
+    const binIdParam = searchParams.get("binId") || undefined;
+    const warehouse = warehouseIdParam ? await warehouseById(warehouseIdParam) : null;
+    if (warehouseIdParam && !warehouse) {
+      log.warn("unknown location on product list", { warehouseId: warehouseIdParam });
+      return errorResponse("Unknown location", 400);
+    }
+    if (warehouse && storeId && warehouse.storeId !== storeId) {
+      log.warn("location outside store on product list", { warehouseId: warehouse.id, storeId });
+      return errorResponse("That location is not in this store", 400);
+    }
+    const noBin = binIdParam === "none";
+    if (noBin && !warehouse) {
+      log.warn("no-bin scope without a location", {});
+      return errorResponse("Choose a location to list its stock that is in no bin", 400);
+    }
+    const bin =
+      binIdParam && !noBin
+        ? await prisma.bin.findUnique({
+            where: { id: binIdParam },
+            select: { id: true, warehouseId: true, isActive: true, warehouse: { select: { storeId: true, isActive: true } } },
+          })
+        : null;
+    if (binIdParam && !noBin && (!bin || !bin.isActive || !bin.warehouse.isActive)) {
+      log.warn("unknown bin on product list", { binId: binIdParam });
+      return errorResponse("Unknown bin", 400);
+    }
+    if (bin && warehouse && bin.warehouseId !== warehouse.id) {
+      log.warn("bin outside location on product list", { binId: bin.id, warehouseId: warehouse.id });
+      return errorResponse("That bin is not in this location", 400);
+    }
+    if (bin && storeId && bin.warehouse.storeId !== storeId) {
+      log.warn("bin outside store on product list", { binId: bin.id, storeId });
+      return errorResponse("That bin is not in this store", 400);
+    }
+
+    // The narrowest scope wins: a bin, the no-bin stock of a location, a location, a store.
+    const scope: { kind: "bin" | "no-bin" | "location" | "store"; id: string; units: UnitScope } | null =
+      bin ? { kind: "bin", id: bin.id, units: { binId: bin.id } }
+      : noBin && warehouse ? { kind: "no-bin", id: warehouse.id, units: { warehouseId: warehouse.id, unbinned: true } }
+      : warehouse ? { kind: "location", id: warehouse.id, units: { warehouseId: warehouse.id } }
+      : storeId ? { kind: "store", id: storeId, units: { storeId } }
+      : null;
 
     // R43, P13: a parent category includes its children's products; a child (a leaf) is just
     // itself. One recursive CTE (Part I's helper), then a plain `IN`.
@@ -87,7 +143,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    if (noAssemblyOnly) and.push(hasNoAssemblyUnitsWhere(storeId));
+    if (noAssemblyOnly) and.push(hasNoAssemblyUnitsWhere(scope?.units));
 
     if (needsDetails) {
       log.debug("needs-details filter", { hasSearch: Boolean(search), storeId: storeId ?? null });
@@ -119,10 +175,9 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // The bin filter finds products by where their stock IS — home bin, live units, or bin
-    // quantity (plan 2209, R2, Q2a) — not only by `Product.binId`, which goes stale as units move.
-    // Pushed onto `and` because it is an OR group, for the reason given above the array.
-    if (binId) and.push(productInBinWhere(binId));
+    // A bin is a scope now (above), not a where-clause: `productInBinWhere` (plan 2209, R2) also
+    // matched a product whose home bin is the bin while its stock sat elsewhere, and left the
+    // Stock column on the product's total everywhere (plan 1410-stock-location-and-bin, §2.1).
 
     // The half of isLowStock that reads only the product row, so it holds on both paths below.
     // The other half — stock at or below the level — compares against a DIFFERENT stock number
@@ -159,26 +214,18 @@ export async function GET(req: NextRequest) {
       bin: { select: { id: true, code: true, location: true } },
     } satisfies Prisma.ProductSelect;
 
-    if (storeId) {
-      // The store-scoped list (D8). `Product.currentStock` is the global cache across every
-      // warehouse, so under a store filter it is the wrong number to show, sort by or range
-      // on. The store's own quantity is SUM(StockLevel.quantity) over that store's active
-      // warehouses, and Prisma cannot order or paginate on a relation aggregate — so this path
-      // fetches the matched set, bounded by "products the store holds with quantity above
-      // zero", and sorts and pages it in code. The response shape is the same as below.
+    if (scope) {
+      // The scoped list — a store (D8), and since plan 1410-stock-location-and-bin a location,
+      // a bin or a location's no-bin stock. `Product.currentStock` is the global cache across
+      // every warehouse, so under a scope it is the wrong number to show, sort by or range on.
+      // Each scope yields its own quantity per product, and Prisma cannot order or paginate on
+      // those — so this path fetches the matched set, bounded by "products the scope holds with
+      // quantity above zero", and sorts and pages it in code. The response shape is the same as
+      // below.
       //
-      // "Present in the store" is quantity > 0. `adjustWarehouseQty` clamps at zero
-      // (stock-location.ts:37), so > 0 and != 0 are the same set today; > 0 says what it means.
-      const held = await prisma.stockLevel.groupBy({
-        by: ["productId"],
-        where: { warehouse: { storeId, isActive: true } },
-        _sum: { quantity: true },
-      });
-      const qtyOf = new Map<string, number>();
-      for (const row of held) {
-        const qty = row._sum.quantity ?? 0;
-        if (qty > 0) qtyOf.set(row.productId, qty);
-      }
+      // "Present" is quantity > 0. `adjustWarehouseQty` clamps at zero (stock-location.ts:37),
+      // so > 0 and != 0 are the same set today; > 0 says what it means.
+      const qtyOf = await scopedQuantities(scope);
 
       // `currentStock` is set to undefined, not deleted: Prisma ignores an undefined field,
       // and the range it carried (minStock/maxStock — which is also how the In Stock and
@@ -201,7 +248,7 @@ export async function GET(req: NextRequest) {
       let rows = matched.map((p) => ({ ...p, currentStock: qtyOf.get(p.id) ?? 0 }));
       if (minStock !== undefined) rows = rows.filter((p) => p.currentStock >= minStock);
       if (maxStock !== undefined) rows = rows.filter((p) => p.currentStock <= maxStock);
-      // Low against the STORE's quantity — the number the Stock column shows under a scope.
+      // Low against the SCOPE's quantity — the number the Stock column shows under a scope.
       if (lowStockOnly) rows = rows.filter(isLowStock);
       if (sortBy === "currentStock") {
         rows.sort((a, b) =>
@@ -209,9 +256,14 @@ export async function GET(req: NextRequest) {
         );
       }
       const total = rows.length;
-      const pageRows = await withCondition(rows.slice(skip, skip + limit), storeId);
+      const pageRows = await withCondition(rows.slice(skip, skip + limit), scope.units);
 
-      log.debug("scoped product list", { storeId, held: qtyOf.size, returned: pageRows.length });
+      log.debug("scoped product list", {
+        scope: scope.kind,
+        scopeId: scope.id,
+        held: qtyOf.size,
+        returned: pageRows.length,
+      });
       return paginatedResponse(pageRows, total, page, limit);
     }
 
@@ -250,11 +302,46 @@ export async function GET(req: NextRequest) {
 }
 
 /**
+ * productId → what the scope holds, above zero only (plan 1410-stock-location-and-bin, A2).
+ *   store     SUM(StockLevel) over the store's active warehouses (plan 0909, D8)
+ *   location  that warehouse's StockLevel
+ *   bin       getBinQtyMap — what is physically in the bin, the figure stock counts use
+ *   no-bin    getWarehouseHoldings().noBin — the location's stock that no active bin holds,
+ *             the same figure the Bin picker shows beside "No bin"
+ */
+async function scopedQuantities(scope: { kind: "bin" | "no-bin" | "location" | "store"; id: string }) {
+  const qtyOf = new Map<string, number>();
+  if (scope.kind === "store") {
+    const held = await prisma.stockLevel.groupBy({
+      by: ["productId"],
+      where: { warehouse: { storeId: scope.id, isActive: true } },
+      _sum: { quantity: true },
+    });
+    for (const row of held) {
+      const qty = row._sum.quantity ?? 0;
+      if (qty > 0) qtyOf.set(row.productId, qty);
+    }
+  } else if (scope.kind === "location") {
+    const held = await prisma.stockLevel.findMany({
+      where: { warehouseId: scope.id, quantity: { gt: 0 } },
+      select: { productId: true, quantity: true },
+    });
+    for (const row of held) qtyOf.set(row.productId, row.quantity);
+  } else if (scope.kind === "bin") {
+    for (const [productId, qty] of await getBinQtyMap(scope.id)) if (qty > 0) qtyOf.set(productId, qty);
+  } else {
+    for (const [productId, qty] of (await getWarehouseHoldings(scope.id)).noBin) qtyOf.set(productId, qty);
+  }
+  return qtyOf;
+}
+
+/**
  * Attach `assembledUnits` / `unassembledUnits` / `noAssemblyUnits` to one page of rows (R10,
  * P7) — a single grouped query over the page's ids, so the list is not slowed by its length.
+ * Under a scope, only the units the scope holds are counted (plan 1410-stock-location-and-bin, A3).
  */
-async function withCondition<T extends { id: string }>(rows: T[], storeId?: string) {
-  const counts = await conditionByProduct(rows.map((r) => r.id), { storeId });
+async function withCondition<T extends { id: string }>(rows: T[], scope?: UnitScope) {
+  const counts = await conditionByProduct(rows.map((r) => r.id), scope);
   return rows.map((r) => {
     const c = counts.get(r.id) ?? ZERO_CONDITION;
     return {
