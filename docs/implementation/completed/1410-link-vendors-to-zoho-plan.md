@@ -1,6 +1,6 @@
 # Link the app's vendors to their Zoho vendors — a Link step on /vendors, and bill approval that links by GSTIN
 
-Status: in-progress — approved 14 Oct 2026 with the §1 defaults ("Yes, build it"); building on `feat/1410-vendor-zoho-link`.
+Status: completed — 14 Oct 2026, released: PR #86 merged into `main` at the owner's instruction and deployed to the VPS by hand. No migration. Left for the owner on production: `/vendors` ▸ Import from Zoho ▸ review ▸ **Link**, then **Retry** the five failing bills on Inwards; seeding the test database (§6).
 Branch: **`feat/1410-vendor-zoho-link`** — off `origin/main` @ `d93da76`. Released the same way as the other 14 Oct features: PR into `main`, Deploy to VPS, then merged into `test`.
 
 Every `file:line` below was read at `origin/main` @ `d93da76` on 14 Oct 2026. The production figures were read the same day, read-only.
@@ -235,3 +235,13 @@ Built on `feat/1410-vendor-zoho-link`, from `origin/main` @ `d93da76`.
 - **Merging the app's own duplicate-GSTIN vendors** (the 5 groups in §2.3). The Link step will show them for review; whether, say, RALSON and UNISTA are really one business is the owner's call.
 - **Zakya (POS) vendors.** The sheet reads Zoho Books, as today. At bill approval, C1 runs for **Books** bills only (§6): a Zakya bill carries Zakya's contact id, and linking a vendor to it would block that vendor's Books id for good.
 - **A one-off script.** The owner chose the button (§0.1).
+
+## 7. Released — 14 Oct 2026
+
+- The owner, 14 Oct 2026: *"Okay, I need you to update the related operations to the main production branch. After you do it, let me know. create a PR means related updations create a PR and merge it to the main branch and after the updation let me know"*.
+- Before the release the owner tried the branch locally on `:3100` against the test database.
+- PR #86 was merged into `main` once its Type check and Build passed, then Deploy to VPS ran from `main`. There is no migration, so the migrate job finds nothing to apply.
+- `vendors.fetch` already exists in production's catalog (seeded for plan 1410-per-module-fetch-permissions), and ADMIN holds it. No seed is needed.
+- **Still the owner's, on production:**
+  1. `/vendors` ▸ **Import from Zoho**: check the ticked GSTIN matches and the review rows, then tap **Link**.
+  2. On Inwards, **Retry** the five bills: NAREN INTERNATIONAL, GURU MAHIMA DISTRIBUTORS, HORNBACK E MOBILITY PRIVATE LIMITED, and INKODOP TECHNOLOGIES PRIVATE LIMITED ×2.

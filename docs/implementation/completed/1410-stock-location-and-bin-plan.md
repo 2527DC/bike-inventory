@@ -1,6 +1,6 @@
 # /stock by location and bin — pick Bch store or Bch warehouse, then one of its bins, and see what that bin holds
 
-Status: in-progress — approved 14 Oct 2026 with the §1 defaults ("Yes, build it"); building on `feat/1410-stock-location-bin`.
+Status: completed — 14 Oct 2026, released: PR #84 (`d93da76`) merged into `main` at the owner's instruction, deployed to the VPS (run 38561471706), merged into `test` (`9dd7d3c`). No migration. Left for the owner: the browser pass on bicyclecare.in, and whether "Low" should show under a bin.
 Branch: **`feat/1410-stock-location-bin`** — off `origin/main` @ `f93ec68` (owner: "Branch from main → PR to main"). After it reaches `main` it is merged into `test`.
 
 Every `file:line` below was read at `origin/main` @ `f93ec68` on 14 Oct 2026. The production figures were read the same day, read-only.
@@ -262,3 +262,13 @@ The screenshot is `localhost:3000/stock` on `main`'s code. That screen has the o
 - `tsc` is clean, `eslint` shows 0 errors (the same 2 warnings that were already on `main`), and `npm run build` exits 0.
 - The API and its parameters are unchanged, so the end-to-end results in §6 stand: picker = list on all 14 scopes.
 - Not run: a signed-in browser pass, because there is no browser in this session.
+
+## 8. Released — 14 Oct 2026
+
+- The owner, 14 Oct 2026: *"Okay, I need you to merge it to the main branch and deploy the thing. Yeah."*
+- **PR #84** merged into `main` as `d93da76`, carrying §6 and the §7 Store → Warehouse → Bin filter.
+- **Deploy to VPS** run `38561471706` succeeded. The migrate job found nothing to apply.
+- `main` was merged into `test` as `9dd7d3c`, through PR #85 for CI. The plans README conflicted (both sides added rows) and both sides were kept.
+- **Open for the owner:**
+  - the signed-in browser pass on bicyclecare.in
+  - whether "Low" should be hidden under a bin or No-bin scope (§6, inventory consultant). Today it compares a bin's quantity with the product's overall reorder level.
