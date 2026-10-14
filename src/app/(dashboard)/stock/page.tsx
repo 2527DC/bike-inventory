@@ -27,7 +27,7 @@ import { ReorderSheet, type ReorderTarget, type ReorderSaved } from "@/component
 import { AssemblyLevelSheet, type AssemblyLevelTarget, type AssemblyLevelSaved } from "@/components/assembly-level-sheet";
 import { ASSEMBLY_LEVELS, type AssemblyLevelValue } from "@/lib/assembly-level";
 import { SearchableSelect } from "@/components/ui/searchable-select";
-import { useStores } from "@/hooks/use-sites";
+import { useStockLocations } from "./_components/use-stock-locations";
 import { CategoryTreeSelect } from "@/components/category-tree-select";
 import { ZohoStockImportSheet } from "./_components/zoho-stock-import-sheet";
 import { AddStockSheet, type AddStockTarget, type AddStockDone } from "./_components/add-stock-sheet";
@@ -81,6 +81,8 @@ const EXPORT_PAGE_SIZE = 500;
 const EXPORT_MAX_ROWS = 10_000;
 
 const fmt = (v: number) => v.toLocaleString("en-IN");
+/** How a location's kind reads in the Location picker (plan 1410-stock-location-and-bin, B1). */
+const LOCATION_KIND_LABEL: Record<"FLOOR" | "GODOWN", string> = { FLOOR: "Shop floor", GODOWN: "Godown" };
 
 /** A one-line message above the list: an add that landed, an export's progress or outcome. */
 type Notice = { tone: "success" | "info" | "error"; text: string };
@@ -197,12 +199,24 @@ function StockScreen() {
   const [showFilters, setShowFilters] = useState(false);
   const [selectedBrand, setSelectedBrand] = useState(() => searchParams.get("brandId") ?? "");
   const [selectedCategory, setSelectedCategory] = useState(() => searchParams.get("categoryId") ?? "");
-  const [selectedBin, setSelectedBin] = useState("");
-  // The store scope (plan 0909-stock-store-and-warehouse-scoping, C2). "" is no scope. When
-  // set, the API answers with only what that store holds and every Stock figure on the page
-  // is that store's, not the global total — the caption under the control says so.
-  const [selectedStore, setSelectedStore] = useState(() => searchParams.get("storeId") ?? "");
-  const { stores, loading: storesLoading, error: storesError } = useStores();
+  // The location scope (plan 1410-stock-location-and-bin, B1, B2). One Location picker replaces
+  // the old Store and "Bin / Location" pair: "" is every location, `store:<id>` a whole store
+  // (the store scope of plan 0909, C2, kept), `wh:<id>` one location. The Bin picker opens only
+  // under one location: "" its whole stock, `none` its stock in no bin, or a bin id. Whatever is
+  // chosen, the API answers with only what it holds and every Stock figure on the page is that
+  // scope's, not the global total — the caption under the pickers says so. Read once from the
+  // URL, written back on change, so a refresh or a shared link reopens the same view.
+  const [selectedLocation, setSelectedLocation] = useState(() => {
+    const warehouseId = searchParams.get("warehouseId");
+    if (warehouseId) return `wh:${warehouseId}`;
+    const storeId = searchParams.get("storeId");
+    return storeId ? `store:${storeId}` : "";
+  });
+  const [selectedBin, setSelectedBin] = useState(() =>
+    searchParams.get("warehouseId") ? searchParams.get("binId") ?? "" : ""
+  );
+  const { stores: locationStores, loading: locationsLoading, error: locationsError, reload: reloadLocations } =
+    useStockLocations();
   const [brands, setBrands] = useState<BrandItem[]>([]);
   const [bins, setBins] = useState<BinItem[]>([]);
   const [page, setPage] = useState(1);
@@ -282,6 +296,7 @@ function StockScreen() {
       });
 
       log.info("bulk assign applied", { field: bulkAction, selected: selectedIds.size, updated: data.updated });
+      reloadLocations();
       setBulkMessage(`Updated ${data.updated} products`);
       exitSelectMode();
       setPage(1);
@@ -333,7 +348,67 @@ function StockScreen() {
     );
   }, [bulkAction, bulkVendors.length]);
 
-  const activeFilterCount = [selectedBrand, selectedCategory, selectedBin, selectedStore].filter(Boolean).length;
+  const activeFilterCount = [selectedBrand, selectedCategory, selectedLocation, selectedBin].filter(Boolean).length;
+
+  // The location and bin the pickers point at, resolved against the loaded set. Null while the
+  // set is loading, or when the URL names one that no longer exists (the API refuses it with 400,
+  // shown in the list's error banner).
+  const scopedStore = selectedLocation.startsWith("store:")
+    ? locationStores.find((s) => s.id === selectedLocation.slice(6)) ?? null
+    : null;
+  const scopedLocation = selectedLocation.startsWith("wh:")
+    ? locationStores.flatMap((s) => s.warehouses).find((w) => w.id === selectedLocation.slice(3)) ?? null
+    : null;
+  const scopedBin = scopedLocation && selectedBin && selectedBin !== "none"
+    ? scopedLocation.bins.find((b) => b.id === selectedBin) ?? null
+    : null;
+
+  // What the Stock figures are under the chosen scope (B3), shown ABOVE the list rather than in
+  // the Filters panel: the panel opens closed, so a refreshed or shared link would otherwise show
+  // a bin's quantities with nothing saying so. A scope the URL names that no longer exists is said
+  // plainly (the list's banner carries the server's 400); it is derived here, not reset in an
+  // effect, so the person decides what to choose instead.
+  const scopeStale =
+    !locationsLoading &&
+    !locationsError &&
+    ((selectedLocation !== "" && !scopedStore && !scopedLocation) ||
+      (scopedLocation !== null && selectedBin !== "" && selectedBin !== "none" && !scopedBin));
+  const scopeLabel = scopedBin
+    ? `${scopedLocation?.name} › ${scopedBin.code}`
+    : scopedLocation && selectedBin === "none"
+      ? `${scopedLocation.name} › No bin`
+      : scopedLocation
+        ? scopedLocation.name
+        : scopedStore
+          ? `${scopedStore.name} · all locations`
+          : null;
+  const scopeCaption = scopeStale
+    ? "The chosen location or bin no longer exists. Choose another under Filters."
+    : scopedBin
+      ? `Showing what ${scopeLabel} holds. Quantities are that bin's.`
+      : scopedLocation && selectedBin === "none"
+        ? `Showing what ${scopedLocation.name} holds in no bin. Quantities are the stock not in any bin.`
+        : scopedLocation
+          ? `Showing what ${scopedLocation.name} holds. Quantities are that location's.`
+          : scopedStore
+            ? `Showing what ${scopedStore.name} holds across its locations. Quantities are the store's.`
+            : null;
+
+  /** Change the location (which always clears the bin) or the bin, and mirror both into the URL. */
+  function changeScope(location: string, bin: string) {
+    setSelectedLocation(location);
+    setSelectedBin(bin);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("storeId");
+    url.searchParams.delete("warehouseId");
+    url.searchParams.delete("binId");
+    if (location.startsWith("store:")) url.searchParams.set("storeId", location.slice(6));
+    if (location.startsWith("wh:")) url.searchParams.set("warehouseId", location.slice(3));
+    if (location.startsWith("wh:") && bin) url.searchParams.set("binId", bin);
+    // replaceState, as the sort does: a filter is not a new page in the back-button history.
+    window.history.replaceState(null, "", url);
+    log.debug("stock scope changed", { location: location || "all", bin: bin || null });
+  }
 
   const buildParams = useCallback((pageNum: number) => {
     const params = new URLSearchParams({ limit: String(PAGE_SIZE), page: String(pageNum), sortBy: sort.sortBy, sortOrder: sort.sortOrder });
@@ -353,10 +428,13 @@ function StockScreen() {
     else if (quickFilter === "ALL") { params.set("status", "ACTIVE"); }
     if (selectedBrand) params.set("brandId", selectedBrand);
     if (selectedCategory) params.set("categoryId", selectedCategory);
-    if (selectedBin) params.set("binId", selectedBin);
-    if (selectedStore) params.set("storeId", selectedStore);
+    if (selectedLocation.startsWith("store:")) params.set("storeId", selectedLocation.slice(6));
+    if (selectedLocation.startsWith("wh:")) {
+      params.set("warehouseId", selectedLocation.slice(3));
+      if (selectedBin) params.set("binId", selectedBin);
+    }
     return params;
-  }, [debouncedSearch, quickFilter, selectedBrand, selectedCategory, selectedBin, selectedStore, sort]);
+  }, [debouncedSearch, quickFilter, selectedBrand, selectedCategory, selectedLocation, selectedBin, sort]);
 
   // One page at a time (14 Oct 2026, owner: pages, not a "Load more" list that keeps growing).
   const fetchProducts = useCallback((pageNum: number, silent = false) => {
@@ -380,6 +458,7 @@ function StockScreen() {
         setProducts(res.data);
         setTotal(count);
         setLastUpdated(new Date());
+        setDataError(null);
       });
     load(pageNum, false)
       .catch((e) => {
@@ -416,6 +495,8 @@ function StockScreen() {
       log.info("product status changed", { productId: p.id, status });
       setRowOutcome({ ok: true, name: p.name, message: res.message });
       fetchProducts(page);
+      // The pickers count active products only, so a deactivate or restore moves them.
+      reloadLocations();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Could not update the product";
       log.error("product status change failed", { productId: p.id, message: msg });
@@ -445,8 +526,7 @@ function StockScreen() {
   function clearFilters() {
     setSelectedBrand("");
     setSelectedCategory("");
-    setSelectedBin("");
-    setSelectedStore("");
+    changeScope("", "");
   }
 
   /**
@@ -496,6 +576,8 @@ function StockScreen() {
     });
     log.info("stock added from row", { productId: done.productId, added: done.added, duplicate: done.duplicate, page });
     fetchProducts(page, true);
+    // The bin's and the location's counts in the pickers moved too.
+    reloadLocations();
   }
 
   /** The rows the table shows from a set the server returned — its search, narrowed fuzzily. */
@@ -539,8 +621,13 @@ function StockScreen() {
         return;
       }
       const records = data as unknown as Record<string, unknown>[];
-      if (format === "excel") await exportToExcel(records, STOCK_COLUMNS, "stock-inventory");
-      else await exportToPDF("Stock Inventory", records, STOCK_COLUMNS, "stock-inventory");
+      // A scoped export says so in its name and title, so a bin's quantities are not read as totals.
+      const fileName = scopeLabel
+        ? `stock-${scopeLabel.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`
+        : "stock-inventory";
+      const title = scopeLabel ? `Stock — ${scopeLabel}` : "Stock Inventory";
+      if (format === "excel") await exportToExcel(records, STOCK_COLUMNS, fileName);
+      else await exportToPDF(title, records, STOCK_COLUMNS, fileName);
       const truncated = matched > EXPORT_MAX_ROWS;
       log.info("stock export finished", { format, rows: data.length, matched, truncated, ms: Date.now() - started });
       setNotice(
@@ -558,10 +645,6 @@ function StockScreen() {
   }
 
   const secondsAgo = Math.round((Date.now() - lastUpdated.getTime()) / 1000);
-
-  // The store the list is scoped to, for the caption under the Store control. Null when the
-  // filter is clear or the store set has not arrived yet.
-  const scopedStore = selectedStore ? stores.find((s) => s.id === selectedStore) ?? null : null;
 
   // What the table rows and the cards need from the page. The page owns the state and the sheets;
   // the layouts only render and call back.
@@ -757,7 +840,7 @@ function StockScreen() {
         <Card className="mb-3 border-slate-200">
           <CardContent className="p-3 space-y-2.5">
             <div className="grid grid-cols-2 gap-2.5">
-              {/* All three pickers are searchable (owner, 9 Sep 2026 — Q7 for Store, D11 pulls
+              {/* Every picker is searchable (owner, 9 Sep 2026 — Q7 for Store, D11 pulls
                   Category and Brand along so the panel does not carry two dialects side by
                   side). The dropdown is unportalled; this grid has no overflow class and Card
                   sets none, so it is not clipped. The product count that the old <option>
@@ -794,46 +877,82 @@ function StockScreen() {
                 />
               </div>
 
-              <div>
-                <label htmlFor="stock-filter-store" className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Store</label>
+              {/* Location, then that location's bins (plan 1410-stock-location-and-bin, B1). Both
+                  read GET /api/stock/locations (stock.view), so they load for every role that can
+                  open this page — the old Bin list read the admin-only GET /api/bins. */}
+              <div className="col-span-2 sm:col-span-1">
+                <label htmlFor="stock-filter-location" className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Location</label>
                 <SearchableSelect
-                  id="stock-filter-store"
+                  id="stock-filter-location"
                   className="mt-0.5"
-                  options={stores.map((s) => ({
-                    id: s.id,
-                    label: s.name,
-                    hint: `${s.warehouses.length} location${s.warehouses.length === 1 ? "" : "s"}`,
-                  }))}
-                  value={selectedStore || null}
-                  onChange={(id) => setSelectedStore(id ?? "")}
-                  placeholder={storesLoading ? "Loading stores…" : "All stores"}
-                  emptyText="No matching store"
-                  disabled={storesLoading || !!storesError}
+                  options={locationStores.flatMap((s) => [
+                    {
+                      id: `store:${s.id}`,
+                      label: `${s.name} · all locations`,
+                      hint: `${s.warehouses.length} location${s.warehouses.length === 1 ? "" : "s"}`,
+                    },
+                    ...s.warehouses.map((w) => ({
+                      id: `wh:${w.id}`,
+                      label: w.name,
+                      hint: `${LOCATION_KIND_LABEL[w.kind]} · ${fmt(w.items)} item${w.items === 1 ? "" : "s"} · ${w.bins.length} bin${w.bins.length === 1 ? "" : "s"}`,
+                    })),
+                  ])}
+                  value={selectedLocation || null}
+                  onChange={(id) => changeScope(id ?? "", "")}
+                  placeholder={locationsLoading ? "Loading locations…" : "All locations"}
+                  emptyText="No matching location"
+                  disabled={locationsLoading || !!locationsError}
                 />
-                {storesError && (
-                  <p className="mt-1 text-[11px] text-red-500">Could not load stores</p>
-                )}
-                {scopedStore && (
-                  <p className="mt-1 text-[11px] text-slate-500">
-                    Showing what {scopedStore.name} holds. Quantities are that store&apos;s.
+                {locationsError && (
+                  <p className="mt-1 text-[11px] text-red-500">
+                    Could not load locations and bins.{" "}
+                    <button type="button" onClick={reloadLocations} className="font-medium underline">
+                      Retry
+                    </button>
                   </p>
                 )}
               </div>
 
-              <div>
-                <label className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Bin / Location</label>
-                <select
-                  value={selectedBin}
-                  onChange={(e) => setSelectedBin(e.target.value)}
-                  className="mt-0.5 flex h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
-                >
-                  <option value="">All Bins ({bins.length})</option>
-                  {bins.map((b) => (
-                    <option key={b.id} value={b.id}>{b.name} ({b._count.products})</option>
-                  ))}
-                </select>
+              <div className="col-span-2 sm:col-span-1">
+                <label htmlFor="stock-filter-bin" className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Bin</label>
+                <SearchableSelect
+                  id="stock-filter-bin"
+                  className="mt-0.5"
+                  options={
+                    scopedLocation
+                      ? [
+                          ...(scopedLocation.noBin.items > 0
+                            ? [{
+                                id: "none",
+                                label: "No bin",
+                                hint: `${fmt(scopedLocation.noBin.products)} product${scopedLocation.noBin.products === 1 ? "" : "s"} · ${fmt(scopedLocation.noBin.items)} item${scopedLocation.noBin.items === 1 ? "" : "s"}`,
+                              }]
+                            : []),
+                          ...scopedLocation.bins.map((b) => ({
+                            id: b.id,
+                            label: b.name && b.name !== b.code ? `${b.code} · ${b.name}` : b.code,
+                            hint: b.items > 0
+                              ? `${fmt(b.products)} product${b.products === 1 ? "" : "s"} · ${fmt(b.items)} item${b.items === 1 ? "" : "s"}`
+                              : "empty",
+                          })),
+                        ]
+                      : []
+                  }
+                  value={selectedBin || null}
+                  onChange={(id) => changeScope(selectedLocation, id ?? "")}
+                  placeholder={
+                    locationsLoading
+                      ? "Loading bins…"
+                      : scopedLocation
+                        ? `All bins (${scopedLocation.bins.length})`
+                        : "Choose a location first"
+                  }
+                  emptyText="No matching bin"
+                  disabled={!scopedLocation}
+                />
               </div>
             </div>
+
 
             {activeFilterCount > 0 && (
               <button onClick={clearFilters} className="text-xs text-red-500 font-medium">
@@ -868,6 +987,10 @@ function StockScreen() {
             never appear on the build line.
           </span>
         </p>
+      )}
+
+      {scopeCaption && (
+        <p className={`mb-1.5 text-[11px] ${scopeStale ? "text-red-600" : "text-slate-500"}`}>{scopeCaption}</p>
       )}
 
       {/* Status bar */}
@@ -1002,6 +1125,7 @@ function StockScreen() {
           setPage(1);
           fetchProducts(1);
           reloadMasterData();
+          reloadLocations();
         }}
       />
 
