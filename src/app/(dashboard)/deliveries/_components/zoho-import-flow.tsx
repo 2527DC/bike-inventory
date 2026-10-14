@@ -48,18 +48,18 @@ interface ZohoInvoicePreview {
 }
 
 interface ZohoImportFlowProps {
-  canFetch: boolean;
   /**
-   * zoho.approve. Importing WRITES Delivery rows, so it is a separate grant from fetching —
-   * and this prop is new: the component had no import gate at all, only the fetch one, so
-   * anyone who could open the panel could also import. Cosmetic, as always: the route
-   * re-checks (CLAUDE.md).
+   * deliveries.fetch — fetching AND importing (plan 1410-per-module-fetch-permissions, R2:
+   * "one fetch permission … anybody can fetch and import"). There was a separate `canImport`
+   * prop on zoho.approve; with one tick it would always be true wherever the panel shows, so
+   * it is gone rather than kept as a second name for the same answer. Cosmetic, as always:
+   * every route below re-checks deliveries.fetch (CLAUDE.md).
    */
-  canImport: boolean;
+  canFetch: boolean;
   onImported: () => void;
 }
 
-export function ZohoImportFlow({ canFetch, canImport, onImported }: ZohoImportFlowProps) {
+export function ZohoImportFlow({ canFetch, onImported }: ZohoImportFlowProps) {
   // Was `sheetOpen` + a two-tab bar. The panel is inline now (R1) and the tabs became one
   // segmented toggle, so a single set of banners and result cards serves both modes — the
   // tabs each owned their own copy, which is how a message could sit on the tab you were
@@ -114,7 +114,7 @@ export function ZohoImportFlow({ canFetch, canImport, onImported }: ZohoImportFl
       // tell an expired session from a server error — the exact failure api-client exists for.
       const data = await apiFetch<{ results: ZohoSearchResult[] }>("/api/deliveries/search-zoho", {
         method: "POST",
-        json: { query: q },
+        json: { module: "deliveries", query: q },
         timeoutMs: 30_000,
       });
 
@@ -189,7 +189,7 @@ export function ZohoImportFlow({ canFetch, canImport, onImported }: ZohoImportFl
       // connect it on Settings › Integrations"). apiFetch surfaces that message.
       const initData = await apiFetch<{ pullId: string }>("/api/zoho/trigger-pull", {
         method: "POST",
-        json: { step: "init" },
+        json: { module: "deliveries", step: "init" },
         timeoutMs: 20_000,
       });
       const pullId = initData.pullId;
@@ -231,7 +231,7 @@ export function ZohoImportFlow({ canFetch, canImport, onImported }: ZohoImportFl
         };
       }>("/api/zoho/trigger-pull", {
         method: "POST",
-        json: { step: "invoices", pullId, ...windowBody },
+        json: { module: "deliveries", step: "invoices", pullId, ...windowBody },
         timeoutMs: 60_000,
       });
 
@@ -261,6 +261,7 @@ export function ZohoImportFlow({ canFetch, canImport, onImported }: ZohoImportFl
       await apiTry("/api/zoho/trigger-pull", {
         method: "POST",
         json: {
+          module: "deliveries",
           step: "finalize",
           pullId,
           invoicesNew: invData.invoicesNew,
@@ -277,7 +278,7 @@ export function ZohoImportFlow({ canFetch, canImport, onImported }: ZohoImportFl
       // `if (previewRes.success) { … }` with NO else — on a failure the component stayed in
       // "fetching" forever: spinner gone, button disabled, nothing said.
       const previewData = await apiFetch<{ previews: Array<ZohoInvoicePreview & { entityType: string; status: string }> }>(
-        `/api/zoho/pull-review?pullId=${pullId}`,
+        `/api/zoho/pull-review?module=deliveries&pullId=${encodeURIComponent(pullId)}`,
         { timeoutMs: 20_000 }
       );
       const invoices = (previewData.previews || []).filter(
@@ -330,9 +331,9 @@ export function ZohoImportFlow({ canFetch, canImport, onImported }: ZohoImportFl
         await apiFetch("/api/zoho/pull-review/approve", {
           method: "POST",
           json: {
+            module: "deliveries",
             pullId: fetchPullId,
             action: "approve",
-            entityType: "invoice",
             previewIds: slice,
           },
           timeoutMs: 60_000,
@@ -540,7 +541,7 @@ export function ZohoImportFlow({ canFetch, canImport, onImported }: ZohoImportFl
               <p className="text-xs font-semibold text-blue-800">
                 {searchImportable.length} invoice{searchImportable.length !== 1 ? "s" : ""} found in Zoho
               </p>
-              {canImport && selectedResults.size > 0 && (
+              {selectedResults.size > 0 && (
                 <button
                   onClick={handleImportSearchResults}
                   className="flex items-center gap-1 bg-blue-600 text-white px-3 min-h-[36px] rounded-md text-xs font-medium"
@@ -566,15 +567,13 @@ export function ZohoImportFlow({ canFetch, canImport, onImported }: ZohoImportFl
               <p className="text-xs font-semibold text-blue-800">
                 {fetchImportable.length} new invoice{fetchImportable.length !== 1 ? "s" : ""} from Zoho
               </p>
-              {canImport && (
-                <button
-                  onClick={handleImportSelected}
-                  disabled={selectedInvoices.size === 0}
-                  className="flex items-center gap-1 bg-blue-600 text-white px-3 min-h-[36px] rounded-md text-xs font-medium disabled:opacity-50"
-                >
-                  <Download className="h-3 w-3" /> Import {selectedInvoices.size}
-                </button>
-              )}
+              <button
+                onClick={handleImportSelected}
+                disabled={selectedInvoices.size === 0}
+                className="flex items-center gap-1 bg-blue-600 text-white px-3 min-h-[36px] rounded-md text-xs font-medium disabled:opacity-50"
+              >
+                <Download className="h-3 w-3" /> Import {selectedInvoices.size}
+              </button>
             </div>
             <ZohoImportResults
               results={fetchImportable}

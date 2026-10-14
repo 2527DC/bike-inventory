@@ -57,6 +57,14 @@ export interface ModuleSeed {
    * R28, P5).
    */
   dividerBefore?: boolean;
+  /**
+   * When `<module>.<action>` is CREATED by a seed run, every non-system role already holding
+   * any of the listed permission keys is granted it in the same run. Never re-applied once the
+   * permission exists, so an admin's later revocation is never undone. Permission keys only —
+   * never role names (CLAUDE.md rule 1). First used by `bank_recon` (plan 1210 bank accounts,
+   * Q1/Q2): the bank screens move off `bills` without anyone losing access on the day.
+   */
+  inheritGrantsFrom?: Partial<Record<ActionKey, string[]>>;
 }
 
 // Sidebar group order is NOT declared anywhere — it falls out of `sortOrder` below.
@@ -144,23 +152,24 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     parentKey: "stock_management",
     group: "Operations", // MUST equal the parent's — the seeder asserts it
     sortOrder: 101,
-    // `fetch` is GONE. It gated the "Fetch Stock" button on /stock, which pulled the catalog
-    // from Zoho; that import was deleted and products now arrive from
-    // scripts/import-products.ts. Verified before removing: no `requireFeature("stock",
-    // "fetch")` and no `canFetch("stock")` existed anywhere — the wizard's API calls were
-    // gated by `zoho.fetch`, so nothing loses access. The seeder's stale-permission sweep
-    // (seed-rbac.ts) deletes the row and its grants on the next `npm run db:seed:rbac`.
+    // `fetch` is BACK (plan 1410-per-module-fetch-permissions, owner 14 Oct 2026). It gates the
+    // Fetch from Zoho sheet on /stock — preview AND import, one tick — and both routes behind
+    // it (`stock/zoho-preview`, `stock/zoho-import`).
     //
-    // P4 (R1) finished the job this started. FIVE more `fetch` actions were orphaned the same
-    // way — inbound, deliveries, vendors, bills, customers and brand_ledger — because every
-    // screen that used them called a route guarded by `zoho.fetch`. A role could therefore
-    // hold the button and not the route, or the route and not the button, which is exactly
-    // how "the Fetch button does nothing" started. `zoho.fetch` / `zoho.approve` is the one
-    // truth now, and it is the ONLY surviving `fetch` action in this catalog.
+    // History: P4 of the 0409 plan removed per-module `fetch` from stock, inbound, deliveries,
+    // vendors, bills, customers and brand_ledger, because each screen's button checked its own
+    // module while its route checked `zoho.fetch` — a role could hold the button and not the
+    // route, which is how "the Fetch button does nothing" started. The ticks are back WITHOUT that
+    // mismatch: every route a screen calls checks the same module key its button does, and the
+    // shared Zoho pull routes are told which module the screen belongs to.
     //
-    // ⚠ RUN `npm run db:seed:rbac` AFTER DEPLOY, or the six dead permissions stay grantable
-    //   on /team/permissions and keep implying an access they no longer control.
-    actions: ["view", "create", "edit", "delete"],
+    // Copied once from `zoho.fetch` (R3). Not from `stock.create`: a `stock.create` holder could
+    // never open the preview, so had no working fetch to keep.
+    //
+    // ⚠ RUN `npm run db:seed:rbac` BEFORE THE DEPLOY. The new guards check permissions that do
+    //   not exist until it runs; the old code keeps working meanwhile (`zoho.fetch` still exists).
+    actions: ["view", "create", "edit", "delete", "fetch"],
+    inheritGrantsFrom: { fetch: ["zoho.fetch"] }, // R3: copied once, on creation
   },
   {
     // The four controlled activities, numbered in flow order (R28). Each has a doer
@@ -174,7 +183,12 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     group: "Operations", // MUST equal the parent's — the seeder asserts it
     sortOrder: 110,
     dividerBefore: true, // the line between Stock & inventory and the four activities (P5)
-    actions: ["view", "create", "edit", "delete", "approve"],
+    // `fetch` (plan 1410-per-module-fetch-permissions, owner 14 Oct 2026): the Zoho bill pull
+    // on /inbound — fetch AND import, one tick (R2). The shared pull routes are told the
+    // screen's module and check its `fetch`, so this tick is the button and the route alike.
+    // Copied once from the two grants that gated the pull and the import before (R3).
+    actions: ["view", "create", "edit", "delete", "approve", "fetch"],
+    inheritGrantsFrom: { fetch: ["zoho.fetch", "zoho.approve"] }, // R3: copied once, on creation
   },
   {
     key: "deliveries",
@@ -186,7 +200,11 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     group: "Operations", // MUST equal the parent's — the seeder asserts it
     sortOrder: 111,
     // `approve` = outbound approval before OUT_FOR_DELIVERY / SHIPPED (R26a).
-    actions: ["view", "create", "edit", "delete", "approve"],
+    // `fetch` (plan 1410-per-module-fetch-permissions): Bulk fetch, the one-invoice search and
+    // import on /deliveries, and the invoice lookup on /prebookings — fetch AND import, one
+    // tick. Copied once (R3).
+    actions: ["view", "create", "edit", "delete", "approve", "fetch"],
+    inheritGrantsFrom: { fetch: ["zoho.fetch", "zoho.approve"] }, // R3: copied once, on creation
   },
   {
     key: "transfers",
@@ -246,7 +264,11 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: "/second-hand",
     group: "Sales",
     sortOrder: 260,
-    actions: ["view", "create", "edit", "delete", "approve"],
+    // `fetch` (plan 1410-per-module-fetch-permissions): the Zoho invoice lookup on
+    // /second-hand/new that fills the seller's name and phone. Copied once from `zoho.fetch`,
+    // which gated it before (R3).
+    actions: ["view", "create", "edit", "delete", "approve", "fetch"],
+    inheritGrantsFrom: { fetch: ["zoho.fetch"] }, // R3: copied once, on creation
   },
   {
     // Routeless (plan 1709, R29): Barcode & labels is the Labels tab on /assembly, which this
@@ -269,7 +291,13 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: "/accounts/settlement",
     group: "Accounts",
     sortOrder: 315,
-    actions: ["view", "create", "edit", "approve"],
+    // `fetch` (plan 1410-per-module-fetch-permissions): Fetch POS and Re-fetch on
+    // /accounts/settlement (Q3 — Re-fetch included; the confirm dialog stays). POST
+    // /api/pos/settlement accepts `fetch` OR `create`: it is the import step of Fetch POS and
+    // the New settlement button. Copied once from `pos.create`, which gated the fetch before
+    // (R3).
+    actions: ["view", "create", "edit", "approve", "fetch"],
+    inheritGrantsFrom: { fetch: ["pos.create"] }, // R3: copied once, on creation
   },
   {
     // Top of Operations, above Stock management (plan 1709, R27). 90 is below the Overview
@@ -324,7 +352,11 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: "/vendors",
     group: "Purchase",
     sortOrder: 200,
-    actions: ["view", "create", "edit", "delete"],
+    // `fetch` (plan 1410-per-module-fetch-permissions): the Fetch from Zoho sheet on /vendors —
+    // preview AND import, one tick. Copied once from `vendors.create`, which gated both before
+    // (R3).
+    actions: ["view", "create", "edit", "delete", "fetch"],
+    inheritGrantsFrom: { fetch: ["vendors.create"] }, // R3: copied once, on creation
   },
   {
     key: "purchase_orders",
@@ -358,19 +390,20 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     parentKey: "stock_management",
     group: "Operations",
     sortOrder: 116, // plan 2109 R4: after stock_audit (113) and categories (115); was 108
-    // CRUD plus `fetch`, and `fetch` is deliberately NOT `zoho.fetch`.
+    // CRUD plus `fetch`, and `fetch` is deliberately NOT the bill-pull tick (`bills.fetch`,
+    // `inbound.fetch`, formerly `zoho.fetch`).
     //
-    // `zoho.fetch` is the grant for pulling BILLS and INVOICES — a routine, high-frequency
-    // job an accounts clerk does. Until now that same import was also the thing that MINTED
-    // brands, one per bill vendor name, which is the defect the 0809 plan closes. If the
-    // "Fetch from Zoho" button on /more/brands were guarded by `zoho.fetch`, everyone who
-    // pulls bills would silently regain the power to rewrite the brand master — the same
-    // hole, moved from an import side effect to a button.
+    // Pulling bills is a routine job an accounts clerk does, and the bill import used to be the
+    // thing that MINTED brands, one per bill vendor name — the defect the 0809 plan closes. If the
+    // Fetch from Zoho button on /more/brands were guarded by the bill-pull tick, everyone who
+    // pulls bills would silently regain the power to rewrite the brand master. So the brand master
+    // is owned by its own screen's tick.
     //
-    // So the brand master is owned by its own screen: `brands.fetch` opens the preview
-    // (which writes nothing), and `brands.create` is what actually inserts rows. Two grants,
-    // because "may look at what Zoho has" and "may add 36 brands to the master" are
-    // genuinely different decisions, and the person trusted with one need not hold the other.
+    // ONE tick, fetch and import (plan 1410-per-module-fetch-permissions, Q4, owner 14 Oct
+    // 2026: "one fetch permission … with that permission anybody can fetch and import"). Until
+    // then `brands.fetch` opened the preview and `brands.create` was also needed to insert; the
+    // import now checks `brands.fetch` alone. `brands.create` still gates adding a brand by
+    // hand and merging.
     //
     // No `delete` (plan 0809-brand-category-inactive): a brand is retired with the
     // Active/Inactive toggle on `edit`, and nothing under it is ever destroyed.
@@ -419,9 +452,10 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     // from Zoho" screen with `zoho.fetch` would hand the taxonomy back to whoever imports
     // bills, which is precisely the arrangement that produced the mess documented above.
     //
-    // `categories.fetch` opens the preview (writes nothing); `categories.create` inserts.
-    // The taxonomy is owned by the person who curates it, not by the person who happens to
-    // run a bill pull.
+    // `categories.fetch` is the preview AND the import — one tick (plan
+    // 1410-per-module-fetch-permissions, Q4, owner 14 Oct 2026); `categories.create` is no
+    // longer needed to import. The taxonomy is owned by the person who curates it, not by the
+    // person who happens to run a bill pull.
     //
     // No `delete` (plan 0809-brand-category-inactive): a category is retired with the
     // Active/Inactive toggle on `edit`, subtree and all, and nothing is ever destroyed.
@@ -437,7 +471,10 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: "/vendor-issues",
     group: "Purchase",
     sortOrder: 230,
-    actions: ["view", "create", "edit", "delete", "approve"],
+    // `fetch` (plan 1410-per-module-fetch-permissions): the Zoho contact search on
+    // /vendor-issues/new. Copied once from `zoho.fetch`, which gated it before (R3).
+    actions: ["view", "create", "edit", "delete", "approve", "fetch"],
+    inheritGrantsFrom: { fetch: ["zoho.fetch"] }, // R3: copied once, on creation
   },
   {
     key: "reorder",
@@ -504,7 +541,11 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: null,
     group: "Accounts",
     sortOrder: 300,
-    actions: ["view", "create", "edit", "delete", "approve"],
+    // `fetch` (plan 1410-per-module-fetch-permissions): the Zoho bill pull on /bills — fetch
+    // AND import, one tick. Copied once from the two grants that gated the pull and the import
+    // before (R3).
+    actions: ["view", "create", "edit", "delete", "approve", "fetch"],
+    inheritGrantsFrom: { fetch: ["zoho.fetch", "zoho.approve"] }, // R3: copied once, on creation
   },
   {
     // Back in the sidebar since 9 Sep 2026 (plan 0909-expense-multi-entry-flow, R1): the
@@ -567,7 +608,11 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: "/customers",
     group: "Sales",
     sortOrder: 250,
-    actions: ["view", "create", "edit", "delete"],
+    // `fetch` (plan 1410-per-module-fetch-permissions): the Zoho invoice pull on /receivables —
+    // fetch AND import (Q1: the import runs on the server, so `customers.create` is not needed
+    // for it). Copied once (R3).
+    actions: ["view", "create", "edit", "delete", "fetch"],
+    inheritGrantsFrom: { fetch: ["zoho.fetch", "zoho.approve"] }, // R3: copied once, on creation
   },
 
   // ── Brand Ledger (supplier reconciliation) ────────────────────────────────
@@ -652,7 +697,11 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: "/services/counter",
     group: "Service",
     sortOrder: 600,
-    actions: ["view", "create", "edit", "delete", "approve"],
+    // `fetch` (plan 1410-per-module-fetch-permissions): the workshop job card's "is this Zoho
+    // invoice paid?" check (api/services/zoho). Copied once from `zoho.fetch`, which gated it
+    // before (R3).
+    actions: ["view", "create", "edit", "delete", "approve", "fetch"],
+    inheritGrantsFrom: { fetch: ["zoho.fetch"] }, // R3: copied once, on creation
   },
   {
     key: "service_assembly",
@@ -895,6 +944,14 @@ export const MODULE_CATALOG: ModuleSeed[] = [
     route: null,
     group: "Admin",
     sortOrder: 522,
+    // `fetch` GUARDS NOTHING since plan 1410-per-module-fetch-permissions (14 Oct 2026): every
+    // Zoho fetch moved to the tick of the module whose screen it is on (inbound.fetch,
+    // bills.fetch, …), and the sync log it used to gate reads on `view`. It stays for ONE
+    // release (Q5): the seeder deletes a removed permission's grants before step 2b could copy
+    // them, and the old code still running during the deploy checks it.
+    // ⚠ NEXT RELEASE: drop "fetch" here and re-seed.
+    // `approve` still guards Clear sync data (api/sync/clear); `view`/`edit` are the Integrations
+    // screen.
     actions: ["view", "edit", "approve", "fetch"],
     parentKey: "settings",
   },

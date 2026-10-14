@@ -135,7 +135,9 @@ function InboundScreen() {
   const chip: QuickChip = isInboundQuickFilter(rawChip) ? rawChip : "all";
 
   const { canFetch } = usePermissions();
-  const canFetchBills = canFetch("zoho");
+  // 1 Inbound › Fetch — the tick the pull routes check for `module: "inbound"` (plan
+  // 1410-per-module-fetch-permissions). One tick fetches and imports.
+  const canFetchBills = canFetch("inbound");
 
   const [shipments, setShipments] = useState<InboundShipment[]>([]);
   const [counts, setCounts] = useState<Partial<Record<QuickChip, number>>>({});
@@ -257,7 +259,7 @@ function InboundScreen() {
     setFetchProgress("Connecting to Zoho…");
     try {
       const init = await apiFetch<{ pullId: string }>("/api/zoho/trigger-pull", {
-        method: "POST", json: { step: "init" }, timeoutMs: 20_000,
+        method: "POST", json: { module: "inbound", step: "init" }, timeoutMs: 20_000,
       });
       const pullId = init.pullId;
       setFetchPullId(pullId);
@@ -281,7 +283,7 @@ function InboundScreen() {
         window: { from: string; to: string; clampedToFy: boolean } | null;
         skipped: { counts: { alreadyImported: number }; items: Array<{ ref: string; where?: string; id?: string; no?: string; status?: string }> };
       }>("/api/zoho/trigger-pull", {
-        method: "POST", json: { step: "bills", pullId, ...body }, timeoutMs: 60_000,
+        method: "POST", json: { module: "inbound", step: "bills", pullId, ...body }, timeoutMs: 60_000,
       });
 
       const billsFound = billRes.billsNew || 0;
@@ -297,7 +299,7 @@ function InboundScreen() {
       await apiTry("/api/zoho/trigger-pull", {
         method: "POST",
         json: {
-          step: "finalize", pullId,
+          module: "inbound", step: "finalize", pullId,
           billsNew: billRes.billsNew, apiCalls: billRes.apiCalls, allErrors: billRes.errors || [],
         },
         timeoutMs: 20_000,
@@ -305,7 +307,7 @@ function InboundScreen() {
 
       setFetchProgress("Loading preview…");
       const previewData = await apiFetch<{ previews: Array<ZohoBillPreview & { entityType: string; status: string }> }>(
-        `/api/zoho/pull-review?pullId=${pullId}`, { timeoutMs: 20_000 }
+        `/api/zoho/pull-review?module=inbound&pullId=${encodeURIComponent(pullId)}`, { timeoutMs: 20_000 }
       );
       const billItems = (previewData.previews || []).filter(
         (p) => p.entityType === "bill" && p.status === "PENDING"
@@ -347,13 +349,11 @@ function InboundScreen() {
     setFetchStep("importing");
     try {
       // `apiFetch` throws with the server's message on failure, and never parses HTML as JSON.
+      // `module: "inbound"` makes the server build shipments; it no longer reads `source` or
+      // `entityType` from the body.
       const res = await apiFetch<{ bills?: number; errors?: string[] }>("/api/zoho/pull-review/approve", {
         method: "POST",
-        json: {
-          pullId: fetchPullId, action: "approve",
-          entityType: "bill", previewIds: Array.from(selectedBills),
-          source: "inventory",
-        },
+        json: { module: "inbound", pullId: fetchPullId, action: "approve", previewIds: Array.from(selectedBills) },
       });
       const imported = res?.bills || 0;
       const errors = res?.errors || [];

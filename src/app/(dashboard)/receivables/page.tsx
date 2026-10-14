@@ -10,6 +10,10 @@ import { useDebounce } from "@/hooks/use-debounce";
 import { type DateRangeKey } from "@/components/date-filter";
 import { FilterSheet } from "@/components/filter-sheet";
 import { usePermissions } from "@/lib/use-permissions";
+import { apiFetch, apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("receivables");
 
 interface InvoiceItem {
   id: string;
@@ -46,7 +50,10 @@ function formatCurrency(amount: number) {
 
 export default function ReceivablesPage() {
   const { canFetch: canFetchCheck } = usePermissions();
-  const canFetch = canFetchCheck("zoho");
+  // Customers › Fetch — the tick the pull routes check for `module: "customers"` (plan
+  // 1410-per-module-fetch-permissions). It imports too: the import runs on the server now (Q1),
+  // so `customers.create` is no longer needed for it.
+  const canFetch = canFetchCheck("customers");
 
   const [invoices, setInvoices] = useState<InvoiceItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -110,17 +117,17 @@ export default function ReceivablesPage() {
     setFetchError("");
     setFetchProgress("Connecting to Zoho...");
     try {
-      // Step 1: Init
-      const initRes = await fetch("/api/zoho/trigger-pull", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ step: "init" }),
-      }).then(r => r.json());
-      if (!initRes.success) throw new Error(initRes.error || "Init failed");
-      const pullId = initRes.data.pullId;
+      // Step 1: Init. apiFetch, not fetch().then(r => r.json()) — an expired session answers
+      // HTML, and the server's own sentence ("Zoho is not connected — …") is what is shown.
+      const init = await apiFetch<{ pullId: string; sources?: { pos?: string; books?: string } }>(
+        "/api/zoho/trigger-pull",
+        { method: "POST", json: { module: "customers", step: "init" }, timeoutMs: 20_000 }
+      );
+      const pullId = init.pullId;
       setFetchPullId(pullId);
 
       // Check if POS or Books is connected for invoices
-      const sources = initRes.data.sources || {};
+      const sources = init.sources || {};
       if (sources.pos === "skipped" && sources.books === "skipped") {
         throw new Error("Neither Zakya POS nor Zoho Books is connected. Go to Settings > Zoho to connect.");
       }
@@ -138,48 +145,44 @@ export default function ReceivablesPage() {
           : { days: fetchDays };
       const label = fetchDays === -1 ? "custom range" : `last ${fetchDays} days`;
       setFetchProgress(`Pulling unpaid invoices (${label})...`);
-      const invRes = await fetch("/api/zoho/trigger-pull", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ step: "invoices", pullId, ...windowBody }),
-      }).then(r => r.json());
-      if (!invRes.success) throw new Error(invRes.error || "Invoice fetch failed");
+      const inv = await apiFetch<{ source?: string; invoicesNew?: number; apiCalls?: number; errors?: string[] }>(
+        "/api/zoho/trigger-pull",
+        { method: "POST", json: { module: "customers", step: "invoices", pullId, ...windowBody }, timeoutMs: 60_000 }
+      );
+
+      const finalize = (invoicesNew: number, apiCalls: number) =>
+        apiTry("/api/zoho/trigger-pull", {
+          method: "POST",
+          json: { module: "customers", step: "finalize", pullId, invoicesNew, apiCalls, allErrors: inv.errors || [] },
+          timeoutMs: 20_000,
+        }).then((r) => { if (r.error) log.warn("finalize failed", { pullId, error: r.error }); });
 
       // Check if source was skipped
-      if (invRes.data.source === "skipped") {
-        await fetch("/api/zoho/trigger-pull", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ step: "finalize", pullId, invoicesNew: 0, apiCalls: 0, allErrors: invRes.data.errors || [] }),
-        });
-        throw new Error(invRes.data.errors?.[0] || "No invoice source connected");
+      if (inv.source === "skipped") {
+        await finalize(0, 0);
+        throw new Error(inv.errors?.[0] || "No invoice source connected");
       }
 
       // Step 3: Finalize
-      const found = invRes.data.invoicesNew || 0;
+      const found = inv.invoicesNew || 0;
       setFetchProgress(`Found ${found} invoice${found !== 1 ? "s" : ""}. Finalizing...`);
-      await fetch("/api/zoho/trigger-pull", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          step: "finalize", pullId,
-          invoicesNew: invRes.data.invoicesNew, apiCalls: invRes.data.apiCalls,
-          allErrors: invRes.data.errors || [],
-        }),
-      });
+      await finalize(inv.invoicesNew || 0, inv.apiCalls || 0);
 
       // Step 4: Load previews — filter for unpaid invoices
       setFetchProgress("Loading preview...");
-      const previewRes = await fetch(`/api/zoho/pull-review?pullId=${pullId}`).then(r => r.json());
-      if (previewRes.success) {
-        const invPreviews = (previewRes.data.previews || []).filter(
-          (p: ZohoInvoicePreview & { entityType: string; status: string }) =>
-            p.entityType === "invoice" && p.status === "PENDING" && (p.data.balance > 0)
-        );
-        setInvoicePreviews(invPreviews);
-        setSelectedInvoices(new Set(invPreviews.map((inv: ZohoInvoicePreview) => inv.id)));
-        setFetchStep(invPreviews.length > 0 ? "selecting" : "idle");
-        if (invPreviews.length === 0) setFetchError(`No unpaid invoices found (${label})`);
-
-      }
+      const preview = await apiFetch<{ previews?: (ZohoInvoicePreview & { entityType: string; status: string })[] }>(
+        `/api/zoho/pull-review?module=customers&pullId=${encodeURIComponent(pullId)}`,
+        { timeoutMs: 20_000 }
+      );
+      const invPreviews = (preview.previews || []).filter(
+        (p) => p.entityType === "invoice" && p.status === "PENDING" && p.data.balance > 0
+      );
+      setInvoicePreviews(invPreviews);
+      setSelectedInvoices(new Set(invPreviews.map((p) => p.id)));
+      setFetchStep(invPreviews.length > 0 ? "selecting" : "idle");
+      if (invPreviews.length === 0) setFetchError(`No unpaid invoices found (${label})`);
     } catch (e) {
+      log.error("invoice fetch failed", { error: e instanceof Error ? e.message : String(e) });
       setFetchError(e instanceof Error ? e.message : "Fetch failed");
       setFetchStep("idle");
     } finally {
@@ -199,59 +202,31 @@ export default function ReceivablesPage() {
     if (selectedInvoices.size === 0) return;
     setFetchStep("importing");
     try {
-      // Import as customer invoices (receivables)
-      const selected = invoicePreviews.filter(p => selectedInvoices.has(p.id));
-      let imported = 0;
-
-      for (const inv of selected) {
-        // Create or find customer
-        const custRes = await fetch("/api/customers", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: inv.data.customerName, phone: inv.data.phone }),
-        }).then(r => r.json());
-
-        const customerId = custRes.success ? custRes.data.id : null;
-        if (!customerId) continue;
-
-        // Check if invoice already exists
-        const existingRes = await fetch(`/api/customer-invoices?search=${encodeURIComponent(inv.data.invoiceNumber)}&limit=1`)
-          .then(r => r.json());
-        if (existingRes.success && existingRes.data.length > 0) continue;
-
-        // Create customer invoice
-        const dueDate = new Date(inv.data.date);
-        dueDate.setDate(dueDate.getDate() + 30); // 30 day credit
-
-        await fetch("/api/customer-invoices", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            customerId,
-            invoiceNo: inv.data.invoiceNumber,
-            invoiceDate: inv.data.date,
-            dueDate: dueDate.toISOString().slice(0, 10),
-            amount: inv.data.total,
-            notes: `Imported from Zoho. Balance: ₹${inv.data.balance}`,
-          }),
-        });
-        imported++;
-      }
-
-      // Mark previews as approved
-      await fetch("/api/zoho/pull-review/approve", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pullId: fetchPullId, action: "approve",
-          entityType: "invoice", previewIds: Array.from(selectedInvoices),
-        }),
+      // ONE call. The server finds or creates each customer by phone and writes the customer
+      // invoice once (plan 1410-per-module-fetch-permissions, Q1) — this screen used to do
+      // both itself, three requests per invoice, through two customers.create routes.
+      // As before, the same approve also creates each invoice's delivery (Q2: "as today").
+      const res = await apiFetch<{
+        errors?: string[];
+        receivables?: { created: number; existing: number; customersCreated: number };
+      }>("/api/zoho/pull-review/approve", {
+        method: "POST",
+        json: { module: "customers", pullId: fetchPullId, action: "approve", previewIds: Array.from(selectedInvoices) },
+        timeoutMs: 60_000,
       });
+      const created = res?.receivables?.created ?? 0;
+      const errors = res?.errors || [];
+      log.info("invoices imported", { pullId: fetchPullId, created, existing: res?.receivables?.existing ?? 0, errors: errors.length });
 
       setFetchStep("idle");
       setInvoicePreviews([]);
       setSelectedInvoices(new Set());
       fetchData();
+      if (errors.length > 0) {
+        setFetchError(`Imported ${created} invoice(s). Not imported: ${errors.join("; ")}`);
+      }
     } catch (e) {
+      log.error("invoice import failed", { pullId: fetchPullId, error: e instanceof Error ? e.message : String(e) });
       setFetchError(e instanceof Error ? e.message : "Import failed");
       setFetchStep("selecting");
     }

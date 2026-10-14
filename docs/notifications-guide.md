@@ -62,8 +62,8 @@ one row per recipient in notification_outbox: SENT / FAILED / SKIPPED + reason
 | `stock.below_reorder` | an outward sale/delivery takes a product **below** its reorder level (downward crossing only — no repeat while it stays below) | holders of `reorder.edit` | on |
 | `service.job_ready` | a workshop job is set to READY | holders of `service_jobs.approve` + the job's mechanic | on |
 | `inbound.delivered` | a shipment is set to DELIVERED (not partial) | holders of `inbound.approve` | on |
-| `zoho.pull_started` | someone starts a bills-and-invoices pull | holders of `zoho.fetch` | on |
-| `zoho.pull_finished` | that pull ends — `success` or `partial` | holders of `zoho.fetch` | on |
+| `zoho.pull_started` | someone starts a Zoho bills or invoices pull on /inbound, /bills, /receivables or /deliveries | holders of **that screen's** Fetch — `inbound.fetch`, `bills.fetch`, `customers.fetch` or `deliveries.fetch` (plan 1410) | on |
+| `zoho.pull_finished` | that pull ends — `success` or `partial` | holders of that screen's Fetch; the person who pulled is included only if nobody else holds it | on |
 
 The person who triggered the event is never a recipient. Deactivated users are never recipients.
 

@@ -56,7 +56,8 @@ type Kind = "brand" | "category";
 
 /**
  * Per-kind wiring. The `module` values are the RBAC module keys, not display strings —
- * `brands.fetch` / `categories.fetch` guard the preview routes and `*.create` the imports.
+ * `brands.fetch` / `categories.fetch` guard the preview AND the import routes: one tick (plan
+ * 1410-per-module-fetch-permissions, Q4). The imports used to need `*.create` as well.
  */
 const CONFIG: Record<Kind, { module: string; many: string; base: string }> = {
   brand: { module: "brands", many: "brands", base: "/api/brands" },

@@ -15,6 +15,7 @@ import { FilterSheet } from "@/components/filter-sheet";
 import { usePermissions } from "@/lib/use-permissions";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { createLogger } from "@/lib/logger";
+import { apiFetch } from "@/lib/api-client";
 
 const log = createLogger("bills");
 
@@ -64,7 +65,9 @@ function formatCurrency(amount: number) {
 
 export default function BillsPage() {
   const { canFetch: canFetchCheck } = usePermissions();
-  const canFetchBills = canFetchCheck("zoho");
+  // Bills & Payments › Fetch — the same tick the pull routes check for `module: "bills"`
+  // (plan 1410-per-module-fetch-permissions). One tick fetches and imports.
+  const canFetchBills = canFetchCheck("bills");
 
   const [bills, setBills] = useState<BillItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -124,29 +127,16 @@ export default function BillsPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  const fetchWithTimeout = async (url: string, options?: RequestInit, timeoutMs = 20000) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(url, { ...options, signal: controller.signal });
-      return res;
-    } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") throw new Error("Request timed out — Zoho may be slow, try again");
-      throw e;
-    } finally { clearTimeout(timer); }
-  };
-
   const handleFetchBills = async () => {
     setFetchStep("fetching");
     setFetchError("");
     setFetchProgress("Connecting to Zoho...");
     try {
-      const initRes = await fetchWithTimeout("/api/zoho/trigger-pull", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ step: "init" }),
-      }).then(r => r.json());
-      if (!initRes.success) throw new Error(initRes.error || "Init failed");
-      const pullId = initRes.data.pullId;
+      // apiFetch, not fetch().then(r => r.json()): an expired session answers HTML, and this
+      // screen's errors are shown verbatim. `module: "bills"` names this screen to every route.
+      const { pullId } = await apiFetch<{ pullId: string }>("/api/zoho/trigger-pull", {
+        method: "POST", json: { module: "bills", step: "init" }, timeoutMs: 20_000,
+      });
       setFetchPullId(pullId);
 
       const searchTerm = billSearch.trim();
@@ -163,38 +153,40 @@ export default function BillsPage() {
 
       const label = searchTerm ? `"${searchTerm}"` : fetchDays === -1 ? "custom range" : `last ${fetchDays} days`;
       setFetchProgress(searchTerm ? `Searching ${label} in Zoho...` : `Pulling bills (${label})...`);
-      const billRes = await fetchWithTimeout("/api/zoho/trigger-pull", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ step: "bills", pullId, ...windowBody }),
-      }, 60000).then(r => r.json());
-      if (!billRes.success) throw new Error(billRes.error || "Bills fetch failed");
+      const billData = await apiFetch<{ source?: string; billsNew?: number; apiCalls?: number; errors?: string[] }>(
+        "/api/zoho/trigger-pull",
+        { method: "POST", json: { module: "bills", step: "bills", pullId, ...windowBody }, timeoutMs: 60_000 }
+      );
 
-      const src = billRes.data.source === "inventory" ? "Zoho Inventory" : billRes.data.source === "pos" ? "Zakya" : "Zoho Books";
-      const billsFound = billRes.data.billsNew || 0;
+      const src = billData.source === "inventory" ? "Zoho Inventory" : billData.source === "pos" ? "Zakya" : "Zoho Books";
+      const billsFound = billData.billsNew || 0;
       setFetchProgress(`Found ${billsFound} new bills from ${src}, saving...`);
 
-      const finalizeRes = await fetchWithTimeout("/api/zoho/trigger-pull", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          step: "finalize", pullId,
-          billsNew: billRes.data.billsNew, apiCalls: billRes.data.apiCalls,
-          allErrors: billRes.data.errors || [],
-        }),
-      }).then(r => r.json());
-      if (!finalizeRes.success) {
-        log.warn("finalize failed", { error: finalizeRes.error });
+      try {
+        await apiFetch("/api/zoho/trigger-pull", {
+          method: "POST",
+          json: {
+            module: "bills", step: "finalize", pullId,
+            billsNew: billData.billsNew, apiCalls: billData.apiCalls,
+            allErrors: billData.errors || [],
+          },
+          timeoutMs: 20_000,
+        });
+      } catch (e) {
+        // Not fatal: the previews are written; approve recreates a missing pull log.
+        log.warn("finalize failed", { pullId, error: e instanceof Error ? e.message : String(e) });
       }
 
       setFetchProgress("Loading preview...");
-      const previewRes = await fetchWithTimeout(`/api/zoho/pull-review?pullId=${pullId}`).then(r => r.json());
-      if (!previewRes.success) throw new Error(previewRes.error || "Failed to load preview");
-      const billItems = (previewRes.data.previews || []).filter(
-        (p: ZohoBillPreview & { entityType: string; status: string }) => p.entityType === "bill" && p.status === "PENDING"
+      const preview = await apiFetch<{ previews?: (ZohoBillPreview & { entityType: string; status: string })[] }>(
+        `/api/zoho/pull-review?module=bills&pullId=${encodeURIComponent(pullId)}`,
+        { timeoutMs: 20_000 }
       );
+      const billItems = (preview.previews || []).filter((p) => p.entityType === "bill" && p.status === "PENDING");
       setBillPreviews(billItems);
       setSelectedBills(new Set(billItems.map((b: ZohoBillPreview) => b.id)));
       setFetchStep(billItems.length > 0 ? "selecting" : "idle");
-      const billErrors = billRes.data.errors || [];
+      const billErrors = billData.errors || [];
       if (billItems.length === 0) {
         const errDetail = billErrors.length > 0 ? `: ${billErrors.join("; ")}` : "";
         const debugInfo = billsFound > 0 ? ` (${billsFound} found from API but 0 in preview — check finalize)` : "";
@@ -203,6 +195,7 @@ export default function BillsPage() {
         setFetchError(`Warnings: ${billErrors.join("; ")}`);
       }
     } catch (e) {
+      log.error("bill fetch failed", { error: e instanceof Error ? e.message : String(e) });
       setFetchError(e instanceof Error ? e.message : "Fetch failed");
       setFetchStep("idle");
     } finally {
@@ -222,17 +215,15 @@ export default function BillsPage() {
     if (selectedBills.size === 0) return;
     setFetchStep("importing");
     try {
-      const res = await fetch("/api/zoho/pull-review/approve", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pullId: fetchPullId, action: "approve",
-          entityType: "bill", previewIds: Array.from(selectedBills),
-          source: "accounting",
-        }),
-      }).then(r => r.json());
-      if (!res.success) throw new Error(res.error || "Import failed");
-      const imported = res.data?.bills || 0;
-      const errors = res.data?.errors || [];
+      // The server makes a Bills import financial-only (a vendor bill, never a shipment) from
+      // `module: "bills"` — it no longer takes `source` or `entityType` from the body.
+      const res = await apiFetch<{ bills?: number; errors?: string[] }>("/api/zoho/pull-review/approve", {
+        method: "POST",
+        json: { module: "bills", pullId: fetchPullId, action: "approve", previewIds: Array.from(selectedBills) },
+        timeoutMs: 60_000,
+      });
+      const imported = res?.bills || 0;
+      const errors = res?.errors || [];
       setFetchStep("idle");
       setBillPreviews([]);
       setSelectedBills(new Set());
@@ -241,6 +232,7 @@ export default function BillsPage() {
         setFetchError(`Imported ${imported} bill(s). Warnings: ${errors.join("; ")}`);
       }
     } catch (e) {
+      log.error("bill import failed", { pullId: fetchPullId, error: e instanceof Error ? e.message : String(e) });
       setFetchError(e instanceof Error ? e.message : "Import failed");
       setFetchStep("selecting");
     }

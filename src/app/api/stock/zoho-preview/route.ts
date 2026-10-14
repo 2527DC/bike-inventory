@@ -38,7 +38,10 @@ export interface StockPreviewItem {
  */
 export async function GET(req: NextRequest) {
   try {
-    await requireFeature("zoho", "fetch");
+    // stock.fetch — the tick the /stock Fetch from Zoho button checks (plan
+    // 1410-per-module-fetch-permissions). Was zoho.fetch, while the button also showed for
+    // stock.edit: a button this route refused.
+    await requireFeature("stock", "fetch");
 
     const { searchParams } = new URL(req.url);
     const daysParam = searchParams.get("days");

@@ -38,7 +38,9 @@ interface PreviewRow {
  */
 export async function GET() {
   try {
-    await requireFeature("vendors", "create");
+    // vendors.fetch — preview and import are one tick (plan 1410-per-module-fetch-permissions,
+    // R2). Was vendors.create; the seeder copied that grant to vendors.fetch once (R3).
+    await requireFeature("vendors", "fetch");
 
     const zoho = await getBooks();
     if (!zoho) {

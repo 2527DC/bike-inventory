@@ -6,7 +6,7 @@ import { z } from "zod";
 import { ProductStatus, ProductCondition } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireFeature, AuthError, type CurrentUser } from "@/lib/auth-helpers";
+import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { logActivity } from "@/lib/activity-log";
 import { DEFAULT_BRAND, PLACEHOLDER_CATEGORY } from "@/lib/import-placeholders";
 import { createLogger } from "@/lib/logger";
@@ -40,12 +40,10 @@ const bodySchema = z.object({
  */
 export async function POST(req: NextRequest) {
   try {
-    let user: CurrentUser;
-    try {
-      user = await requireFeature("zoho", "fetch");
-    } catch {
-      user = await requireFeature("stock", "create");
-    }
+    // stock.fetch alone — fetch and import are one tick (plan 1410-per-module-fetch-permissions,
+    // R2). This was "zoho.fetch, or else stock.create": two grants either of which imported,
+    // while the preview before it needed zoho.fetch, so the stock.create half never had a way in.
+    const user = await requireFeature("stock", "fetch");
 
     const raw = await req.json().catch(() => null);
     const parsed = bodySchema.safeParse(raw);

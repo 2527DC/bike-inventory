@@ -3,7 +3,11 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { requireFeature, AuthError } from "@/lib/auth-helpers";
+import { requireAuth, requireFeature, AuthError } from "@/lib/auth-helpers";
+import { userCan } from "@/lib/rbac";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("pos:settlement");
 
 // GET — List daily settlements
 export async function GET(req: NextRequest) {
@@ -41,7 +45,18 @@ export async function GET(req: NextRequest) {
 // POST — Create a daily settlement from POS sessions for a given date
 export async function POST(req: NextRequest) {
   try {
-    await requireFeature("pos", "create");
+    // pos.fetch OR pos.create (plan 1410-per-module-fetch-permissions). Fetch POS calls this
+    // once per day of its window, right after the fetch — it is that fetch's import step, and
+    // R2 says the Fetch tick alone imports. The New settlement button calls it too, and stays
+    // on create. Two permission checks, never a role name.
+    const user = await requireAuth();
+    const [mayFetch, mayCreate] = await Promise.all([
+      userCan(user.id, "pos", "fetch"),
+      userCan(user.id, "pos", "create"),
+    ]);
+    if (!mayFetch && !mayCreate) {
+      throw new AuthError("You do not have permission to fetch or create pos", 403);
+    }
     const body = await req.json();
     const { date } = body as { date: string };
 
@@ -94,9 +109,16 @@ export async function POST(req: NextRequest) {
       return s;
     });
 
+    log.info("settlement created", {
+      settlementId: settlement.id,
+      date,
+      sessions: sessions.length,
+      via: mayCreate ? "pos.create" : "pos.fetch",
+    });
     return successResponse(settlement);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("settlement create failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Failed to create settlement", 500);
   }
 }

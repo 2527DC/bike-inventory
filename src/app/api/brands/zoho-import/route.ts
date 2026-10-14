@@ -27,7 +27,9 @@ const importSchema = z.object({
  */
 export async function POST(req: NextRequest) {
   try {
-    await requireFeature("brands", "create");
+    // brands.fetch — the preview's tick imports too (plan 1410-per-module-fetch-permissions,
+    // Q4, owner 14 Oct 2026). Was brands.create, the second of the 0809 plan's "two grants".
+    await requireFeature("brands", "fetch");
 
     const parsed = importSchema.safeParse(await req.json().catch(() => null));
     if (!parsed.success) {
