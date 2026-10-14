@@ -1,6 +1,6 @@
 # A Fetch tick on every module that fetches — and that one tick fetches and imports
 
-Status: in-progress — built 14 Oct 2026 (§6); `tsc`, `eslint` (0 errors), `npm run build` pass; the seeder and a 61-check end-to-end run on localhost passed; headless-Chrome visual pass done. Awaiting the owner's local test. Push and merge to `main` only when the owner says so.
+Status: completed — 14 Oct 2026, released: PR #80 merged into `main` at the owner's instruction; production is seeded (`npm run db:seed:rbac`) BEFORE the VPS deploy from `main` (§3 Release order). No migration. Left for the owner: tick Fetch per role on `/team/permissions` (step 4), merge `main` into `test` and seed `test` (step 5), drop `zoho.fetch` next release (step 6).
 Branch: **`feat/1410-fetch-permissions`** — off `origin/main` @ `e3b20bc` (owner: "From main, straight to production"). On 14 Oct 2026 the owner had PR #79's branch (`feat/1410-stock-quick-add`, the /stock table and Add stock) merged INTO this branch, so both can be tested together; the one `stock/page.tsx` conflict was resolved by keeping all of #79 and swapping in this plan's Fetch check. If #79 reaches `main` first, this branch's PR shows only its own changes; if this one goes first, it carries #79 with it.
 
 Every `file:line` below was read from disk on 14 Oct 2026 at `e3b20bc`.
@@ -250,6 +250,13 @@ Built on `feat/1410-fetch-permissions` (off `origin/main` @ `e3b20bc`), uncommit
 | Headless Chrome | role editor shows the Fetch chip; a role without Bills › Fetch sees no fetch controls on `/bills`; with Inbound › Fetch it sees them on `/inbound`; without POS › Fetch, Settlement shows no Fetch POS / Re-fetch; no horizontal overflow at 390 px; no page errors |
 
 Local side effect, reported: running this branch's seed on the local database removed the `bank_recon` module, which an earlier local seed from `feat/1210-bank-accounts-suspense` had created. Local only; re-seeding from that branch restores it.
+
+**Released — 14 Oct 2026.**
+
+- The owner, 14 Oct 2026: *"The Fetch permission change isn't on production yet. I update with respect to this too and tell me which command should i run related to it"*.
+- `main` was merged into the branch first (`e0ecc87`) to clear one conflict in `docs/implementation/README.md`: PR #79's plan had moved to `completed/` on `main`. Then PR #80 went into `main`.
+- **Production, compared read-only before the merge:** 55 modules and 193 permissions, against this catalog's 55 and 203. The seed adds exactly the ten `*.fetch` ticks and removes nothing. The seed's admin user on production is `admin@bch.local`, so the seed must run with `ADMIN_ACCESS_CODE` set to that account's real code, or it resets the code to `ADMIN123`.
+- The order is §3's: seed production, then Actions ▸ Deploy to VPS ▸ `main`.
 
 ## 5. Out of scope, deliberately
 
