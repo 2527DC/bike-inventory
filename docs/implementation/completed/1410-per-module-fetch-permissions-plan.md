@@ -254,7 +254,7 @@ Local side effect, reported: running this branch's seed on the local database re
 **Released — 14 Oct 2026.**
 
 - The owner, 14 Oct 2026: *"The Fetch permission change isn't on production yet. I update with respect to this too and tell me which command should i run related to it"*.
-- `main` was merged into the branch first (`e0ecc87`) to clear one conflict in `docs/implementation/README.md`: PR #79's plan had moved to `completed/` on `main`. Then PR #80 went into `main`.
+- `main` was merged into the branch first (`8b47431`) to clear one conflict in `docs/implementation/README.md`: PR #79's plan had moved to `completed/` on `main`. Then PR #80 went into `main`.
 - **Production, compared read-only before the merge:** 55 modules and 193 permissions, against this catalog's 55 and 203. The seed adds exactly the ten `*.fetch` ticks and removes nothing. The seed's admin user on production is `admin@bch.local`, so the seed must run with `ADMIN_ACCESS_CODE` set to that account's real code, or it resets the code to `ADMIN123`.
 - The order is §3's: seed production, then Actions ▸ Deploy to VPS ▸ `main`.
 
