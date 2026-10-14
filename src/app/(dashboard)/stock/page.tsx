@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, RefreshCw, CheckSquare, X, Package, Store, Tags, Layers, BarChart3, Cloud } from "lucide-react";
+import { Search, MapPin, Loader2, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight, RefreshCw, CheckSquare, X, Package, Store, Tags, Layers, BarChart3, Cloud } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -23,8 +23,6 @@ import {
   DEFAULT_STOCK_SORT, type StockProduct, type StockRowContext, type StockSort, type StockSortKey,
 } from "./_components/stock-row";
 import { StockTable } from "./_components/stock-table";
-import { StockCard } from "./_components/stock-card";
-import { isLowStock } from "@/lib/reorder";
 import { ReorderSheet, type ReorderTarget, type ReorderSaved } from "@/components/reorder-sheet";
 import { AssemblyLevelSheet, type AssemblyLevelTarget, type AssemblyLevelSaved } from "@/components/assembly-level-sheet";
 import { ASSEMBLY_LEVELS, type AssemblyLevelValue } from "@/lib/assembly-level";
@@ -32,6 +30,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useStores } from "@/hooks/use-sites";
 import { CategoryTreeSelect } from "@/components/category-tree-select";
 import { ZohoStockImportSheet } from "./_components/zoho-stock-import-sheet";
+import { AddStockSheet, type AddStockTarget, type AddStockDone } from "./_components/add-stock-sheet";
 
 const STOCK_COLUMNS: ExportColumn[] = [
   { header: "SKU", key: "sku" },
@@ -75,6 +74,17 @@ const log = createLogger("stock");
 
 const PAGE_SIZE = 100;
 
+// Export takes every product matching the filters, not just the page on screen (plan 1410,
+// owner-approved). 500 is the most one request returns (parseSearchParams, api-utils.ts), and
+// the whole export stops at 10,000 rows — past that, a sentence asks for narrower filters.
+const EXPORT_PAGE_SIZE = 500;
+const EXPORT_MAX_ROWS = 10_000;
+
+const fmt = (v: number) => v.toLocaleString("en-IN");
+
+/** A one-line message above the list: an add that landed, an export's progress or outcome. */
+type Notice = { tone: "success" | "info" | "error"; text: string };
+
 /**
  * `useSearchParams` must sit under a Suspense boundary or the production build fails
  * prerendering the page (node_modules/next/dist/docs/01-app/03-api-reference/04-functions/
@@ -90,7 +100,7 @@ export default function StockPage() {
 
 function StockScreen() {
   const { data: session } = useSession();
-  const { canEdit, canView, canApprove, canFetch } = usePermissions();
+  const { canEdit, canView, canApprove, canFetch, canCreate } = usePermissions();
 
   // Deep links (plan 1709, R11): /stock/condition links here with the product's SKU and store,
   // and `?condition=no-assembly` opens the No assembly chip. Read ONCE as initial state — the
@@ -129,6 +139,14 @@ function StockScreen() {
   // assembly.approve; PUT /api/products/[id]/assembly-level demands the same, so the button and
   // the route can never disagree.
   const mayAssemblyLevel = canApprove("assembly");
+
+  // inventory_adjustments.create, NOT stock.edit (plan 1410, Q1): adding stock without a count
+  // is its own grant. POST /api/products/[id]/add-stock demands the same one, so the button and
+  // the route cannot disagree. Cosmetic here — the route is the gate.
+  const mayAddStock = canCreate("inventory_adjustments");
+  const [addTarget, setAddTarget] = useState<AddStockTarget | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   // Stock & inventory › Fetch — the one tick both stock/zoho-preview and stock/zoho-import check
   // (plan 1410-per-module-fetch-permissions). This used to also show for zoho.fetch and
@@ -173,7 +191,6 @@ function StockScreen() {
   const [dataError, setDataError] = useState<string | null>(null);
   const [products, setProducts] = useState<ProductItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [search, setSearch] = useState(() => searchParams.get("search") ?? "");
   const debouncedSearch = useDebounce(search);
   const [quickFilter, setQuickFilter] = useState<QuickFilter>(initialQuick);
@@ -190,7 +207,6 @@ function StockScreen() {
   const [bins, setBins] = useState<BinItem[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [refreshing, setRefreshing] = useState(false);
 
@@ -268,6 +284,7 @@ function StockScreen() {
       log.info("bulk assign applied", { field: bulkAction, selected: selectedIds.size, updated: data.updated });
       setBulkMessage(`Updated ${data.updated} products`);
       exitSelectMode();
+      setPage(1);
       fetchProducts(1);
     } catch (e) {
       const message = e instanceof Error ? e.message : "Failed";
@@ -329,7 +346,11 @@ function StockScreen() {
     // be loaded would report "3 need details" out of 151 and look like good news.
     else if (quickFilter === "NEEDS_DETAILS") { params.set("status", "ACTIVE"); params.set("needsDetails", "true"); }
     else if (quickFilter === "NO_ASSEMBLY") { params.set("status", "ACTIVE"); params.set("condition", "no-assembly"); }
-    else if (quickFilter === "ALL" || quickFilter === "LOW_STOCK") { params.set("status", "ACTIVE"); }
+    // Server-side too (plan 1410) — it used to filter only the 100 rows already loaded. Same rule
+    // as the badge, isLowStock: a level is set and stock is at or below it. No out-of-stock
+    // precedence, unlike the badge helpers: "what do I need to order" includes what has run out.
+    else if (quickFilter === "LOW_STOCK") { params.set("status", "ACTIVE"); params.set("lowStock", "1"); }
+    else if (quickFilter === "ALL") { params.set("status", "ACTIVE"); }
     if (selectedBrand) params.set("brandId", selectedBrand);
     if (selectedCategory) params.set("categoryId", selectedCategory);
     if (selectedBin) params.set("binId", selectedBin);
@@ -337,21 +358,30 @@ function StockScreen() {
     return params;
   }, [debouncedSearch, quickFilter, selectedBrand, selectedCategory, selectedBin, selectedStore, sort]);
 
-  const fetchProducts = useCallback((pageNum: number, append = false, silent = false) => {
-    if (!silent) { if (append) setLoadingMore(true); else setLoading(true); }
+  // One page at a time (14 Oct 2026, owner: pages, not a "Load more" list that keeps growing).
+  const fetchProducts = useCallback((pageNum: number, silent = false) => {
+    if (!silent) setLoading(true);
     else setRefreshing(true);
 
-    const params = buildParams(pageNum);
     // apiFetchEnvelope, not `fetch().json()`: the page block sits beside `data`, and an expired
     // session must surface as "signed out", not `Unexpected token '<'`.
-    apiFetchEnvelope<ProductItem[]>(`/api/products?${params}`)
-      .then((res) => {
-        if (append) setProducts((prev) => [...prev, ...res.data]);
-        else setProducts(res.data);
-        setTotal(res.pagination?.total || 0);
-        setHasMore(res.pagination?.hasMore || false);
+    const load = (n: number, steppedBack: boolean): Promise<void> =>
+      apiFetchEnvelope<ProductItem[]>(`/api/products?${buildParams(n)}`).then((res) => {
+        const count = res.pagination?.total || 0;
+        const lastPage = Math.max(1, Math.ceil(count / PAGE_SIZE));
+        // Refreshing in place can find the page gone: the last row on the last page of Low
+        // Stock leaves the filter once stock is added to it, and a deactivate does the same.
+        // Step back to the new last page once, rather than show "No products" beside a total.
+        if (!steppedBack && res.data.length === 0 && n > lastPage) {
+          log.debug("page no longer exists, stepping back", { page: n, lastPage, total: count });
+          setPage(lastPage);
+          return load(lastPage, true);
+        }
+        setProducts(res.data);
+        setTotal(count);
         setLastUpdated(new Date());
-      })
+      });
+    load(pageNum, false)
       .catch((e) => {
         log.error("product list failed", { page: pageNum, message: e instanceof Error ? e.message : String(e) });
         if (typeof navigator !== "undefined" && !navigator.onLine) {
@@ -362,7 +392,6 @@ function StockScreen() {
       })
       .finally(() => {
         setLoading(false);
-        setLoadingMore(false);
         setRefreshing(false);
       });
   }, [buildParams]);
@@ -386,7 +415,7 @@ function StockScreen() {
       });
       log.info("product status changed", { productId: p.id, status });
       setRowOutcome({ ok: true, name: p.name, message: res.message });
-      fetchProducts(1);
+      fetchProducts(page);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Could not update the product";
       log.error("product status change failed", { productId: p.id, message: msg });
@@ -396,10 +425,21 @@ function StockScreen() {
     }
   }
 
-  function loadMore() {
-    const nextPage = page + 1;
-    setPage(nextPage);
-    fetchProducts(nextPage, true);
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  function goToPage(next: number) {
+    if (next < 1 || next > totalPages || next === page) return;
+    log.debug("page changed", { from: page, to: next, totalPages });
+    setPage(next);
+    fetchProducts(next);
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  /** Up to five page numbers around the current one, with the first and last always reachable. */
+  function pageWindow(): number[] {
+    const from = Math.max(1, Math.min(page - 2, totalPages - 4));
+    const to = Math.min(totalPages, from + 4);
+    return Array.from({ length: to - from + 1 }, (_, i) => from + i);
   }
 
   function clearFilters() {
@@ -441,14 +481,81 @@ function StockScreen() {
     );
   }
 
-  // No out-of-stock precedence here, unlike the three badge helpers above: a product at zero
-  // with a reorder level IS in this filter, because "what do I need to order" includes the
-  // things that have already run out. That difference is intentional and predates P8.
-  const filtered = quickFilter === "LOW_STOCK"
-    ? products.filter(isLowStock)
-    : debouncedSearch
-      ? products.filter((p) => fuzzySearchFields(debouncedSearch, [p.name, p.sku, p.brand?.name, p.category?.name]))
-      : products;
+  /**
+   * After an add (plan 1410): say what happened in one line, then reload THIS page in place —
+   * silently, so the table, its scroll and the page number stay. A refetch rather than a patch:
+   * the Stock figure under a store scope is that store's, the route answers with the global
+   * total, and the A / U and "without codes" figures move too.
+   */
+  function applyStockAdded(done: AddStockDone) {
+    setNotice({
+      tone: "success",
+      text: done.duplicate
+        ? `Already added — ${done.productName} is now ${fmt(done.newStock)}`
+        : `Added ${fmt(done.added)} to ${done.productName} — now ${fmt(done.newStock)} · bin ${done.binCode}`,
+    });
+    log.info("stock added from row", { productId: done.productId, added: done.added, duplicate: done.duplicate, page });
+    fetchProducts(page, true);
+  }
+
+  /** The rows the table shows from a set the server returned — its search, narrowed fuzzily. */
+  function visibleRows(rows: ProductItem[]) {
+    return debouncedSearch
+      ? rows.filter((p) => fuzzySearchFields(debouncedSearch, [p.name, p.sku, p.brand?.name, p.category?.name]))
+      : rows;
+  }
+
+  const filtered = visibleRows(products);
+
+  /**
+   * Export EVERY product matching the filters (plan 1410, owner-approved) — it used to take
+   * only the page on screen. Pages through /api/products with the list's own params, 500 at a
+   * time, stopping at EXPORT_MAX_ROWS and saying so.
+   */
+  async function exportAll(format: "excel" | "pdf") {
+    if (exporting) return;
+    setExporting(true);
+    setNotice({ tone: "info", text: "Preparing the export…" });
+    const started = Date.now();
+    try {
+      const rows: ProductItem[] = [];
+      let matched = 0;
+      for (let pageNum = 1; rows.length < EXPORT_MAX_ROWS; pageNum++) {
+        const params = buildParams(pageNum);
+        params.set("limit", String(EXPORT_PAGE_SIZE));
+        const res = await apiFetchEnvelope<ProductItem[]>(`/api/products?${params}`);
+        matched = res.pagination?.total ?? rows.length + res.data.length;
+        rows.push(...res.data);
+        if (res.data.length < EXPORT_PAGE_SIZE || rows.length >= matched) break;
+        setNotice({
+          tone: "info",
+          text: `Preparing the export — ${fmt(rows.length)} of ${fmt(Math.min(matched, EXPORT_MAX_ROWS))} products…`,
+        });
+      }
+      const data = visibleRows(rows.slice(0, EXPORT_MAX_ROWS));
+      if (data.length === 0) {
+        log.info("stock export skipped: nothing matches", { format, matched });
+        setNotice({ tone: "info", text: "Nothing to export — no products match these filters." });
+        return;
+      }
+      const records = data as unknown as Record<string, unknown>[];
+      if (format === "excel") await exportToExcel(records, STOCK_COLUMNS, "stock-inventory");
+      else await exportToPDF("Stock Inventory", records, STOCK_COLUMNS, "stock-inventory");
+      const truncated = matched > EXPORT_MAX_ROWS;
+      log.info("stock export finished", { format, rows: data.length, matched, truncated, ms: Date.now() - started });
+      setNotice(
+        truncated
+          ? { tone: "info", text: `Exported the first ${fmt(EXPORT_MAX_ROWS)} of ${fmt(matched)} products — narrow the filters to export the rest.` }
+          : { tone: "success", text: `Exported ${fmt(data.length)} product${data.length === 1 ? "" : "s"}.` }
+      );
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      log.error("stock export failed", { format, message });
+      setNotice({ tone: "error", text: `Export failed — ${message}` });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const secondsAgo = Math.round((Date.now() - lastUpdated.getTime()) / 1000);
 
@@ -468,6 +575,8 @@ function StockScreen() {
     mayReorder,
     mayAssemblyLevel,
     mayDeactivate,
+    mayAddStock,
+    onAddStock: (p) => setAddTarget({ id: p.id, name: p.name, sku: p.sku }),
     onReorder: (p) => setReorderTarget(p),
     onAssemblyLevel: (p) =>
       setLevelTarget({ id: p.id, name: p.name, sku: p.sku, assemblyLevel: p.assemblyLevel ?? null }),
@@ -502,11 +611,16 @@ function StockScreen() {
       <CheckSquare className="h-3.5 w-3.5" /> Select
     </button>
   ) : null;
+  // ExportButtons has no busy state of its own, so the wrapper blocks a second tap while an
+  // export is being gathered; exportAll also returns early if one is already running.
   const exportButtons = (
-    <ExportButtons
-      onExcel={() => exportToExcel(filtered as unknown as Record<string, unknown>[], STOCK_COLUMNS, "stock-inventory")}
-      onPDF={() => exportToPDF("Stock Inventory", filtered as unknown as Record<string, unknown>[], STOCK_COLUMNS, "stock-inventory")}
-    />
+    <div
+      aria-busy={exporting}
+      title={exporting ? "Preparing the export…" : undefined}
+      className={exporting ? "pointer-events-none opacity-50" : undefined}
+    >
+      <ExportButtons onExcel={() => void exportAll("excel")} onPDF={() => void exportAll("pdf")} />
+    </div>
   );
   // Categories and Brands left the sidebar and live here; each shows only to a role holding its
   // view grant — cosmetic, the screens re-check. "Assembled vs unassembled" is stock.view, which
@@ -590,7 +704,7 @@ function StockScreen() {
         <ErrorBanner
           message={dataError}
           type={typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "error"}
-          onRetry={() => { setDataError(null); fetchProducts(1); }}
+          onRetry={() => { setDataError(null); fetchProducts(page); }}
           onDismiss={() => setDataError(null)}
         />
       )}
@@ -759,15 +873,45 @@ function StockScreen() {
       {/* Status bar */}
       <div className="flex items-center justify-between mb-2">
         <p className="text-xs text-slate-500 tabular-nums">
-          {quickFilter === "LOW_STOCK"
-            ? `${filtered.length} low stock items`
-            : `${filtered.length} of ${total.toLocaleString("en-IN")} products`}
+          {total === 0
+            ? quickFilter === "LOW_STOCK" ? "No low stock products" : "No products"
+            : `Showing ${((page - 1) * PAGE_SIZE + 1).toLocaleString("en-IN")}–${((page - 1) * PAGE_SIZE + products.length).toLocaleString("en-IN")} of ${total.toLocaleString("en-IN")} ${quickFilter === "LOW_STOCK" ? "low stock products" : "products"}`}
         </p>
         <div className="flex items-center gap-1 text-[11px] text-slate-400 tabular-nums">
           <RefreshCw className={`h-3 w-3 ${refreshing ? "animate-spin" : ""}`} />
           {secondsAgo < 5 ? "Just now" : `${secondsAgo}s ago`}
         </div>
       </div>
+
+      {/* One line, right above the table: an add that landed ("Added 5 to GT lock — now 604"),
+          or an export's progress and outcome. */}
+      {notice && (
+        <div
+          role={notice.tone === "error" ? "alert" : "status"}
+          className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 mb-2 ${
+            notice.tone === "success"
+              ? "bg-green-50 border-green-200 text-green-800"
+              : notice.tone === "error"
+                ? "bg-red-50 border-red-200 text-red-700"
+                : "bg-blue-50 border-blue-200 text-blue-800"
+          }`}
+        >
+          <span className="text-xs font-medium break-words min-w-0 flex items-center gap-1.5">
+            {exporting && notice.tone === "info" && <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />}
+            {notice.text}
+          </span>
+          {!(exporting && notice.tone === "info") && (
+            <button
+              type="button"
+              onClick={() => setNotice(null)}
+              aria-label="Dismiss"
+              className="shrink-0 min-h-[44px] min-w-[44px] -my-2.5 -mr-2.5 flex items-center justify-center rounded-lg opacity-70 hover:opacity-100 focus-ring"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Product list */}
       {loading ? (
@@ -784,28 +928,48 @@ function StockScreen() {
             </div>
           )}
 
-          {/* PC: a sortable table. Phone and tablet: compact cards (plan
-              2109-stock-list-table-and-compact-cards, R1, R2, Q4 — the switch is lg, 1024px).
-              One list of data, two layouts; both render from _components/stock-row.tsx. */}
+          {/* One sortable table at every width (owner, 14 Oct 2026: no cards). It scrolls inside
+              its own box, so the page never scrolls sideways. key={page} starts each page at the
+              top of that box. */}
           {filtered.length > 0 && (
-            <>
-              <div className="hidden lg:block">
-                <StockTable products={filtered} ctx={rowCtx} sort={sort} onSort={changeSort} />
-              </div>
-              <div className="lg:hidden space-y-1.5">
-                {filtered.map((p) => (
-                  <StockCard key={p.id} product={p} ctx={rowCtx} />
-                ))}
-              </div>
-            </>
+            <StockTable key={page} products={filtered} ctx={rowCtx} sort={sort} onSort={changeSort} />
           )}
 
-          {hasMore && quickFilter !== "LOW_STOCK" && (
-            <Button variant="outline" className="w-full tabular-nums" onClick={loadMore} disabled={loadingMore}>
-              {loadingMore
-                ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Loading...</>
-                : `Load More (${(total - products.length).toLocaleString("en-IN")} remaining)`}
-            </Button>
+          {/* Pages, not "Load more" — for every chip, Low Stock included now that the server
+              filters it (plan 1410). */}
+          {totalPages > 1 && (
+            <nav aria-label="Product pages" className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <p className="text-xs text-slate-500 tabular-nums">
+                Page {page.toLocaleString("en-IN")} of {totalPages.toLocaleString("en-IN")}
+              </p>
+              <div className="flex items-center gap-1">
+                <Button variant="outline" size="sm" className="min-h-[40px] px-2" onClick={() => goToPage(1)} disabled={page === 1 || loading} aria-label="First page">
+                  First
+                </Button>
+                <Button variant="outline" size="sm" className="min-h-[40px] px-2" onClick={() => goToPage(page - 1)} disabled={page === 1 || loading} aria-label="Previous page">
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                {pageWindow().map((n) => (
+                  <Button
+                    key={n}
+                    variant={n === page ? "default" : "outline"}
+                    size="sm"
+                    className="min-h-[40px] min-w-[40px] px-2 tabular-nums"
+                    onClick={() => goToPage(n)}
+                    disabled={loading}
+                    aria-current={n === page ? "page" : undefined}
+                  >
+                    {n}
+                  </Button>
+                ))}
+                <Button variant="outline" size="sm" className="min-h-[40px] px-2" onClick={() => goToPage(page + 1)} disabled={page === totalPages || loading} aria-label="Next page">
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+                <Button variant="outline" size="sm" className="min-h-[40px] px-2" onClick={() => goToPage(totalPages)} disabled={page === totalPages || loading} aria-label="Last page">
+                  Last
+                </Button>
+              </div>
+            </nav>
           )}
         </div>
       )}
@@ -824,10 +988,18 @@ function StockScreen() {
         onSaved={applyAssemblyLevelSaved}
       />
 
+      <AddStockSheet
+        open={addTarget !== null}
+        product={addTarget}
+        onClose={() => setAddTarget(null)}
+        onAdded={applyStockAdded}
+      />
+
       <ZohoStockImportSheet
         isOpen={isZohoSheetOpen}
         onClose={() => setIsZohoSheetOpen(false)}
         onImportComplete={() => {
+          setPage(1);
           fetchProducts(1);
           reloadMasterData();
         }}

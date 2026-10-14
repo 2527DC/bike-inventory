@@ -1,7 +1,7 @@
 # A Fetch tick on every module that fetches — and that one tick fetches and imports
 
 Status: in-progress — built 14 Oct 2026 (§6); `tsc`, `eslint` (0 errors), `npm run build` pass; the seeder and a 61-check end-to-end run on localhost passed; headless-Chrome visual pass done. Awaiting the owner's local test. Push and merge to `main` only when the owner says so.
-Branch: **`feat/1410-fetch-permissions`** — off `origin/main` @ `e3b20bc` (owner: "From main, straight to production"). It does not contain PR #79 (quick add); whichever merges second takes a small conflict in `src/app/(dashboard)/stock/page.tsx`.
+Branch: **`feat/1410-fetch-permissions`** — off `origin/main` @ `e3b20bc` (owner: "From main, straight to production"). On 14 Oct 2026 the owner had PR #79's branch (`feat/1410-stock-quick-add`, the /stock table and Add stock) merged INTO this branch, so both can be tested together; the one `stock/page.tsx` conflict was resolved by keeping all of #79 and swapping in this plan's Fetch check. If #79 reaches `main` first, this branch's PR shows only its own changes; if this one goes first, it carries #79 with it.
 
 Every `file:line` below was read from disk on 14 Oct 2026 at `e3b20bc`.
 
