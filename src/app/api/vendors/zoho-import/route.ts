@@ -12,6 +12,8 @@ import { getBooks } from "@/lib/integrations";
 import { vendorDataFrom } from "@/lib/vendors/resolve-zoho-vendor";
 import { vendorCodeFor, randomCodeSuffix } from "@/lib/vendors/code";
 import { createLogger } from "@/lib/logger";
+import { matchOne, normaliseGstin } from "@/lib/vendors/zoho-match";
+import { listVendorsForMatching } from "@/lib/vendors/zoho-link";
 
 const log = createLogger("vendors:zoho-sync");
 
@@ -39,9 +41,12 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * (plan 2409-zoho-vendor-sync, Part A).
  *
  * Per id: already linked → skipped (never updated); the Zoho detail read → the same
- * `vendorDataFrom` mapping a bill import uses → create. A name that already exists here is
- * skipped and named, never linked by name. Each vendor is its own write, so a failure on one
- * does not undo the others and a re-run simply skips what is already there.
+ * `vendorDataFrom` mapping a bill import uses → create. A vendor that is already here — the same
+ * GSTIN or name, by the matcher the Link step uses (plan 1410-link-vendors-to-zoho) — is skipped
+ * and named: it is linked, never imported a second time. The screen offers only new vendors, but
+ * this is re-checked here, so a sheet left open from before cannot create a duplicate. Each vendor
+ * is its own write, so a failure on one does not undo the others and a re-run simply skips what
+ * is already there.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -49,7 +54,11 @@ export async function POST(req: NextRequest) {
     // vendors.create.
     await requireFeature("vendors", "fetch");
 
-    const parsed = importSchema.safeParse(await req.json().catch(() => null));
+    const body = await req.json().catch((e: unknown) => {
+      log.warn("import request body is not JSON", { error: e instanceof Error ? e.message : String(e) });
+      return null;
+    });
+    const parsed = importSchema.safeParse(body);
     if (!parsed.success) {
       return errorResponse(parsed.error.issues[0]?.message ?? "Invalid import request", 400);
     }
@@ -63,6 +72,9 @@ export async function POST(req: NextRequest) {
 
     const outcomes: Outcome[] = [];
     let lastCallAt = 0;
+    // Every vendor here, for the matcher; a vendor created in this batch joins it, so two Zoho
+    // duplicates in one batch cannot both be created.
+    const vendors = await listVendorsForMatching();
 
     for (const zohoId of ids) {
       const skip = (reason: string) => outcomes.push({ zohoId, result: "skipped", reason });
@@ -88,6 +100,18 @@ export async function POST(req: NextRequest) {
         const data = vendorDataFrom(zohoId, contact.contact_name ?? "", contact);
         if (!data.name) {
           skip(`Zoho vendor ${zohoId} has no name`);
+          continue;
+        }
+
+        const match = matchOne({ zohoId, name: data.name, gstin: normaliseGstin(contact.gst_no) }, vendors);
+        if (match.kind !== "none") {
+          const here = match.candidates[0];
+          log.warn("vendor already here — not imported", { zohoVendorId: zohoId, kind: match.kind, existingVendorId: here?.id });
+          skip(
+            here
+              ? `"${data.name}" matches "${here.name}" (${here.code}) already here — link it in the Link section instead of importing`
+              : `"${data.name}" matches a vendor already here — link it instead of importing`
+          );
           continue;
         }
 
@@ -122,6 +146,7 @@ export async function POST(req: NextRequest) {
           }
         }
 
+        vendors.push({ id: created.id, code: data.code, name: created.name, gstin: data.gstin ?? null, isActive: true, zohoVendorId: zohoId });
         outcomes.push({ zohoId, result: "created", vendorId: created.id, name: created.name });
       } catch (e) {
         // One vendor's failure is reported and the batch carries on.
