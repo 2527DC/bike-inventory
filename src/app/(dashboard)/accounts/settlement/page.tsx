@@ -44,8 +44,12 @@ type FetchStep = "idle" | "connecting" | "fetching" | "creating" | "done" | "err
 export default function SettlementListPage() {
   const { data: session, status: sessionStatus } = useSession();
 
-  const { canView, canDelete: canDeleteCheck } = usePermissions();
+  const { canView, canDelete: canDeleteCheck, canFetch } = usePermissions();
   const canAccess = canView("bills");
+  // POS › Fetch — Fetch POS and Re-fetch (plan 1410-per-module-fetch-permissions, Q3), the tick
+  // POST /api/pos/sessions checks; the per-day settlements it then creates accept it too.
+  // Re-fetch was shown on bills.delete while its route checked pos.create.
+  const canFetchPos = canFetch("pos");
   // The permission half already worked; the two role comparisons in front of it were dead
   // weight that could only ever be false. Only the half that did something is left.
   const isAdmin = canDeleteCheck("bills");
@@ -226,37 +230,39 @@ export default function SettlementListPage() {
       {/* Actions */}
       <div className="flex gap-2 mb-3">
         <div className="flex items-center gap-1 flex-1">
-          <select value={fetchDays} onChange={(e) => setFetchDays(Number(e.target.value))}
-            className="text-xs border rounded-lg px-2 py-2 bg-white">
-            <option value={1}>1 day</option>
-            <option value={3}>3 days</option>
-            <option value={7}>7 days</option>
-            <option value={14}>14 days</option>
-            <option value={30}>30 days</option>
-            <option value={0}>Custom</option>
-          </select>
-          {fetchDays === 0 && (
+          {canFetchPos && (
             <>
-              <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)}
-                className="text-xs border rounded-lg px-2 py-2 bg-white w-[120px]" />
-              <span className="text-xs text-slate-400">to</span>
-              <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)}
-                className="text-xs border rounded-lg px-2 py-2 bg-white w-[120px]" />
+              <select value={fetchDays} onChange={(e) => setFetchDays(Number(e.target.value))}
+                className="text-xs border rounded-lg px-2 py-2 bg-white">
+                <option value={1}>1 day</option>
+                <option value={3}>3 days</option>
+                <option value={7}>7 days</option>
+                <option value={14}>14 days</option>
+                <option value={30}>30 days</option>
+                <option value={0}>Custom</option>
+              </select>
+              {fetchDays === 0 && (
+                <>
+                  <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)}
+                    className="text-xs border rounded-lg px-2 py-2 bg-white w-[120px]" />
+                  <span className="text-xs text-slate-400">to</span>
+                  <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)}
+                    className="text-xs border rounded-lg px-2 py-2 bg-white w-[120px]" />
+                </>
+              )}
+              <Button size="sm" variant="outline" onClick={() => fetchSessions(false)} disabled={isFetching || (fetchDays === 0 && (!customFrom || !customTo))}>
+                <Download className="h-3.5 w-3.5 mr-1" />
+                {isFetching ? "Fetching..." : "Fetch POS"}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => {
+                if (confirm("Re-fetch will delete existing sessions & settlements for this period and pull fresh from Zakya. Continue?")) {
+                  fetchSessions(true);
+                }
+              }} disabled={isFetching} className="text-orange-600 border-orange-300 hover:bg-orange-50">
+                <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                Re-fetch
+              </Button>
             </>
-          )}
-          <Button size="sm" variant="outline" onClick={() => fetchSessions(false)} disabled={isFetching || (fetchDays === 0 && (!customFrom || !customTo))}>
-            <Download className="h-3.5 w-3.5 mr-1" />
-            {isFetching ? "Fetching..." : "Fetch POS"}
-          </Button>
-          {isAdmin && (
-            <Button size="sm" variant="outline" onClick={() => {
-              if (confirm("Re-fetch will delete existing sessions & settlements for this period and pull fresh from Zakya. Continue?")) {
-                fetchSessions(true);
-              }
-            }} disabled={isFetching} className="text-orange-600 border-orange-300 hover:bg-orange-50">
-              <RefreshCw className="h-3.5 w-3.5 mr-1" />
-              Re-fetch
-            </Button>
           )}
         </div>
         <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={createSettlement} disabled={creating}>

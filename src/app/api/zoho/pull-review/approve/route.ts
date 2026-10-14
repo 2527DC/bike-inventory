@@ -21,6 +21,9 @@ import { toPlus91 } from "@/lib/phone";
 import { nextSequence } from "@/lib/sequence";
 import { ibSeedSql } from "@/lib/inbound/sequence";
 import { resolveBillVendor } from "@/lib/vendors/resolve-zoho-vendor";
+import { zohoPullApproveSchema } from "@/lib/validations";
+import { ZOHO_PULL_ENTITY } from "@/lib/zoho/pull-modules";
+import { importZohoReceivable } from "@/lib/customers/zoho-receivable";
 
 // This route had no logger at all — a 499-line import handler whose only record of what it
 // did was the response body, which a 504 never delivers.
@@ -84,15 +87,23 @@ export async function POST(req: NextRequest) {
   // long a successful run took is the number that says how close to the cliff it is.
   const startedAt = Date.now();
   try {
-    const user = await requireFeature("zoho", "approve");
-    const body = await req.json();
-    const { pullId, action, entityType, previewIds, source } = body as {
-      pullId: string; action: "approve" | "reject"; entityType?: string; previewIds?: string[]; source?: string;
-    };
-
-    if (!pullId || !["approve", "reject"].includes(action)) {
-      return errorResponse("pullId and action (approve/reject) required", 400);
+    const parsed = zohoPullApproveSchema.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) {
+      return errorResponse(parsed.error.issues[0]?.message ?? "Invalid request", 400);
     }
+    const { module: moduleKey, pullId, action, previewIds } = parsed.data;
+
+    // The SCREEN's Fetch tick imports (plan 1410-per-module-fetch-permissions, R2: "one fetch
+    // permission … anybody can fetch and import"). This was `zoho.approve` — a second grant on
+    // top of the fetch.
+    const user = await requireFeature(moduleKey, "fetch");
+
+    // Both used to come from the body. Now they follow from the screen, so one screen's tick
+    // cannot import another screen's records (F2), and a Bills import cannot ask to become a
+    // shipment. `source` keeps its old meaning: "accounting" = financial-only (a vendor bill,
+    // never a product or a shipment) — that is the Bills screen; Inbound builds shipments.
+    const entityType = ZOHO_PULL_ENTITY[moduleKey];
+    const source = moduleKey === "bills" ? "accounting" : "inventory";
 
     // Find or auto-create pullLog (handles case where finalize step failed)
     let pullLog = await prisma.zohoPullLog.findUnique({ where: { pullId } });
@@ -108,14 +119,15 @@ export async function POST(req: NextRequest) {
       return errorResponse(`Pull already ${pullLog.status.toLowerCase()}`, 400);
     }
 
-    // Filter: specific IDs > entity type > all pending
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let previewFilter: any = { pullId, status: "PENDING" };
-    if (previewIds && previewIds.length > 0) {
-      previewFilter = { pullId, status: "PENDING", id: { in: previewIds } };
-    } else if (entityType) {
-      previewFilter.entityType = entityType;
-    }
+    // The screen's kind ALWAYS, plus the chosen ids when there are any. The entity type used
+    // to be applied only when no ids were sent, so any id from any pull imported whatever its
+    // type — harmless under one shared grant, a hole once four screens' ticks share this route.
+    const previewFilter = {
+      pullId,
+      status: "PENDING" as const,
+      entityType,
+      ...(previewIds && previewIds.length > 0 ? { id: { in: previewIds } } : {}),
+    };
 
     const previews = await prisma.zohoPullPreview.findMany({ where: previewFilter });
 
@@ -132,7 +144,8 @@ export async function POST(req: NextRequest) {
           data: { status: "REJECTED", approvedAt: new Date() },
         });
       }
-      return successResponse({ action: "rejected", count: previews.length, entityType: entityType || "all" });
+      log.info("previews rejected", { pullId, module: moduleKey, count: previews.length });
+      return successResponse({ action: "rejected", count: previews.length, entityType });
     }
 
     // ─── APPROVE: write to real tables ───
@@ -151,6 +164,9 @@ export async function POST(req: NextRequest) {
     // successful import read as a failed one and, worse, left the pull stuck at PARTIAL.
     // `errors` keeps its meaning exactly: the record did not import.
     const results = { contacts: 0, items: 0, bills: 0, invoices: 0, skipped: 0, errors: [] as string[], notices: [] as string[] };
+    // The /receivables import (plan 1410, Q1), which the page used to do itself before calling
+    // this route. Additive keys: the other three screens never read them.
+    const receivables = { created: 0, existing: 0, customersCreated: 0 };
 
     // Every active FLOOR warehouse carrying a prefix, for invoice attribution (plan
     // 1609-deliveries, T1). Loaded once, not per record — and only when this batch holds an
@@ -559,6 +575,32 @@ export async function POST(req: NextRequest) {
         } else if (preview.entityType === "invoice") {
           const invoiceNo = String(d.invoiceNumber);
 
+          // RECEIVABLES FIRST, when the screen is /receivables (Q1). Before the delivery's
+          // dedup below on purpose: an invoice already delivered still owes its receivable.
+          // A receivable that cannot be written leaves the preview PENDING — so it can be
+          // retried — and writes no delivery either.
+          if (moduleKey === "customers") {
+            const outcome = await importZohoReceivable(prisma, {
+              invoiceNumber: invoiceNo,
+              customerName: String(d.customerName || ""),
+              phone: String(d.phone || ""),
+              date: String(d.date || ""),
+              total: Number(d.total || 0),
+              balance: Number(d.balance || 0),
+            });
+            if (!outcome.ok) {
+              log.warn("receivable not imported", { pullId, previewId: preview.id, invoiceNo, reason: outcome.reason });
+              results.errors.push(`Invoice ${invoiceNo}: ${outcome.reason}`);
+              continue;
+            }
+            if (outcome.invoiceCreated) receivables.created++;
+            else receivables.existing++;
+            if (outcome.customerCreated) receivables.customersCreated++;
+          }
+
+          // The delivery — kept for /receivables too (Q2, owner 14 Oct 2026: "as today"; §2.4 F1
+          // of the plan raises whether it should be).
+
           // DEDUP FIRST, and it is no longer silent.
           //
           // This used to be a bare `continue` AFTER the detail fetch, which had three
@@ -585,8 +627,8 @@ export async function POST(req: NextRequest) {
           // returned nothing and every imported delivery arrived with no line items, no
           // address, no area and no pincode — the dispatch clerk had nothing to route by.
           // `provider` is written into the preview by trigger-pull (named `provider`, not
-          // `source`, because this route already has a `source` body field meaning something
-          // else entirely).
+          // `source`, because this route already has a `source` meaning something else
+          // entirely — accounting or inventory, derived from the screen since plan 1410).
           if (preview.zohoId) {
             try {
               const { getBooks, getZakya } = await import("@/lib/integrations");
@@ -690,8 +732,9 @@ export async function POST(req: NextRequest) {
     // and without this line there is no way afterwards to tell what got in before the kill.
     log.info("approve finished", {
       pullId,
+      module: moduleKey,
       requestedBy: user.id,
-      entityType: entityType || "all",
+      entityType,
       contacts: results.contacts,
       items: results.items,
       bills: results.bills,
@@ -699,6 +742,7 @@ export async function POST(req: NextRequest) {
       skipped: results.skipped,
       errors: results.errors.length,
       notices: results.notices.length,
+      ...(moduleKey === "customers" ? { receivables } : {}),
       remainingPending,
       status: newStatus,
       ms: Date.now() - startedAt,
@@ -706,15 +750,18 @@ export async function POST(req: NextRequest) {
 
     await logActivity(prisma, {
       module: "zoho", action: "imported", entityType: "ZohoPull", entityId: pullId, entityRef: pullId,
-      details: `${results.invoices} deliveries, ${results.bills} shipments, ${results.skipped} skipped`,
+      details:
+        (moduleKey === "customers" ? `${receivables.created} receivables (${receivables.customersCreated} new customers), ` : "") +
+        `${results.invoices} deliveries, ${results.bills} ${moduleKey === "bills" ? "vendor bills" : "shipments"}, ${results.skipped} skipped`,
       userId: user.id, userName: user.name,
     });
 
     return successResponse({
       action: "approved",
-      entityType: entityType || "all",
+      entityType,
       remainingPending,
       ...results,
+      receivables,
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);

@@ -32,7 +32,10 @@ function toClientInvoice(inv: {
 
 // GET — search Zoho invoices by phone or invoice number
 export async function GET(req: NextRequest) {
-  const { error: authError } = await serviceGuard("zoho", "fetch");
+  // service_jobs.fetch (plan 1410-per-module-fetch-permissions) — the workshop's own tick for
+  // the job card's "is this invoice paid?" check. Was zoho.fetch. Without it the job card falls
+  // back to entering the payment by hand, as it does on any failed check.
+  const { error: authError } = await serviceGuard("service_jobs", "fetch");
   if (authError) return authError;
 
   const phone = req.nextUrl.searchParams.get("phone");

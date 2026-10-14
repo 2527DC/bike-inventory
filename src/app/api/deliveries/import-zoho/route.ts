@@ -22,11 +22,11 @@ const log = createLogger("deliveries:import-zoho");
  */
 export async function POST(req: NextRequest) {
   try {
-    // zoho.APPROVE, not deliveries.fetch. This route WRITES Delivery rows — importing is not
-    // fetching, and gating a write on a read-shaped grant meant anyone who could look could
-    // also import. Flipped in the same commit as the button, so relabelling the UI never
-    // leaves the old grant working by URL.
-    await requireFeature("zoho", "approve");
+    // deliveries.FETCH — fetch and import are one tick (plan 1410-per-module-fetch-permissions,
+    // R2, owner 14 Oct 2026: "one fetch permission … anybody can fetch and import"). This was
+    // `zoho.approve`, a second grant on top of the fetch. The /deliveries Import button checks
+    // the same tick, so the button and this route cannot disagree.
+    await requireFeature("deliveries", "fetch");
     const { invoiceIds } = (await req.json()) as { invoiceIds: string[] };
 
     if (!invoiceIds || invoiceIds.length === 0) {

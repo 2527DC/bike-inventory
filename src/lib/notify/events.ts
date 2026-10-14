@@ -41,7 +41,7 @@ export const NOTIFICATION_EVENTS = {
   },
   "zoho.pull_started": {
     label: "Zoho pull started",
-    description: "Someone started a bills-and-invoices pull from Zoho Books or Zakya",
+    description: "Someone started a bills or invoices pull from Zoho Books or Zakya",
     defaults: { push: true },
   },
   "zoho.pull_finished": {

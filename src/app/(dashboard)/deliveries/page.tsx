@@ -22,14 +22,12 @@ import { BottomSheetModal } from "./_components/bottom-sheet-modal";
 const log = createLogger("deliveries:list");
 
 export default function DeliveriesPage() {
-  const { canFetch, canApprove, canDelete, canEdit } = usePermissions();
+  const { canFetch, canDelete, canEdit } = usePermissions();
   // "Match warehouses" writes Delivery.warehouseId — deliveries.edit (plan 1609 A43b).
   const canMatchWarehouses = canEdit("deliveries");
-  const canFetchInvoices = canFetch("zoho");
-  // The IMPORT gate. The component has never had one — only the Fetch button was gated —
-  // so anyone who could open the panel could also write Delivery rows. The route now
-  // requires zoho.approve; this is the matching client-side courtesy (the API re-checks).
-  const canImportInvoices = canApprove("zoho");
+  // 2 Outbound › Fetch — fetch AND import, one tick (plan 1410-per-module-fetch-permissions).
+  // Every route the panel calls checks deliveries.fetch; this is the matching courtesy.
+  const canFetchInvoices = canFetch("deliveries");
   // Gates the delete button and is handed to the child as a prop. Deleting a delivery is
   // exactly deliveries.delete.
   const isAdmin = canDelete("deliveries");
@@ -205,7 +203,7 @@ export default function DeliveriesPage() {
           the page rather than a modal covering the delivery list (R1). */}
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 mb-2">
         <h1 className="text-lg font-bold text-slate-900">Deliveries</h1>
-        <ZohoImportFlow canFetch={canFetchInvoices} canImport={canImportInvoices} onImported={fetchData} />
+        <ZohoImportFlow canFetch={canFetchInvoices} onImported={fetchData} />
       </div>
 
       {canMatchWarehouses && <MatchWarehousesButton onMatched={fetchData} />}

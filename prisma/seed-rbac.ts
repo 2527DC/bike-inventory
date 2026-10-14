@@ -164,6 +164,11 @@ export async function seedRbac(prisma: PrismaClient) {
 
   // ── 2. Permissions (one row per module × action) ───────────────────────────
   const permSeeds = allPermissionSeeds();
+  // Read BEFORE the upserts: a permission absent here is created by this run, which is the one
+  // moment its catalog `inheritGrantsFrom` applies (step 2b).
+  const preexistingPermKeys = new Set(
+    (await prisma.permission.findMany({ select: { key: true } })).map((p) => p.key)
+  );
   for (const p of permSeeds) {
     const moduleId = moduleIdByKey.get(p.moduleKey)!;
     await prisma.permission.upsert({
@@ -178,6 +183,36 @@ export async function seedRbac(prisma: PrismaClient) {
     where: { key: { notIn: permSeeds.map((p) => p.key) } },
   });
   if (stalePerms.count) console.log(`  permissions  : ${stalePerms.count} stale removed`);
+
+  // ── 2b. Inherited grants — once, for permissions this run created ─────────
+  // A module that moves a screen off another module's guard (bank_recon off bills) names the
+  // permission keys whose holders keep the screen. Only non-system roles: ADMIN gets everything
+  // in step 4. Never re-applied once the permission exists, so a later revocation sticks.
+  for (const m of MODULE_CATALOG) {
+    if (!m.inheritGrantsFrom || m.assignable === false) continue;
+    for (const [action, sourceKeys] of Object.entries(m.inheritGrantsFrom)) {
+      const key = `${m.key}.${action}`;
+      if (!sourceKeys?.length || preexistingPermKeys.has(key)) continue;
+      const target = await prisma.permission.findUnique({ where: { key }, select: { id: true } });
+      if (!target) continue;
+      const holders = await prisma.rolePermission.findMany({
+        where: { role: { isSystem: false }, permission: { key: { in: sourceKeys } } },
+        select: { roleId: true, role: { select: { key: true } } },
+        distinct: ["roleId"],
+      });
+      if (!holders.length) {
+        console.log(`  inherited    : ${key} ← ${sourceKeys.join(" | ")} : no role holds those`);
+        continue;
+      }
+      await prisma.rolePermission.createMany({
+        data: holders.map((h) => ({ roleId: h.roleId, permissionId: target.id })),
+        skipDuplicates: true,
+      });
+      console.log(
+        `  inherited    : ${key} ← ${sourceKeys.join(" | ")} : ${holders.map((h) => h.role.key).join(", ")} (${holders.length} role${holders.length === 1 ? "" : "s"})`
+      );
+    }
+  }
 
   // ── 3. ADMIN role ──────────────────────────────────────────────────────────
   const adminRole = await prisma.role.upsert({

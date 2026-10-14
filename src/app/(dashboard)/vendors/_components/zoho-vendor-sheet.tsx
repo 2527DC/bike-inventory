@@ -45,7 +45,7 @@ interface BatchResult {
 }
 
 export function ZohoVendorSheet({ onDone }: { onDone: () => void }) {
-  const { canCreate, loading: permsLoading } = usePermissions();
+  const { canFetch, loading: permsLoading } = usePermissions();
 
   const [step, setStep] = useState<"idle" | "fetching" | "selecting" | "importing">("idle");
   const [rows, setRows] = useState<PreviewRow[]>([]);
@@ -137,8 +137,9 @@ export function ZohoVendorSheet({ onDone }: { onDone: () => void }) {
     }
   }
 
-  // Cosmetic only — both routes re-check vendors.create.
-  if (permsLoading || !canCreate("vendors")) return null;
+  // Cosmetic only — both routes re-check vendors.fetch: preview and import are one tick (plan
+  // 1410-per-module-fetch-permissions). It was vendors.create.
+  if (permsLoading || !canFetch("vendors")) return null;
 
   const open = step !== "idle";
   const busy = step === "fetching" || step === "importing";

@@ -148,8 +148,10 @@ function StockScreen() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [exporting, setExporting] = useState(false);
 
-  // Zoho fetch: canFetch("zoho") or canFetch("stock") or canEdit("stock")
-  const mayFetchZoho = canFetch("zoho") || canFetch("stock") || canEdit("stock");
+  // Stock & inventory › Fetch — the one tick both stock/zoho-preview and stock/zoho-import check
+  // (plan 1410-per-module-fetch-permissions). This used to also show for zoho.fetch and
+  // stock.edit, and the preview route refused stock.edit: a button that did nothing.
+  const mayFetchZoho = canFetch("stock");
   const [isZohoSheetOpen, setIsZohoSheetOpen] = useState(false);
 
   const [rowBusy, setRowBusy] = useState<string | null>(null);

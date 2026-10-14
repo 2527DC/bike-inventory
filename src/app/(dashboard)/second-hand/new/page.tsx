@@ -7,6 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { uploadImage } from "@/lib/media-upload";
 import { compressImageFull } from "@/lib/media-compress";
+import { usePermissions } from "@/lib/use-permissions";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("second-hand:new");
 
 type Condition = "EXCELLENT" | "GOOD" | "FAIR" | "SCRAP";
 
@@ -21,6 +26,11 @@ const CONDITIONS: { value: Condition; label: string; color: string }[] = [
 
 export default function NewSecondHandPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // The Zoho invoice lookup is a fetch: Second-Hand › Fetch, the tick search-zoho checks for
+  // `module: "second_hand"` (plan 1410-per-module-fetch-permissions). Without it the seller's
+  // details are typed by hand, as when Zoho has no match.
+  const { canFetch } = usePermissions();
+  const canLookup = canFetch("second_hand");
 
   // Form fields
   const [zohoInvoiceNo, setZohoInvoiceNo] = useState("");
@@ -42,29 +52,27 @@ export default function NewSecondHandPage() {
 
   // Search Zoho for customer details by invoice number
   const handleSearchInvoice = async () => {
-    if (!zohoInvoiceNo.trim()) return;
+    if (!canLookup || !zohoInvoiceNo.trim()) return;
     setSearching(true);
     setError("");
-    try {
-      const res = await fetch("/api/deliveries/search-zoho", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: zohoInvoiceNo.trim() }),
-      });
-      if (!res.ok) throw new Error("Search failed");
-      const data = await res.json();
-      if (data.success && data.data.results?.length > 0) {
-        const inv = data.data.results[0];
-        setCustomerName(inv.customerName || "");
-        setCustomerPhone(inv.phone || "");
-      } else {
-        setError("Invoice not found in Zoho. Enter customer details manually.");
-      }
-    } catch {
-      setError("Could not search Zoho. Enter customer details manually.");
-    } finally {
-      setSearching(false);
+    // apiTry, not res.json() — an expired session answers HTML with status 200.
+    const { data, error: searchError } = await apiTry<{ results?: Array<{ customerName?: string; phone?: string }> }>(
+      "/api/deliveries/search-zoho",
+      { method: "POST", json: { module: "second_hand", query: zohoInvoiceNo.trim() }, timeoutMs: 30_000 }
+    );
+    setSearching(false);
+    if (searchError) {
+      log.warn("invoice lookup failed", { error: searchError });
+      setError(`Could not search Zoho (${searchError}). Enter customer details manually.`);
+      return;
     }
+    const inv = data?.results?.[0];
+    if (!inv) {
+      setError("Invoice not found in Zoho. Enter customer details manually.");
+      return;
+    }
+    setCustomerName(inv.customerName || "");
+    setCustomerPhone(inv.phone || "");
   };
 
   // Handle adding photos (camera or gallery)
@@ -215,12 +223,16 @@ export default function NewSecondHandPage() {
               onChange={(e) => setZohoInvoiceNo(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSearchInvoice()}
               className="min-h-[44px]" />
-            <Button type="button" variant="outline" onClick={handleSearchInvoice} disabled={searching}
-              className="shrink-0 min-h-[44px]">
-              {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-            </Button>
+            {canLookup && (
+              <Button type="button" variant="outline" onClick={handleSearchInvoice} disabled={searching}
+                className="shrink-0 min-h-[44px]">
+                {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+              </Button>
+            )}
           </div>
-          <p className="text-[11px] text-slate-400 mt-1">Search to auto-fill customer details, or enter manually</p>
+          <p className="text-[11px] text-slate-400 mt-1">
+            {canLookup ? "Search to auto-fill customer details, or enter manually" : "Enter the customer details below"}
+          </p>
         </div>
 
         {/* Customer Info */}
