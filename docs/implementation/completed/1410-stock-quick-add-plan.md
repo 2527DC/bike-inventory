@@ -1,6 +1,6 @@
 # Add stock directly from /stock — a quantity, assembled or not, a reason; no stock audit
 
-Status: in-progress — built 14 Oct 2026 (§6); `tsc`, `eslint`, `npm run build` pass; a 23-check end-to-end run on localhost passed. The browser pass is the owner's. Goes to `main` by PR.
+Status: completed — 14 Oct 2026, released: PR #79 merged into `main` at the owner's instruction (this feature alone; `test` was not merged), then deployed to the VPS by hand from `main` (§6). No migration. Left for the owner: the browser pass (§4.3), granting `inventory_adjustments.create` beyond ADMIN, and merging this branch into `test` (Branch line).
 Branch: **`feat/1410-stock-quick-add`** — off `origin/main` @ `e3b20bc` (owner: "it has to have a code of main branch", needed immediately). It goes to `main` by PR without the features waiting on `test`, and is merged into `test` afterwards so the two do not drift. The same branch already holds the `/stock` table fix (scrolling table, a table at every width, page numbers — 14 Oct, uncommitted).
 
 Every `file:line` below was read from disk on 14 Oct 2026 at `e3b20bc`.
@@ -200,3 +200,10 @@ On `feat/1410-stock-quick-add`, from `origin/main` @ `e3b20bc`.
 - **No migration.**
 - `inventory_adjustments.create` already exists in production's catalog, and ADMIN holds it. Grant it on `/team/permissions` to anyone else who should add stock.
 - `npm run db:seed:rbac` only refreshes the module's description text, so it is optional.
+
+**Released — 14 Oct 2026.**
+
+- The owner, 14 Oct 2026: *"no dont mege the test  to main i need u to merge the two feature  that were developed from the reference of main i need those implmentaton to direcly merge with the main branch"*. Of the four branches cut from `main`, the owner chose this one alone. `test` → `main` was not merged, and the expenses feature, the `.gitignore` change and PR #76 stay where they are.
+- PR #79 merged into `main` (a merge commit); its Type check and Build passed.
+- Deployed by hand: Actions ▸ Deploy to VPS ▸ `main`. No migration, so the migrate job finds nothing to apply.
+- Not done here: the browser pass, the grant, and merging this branch into `test`.
