@@ -1344,3 +1344,23 @@ export const assemblyTaskCreateSchema = z.object({
   notes: z.string().max(1000).optional(),
 });
 
+
+// ─── Quick add to stock from /stock (plan 1410-stock-quick-add) ───────────────
+
+/**
+ * POST /api/products/[id]/add-stock. The quantity is assembled + unassembled (Q3: split by
+ * number). For a product with no unit codes yet, or a non-assemblable bin, the screen sends
+ * the whole quantity as `unassembled` and the route refuses an `assembled` figure.
+ */
+export const quickAddStockSchema = z
+  .object({
+    binId: z.string().min(1, "Pick the bin these go into"),
+    assembled: z.number().int().min(0).max(5000).default(0),
+    unassembled: z.number().int().min(0).max(5000).default(0),
+    reason: z.string().trim().min(3, "Say why stock is being added (at least 3 characters)").max(300),
+    /** One id per submission, so a double tap adds once. */
+    requestId: z.string().uuid("Reload the page and try again"),
+  })
+  .refine((v) => v.assembled + v.unassembled >= 1, { message: "Add at least 1", path: ["unassembled"] })
+  .refine((v) => v.assembled + v.unassembled <= 5000, { message: "At most 5,000 at a time", path: ["unassembled"] });
+export type QuickAddStockInput = z.infer<typeof quickAddStockSchema>;

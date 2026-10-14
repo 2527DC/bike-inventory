@@ -307,7 +307,9 @@ export const MODULE_CATALOG: ModuleSeed[] = [
   {
     key: "inventory_adjustments",
     label: "Inventory Adjustments",
-    description: "Flag missing/damaged/stolen units, process returns back to bin, and loss write-offs",
+    // create = add stock directly from /stock, without a stock audit (plan 1410-stock-quick-add,
+    //          owner 14 Oct 2026) — a quantity, assembled or not, a bin and a required reason.
+    description: "Add stock directly from /stock; flag missing/damaged/stolen units, process returns back to bin, and loss write-offs",
     icon: "ShieldAlert",
     route: null,
     group: "Operations",
