@@ -215,6 +215,8 @@ export async function GET(req: NextRequest) {
       customers: { category: "MASTER_DATA", label: "Customer" },
       purchase_orders: { category: "PO", label: "PO" },
       transfers: { category: "TRANSFER", label: "Transfer" },
+      // Quick add to stock from /stock (plan 1410). "Stock added …" in the feed.
+      inventory_adjustments: { category: "STOCK", label: "Stock" },
     };
 
     // Six of the seven inferred sources above describe the same events the log now records, so

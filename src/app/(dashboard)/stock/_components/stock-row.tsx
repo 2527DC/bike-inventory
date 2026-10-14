@@ -61,9 +61,24 @@ export function formatInr(amount: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
 }
 
+/** The product's live units, all three conditions together. */
+function liveUnits(p: StockProduct) {
+  return (p.assembledUnits ?? 0) + (p.unassembledUnits ?? 0) + (p.noAssemblyUnits ?? 0);
+}
+
 /** True when the product has any live units — only then are the A / U figures meaningful. */
 export function hasUnits(p: StockProduct) {
-  return (p.assembledUnits ?? 0) + (p.unassembledUnits ?? 0) + (p.noAssemblyUnits ?? 0) > 0;
+  return liveUnits(p) > 0;
+}
+
+/**
+ * How much of the stock has no unit code (plan 1410-stock-quick-add, Q2) — stock beyond the
+ * live units. A product added without codes, or never given any, shows its whole count here.
+ * Both numbers come from the same row and the same scope (the store, when one is chosen), so
+ * no extra query is needed. Never negative: units in a van are not live, nor in the count.
+ */
+export function withoutCodes(p: StockProduct) {
+  return Math.max(0, p.currentStock - liveUnits(p));
 }
 
 /** The server-side sorts the table offers (Q2a). Every value is in `ALLOWED_SORT`, api-utils.ts:99. */
@@ -89,6 +104,9 @@ export interface StockRowContext {
   mayReorder: boolean;
   mayAssemblyLevel: boolean;
   mayDeactivate: boolean;
+  /** `inventory_adjustments.create` — add stock directly (plan 1410). The route re-checks. */
+  mayAddStock: boolean;
+  onAddStock: (p: StockProduct) => void;
   onReorder: (p: StockProduct) => void;
   onAssemblyLevel: (p: StockProduct) => void;
   onSetStatus: (p: StockProduct, status: "ACTIVE" | "INACTIVE") => void;

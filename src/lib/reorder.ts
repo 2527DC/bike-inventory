@@ -26,6 +26,10 @@
  * 4. Two raw-SQL copies (`api/stock/summary`, `api/stock/by-bin`) express the same rule in
  *    Postgres and cannot call a TypeScript helper. If the rule here changes, those two change
  *    by hand or they drift.
+ * 5. `api/products/route.ts` `lowStock=1` (plan 1410, 14 Oct 2026) expresses it as a Prisma
+ *    filter — `reorderLevel > 0` AND `currentStock <= reorderLevel` (a field reference) — so the
+ *    `/stock` Low Stock chip can page on the server. Store-scoped it calls `isLowStock` itself.
+ *    Same rule, different language: change it with this file.
  */
 
 /** The fields the reorder rules read. Structural, so any row carrying them qualifies. */

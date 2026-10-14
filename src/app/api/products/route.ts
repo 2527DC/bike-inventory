@@ -18,6 +18,7 @@ import { createLogger } from "@/lib/logger";
 import { categorySubtreeIds } from "@/lib/categories/tree";
 import { conditionByProduct, hasNoAssemblyUnitsWhere, ZERO_CONDITION } from "@/lib/stock-condition";
 import { productHasNoBinWhere, productInBinWhere } from "@/lib/products/bin-filter";
+import { isLowStock } from "@/lib/reorder";
 
 const log = createLogger("products:list");
 
@@ -58,6 +59,12 @@ export async function GET(req: NextRequest) {
     // an old bookmark still loads the list.
     const condition = searchParams.get("condition") || undefined;
     const noAssemblyOnly = condition === "no-assembly";
+
+    // `lowStock=1` — the Low Stock chip on /stock, server-side so it pages like every other
+    // filter (plan 1410-stock-quick-add; it used to filter only the 100 rows already loaded).
+    // The rule is `isLowStock` (src/lib/reorder.ts): a reorder level is set AND stock is at or
+    // below it. Zero stock is included — "what do I need to order" includes what has run out.
+    const lowStockOnly = searchParams.get("lowStock") === "1" || searchParams.get("lowStock") === "true";
 
     // Search and needsDetails BOTH produce an OR group, and both used to want the same
     // top-level key. Collecting every OR group into one `AND` array is the only form that
@@ -116,6 +123,11 @@ export async function GET(req: NextRequest) {
     // quantity (plan 2209, R2, Q2a) — not only by `Product.binId`, which goes stale as units move.
     // Pushed onto `and` because it is an OR group, for the reason given above the array.
     if (binId) and.push(productInBinWhere(binId));
+
+    // The half of isLowStock that reads only the product row, so it holds on both paths below.
+    // The other half — stock at or below the level — compares against a DIFFERENT stock number
+    // on each path, so each path applies it itself.
+    if (lowStockOnly) and.push({ reorderLevel: { gt: 0 } });
 
     const where = {
       ...(and.length > 0 && { AND: and }),
@@ -189,6 +201,8 @@ export async function GET(req: NextRequest) {
       let rows = matched.map((p) => ({ ...p, currentStock: qtyOf.get(p.id) ?? 0 }));
       if (minStock !== undefined) rows = rows.filter((p) => p.currentStock >= minStock);
       if (maxStock !== undefined) rows = rows.filter((p) => p.currentStock <= maxStock);
+      // Low against the STORE's quantity — the number the Stock column shows under a scope.
+      if (lowStockOnly) rows = rows.filter(isLowStock);
       if (sortBy === "currentStock") {
         rows.sort((a, b) =>
           sortOrder === "asc" ? a.currentStock - b.currentStock : b.currentStock - a.currentStock
@@ -201,15 +215,23 @@ export async function GET(req: NextRequest) {
       return paginatedResponse(pageRows, total, page, limit);
     }
 
+    // Unscoped, low stock compares the cached total with the level — a column-to-column test,
+    // which Prisma expresses as a field reference. Wrapped in AND so it cannot collide with the
+    // minStock / maxStock range that already sits on `currentStock` in `where`.
+    const listWhere: Prisma.ProductWhereInput = lowStockOnly
+      ? { AND: [where, { currentStock: { lte: prisma.product.fields.reorderLevel } }] }
+      : where;
+    if (lowStockOnly) log.debug("low-stock filter", { hasSearch: Boolean(search), page });
+
     const [products, total] = await Promise.all([
       prisma.product.findMany({
-        where,
+        where: listWhere,
         select,
         orderBy: { [sortBy]: sortOrder },
         skip,
         take: limit,
       }),
-      prisma.product.count({ where }),
+      prisma.product.count({ where: listWhere }),
     ]);
 
     return paginatedResponse(await withCondition(products), total, page, limit);
