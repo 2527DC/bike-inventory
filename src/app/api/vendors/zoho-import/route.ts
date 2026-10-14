@@ -45,7 +45,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 export async function POST(req: NextRequest) {
   try {
-    await requireFeature("vendors", "create");
+    // vendors.fetch, as the preview (plan 1410-per-module-fetch-permissions, R2). Was
+    // vendors.create.
+    await requireFeature("vendors", "fetch");
 
     const parsed = importSchema.safeParse(await req.json().catch(() => null));
     if (!parsed.success) {

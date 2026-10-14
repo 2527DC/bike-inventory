@@ -18,6 +18,7 @@ import {
   LMS_QUIZ_TYPES,
   LMS_SCENARIO_TYPES,
 } from "@/lib/staff-lms/constants";
+import { ZOHO_INVOICE_LOOKUP_MODULES, ZOHO_PULL_MODULES } from "@/lib/zoho/pull-modules";
 
 export const productSchema = z.object({
   sku: z.string().min(1, "SKU is required").max(50),
@@ -1279,6 +1280,14 @@ export const warehouseUpdateSchema = warehouseSchema.partial().extend({
  * decision rather than an invisible drop.
  */
 export const zohoPullSchema = z.object({
+  /**
+   * The screen running the pull, by RBAC module key (plan 1410-per-module-fetch-permissions,
+   * D1). Every step needs `<module>.fetch`, and `bills`/`invoices` must be the screen's own
+   * kind (`ZOHO_PULL_ENTITY`). Required: a stale tab that sends none is told to reload.
+   */
+  module: z.enum(ZOHO_PULL_MODULES, {
+    error: "This screen is out of date — reload the page and fetch again",
+  }),
   step: z.enum(["init", "bills", "invoices", "finalize"]),
   pullId: z.string().optional(),
   /** Rolling window INCLUDING today. Ignored when fromDate is given. */
@@ -1295,6 +1304,33 @@ export const zohoPullSchema = z.object({
   invoicesNew: z.number().int().min(0).optional(),
   apiCalls: z.number().int().min(0).optional(),
   allErrors: z.array(z.string()).optional(),
+});
+
+/**
+ * The body of POST /api/zoho/pull-review/approve (plan 1410-per-module-fetch-permissions).
+ *
+ * It was a bare cast too, and it trusted the body for two things it must not: `source`
+ * (whether a bill becomes a shipment or a vendor bill) and `entityType` (which was applied
+ * only when no `previewIds` were sent). Both now follow from `module`, so a role holding one
+ * screen's Fetch can import only that screen's kind of record.
+ */
+export const zohoPullApproveSchema = z.object({
+  module: z.enum(ZOHO_PULL_MODULES, {
+    error: "This screen is out of date — reload the page and import again",
+  }),
+  pullId: z.string().min(1, "pullId is required"),
+  action: z.enum(["approve", "reject"]),
+  /** Omitted = every pending preview of the module's kind in this pull. */
+  previewIds: z.array(z.string().min(1)).max(1000).optional(),
+});
+
+/** The body of POST /api/deliveries/search-zoho — the one-invoice lookup (plan 1410). */
+export const zohoInvoiceLookupSchema = z.object({
+  /** The screen asking — `deliveries` (Deliveries, Pre-bookings) or `second_hand`. */
+  module: z.enum(ZOHO_INVOICE_LOOKUP_MODULES, {
+    error: "This screen is out of date — reload the page and search again",
+  }),
+  query: z.string().trim().min(3, "Search query must be at least 3 characters").max(100),
 });
 
 // ─── Assembly & Cycle Complaints ─────────────────────────────────────────────

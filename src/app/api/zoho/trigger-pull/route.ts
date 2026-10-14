@@ -24,6 +24,7 @@ import {
 } from "@/lib/integrations";
 import { createLogger } from "@/lib/logger";
 import { zohoPullSchema } from "@/lib/validations";
+import { ZOHO_PULL_ENTITY } from "@/lib/zoho/pull-modules";
 import { resolveBillWindow, type ResolvedWindow } from "@/lib/zoho/date-window";
 import { getTodayIST } from "@/lib/services/timezone";
 import { logActivity } from "@/lib/activity-log";
@@ -106,23 +107,34 @@ export async function POST(req: NextRequest) {
   // Captured for the catch. A 500 has to name WHICH step failed — init, items, bills and
   // finalize are indistinguishable otherwise. Kept as a separate object rather than hoisting
   // the destructured consts, so their type narrowing below is preserved.
-  const ctx: { step?: string; pullId?: string } = {};
+  const ctx: { step?: string; pullId?: string; module?: string } = {};
 
   try {
-    // The user is kept: both Zoho notifications below name the person who pressed the button
-    // in their body and leave them out of the recipients.
-    const user = await requireFeature("zoho", "fetch");
-
     // Zod at the boundary. The old bare cast named four fields and dropped `days` and
     // `toDate` on the floor, which is exactly why the date chips appeared to do nothing.
+    // Parsed BEFORE the guard because the body names the module the guard checks.
     const parsed = zohoPullSchema.safeParse(await req.json());
     if (!parsed.success) {
       return errorResponse(parsed.error.issues[0]?.message ?? "Invalid request", 400);
     }
     const body = parsed.data;
-    const { step, pullId: existingPullId, days, fromDate, toDate, searchText } = body;
+    const { module: moduleKey, step, pullId: existingPullId, days, fromDate, toDate, searchText } = body;
     ctx.step = step;
     ctx.pullId = existingPullId;
+    ctx.module = moduleKey;
+
+    // The SCREEN's Fetch tick (plan 1410-per-module-fetch-permissions, D1) — the same one its
+    // button checks. The user is kept: both Zoho notifications below name the person who
+    // pressed the button in their body and leave them out of the recipients.
+    const user = await requireFeature(moduleKey, "fetch");
+
+    // A screen pulls its own kind only: Inbound and Bills pull bills, Receivables and
+    // Deliveries pull invoices. Without this, Bills' Fetch tick would pull invoices.
+    const kind = ZOHO_PULL_ENTITY[moduleKey];
+    if ((step === "bills" && kind !== "bill") || (step === "invoices" && kind !== "invoice")) {
+      log.warn("step refused — not this screen's kind", { module: moduleKey, step, kind });
+      return errorResponse(`This screen pulls ${kind}s, not ${step}`, 400);
+    }
 
     // ─── INIT ───
     if (step === "init") {
@@ -173,28 +185,33 @@ export async function POST(req: NextRequest) {
       });
 
       const pullId = `pull-${Date.now()}`;
+      log.info("pull started", { pullId, module: moduleKey, syncLogId: syncLog.id, books: booksReady, pos: posReady });
 
-      // zoho.pull_started (§F.4): tell everyone ELSE who can pull that a sync is running — it
-      // is also why they will get a 409 if they start their own. The SyncLog row above is
+      // zoho.pull_started (§F.4): tell everyone ELSE who can pull on this screen that a sync is
+      // running — it is also why they will get a 409 if they start their own. The SyncLog row above is
       // committed (no transaction here) and the source check has passed, so this is a real pull.
       // §F.0: after() sends once the response has gone out so the init step is not slowed.
       const actorId = user.id;
       const actorName = user.name;
       after(async () => {
         try {
-          const recipients = (await usersWithPermission("zoho", "fetch")).filter((uid) => uid !== actorId);
+          const recipients = (await usersWithPermission(moduleKey, "fetch")).filter((uid) => uid !== actorId);
           if (recipients.length === 0) {
-            log.debug("pull started but nobody else holds zoho.fetch", { pullId });
+            log.debug("pull started but nobody else holds the screen's fetch", { pullId, module: moduleKey });
             return;
           }
           await notify("zoho.pull_started", {
             recipients,
             title: "Zoho pull started",
-            body: `${actorName} started a bills & invoices pull (bills from Zoho Books, invoices from Zakya POS)`,
+            body:
+              kind === "bill"
+                ? `${actorName} started a bills pull (Zoho Books, Zakya POS as the fallback)`
+                : `${actorName} started an invoices pull (Zakya POS, Zoho Books as the fallback)`,
             refId: syncLog.id,
             link: "/settings/integrations",
             data: {
               pullId,
+              module: moduleKey,
               books: booksReady ? "connected" : "skipped",
               pos: posReady ? "connected" : "skipped",
             },
@@ -630,16 +647,16 @@ export async function POST(req: NextRequest) {
         after(async () => {
           try {
             // The OUTCOME event, unlike pull_started, falls back to including the actor.
-            // zoho.fetch is a narrow grant — quite possibly ADMIN alone — so excluding the
+            // A screen's Fetch is a narrow grant — quite possibly ADMIN alone — so excluding the
             // person who pressed Pull could leave nobody at all, and this is the one event
             // that defaults email ON precisely because it reports something already broken.
             // Firing for nobody would also write no outbox row, so there would be no trace
             // that it tried. pull_started keeps the exclusion: that one is pure courtesy.
-            const holders = await usersWithPermission("zoho", "fetch");
+            const holders = await usersWithPermission(moduleKey, "fetch");
             const others = holders.filter((uid) => uid !== actorId);
             const recipients = others.length > 0 ? others : holders;
             if (recipients.length === 0) {
-              log.warn("pull finished but nobody holds zoho.fetch", { pullId: finishedPullId });
+              log.warn("pull finished but nobody holds the screen's fetch", { pullId: finishedPullId, module: moduleKey });
               return;
             }
             const counts = `${billsNew} new bill${billsNew === 1 ? "" : "s"}, ${invoicesNew} new invoice${invoicesNew === 1 ? "" : "s"}`;
@@ -655,6 +672,7 @@ export async function POST(req: NextRequest) {
               link: "/settings/integrations",
               data: {
                 pullId: finishedPullId,
+                module: moduleKey,
                 status: pullStatus,
                 billsNew: String(billsNew),
                 invoicesNew: String(invoicesNew),
@@ -677,6 +695,7 @@ export async function POST(req: NextRequest) {
 
       log.info("pull finalized", {
         pullId: existingPullId,
+        module: moduleKey,
         status: totalNew > 0 ? "PENDING_REVIEW" : "NO_NEW_DATA",
         billsNew,
         invoicesNew,

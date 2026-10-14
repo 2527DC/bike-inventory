@@ -7,6 +7,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { apiTry } from "@/lib/api-client";
+import { usePermissions } from "@/lib/use-permissions";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("vendor-issues:new");
@@ -102,23 +103,30 @@ function NewVendorIssueForm() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
-  // Zoho client search
+  // Zoho client search — a fetch: Vendor / Ops Issues › Fetch, the tick search-contacts checks
+  // (plan 1410-per-module-fetch-permissions). Without it the client's name is typed by hand.
+  const { canFetch } = usePermissions();
+  const canSearchZoho = canFetch("vendor_issues");
   const [zohoSearching, setZohoSearching] = useState(false);
   const [zohoResults, setZohoResults] = useState<Array<{ id: string; name: string; phone: string | null; email: string | null; city: string | null }>>([]);
   const [showZohoResults, setShowZohoResults] = useState(false);
 
   const searchZohoClient = async () => {
-    if (clientName.trim().length < 2) return;
+    if (!canSearchZoho || clientName.trim().length < 2) return;
     setZohoSearching(true);
-    try {
-      const res = await fetch(`/api/zoho/search-contacts?q=${encodeURIComponent(clientName.trim())}`);
-      const json = await res.json();
-      if (json.success) {
-        setZohoResults(json.data || []);
-        setShowZohoResults(true);
-      }
-    } catch { /* ignore */ }
+    // apiTry, not res.json() — an expired session answers HTML with status 200.
+    const { data, error: searchError } = await apiTry<typeof zohoResults>(
+      `/api/zoho/search-contacts?q=${encodeURIComponent(clientName.trim())}`,
+      { timeoutMs: 30_000 }
+    );
     setZohoSearching(false);
+    if (searchError) {
+      // As before, a failed search shows nothing and the name is typed by hand — but it is logged.
+      log.warn("Zoho contact search failed", { error: searchError });
+      return;
+    }
+    setZohoResults(data || []);
+    setShowZohoResults(true);
   };
 
   useEffect(() => {
@@ -326,11 +334,13 @@ function NewVendorIssueForm() {
                 <input type="text" placeholder="Customer name..." value={clientName}
                   onChange={(e) => { setClientName(e.target.value); setShowZohoResults(false); }}
                   className="flex h-10 min-h-[44px] flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900" />
-                <button type="button" onClick={searchZohoClient} disabled={zohoSearching || clientName.trim().length < 2}
-                  className="h-10 min-h-[44px] px-3 rounded-lg border border-blue-300 bg-blue-50 text-blue-700 text-xs font-medium disabled:opacity-40 flex items-center gap-1">
-                  {zohoSearching ? <Loader2 className="h-3 w-3 animate-spin" /> : <Search className="h-3 w-3" />}
-                  Zoho
-                </button>
+                {canSearchZoho && (
+                  <button type="button" onClick={searchZohoClient} disabled={zohoSearching || clientName.trim().length < 2}
+                    className="h-10 min-h-[44px] px-3 rounded-lg border border-blue-300 bg-blue-50 text-blue-700 text-xs font-medium disabled:opacity-40 flex items-center gap-1">
+                    {zohoSearching ? <Loader2 className="h-3 w-3 animate-spin" /> : <Search className="h-3 w-3" />}
+                    Zoho
+                  </button>
+                )}
               </div>
               {showZohoResults && (
                 <div className="mt-1.5 border rounded-lg bg-white shadow-lg max-h-40 overflow-y-auto">

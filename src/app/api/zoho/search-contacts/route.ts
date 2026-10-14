@@ -4,10 +4,16 @@ import { NextRequest } from "next/server";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { getBooks } from "@/lib/integrations";
+import { createLogger } from "@/lib/logger";
 
+const log = createLogger("zoho:search-contacts");
+
+// The Zoho contact search on /vendor-issues/new, its only caller.
 export async function GET(req: NextRequest) {
   try {
-    await requireFeature("zoho", "fetch");
+    // vendor_issues.fetch — the tick the screen's search checks (plan
+    // 1410-per-module-fetch-permissions). Was zoho.fetch.
+    await requireFeature("vendor_issues", "fetch");
     const { searchParams } = new URL(req.url);
     const query = searchParams.get("q");
 
@@ -16,7 +22,10 @@ export async function GET(req: NextRequest) {
     }
 
     const zoho = await getBooks();
-    if (!zoho) return errorResponse("Zoho not connected", 400);
+    if (!zoho) {
+      log.warn("contact search refused — Zoho Books not connected");
+      return errorResponse("Zoho not connected", 400);
+    }
 
     const result = await zoho.searchContacts(query, "customer");
     const contacts = (result.contacts || []).map(c => ({
@@ -28,9 +37,11 @@ export async function GET(req: NextRequest) {
       address: c.billing_address?.address || null,
     }));
 
+    log.debug("contact search", { found: contacts.length });
     return successResponse(contacts);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("contact search failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Search failed", 500);
   }
 }

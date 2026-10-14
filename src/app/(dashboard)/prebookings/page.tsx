@@ -11,6 +11,19 @@ import { SkeletonList } from "@/components/ui/skeleton";
 import { FilterSheet } from "@/components/filter-sheet";
 import { DesktopTable } from "@/components/desktop-table";
 import { usePermissions } from "@/lib/use-permissions";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("prebookings");
+
+/** What `POST /api/deliveries/search-zoho` returns per invoice — the fields this form reads. */
+interface ZohoInvoiceHit {
+  customerName?: string;
+  phone?: string;
+  salesPerson?: string;
+  salesperson_name?: string;
+  lineItems?: Array<{ name?: string }>;
+}
 
 interface PreBooking {
   id: string;
@@ -65,9 +78,13 @@ function agingColor(dateStr: string) {
 }
 
 export default function PreBookingsPage() {
-  const { canCreate: canCreateCheck, canApprove: canApproveCheck } = usePermissions();
+  const { canCreate: canCreateCheck, canApprove: canApproveCheck, canFetch: canFetchCheck } = usePermissions();
   const canCreate = canCreateCheck("deliveries");
   const canMatch = canApproveCheck("deliveries");
+  // The Zoho lookup is a fetch: 2 Outbound › Fetch, the tick search-zoho checks for
+  // `module: "deliveries"` (plan 1410-per-module-fetch-permissions). Without it the form is
+  // filled by hand, exactly as when Zoho has no match.
+  const canLookup = canFetchCheck("deliveries");
 
   const [preBookings, setPreBookings] = useState<PreBooking[]>([]);
   const [loading, setLoading] = useState(true);
@@ -114,31 +131,32 @@ export default function PreBookingsPage() {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   const handleSearchZoho = async () => {
-    if (!zohoInvoiceNo.trim()) return;
+    if (!canLookup || !zohoInvoiceNo.trim()) return;
     setSearching(true);
     setError("");
-    try {
-      const res = await fetch("/api/deliveries/search-zoho", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: zohoInvoiceNo.trim() }),
-      }).then((r) => r.json());
+    // apiTry, not fetch().then(r => r.json()) — an expired session answers HTML.
+    const { data, error: searchError } = await apiTry<{ results?: ZohoInvoiceHit[] }>("/api/deliveries/search-zoho", {
+      method: "POST",
+      json: { module: "deliveries", query: zohoInvoiceNo.trim() },
+      timeoutMs: 30_000,
+    });
+    setSearching(false);
 
-      if (res.success && res.data.results?.length > 0) {
-        const inv = res.data.results[0];
-        setCustomerName(inv.customerName || "");
-        setCustomerPhone(inv.phone || "");
-        if (inv.salesPerson || inv.salesperson_name) setSalesPerson(inv.salesPerson || inv.salesperson_name || "");
-        if (inv.lineItems?.length > 0) {
-          setProductName(inv.lineItems[0].name || "");
-        }
-      } else {
-        setError("Invoice not found. Enter details manually.");
-      }
-    } catch {
-      setError("Search failed. Enter details manually.");
-    } finally {
-      setSearching(false);
+    if (searchError) {
+      log.warn("invoice lookup failed", { error: searchError });
+      setError(`Search failed (${searchError}). Enter details manually.`);
+      return;
+    }
+    const inv = data?.results?.[0];
+    if (!inv) {
+      setError("Invoice not found. Enter details manually.");
+      return;
+    }
+    setCustomerName(inv.customerName || "");
+    setCustomerPhone(inv.phone || "");
+    if (inv.salesPerson || inv.salesperson_name) setSalesPerson(inv.salesPerson || inv.salesperson_name || "");
+    if (inv.lineItems && inv.lineItems.length > 0) {
+      setProductName(inv.lineItems[0].name || "");
     }
   };
 
@@ -288,11 +306,13 @@ export default function PreBookingsPage() {
               <div className="flex gap-2">
                 <Input value={zohoInvoiceNo} onChange={(e) => setZohoInvoiceNo(e.target.value)}
                   placeholder="e.g. 017616" onKeyDown={(e) => e.key === "Enter" && handleSearchZoho()} />
-                <Button variant="outline" onClick={handleSearchZoho} disabled={searching} className="shrink-0">
-                  {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-                </Button>
+                {canLookup && (
+                  <Button variant="outline" onClick={handleSearchZoho} disabled={searching} className="shrink-0">
+                    {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                  </Button>
+                )}
               </div>
-              <p className="text-[10px] text-slate-400 mt-0.5">Search to auto-fill from Zoho</p>
+              {canLookup && <p className="text-[10px] text-slate-400 mt-0.5">Search to auto-fill from Zoho</p>}
             </div>
 
             <div className="grid grid-cols-2 gap-3">

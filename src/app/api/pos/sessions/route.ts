@@ -5,6 +5,9 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { getBooks, getZakya } from "@/lib/integrations";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("pos:sessions");
 
 // GET — List POS sessions (from DB)
 export async function GET(req: NextRequest) {
@@ -38,9 +41,13 @@ export async function GET(req: NextRequest) {
 // POST — Fetch POS sessions from Zakya and save to DB
 export async function POST(req: NextRequest) {
   try {
-    await requireFeature("pos", "create");
+    // pos.fetch — the Fetch POS / Re-fetch buttons' tick (plan 1410-per-module-fetch-permissions).
+    // Re-fetch (`force`) is included (Q3, owner 14 Oct 2026): it was pos.create like the plain
+    // fetch, so one tick is no weaker than before, and the screen keeps its confirm dialog.
+    const user = await requireFeature("pos", "fetch");
     const body = await req.json();
     const { dateFrom, dateTo, force } = body as { dateFrom: string; dateTo: string; force?: boolean };
+    log.info("POS fetch requested", { userId: user.id, dateFrom, dateTo, force: !!force });
 
     if (!dateFrom || !dateTo) return errorResponse("dateFrom and dateTo required", 400);
 
@@ -91,6 +98,7 @@ export async function POST(req: NextRequest) {
         paymentSource = "zoho-books";
       } catch (err) {
         paymentError = `Zoho Books: ${err instanceof Error ? err.message : String(err)}`;
+        log.warn("Zoho Books payments read failed — trying Zakya", { dateFrom, dateTo, message: paymentError });
       }
     } else {
       paymentError = "Zoho Books not connected";
@@ -105,8 +113,11 @@ export async function POST(req: NextRequest) {
           paymentSource = "zakya";
           paymentError = null;
         }
-      } catch {
+      } catch (err) {
         // Zakya payments not authorized — already know this, skip
+        log.debug("Zakya payments read failed — invoices only", {
+          dateFrom, dateTo, message: err instanceof Error ? err.message : String(err),
+        });
       }
     }
 
@@ -196,6 +207,7 @@ export async function POST(req: NextRequest) {
       created++;
     }
 
+    log.info("POS fetch finished", { fetched: invoices.length, created, skipped, paymentsFound: payments.length });
     return successResponse({
       fetched: invoices.length,
       paymentsFound: payments.length,
@@ -206,6 +218,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("POS fetch failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Failed to fetch POS sessions", 500);
   }
 }

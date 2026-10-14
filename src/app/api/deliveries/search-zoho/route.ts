@@ -5,6 +5,10 @@ import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { getBooks, getZakya } from "@/lib/integrations";
+import { zohoInvoiceLookupSchema } from "@/lib/validations";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("deliveries:search-zoho");
 
 /*
  * Lightweight invoice search — single Zoho API call, no pull pipeline.
@@ -13,17 +17,18 @@ import { getBooks, getZakya } from "@/lib/integrations";
  */
 export async function POST(req: NextRequest) {
   try {
-    // zoho.fetch, not deliveries.fetch (Option B, R1). Four screens used to gate one server
-    // permission through four different module actions, so a role could hold the button and
-    // not the route, or the route and not the button. zoho.* is the single truth now.
-    await requireFeature("zoho", "fetch");
-    const { query } = (await req.json()) as { query: string };
-
-    if (!query || query.trim().length < 3) {
-      return errorResponse("Search query must be at least 3 characters", 400);
+    const parsed = zohoInvoiceLookupSchema.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) {
+      return errorResponse(parsed.error.issues[0]?.message ?? "Invalid search", 400);
     }
+    const { module: moduleKey, query: searchTerm } = parsed.data;
 
-    const searchTerm = query.trim();
+    // The ASKING SCREEN's Fetch tick (plan 1410-per-module-fetch-permissions, D1):
+    // `deliveries` for /deliveries and /prebookings, `second_hand` for /second-hand/new — the
+    // same tick each screen's lookup button checks. This was `zoho.fetch` for all three
+    // (Option B); the button-vs-route mismatch that motivated that is avoided by checking the
+    // one key both sides share, not by sharing one key across screens.
+    await requireFeature(moduleKey, "fetch");
 
     // Try Zakya POS first, fallback to Books. Fetched in parallel: independent answers,
     // and both are request-scoped so nothing is initialised twice.
@@ -35,6 +40,7 @@ export async function POST(req: NextRequest) {
     const [zakya, zoho] = await Promise.all([getZakya(), getBooks()]);
 
     if (!zakya && !zoho) {
+      log.warn("invoice lookup refused — no Zoho source connected", { module: moduleKey });
       return errorResponse("No Zoho source connected", 400);
     }
 
@@ -113,9 +119,11 @@ export async function POST(req: NextRequest) {
       appStatus: existingMap.get(inv.invoice_number) || null,
     }));
 
+    log.debug("invoice lookup", { module: moduleKey, source, found: results.length, isPhone });
     return successResponse({ results, source, total: results.length });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    log.error("invoice lookup failed", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error instanceof Error ? error.message : "Search failed", 500);
   }
 }
