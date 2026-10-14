@@ -1,14 +1,15 @@
 "use client";
 
-// The /stock list at ≥ 1024 px — plan 2109-stock-list-table-and-compact-cards, R1/R3–R6, Q1a/Q2a.
-// One row per product. Every fact and action the old card showed is here (R5); the labels,
-// colours and sort keys come from `stock-row.tsx` so this table and the phone card cannot drift.
-// Render-only: the page owns the data, the sort state and every action.
+// The /stock list — plan 2109-stock-list-table-and-compact-cards, R1/R3–R6, Q1a/Q2a. Since 14 Oct
+// 2026 (owner) it is the ONLY layout, at every width: the phone cards are gone, the table scrolls
+// inside its own box, and the page pages through 100 rows at a time instead of "Load more".
+// One row per product; labels, colours and sort keys come from `stock-row.tsx`.
+// Render-only: the page owns the data, the sort state, the page number and every action.
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  ArrowDown, ArrowUp, CheckSquare, EyeOff, MapPin, RefreshCw, RotateCcw, Square, Wrench,
+  ArrowDown, ArrowUp, CheckSquare, EyeOff, MapPin, PackagePlus, RefreshCw, RotateCcw, Square, Wrench,
 } from "lucide-react";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +17,7 @@ import { isPlaceholderBrand, isPlaceholderCategory } from "@/lib/import-placehol
 import { assemblyLevelLabel } from "@/lib/assembly-level";
 import { createLogger } from "@/lib/logger";
 import {
-  formatInr, hasUnits, stockAccent, stockBadge, stockColor,
+  formatInr, hasUnits, stockAccent, stockBadge, stockColor, withoutCodes,
   type StockProduct, type StockRowContext, type StockSort, type StockSortKey,
 } from "./stock-row";
 
@@ -92,7 +93,8 @@ export function StockTable({
   onSort: (key: StockSortKey) => void;
 }) {
   const router = useRouter();
-  const showActions = !ctx.selectMode && (ctx.mayReorder || ctx.mayAssemblyLevel || ctx.mayDeactivate);
+  const showActions =
+    !ctx.selectMode && (ctx.mayAddStock || ctx.mayReorder || ctx.mayAssemblyLevel || ctx.mayDeactivate);
 
   function openRow(p: StockProduct) {
     if (ctx.selectMode) {
@@ -108,16 +110,15 @@ export function StockTable({
     run();
   }
 
-  // Not the Table primitive: its `overflow-x-auto` box would always be the sticky header's scroll
-  // parent, so the header would never stick against the page. The wrapper below clips only where
-  // the columns cannot fit (below 1280 px).
+  // The table scrolls INSIDE its own box, both ways, at every width — the page itself never
+  // scrolls sideways (14 Oct 2026: at ≥ 1280 px the box used to stop clipping, and the row
+  // actions ran off the right edge of the screen). Because this box is the scroll parent, the
+  // header sticks to the top of the box, which max-h keeps on screen; one page is 100 rows.
+  // min-w keeps the columns readable on a phone — narrower than that, the box scrolls sideways.
   return (
-    // Between 1024 and 1279 px the content area beside the 240 px sidebar is ~720 px, too narrow
-    // for every column. There the table scrolls sideways INSIDE its own box (the page never does),
-    // at the cost of the sticky header. From 1280 px the box stops clipping and the header sticks.
-    <div className="w-full overflow-x-auto xl:overflow-visible rounded-xl border border-slate-200 bg-white shadow-sm">
-      <table className="w-full caption-bottom text-sm">
-        <TableHeader className="sticky top-0 z-10">
+    <div className="w-full max-w-full overflow-auto max-h-[70vh] overscroll-contain rounded-xl border border-slate-200 bg-white shadow-sm">
+      <table className="w-full min-w-[60rem] caption-bottom text-sm">
+        <TableHeader className="sticky top-0 z-10 shadow-[0_1px_0_0_rgb(226_232_240)]">
           <TableRow className="hover:bg-transparent">
             {ctx.selectMode && <TableHead className="w-10"><span className="sr-only">Select</span></TableHead>}
             <SortHeader label="Product" sortKey="name" sort={sort} onSort={onSort} />
@@ -138,6 +139,7 @@ export function StockTable({
             const selected = ctx.selectedIds.has(p.id);
             const busy = ctx.busyId === p.id;
             const accent = `border-l-4 ${stockAccent(p)}`;
+            const uncoded = withoutCodes(p);
             return (
               <TableRow
                 key={p.id}
@@ -261,12 +263,34 @@ export function StockTable({
                     <span className={`text-lg font-bold tabular-nums ${stockColor(p)}`}>{p.currentStock}</span>
                     <Badge variant={badge.variant} className="text-[10px] px-2">{badge.label}</Badge>
                   </div>
+                  {/* Stock beyond the live units has no unit code (plan 1410, Q2) — added without
+                      codes, or never given any. A stock audit of the bin gives them codes. */}
+                  {uncoded > 0 && (
+                    <div
+                      className="text-[11px] text-slate-500 tabular-nums"
+                      title="These items are counted but have no unit codes yet. A stock audit of the bin gives them codes."
+                    >
+                      {uncoded.toLocaleString("en-IN")} without codes
+                    </div>
+                  )}
                 </TableCell>
 
                 {/* Hidden in select mode: the whole row is a checkbox target there. */}
                 {showActions && (
                   <TableCell className="py-2 text-right whitespace-nowrap">
                     <div className="flex gap-1 justify-end">
+                      {/* Add stock directly, without a stock audit (plan 1410, R2). Active rows
+                          only — the route refuses an inactive product. */}
+                      {ctx.mayAddStock && p.status === "ACTIVE" && (
+                        <StockRowButton
+                          label={`Add stock to ${p.name}`}
+                          tone="text-emerald-700"
+                          disabled={busy}
+                          onClick={(e) => action(e, () => ctx.onAddStock(p))}
+                        >
+                          <PackagePlus className="h-3.5 w-3.5" />
+                        </StockRowButton>
+                      )}
                       {ctx.mayReorder && (
                         <StockRowButton
                           label={`Reorder settings for ${p.name}`}
