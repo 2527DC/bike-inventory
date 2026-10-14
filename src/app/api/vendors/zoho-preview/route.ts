@@ -2,15 +2,25 @@ export const dynamic = "force-dynamic";
 // Walks every page of Zoho's vendor list (200 per page); 60 s is headroom, not the norm.
 export const maxDuration = 60;
 
-import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { getBooks } from "@/lib/integrations";
 import { createLogger } from "@/lib/logger";
+import { matchAll, normaliseGstin, type AppVendorRef, type MatchKind, type VendorMatch } from "@/lib/vendors/zoho-match";
+import { listVendorsForMatching } from "@/lib/vendors/zoho-link";
 
 const log = createLogger("vendors:zoho-sync");
 
-type Status = "linked" | "new" | "clash";
+/**
+ *   linked    a vendor here already has this Zoho id
+ *   match     the GSTIN pairs it with one vendor here — ticked for linking (gstin, gstin+name)
+ *   review    a vendor here may be it — linked only when a person ticks or picks (name, ambiguous)
+ *   conflict  the same name with a different GSTIN, or a GSTIN or name already held by a vendor
+ *             linked to another Zoho vendor — shown, never linked or imported
+ *   new       nothing here — importable
+ * (plan 1410-link-vendors-to-zoho, B1; replaces plan 2409's name-only "clash").
+ */
+type Status = "linked" | "new" | "match" | "review" | "conflict";
 
 interface PreviewRow {
   zohoId: string;
@@ -18,23 +28,26 @@ interface PreviewRow {
   gstin: string | null;
   city: string | null;
   status: Status;
-  /** For linked / clash: the local vendor this row meets. */
+  /** match / review / conflict: what decided it (src/lib/vendors/zoho-match.ts). */
+  kind?: MatchKind;
+  /** linked: the vendor holding the id. match / name review / conflict: the vendor it meets. */
   localId?: string;
   localName?: string;
+  /** match / review / conflict: the vendors here it was weighed against — an ambiguous row's choices. */
+  candidates?: AppVendorRef[];
+  /** conflict: why. */
+  reason?: VendorMatch["reason"];
 }
 
 /**
  * GET /api/vendors/zoho-preview — WRITES NOTHING (plan 2409-zoho-vendor-sync, Part A).
  *
- * Classifies every Zoho vendor against the local Vendor table:
- *   linked — a Vendor already carries this Zoho id. Skipped by the import, never updated
- *            (details are copied once, at creation — plan 2409-zoho-vendor-id, Q4).
- *   new    — no Vendor has this id and none has this name. Importable.
- *   clash  — a Vendor has this exact name (case-insensitive) but no or another Zoho id.
- *            Shown, never imported: `Vendor.name` is unique, and linking by name is the
- *            thing this whole design avoids. The person renames one side.
+ * Classifies every Zoho vendor against the local Vendor table (statuses above). Vendors with no
+ * Zoho id are matched by GSTIN first (plan 1410-link-vendors-to-zoho): on 14 Oct 2026 none of the
+ * 83 app vendors carried one, so plan 2409's name-only "clash" made every one of them a dead end.
  *
- * The import recomputes all of this; this response is for the screen only.
+ * The Link and Import routes recompute the match with the same matcher; this response is for the
+ * screen only.
  */
 export async function GET() {
   try {
@@ -54,44 +67,54 @@ export async function GET() {
     log.debug("-> GET all Zoho vendors");
     const [zohoVendors, local] = await Promise.all([
       zoho.listAllContacts(),
-      prisma.vendor.findMany({ select: { id: true, name: true, zohoVendorId: true } }),
+      listVendorsForMatching(),
     ]);
     log.debug("vendor preview source rows", { zoho: zohoVendors.length, local: local.length });
 
     const byZohoId = new Map(local.filter((v) => v.zohoVendorId).map((v) => [v.zohoVendorId as string, v]));
-    const byName = new Map(local.map((v) => [v.name.trim().toLowerCase(), v]));
+
+    // listContacts asks for contact_type=vendor; a customer row slipping through is not ours.
+    const candidates = zohoVendors
+      .filter((c) => c.contact_id && (c.contact_name ?? "").trim() && (!c.contact_type || c.contact_type === "vendor"))
+      .map((c) => ({
+        zohoId: c.contact_id,
+        name: (c.contact_name ?? "").trim(),
+        gstin: normaliseGstin(c.gst_no),
+        city: c.billing_address?.city?.trim() || null,
+      }));
+    const toMatch = candidates.filter((z) => !byZohoId.has(z.zohoId));
+    const matches = matchAll(toMatch, local);
 
     const rows: PreviewRow[] = [];
-    const counts = { linked: 0, new: 0, clash: 0, total: 0 };
+    const counts = { linked: 0, new: 0, match: 0, review: 0, conflict: 0, total: 0 };
 
-    for (const c of zohoVendors) {
-      const zohoId = c.contact_id;
-      const name = (c.contact_name ?? "").trim();
-      if (!zohoId || !name) continue;
-      // listContacts asks for contact_type=vendor; a customer row slipping through is not ours.
-      if (c.contact_type && c.contact_type !== "vendor") continue;
+    for (const z of candidates) {
+      const base = { zohoId: z.zohoId, name: z.name, gstin: z.gstin, city: z.city };
 
-      const base = {
-        zohoId,
-        name,
-        gstin: c.gst_no?.trim() || null,
-        city: c.billing_address?.city?.trim() || null,
-      };
-
-      const linked = byZohoId.get(zohoId);
+      const linked = byZohoId.get(z.zohoId);
       if (linked) {
         counts.linked++;
         rows.push({ ...base, status: "linked", localId: linked.id, localName: linked.name });
         continue;
       }
-      const sameName = byName.get(name.toLowerCase());
-      if (sameName) {
-        counts.clash++;
-        rows.push({ ...base, status: "clash", localId: sameName.id, localName: sameName.name });
-        continue;
+
+      const m = matches.get(z.zohoId)!;
+      const paired = m.vendorId ? m.candidates.find((v) => v.id === m.vendorId) : undefined;
+      const pairedRef = paired ? { localId: paired.id, localName: paired.name } : {};
+      if (m.kind === "gstin" || m.kind === "gstin+name") {
+        counts.match++;
+        rows.push({ ...base, status: "match", kind: m.kind, ...pairedRef, candidates: m.candidates });
+      } else if (m.kind === "name" || m.kind === "ambiguous") {
+        counts.review++;
+        rows.push({ ...base, status: "review", kind: m.kind, ...pairedRef, candidates: m.candidates });
+      } else if (m.kind === "conflict") {
+        counts.conflict++;
+        const c = m.candidates[0];
+        rows.push({ ...base, status: "conflict", kind: m.kind, reason: m.reason, localId: c.id, localName: c.name, candidates: m.candidates });
+      } else {
+        counts.new++;
+        rows.push({ ...base, status: "new" });
       }
-      counts.new++;
-      rows.push({ ...base, status: "new" });
     }
     counts.total = rows.length;
 

@@ -222,13 +222,15 @@ export async function POST(req: NextRequest) {
             continue;
           }
 
-          // Vendor by Zoho vendor id, never by name (plan 2409). Created once, with its Zoho
-          // details, the first time an id is seen; a throw lands in this bill's catch below.
+          // Vendor by Zoho vendor id (plan 2409), else an existing vendor with the same GSTIN,
+          // linked now (plan 1410-link-vendors-to-zoho, C1), else created once with its Zoho
+          // details. Never by name alone; a throw lands in this bill's catch below.
           const { vendor, notice: vendorNotice } = await resolveBillVendor({
             billNo: String(d.billNumber),
             vendorName: String(d.vendorName || ""),
             vendorId: typeof d.vendorId === "string" && d.vendorId ? d.vendorId : null,
             vendorSource: typeof d.vendorSource === "string" ? d.vendorSource : null,
+            actor: { id: user.id, name: user.name },
           });
           if (vendorNotice) results.notices.push(vendorNotice);
 
