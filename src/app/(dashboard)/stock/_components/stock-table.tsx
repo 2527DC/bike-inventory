@@ -20,35 +20,40 @@ import {
   formatInr, hasUnits, stockAccent, stockBadge, stockColor, withoutCodes,
   type StockProduct, type StockRowContext, type StockSort, type StockSortKey,
 } from "./stock-row";
+import { StockRowMenu, type StockRowMenuItem } from "./stock-row-menu";
 
 const log = createLogger("stock:table");
 
 /**
- * A row action. Takes the click event so the caller can stopPropagation — the row itself
- * navigates on click, and without that a Deactivate would also open the product.
- * Exported so the phone card may share the same look.
+ * The actions this person may take on this row, in the order the ⋮ menu lists them. Each grant
+ * is checked here exactly as the buttons that came before checked it — the routes re-check.
  */
-export function StockRowButton({
-  label, onClick, children, tone = "text-slate-600", disabled,
-}: {
-  label: string;
-  onClick: (e: React.MouseEvent) => void;
-  children: React.ReactNode;
-  tone?: string;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={label}
-      title={label}
-      className={`min-h-[32px] min-w-[32px] inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 focus-ring ${tone}`}
-    >
-      {children}
-    </button>
-  );
+function rowActions(p: StockProduct, ctx: StockRowContext): StockRowMenuItem[] {
+  const items: StockRowMenuItem[] = [];
+  // Add stock directly, without a stock audit (plan 1410, R2). Active rows only — the route
+  // refuses an inactive product.
+  if (ctx.mayAddStock && p.status === "ACTIVE") {
+    items.push({ key: "add-stock", label: "Add stock", tone: "text-emerald-700", icon: <PackagePlus className="h-4 w-4" />, onSelect: () => ctx.onAddStock(p) });
+  }
+  if (ctx.mayReorder) {
+    items.push({ key: "reorder", label: "Reorder settings", tone: "text-blue-700", icon: <RefreshCw className="h-4 w-4" />, onSelect: () => ctx.onReorder(p) });
+  }
+  if (ctx.mayAssemblyLevel) {
+    items.push({
+      key: "assembly-level",
+      label: p.assemblyLevel ? "Assembly level" : "Set assembly level",
+      tone: p.assemblyLevel ? "text-slate-700" : "text-amber-700",
+      icon: <Wrench className="h-4 w-4" />,
+      onSelect: () => ctx.onAssemblyLevel(p),
+    });
+  }
+  if (ctx.mayDeactivate && p.status === "ACTIVE") {
+    items.push({ key: "deactivate", label: "Deactivate", tone: "text-slate-700", icon: <EyeOff className="h-4 w-4" />, onSelect: () => ctx.onSetStatus(p, "INACTIVE") });
+  }
+  if (ctx.mayDeactivate && p.status === "INACTIVE") {
+    items.push({ key: "restore", label: "Restore", tone: "text-green-700", icon: <RotateCcw className="h-4 w-4" />, onSelect: () => ctx.onSetStatus(p, "ACTIVE") });
+  }
+  return items;
 }
 
 function SortHeader({
@@ -102,12 +107,6 @@ export function StockTable({
       return;
     }
     router.push(ctx.hrefFor(p));
-  }
-
-  function action(e: React.MouseEvent, run: () => void) {
-    e.preventDefault();
-    e.stopPropagation();
-    run();
   }
 
   // The table scrolls INSIDE its own box, both ways, at every width — the page itself never
@@ -275,62 +274,11 @@ export function StockTable({
                   )}
                 </TableCell>
 
-                {/* Hidden in select mode: the whole row is a checkbox target there. */}
+                {/* Hidden in select mode: the whole row is a checkbox target there. One ⋮ button
+                    opens the row's actions (owner, 14 Oct 2026) — see stock-row-menu.tsx. */}
                 {showActions && (
-                  <TableCell className="py-2 text-right whitespace-nowrap">
-                    <div className="flex gap-1 justify-end">
-                      {/* Add stock directly, without a stock audit (plan 1410, R2). Active rows
-                          only — the route refuses an inactive product. */}
-                      {ctx.mayAddStock && p.status === "ACTIVE" && (
-                        <StockRowButton
-                          label={`Add stock to ${p.name}`}
-                          tone="text-emerald-700"
-                          disabled={busy}
-                          onClick={(e) => action(e, () => ctx.onAddStock(p))}
-                        >
-                          <PackagePlus className="h-3.5 w-3.5" />
-                        </StockRowButton>
-                      )}
-                      {ctx.mayReorder && (
-                        <StockRowButton
-                          label={`Reorder settings for ${p.name}`}
-                          tone="text-blue-600"
-                          disabled={busy}
-                          onClick={(e) => action(e, () => ctx.onReorder(p))}
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" />
-                        </StockRowButton>
-                      )}
-                      {ctx.mayAssemblyLevel && (
-                        <StockRowButton
-                          label={`Assembly level for ${p.name}`}
-                          tone={p.assemblyLevel ? "text-slate-700" : "text-amber-600"}
-                          disabled={busy}
-                          onClick={(e) => action(e, () => ctx.onAssemblyLevel(p))}
-                        >
-                          <Wrench className="h-3.5 w-3.5" />
-                        </StockRowButton>
-                      )}
-                      {ctx.mayDeactivate && p.status === "ACTIVE" && (
-                        <StockRowButton
-                          label={`Deactivate ${p.name}`}
-                          disabled={busy}
-                          onClick={(e) => action(e, () => ctx.onSetStatus(p, "INACTIVE"))}
-                        >
-                          <EyeOff className="h-3.5 w-3.5" />
-                        </StockRowButton>
-                      )}
-                      {ctx.mayDeactivate && p.status === "INACTIVE" && (
-                        <StockRowButton
-                          label={`Restore ${p.name}`}
-                          tone="text-green-600"
-                          disabled={busy}
-                          onClick={(e) => action(e, () => ctx.onSetStatus(p, "ACTIVE"))}
-                        >
-                          <RotateCcw className="h-3.5 w-3.5" />
-                        </StockRowButton>
-                      )}
-                    </div>
+                  <TableCell className="py-2 text-right whitespace-nowrap w-12">
+                    <StockRowMenu productId={p.id} productName={p.name} items={rowActions(p, ctx)} disabled={busy} />
                   </TableCell>
                 )}
               </TableRow>
