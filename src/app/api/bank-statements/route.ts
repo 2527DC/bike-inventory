@@ -7,6 +7,8 @@ import { requireFeature, AuthError, getServerSession } from "@/lib/auth-helpers"
 import { createLogger } from "@/lib/logger";
 import { runAi, toAiErrorResponse, aiErrorKind } from "@/lib/ai";
 
+import { parseTabularBankStatement } from "@/lib/bank-statement-parser";
+
 const log = createLogger("bank-statements");
 
 // GET — List uploaded statements
@@ -27,7 +29,7 @@ export async function GET() {
   }
 }
 
-// POST — Upload and parse a bank statement with the configured AI provider (src/lib/ai)
+// POST — Upload and parse a bank statement with deterministic parser + configured AI provider fallback
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession();
@@ -36,24 +38,30 @@ export async function POST(req: NextRequest) {
 
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
-    const bank = formData.get("bank") as string || "HDFC";
+    const bank = (formData.get("bank") as string) || "HDFC";
 
     if (!file) return errorResponse("No file uploaded", 400);
 
     // Read file content — handle both CSV/TXT and XLS/XLSX
-    let text: string;
+    let text = "";
     const fileName = file.name.toLowerCase();
+    const XLSX = await import("xlsx");
+    let workbook: import("xlsx").WorkBook | null = null;
 
     if (fileName.endsWith(".xls") || fileName.endsWith(".xlsx")) {
-      // Binary Excel file — convert to CSV using xlsx package
-      const XLSX = await import("xlsx");
       const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type: "array" });
+      workbook = XLSX.read(buffer, { type: "array" });
       const sheetName = workbook.SheetNames[0];
-      text = XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName]);
+      if (sheetName && workbook.Sheets[sheetName]) {
+        text = XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName]);
+      }
     } else {
-      // CSV or TXT — read as text directly
       text = await file.text();
+      try {
+        workbook = XLSX.read(text, { type: "string" });
+      } catch {
+        workbook = null;
+      }
     }
 
     if (!text || text.trim().length < 20) {
@@ -69,14 +77,42 @@ export async function POST(req: NextRequest) {
       sample: firstLines.slice(0, 200),
     });
 
-    // Parse the CSV/XLS content with the AI provider — bank-specific hints
-    const bankHints = bank === "ICICI"
-      ? `ICICI bank statements typically have columns: S No., Value Date, Transaction Date, Cheque Number, Transaction Remarks, Withdrawal Amount (Dr), Deposit Amount (Cr), Balance. The date format is usually DD/MM/YYYY or DD-MM-YYYY. Some ICICI statements have headers spread across multiple rows or have a summary section at top — skip those and find the actual transaction rows.`
-      : bank === "HDFC"
-      ? `HDFC bank statements typically have columns: Date, Narration, Chq./Ref.No., Value Dt, Withdrawal Amt., Deposit Amt., Closing Balance. The date format is usually DD/MM/YY or DD/MM/YYYY.`
-      : `Parse the bank statement based on common column patterns.`;
+    // Diagnostic info for error reporting
+    const filePreview = text.split("\n").slice(0, 10).join("\n");
+    const fileStats = { name: file.name, size: `${Math.round(file.size / 1024)}KB`, lines: text.split("\n").length, chars: text.length };
 
-    const parsePrompt = `You are an expert bank statement parser. Parse the following ${bank} bank statement data and extract ALL transactions.
+    // Call A — extract transaction rows.
+    // 1. First attempt deterministic tabular parsing (instant, zero-token, exact match for standard bank formats)
+    let transactions: Array<{
+      date: string; description: string; reference: string;
+      amount: number; type: "CREDIT" | "DEBIT"; balance: number | null;
+    }> = [];
+    let responseText = "";
+
+    if (workbook) {
+      const tabularResult = parseTabularBankStatement(workbook);
+      if (tabularResult && tabularResult.transactions.length > 0) {
+        transactions = tabularResult.transactions;
+        log.info("statement parsed via deterministic parser", {
+          file: file.name,
+          bank,
+          transactions: transactions.length,
+          headerRow: tabularResult.headerRowIndex + 1,
+        });
+      }
+    }
+
+    // 2. Fall back to AI extraction if tabular parser didn't match (unstructured or non-standard format)
+    if (transactions.length === 0) {
+      log.info("tabular parser did not match; falling back to AI parse", { file: file.name, bank });
+
+      const bankHints = bank === "ICICI"
+        ? `ICICI bank statements typically have columns: S No., Value Date, Transaction Date, Cheque Number, Transaction Remarks, Withdrawal Amount (Dr), Deposit Amount (Cr), Balance. The date format is usually DD/MM/YYYY or DD-MM-YYYY. Some ICICI statements have headers spread across multiple rows or have a summary section at top — skip those and find the actual transaction rows.`
+        : bank === "HDFC"
+        ? `HDFC bank statements typically have columns: Date, Narration, Chq./Ref.No., Value Dt, Withdrawal Amt., Deposit Amt., Closing Balance. The date format is usually DD/MM/YY or DD/MM/YYYY.`
+        : `Parse the bank statement based on common column patterns.`;
+
+      const promptTemplate = (dataChunk: string) => `You are an expert bank statement parser. Parse the following ${bank} bank statement data and extract ALL transactions.
 
 ${bankHints}
 
@@ -106,66 +142,74 @@ Rules:
 - If you cannot find any transactions, return an empty array []
 
 Bank statement data (${bank}):
-${text.slice(0, 50000)}`;
+${dataChunk}`;
 
-    // Diagnostic info for error reporting
-    const filePreview = text.split("\n").slice(0, 10).join("\n");
-    const fileStats = { name: file.name, size: `${Math.round(file.size / 1024)}KB`, lines: text.split("\n").length, chars: text.length };
+      // Chunk the lines if large so AI output never exceeds max output tokens
+      const lines = text.split("\n");
+      const CHUNK_LINES = 50;
+      const chunks: string[] = [];
 
-    // Call A — extract the transaction rows. runAi retries transient failures, refuses a
-    // truncated reply (AiError "max_tokens") and parses the JSON (AiError "parse"), so the
-    // only shape left to check here is "is it an array".
-    let transactions: Array<{
-      date: string; description: string; reference: string;
-      amount: number; type: "CREDIT" | "DEBIT"; balance: number | null;
-    }> = [];
-    let responseText = "";
-
-    try {
-      log.debug("-> runAi bank.statement_parse", { file: file.name, bank, promptChars: parsePrompt.length });
-      const parseResult = await runAi({
-        purpose: "bank.statement_parse",
-        prompt: parsePrompt,
-        maxTokens: 16384,
-        json: true,
-      });
-      responseText = parseResult.text;
-
-      const parsed: unknown = parseResult.json;
-      if (!Array.isArray(parsed)) {
-        log.error("statement parse returned JSON that is not an array", {
-          file: file.name,
-          model: parseResult.model,
-          type: parsed === null ? "null" : typeof parsed,
-        });
-        return Response.json({
-          success: false,
-          error: "AI returned invalid JSON. Try re-uploading or use a different file format.",
-          diagnostics: { step: "json_parse", fileStats, filePreview, aiResponse: responseText.slice(0, 500) },
-        }, { status: 500 });
+      if (lines.length <= CHUNK_LINES) {
+        chunks.push(text.slice(0, 50000));
+      } else {
+        // Keep header lines (first 5 lines) with each chunk for context
+        const headerContext = lines.slice(0, 5).join("\n");
+        for (let i = 0; i < lines.length; i += CHUNK_LINES) {
+          const slice = lines.slice(i, i + CHUNK_LINES).join("\n");
+          chunks.push(`${headerContext}\n${slice}`);
+        }
       }
-      transactions = parsed;
-      log.info("statement parsed", { file: file.name, bank, transactions: transactions.length, model: parseResult.model });
-    } catch (error) {
-      const aiRes = toAiErrorResponse(error);
-      if (!aiRes) {
-        log.error("statement parse threw a non-AI error", { file: file.name, kind: aiErrorKind(error) });
-        throw error;
-      }
-      // Same contract as before: { success: false, error, diagnostics: { step: "ai_call", ... } }
-      // with the status and message toAiErrorResponse chose for this kind of failure.
-      log.error("statement parse failed at the AI step", { file: file.name, status: aiRes.status, kind: aiErrorKind(error) });
-      let body: Record<string, unknown>;
+
       try {
-        body = (await aiRes.json()) as Record<string, unknown>;
-      } catch (readError) {
-        log.warn("could not read the AI error body; falling back to the message", { kind: aiErrorKind(readError) });
-        body = { success: false, error: error instanceof Error ? error.message : "AI processing failed. Please try again." };
+        for (let idx = 0; idx < chunks.length; idx++) {
+          const chunkPrompt = promptTemplate(chunks[idx]);
+          log.debug("-> runAi bank.statement_parse chunk", {
+            file: file.name,
+            bank,
+            chunk: idx + 1,
+            totalChunks: chunks.length,
+            promptChars: chunkPrompt.length,
+          });
+
+          const parseResult = await runAi({
+            purpose: "bank.statement_parse",
+            prompt: chunkPrompt,
+            maxTokens: 16384,
+            json: true,
+          });
+          responseText = parseResult.text;
+
+          const parsed: unknown = parseResult.json;
+          if (Array.isArray(parsed)) {
+            transactions.push(...(parsed as typeof transactions));
+          } else {
+            log.warn("statement parse chunk returned JSON that is not an array", {
+              file: file.name,
+              chunk: idx + 1,
+              model: parseResult.model,
+            });
+          }
+        }
+        log.info("statement parsed via AI", { file: file.name, bank, transactions: transactions.length });
+      } catch (error) {
+        const aiRes = toAiErrorResponse(error);
+        if (!aiRes) {
+          log.error("statement parse threw a non-AI error", { file: file.name, kind: aiErrorKind(error) });
+          throw error;
+        }
+        log.error("statement parse failed at the AI step", { file: file.name, status: aiRes.status, kind: aiErrorKind(error) });
+        let body: Record<string, unknown>;
+        try {
+          body = (await aiRes.json()) as Record<string, unknown>;
+        } catch (readError) {
+          log.warn("could not read the AI error body; falling back to the message", { kind: aiErrorKind(readError) });
+          body = { success: false, error: error instanceof Error ? error.message : "AI processing failed. Please try again." };
+        }
+        return Response.json(
+          { ...body, diagnostics: { step: "ai_call", fileStats, filePreview } },
+          { status: aiRes.status },
+        );
       }
-      return Response.json(
-        { ...body, diagnostics: { step: "ai_call", fileStats, filePreview } },
-        { status: aiRes.status },
-      );
     }
 
     if (transactions.length === 0) {
@@ -266,73 +310,118 @@ Return ONLY the JSON array.`;
 
     // Call B — vendor / bill matching. Non-fatal: the statement is already saved, so a
     // failure here leaves every transaction UNMATCHED for manual review.
+    // Batch transactions in chunks of 35 so large statements never hit token limits.
     let matchedCount = 0;
     let flaggedCount = 0;
 
-    try {
-      log.debug("-> runAi bank.vendor_resolve", {
-        statementId: statement.id,
-        transactions: statement.transactions.length,
-        vendors: vendors.length,
-        pendingBills: pendingBills.length,
-        promptChars: matchPrompt.length,
-      });
-      const matchResult = await runAi({
-        purpose: "bank.vendor_resolve",
-        prompt: matchPrompt,
-        maxTokens: 16384,
-        json: true,
-      });
+    const RESOLVE_BATCH_SIZE = 35;
+    for (let i = 0; i < statement.transactions.length; i += RESOLVE_BATCH_SIZE) {
+      const batch = statement.transactions.slice(i, i + RESOLVE_BATCH_SIZE);
+      const matchPrompt = `You are a bank reconciliation AI. Match bank transactions to vendors and bills.
 
-      const parsedMatches: unknown = matchResult.json;
-      if (Array.isArray(parsedMatches)) {
-        const matches: Array<{
-          txnId: string; vendorId: string | null; billId: string | null;
-          category: string; confidence: number; flagReason: string | null;
-        }> = parsedMatches;
-        log.info("vendor resolve finished", { statementId: statement.id, matches: matches.length, model: matchResult.model });
+VENDORS (id, name):
+${vendors.map(v => `${v.id}|${v.name}|${v.code}`).join("\n")}
 
-        for (const match of matches) {
-          const updateData: Record<string, unknown> = {
-            confidence: match.confidence || 0,
-            suggestedCategory: match.category,
-          };
+PENDING BILLS (id, billNo, amount, balance, vendorId, vendorName):
+${pendingBills.map(b => `${b.id}|${b.billNo}|${b.amount}|${b.amount - b.paidAmount}|${b.vendor.id}|${b.vendor.name}`).join("\n")}
 
-          if (match.vendorId) updateData.suggestedVendorId = match.vendorId;
-          if (match.billId) updateData.suggestedBillId = match.billId;
+BANK TRANSACTIONS TO MATCH:
+${batch.map(t => `${t.id}|${t.date.toISOString().slice(0, 10)}|${t.description}|${t.amount}|${t.type}|${t.reference || ""}`).join("\n")}
 
-          if (match.flagReason) {
-            updateData.matchStatus = "FLAGGED";
-            updateData.flagReason = match.flagReason;
-            flaggedCount++;
-          } else if (match.vendorId || match.category?.startsWith("EXPENSE")) {
-            updateData.matchStatus = "MATCHED";
-            matchedCount++;
-          }
+For each DEBIT transaction, try to match it to a vendor payment:
+- Match by vendor name in description
+- Match by amount to pending bill balance
+- Match by reference/cheque number
 
-          await prisma.bankTransaction.update({
-            where: { id: match.txnId },
-            data: updateData,
-          }).catch((e: unknown) => {
-            // The model can invent a txnId. Skip that row — but say so, or a statement
-            // that comes back fully UNMATCHED has no trail to explain why.
-            log.warn("vendor resolve: transaction update skipped", {
-              statementId: statement.id,
-              txnId: match.txnId,
-              error: e instanceof Error ? e.message : String(e),
+Return a JSON array:
+[
+  {
+    "txnId": "transaction id",
+    "vendorId": "matched vendor id or null",
+    "billId": "matched bill id or null",
+    "category": "VENDOR_PAYMENT" | "EXPENSE_SALARY" | "EXPENSE_RENT" | "EXPENSE_UTILITY" | "EXPENSE_DELIVERY" | "EXPENSE_OTHER" | "TRANSFER" | "UNKNOWN",
+    "confidence": 0.0 to 1.0,
+    "flagReason": "reason if suspicious, else null"
+  }
+]
+
+Flag suspicious transactions if:
+- Large round amounts with no matching vendor (>50000)
+- Duplicate amounts on same day
+- Description contains unusual keywords
+- Unknown payee for large debits
+
+Return ONLY the JSON array.`;
+
+      try {
+        log.debug("-> runAi bank.vendor_resolve batch", {
+          statementId: statement.id,
+          batchIndex: Math.floor(i / RESOLVE_BATCH_SIZE) + 1,
+          batchCount: batch.length,
+          totalTransactions: statement.transactions.length,
+          vendors: vendors.length,
+          pendingBills: pendingBills.length,
+          promptChars: matchPrompt.length,
+        });
+        const matchResult = await runAi({
+          purpose: "bank.vendor_resolve",
+          prompt: matchPrompt,
+          maxTokens: 16384,
+          json: true,
+        });
+
+        const parsedMatches: unknown = matchResult.json;
+        if (Array.isArray(parsedMatches)) {
+          const matches: Array<{
+            txnId: string; vendorId: string | null; billId: string | null;
+            category: string; confidence: number; flagReason: string | null;
+          }> = parsedMatches;
+          log.info("vendor resolve batch finished", {
+            statementId: statement.id,
+            batchIndex: Math.floor(i / RESOLVE_BATCH_SIZE) + 1,
+            matches: matches.length,
+            model: matchResult.model,
+          });
+
+          for (const match of matches) {
+            const updateData: Record<string, unknown> = {
+              confidence: match.confidence || 0,
+              suggestedCategory: match.category,
+            };
+
+            if (match.vendorId) updateData.suggestedVendorId = match.vendorId;
+            if (match.billId) updateData.suggestedBillId = match.billId;
+
+            if (match.flagReason) {
+              updateData.matchStatus = "FLAGGED";
+              updateData.flagReason = match.flagReason;
+              flaggedCount++;
+            } else if (match.vendorId || match.category?.startsWith("EXPENSE")) {
+              updateData.matchStatus = "MATCHED";
+              matchedCount++;
+            }
+
+            await prisma.bankTransaction.update({
+              where: { id: match.txnId },
+              data: updateData,
+            }).catch((e: unknown) => {
+              log.warn("vendor resolve: transaction update skipped", {
+                statementId: statement.id,
+                txnId: match.txnId,
+                error: e instanceof Error ? e.message : String(e),
+              });
             });
+          }
+        } else {
+          log.warn("vendor resolve batch skipped", {
+            statementId: statement.id,
+            kind: "not_an_array",
+            model: matchResult.model,
           });
         }
-      } else {
-        log.warn("vendor resolve skipped", {
-          statementId: statement.id,
-          kind: "not_an_array",
-          model: matchResult.model,
-        });
+      } catch (error) {
+        log.warn("vendor resolve batch skipped", { statementId: statement.id, kind: aiErrorKind(error) });
       }
-    } catch (error) {
-      // AI matching failed — transactions stay UNMATCHED, user can review manually
-      log.warn("vendor resolve skipped", { statementId: statement.id, kind: aiErrorKind(error) });
     }
 
     // Update statement counts
