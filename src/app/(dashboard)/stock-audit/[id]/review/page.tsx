@@ -122,7 +122,7 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
   const [data, setData] = useState<StockCountData | null>(null);
   const [items, setItems] = useState<StockCountItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"all" | "counted" | "variance">("counted");
+  const [tab, setTab] = useState<"all" | "counted" | "zero" | "variance">("counted");
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [selectedChip, setSelectedChip] = useState<string | null>(null);
@@ -209,7 +209,9 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
   const writtenOff = zeroLines.reduce((sum, i) => sum + liveOf(i), 0);
 
   const filtered = tab === "counted"
-    ? items.filter((i) => i.countedQty !== null && (i.systemQty > 0 || (i.countedQty ?? 0) > 0))
+    ? items.filter((i) => i.countedQty !== null && (i.countedQty ?? 0) > 0)
+    : tab === "zero"
+    ? items.filter((i) => i.countedQty === 0)
     : tab === "variance"
     ? items.filter((i) => i.variance !== null && i.variance !== 0)
     : items.filter((i) => i.systemQty > 0 || (i.countedQty ?? 0) > 0);
@@ -362,10 +364,11 @@ export default function StockCountReviewPage({ params }: { params: Promise<{ id:
       {/* Tabs + Export */}
       <div className="flex items-center justify-between mb-2">
         <div className="flex gap-1.5">
-          {(["counted", "variance", "all"] as const).map((t) => (
+          {(["counted", "zero", "variance", "all"] as const).map((t) => (
             <button key={t} onClick={() => setTab(t)}
               className={`px-2.5 py-1 rounded-full text-xs font-medium ${tab === t ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}>
-              {t === "counted" ? `Counted (${items.filter((i) => i.countedQty !== null && (i.systemQty > 0 || (i.countedQty ?? 0) > 0)).length})`
+              {t === "counted" ? `Stock > 0 (${items.filter((i) => (i.countedQty ?? 0) > 0).length})`
+                : t === "zero" ? `Zero Stock (${items.filter((i) => i.countedQty === 0).length})`
                 : t === "variance" ? `Variance (${items.filter((i) => i.variance && i.variance !== 0).length})`
                 : `All (${items.filter((i) => i.systemQty > 0 || (i.countedQty ?? 0) > 0).length})`}
             </button>

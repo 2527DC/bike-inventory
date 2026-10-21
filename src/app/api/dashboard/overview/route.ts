@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireAuth, AuthError } from "@/lib/auth-helpers";
-import { userCan } from "@/lib/rbac";
+import { getAccess, userCan } from "@/lib/rbac";
 import { createLogger } from "@/lib/logger";
 import { listPendingApprovals } from "@/lib/approvals/pending";
 import { INBOUND_NOT_APPROVED_WHERE } from "@/lib/inbound/filters";
@@ -84,11 +84,18 @@ export async function GET() {
   try {
     const user = await requireAuth();
 
+    // Money section: admin-only. The client requirement (Oct 2026) is that Payable, Receivable,
+    // Overdue Bills and Stock Value are never shown to non-admin roles, regardless of what
+    // grants their role holds. `getAccess` is React-cache()d per request, so this is the SAME
+    // database read that backs the userCan calls below — zero extra queries.
+    const access = await getAccess(user.id);
+    const isAdmin = access.roleKey === "ADMIN";
+
     // One `getAccess` read backs all of these — it is React-`cache`d per request.
     const [
-      canAccounts,
+      ,                 // accounts.view — superseded by isAdmin for the money section
       canStock,
-      canReports,
+      ,                 // reports.view — superseded by isAdmin for the money section
       canInbound,
       canAssemblyView,
       canAssemblyApprove,
@@ -111,9 +118,8 @@ export async function GET() {
 
     // Stock value is NOT read from `api/dashboard/stats`: that route is gated on `reorder.view`,
     // which is a purchasing grant and has nothing to do with being allowed to see what the shop
-    // is holding (Q29's own note). The same SUM is computed here behind `stock.view` or
-    // `reports.view` instead.
-    const canStockValue = canStock || canReports;
+    // is holding (Q29's own note). Money section is admin-only (Oct 2026 requirement), so no
+    // separate canStockValue variable is needed — `isAdmin` is the single gate for all money queries.
 
     const hours = await getStuckHours();
     const now = Date.now();
@@ -145,8 +151,9 @@ export async function GET() {
       conditionRows,
     ] = await Promise.all([
       // ── Money ────────────────────────────────────────────────────────────────────────
+      // All money queries are admin-only (Oct 2026: financial KPIs restricted to ADMIN role).
       when(
-        canAccounts,
+        isAdmin,
         () =>
           prisma.vendorBill.aggregate({
             where: { status: { in: BILL_PENDING } },
@@ -155,7 +162,7 @@ export async function GET() {
         null
       ),
       when(
-        canAccounts,
+        isAdmin,
         () =>
           prisma.customerInvoice.aggregate({
             where: { status: { in: INVOICE_PENDING } },
@@ -164,7 +171,7 @@ export async function GET() {
         null
       ),
       when(
-        canAccounts,
+        isAdmin,
         () =>
           prisma.vendorBill.count({
             where: { dueDate: { lt: new Date(now) }, status: { in: BILL_PENDING } },
@@ -172,7 +179,7 @@ export async function GET() {
         0
       ),
       when(
-        canStockValue,
+        isAdmin,
         () =>
           prisma.$queryRaw<[{ stock_value: number }]>`
             SELECT COALESCE(SUM("currentStock" * "costPrice"), 0)::float AS stock_value
@@ -341,8 +348,11 @@ export async function GET() {
     const sections: OverviewSection[] = [];
 
     // ── Money ──────────────────────────────────────────────────────────────────────────
+    // Oct 2026: money cards (Payable, Receivable, Overdue Bills, Stock Value) are admin-only.
+    // The client requirement is that no non-admin role ever sees financial KPIs on the home
+    // screen, regardless of what grants their role holds. `isAdmin` is the single gate.
     const moneyCards: OverviewCard[] = [];
-    if (canAccounts) {
+    if (isAdmin) {
       const payable = (payableAgg?._sum.amount ?? 0) - (payableAgg?._sum.paidAmount ?? 0);
       const receivable = (receivableAgg?._sum.amount ?? 0) - (receivableAgg?._sum.paidAmount ?? 0);
       moneyCards.push(
@@ -355,18 +365,16 @@ export async function GET() {
           format: "count",
           href: "/bills",
           tone: overdueBills > 0 ? "warn" : "good",
+        },
+        {
+          key: "stockValue",
+          label: "Stock value",
+          value: stockValueRows[0]?.stock_value ?? 0,
+          format: "inr",
+          href: "/stock",
+          tone: "neutral",
         }
       );
-    }
-    if (canStockValue) {
-      moneyCards.push({
-        key: "stockValue",
-        label: "Stock value",
-        value: stockValueRows[0]?.stock_value ?? 0,
-        format: "inr",
-        href: "/stock",
-        tone: "neutral",
-      });
     }
     if (moneyCards.length) sections.push({ key: "money", label: "Money", cards: moneyCards });
 
