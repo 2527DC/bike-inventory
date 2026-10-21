@@ -110,7 +110,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const items = await prisma.stockCountItem.findMany({
       where: {
         stockCountId: id,
-        ...(filter === "counted" && { countedQty: { not: null } }),
+        ...(filter === "counted" && { countedQty: { not: null, gt: 0 } }),
+        ...(filter === "zero" && { countedQty: 0 }),
         ...(filter === "uncounted" && { countedQty: null }),
         ...(filter === "variance" && { variance: { not: null }, AND: { variance: { not: 0 } } }),
         ...searchCondition,
@@ -155,13 +156,27 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const countedCount = await prisma.stockCountItem.count({
       where: { stockCountId: id, countedQty: { not: null } },
     });
+    const positiveCount = await prisma.stockCountItem.count({
+      where: { stockCountId: id, countedQty: { gt: 0 } },
+    });
+    const zeroCount = await prisma.stockCountItem.count({
+      where: { stockCountId: id, countedQty: 0 },
+    });
+    const unitsAgg = await prisma.stockCountItem.aggregate({
+      where: { stockCountId: id },
+      _sum: { countedQty: true },
+    });
     const totalCount = allCounts[0]?._count || 0;
+    const totalUnits = unitsAgg._sum.countedQty ?? 0;
 
     return successResponse({
       items: withLive,
       staleCount,
       totalCount,
       countedCount,
+      positiveCount,
+      zeroCount,
+      totalUnits,
       uncountedCount: totalCount - countedCount,
     });
   } catch (error) {

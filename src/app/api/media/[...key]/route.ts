@@ -46,11 +46,13 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ key: strin
     if (!body) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     const ext = key.split(".").pop()?.toLowerCase() || "";
+    const filename = key.split("/").pop() || `document.${ext || "bin"}`;
     return new NextResponse(new Uint8Array(body), {
       headers: {
         "Content-Type": CONTENT_TYPES[ext] || "application/octet-stream",
         "Content-Length": String(body.byteLength),
         "Cache-Control": IMMUTABLE_CACHE_CONTROL,
+        "Content-Disposition": `inline; filename="${filename}"`,
       },
     });
   } catch (error) {

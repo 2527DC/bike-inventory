@@ -63,6 +63,9 @@ interface StockCountSummary {
   canCorrectStock: boolean;
   totalItems: number;
   countedItems: number;
+  positiveItems?: number;
+  zeroItems?: number;
+  totalCountedUnits?: number;
   totalVariance: number;
   itemsWithVariance: number;
 }
@@ -163,12 +166,11 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState("");
   const [autoSaveStatus, setAutoSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
-  const [tab, setTab] = useState<"uncounted" | "counted" | "all">("uncounted");
-  const [tabCounts, setTabCounts] = useState({ total: 0, counted: 0, uncounted: 0 });
+  const [tab, setTab] = useState<"uncounted" | "counted" | "zero" | "all">("uncounted");
+  const [tabCounts, setTabCounts] = useState({ total: 0, counted: 0, uncounted: 0, zero: 0, totalUnits: 0 });
   const [staleCount, setStaleCount] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [quickMode, setQuickMode] = useState(false);
-  const [hideZeroCount, setHideZeroCount] = useState(false);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -213,7 +215,10 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
       items: StockCountItemData[];
       totalCount?: number;
       countedCount?: number;
+      positiveCount?: number;
       uncountedCount?: number;
+      zeroCount?: number;
+      totalUnits?: number;
       staleCount?: number;
     };
 
@@ -250,8 +255,10 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
         if (data.totalCount !== undefined) {
           setTabCounts({
             total: data.totalCount,
-            counted: data.countedCount ?? 0,
+            counted: data.positiveCount ?? (data.countedCount !== undefined ? Math.max(0, data.countedCount - (data.zeroCount ?? 0)) : 0),
             uncounted: data.uncountedCount ?? 0,
+            zero: data.zeroCount ?? 0,
+            totalUnits: data.totalUnits ?? 0,
           });
         }
         if (data.staleCount !== undefined) {
@@ -658,6 +665,29 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
               style={{ width: `${progress}%` }}
             />
           </div>
+
+          {/* Breakdown: products with stock > 0, total physical units counted, products with 0 stock */}
+          <div className="grid grid-cols-3 gap-2 py-2 px-2.5 bg-slate-50 border border-slate-100 rounded-lg mb-2.5 text-center">
+            <div>
+              <p className="text-[10px] text-slate-500 uppercase tracking-wide font-medium">Stock &gt; 0</p>
+              <p className="text-sm font-bold text-blue-700 tabular-nums">
+                {summary.positiveItems ?? tabCounts.counted} <span className="text-[11px] font-normal text-slate-500">items</span>
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] text-slate-500 uppercase tracking-wide font-medium">Total Counted</p>
+              <p className="text-sm font-bold text-slate-900 tabular-nums">
+                {summary.totalCountedUnits ?? tabCounts.totalUnits} <span className="text-[11px] font-normal text-slate-500">units</span>
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] text-slate-500 uppercase tracking-wide font-medium">Zero Stock</p>
+              <p className="text-sm font-bold text-slate-600 tabular-nums">
+                {summary.zeroItems ?? tabCounts.zero} <span className="text-[11px] font-normal text-slate-500">items</span>
+              </p>
+            </div>
+          </div>
+
           <div className="text-xs">
             {summary.itemsWithVariance === 0 ? (
               <span className="text-green-600 font-medium">All counts match the system</span>
@@ -790,14 +820,23 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
           owner described as doing nothing when clicked. The rows render read-only until Start
           is pressed; seeing WHAT you are about to count is the point of opening it. */}
       <div className="flex bg-slate-100 rounded-lg p-0.5 mb-2">
-        {(["uncounted", "counted", "all"] as const).map((t) => {
-          const count = t === "uncounted" ? tabCounts.uncounted : t === "counted" ? tabCounts.counted : tabCounts.total;
+        {(["uncounted", "counted", "zero", "all"] as const).map((t) => {
+          const count =
+            t === "uncounted" ? tabCounts.uncounted
+            : t === "counted" ? tabCounts.counted
+            : t === "zero" ? tabCounts.zero
+            : tabCounts.total;
+          const label =
+            t === "uncounted" ? "Uncounted"
+            : t === "counted" ? "Stock > 0"
+            : t === "zero" ? "Zero Stock"
+            : "All";
           return (
             <button key={t} onClick={() => { setTab(t); setSearch(""); }}
-              className={`flex-1 px-2 py-1.5 rounded-md text-xs font-medium tabular-nums transition-colors ${
+              className={`flex-1 px-1.5 py-1.5 rounded-md text-xs font-medium tabular-nums transition-colors ${
                 tab === t ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
               }`}>
-              {t.charAt(0).toUpperCase() + t.slice(1)} ({count})
+              {label} ({count})
             </button>
           );
         })}
@@ -835,32 +874,14 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
         )}
       </div>
 
-      {/* Hide zero-count toggle (only on Counted tab) */}
-      {tab === "counted" && !loadingItems && items.length > 0 && (
-        <div className="flex items-center justify-end mb-2">
-          <button
-            onClick={() => setHideZeroCount(!hideZeroCount)}
-            className={`text-xs px-3 py-1.5 rounded-full font-medium transition-colors ${
-              hideZeroCount ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-            }`}
-          >
-            {hideZeroCount ? "Showing stock > 0" : "Show stock > 0 only"}
-          </button>
-        </div>
-      )}
+      {/* Hide zero-count toggle removed — zeros now have their own "Zero" tab */}
 
       {/* Items */}
       {loadingItems ? (
         <SkeletonList count={5} type="card" />
       ) : (
         <div className="space-y-2">
-          {items.filter((item) => {
-            if (hideZeroCount && tab === "counted") {
-              const val = counts[item.id] ?? item.countedQty;
-              return val !== null && val !== undefined && val > 0;
-            }
-            return true;
-          }).map((item) => {
+          {items.map((item) => {
             const val = counts[item.id];
             const displayVal = val ?? item.countedQty;
             const variance = displayVal !== null && displayVal !== undefined ? displayVal - item.systemQty : null;
@@ -1014,7 +1035,13 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                 ? "No items match — try a different spelling"
                 : tabCounts.total === 0 && summary.bin
                   ? `Nothing is recorded in bin ${summary.bin.code} yet. Add what you find below.`
-                  : tab === "counted" ? "No items counted yet — tap + on items you find" : tab === "uncounted" ? "All items have been counted!" : "No items in this count"}
+                  : tab === "counted"
+                    ? "No items counted with stock > 0 yet"
+                    : tab === "zero"
+                      ? "No items recorded as zero stock yet"
+                      : tab === "uncounted"
+                        ? "All items have been counted!"
+                        : "No items in this count"}
             </p>
           )}
 
