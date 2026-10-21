@@ -46,20 +46,27 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ loc
       ? { warehouseId: warehouse.id }
       : { warehouse: { storeId: store!.id } };
 
-    const rows = await prisma.stockLevel.findMany({
-      where: { ...where, quantity: { not: 0 }, product: { status: "ACTIVE" } },
-      select: {
-        quantity: true,
-        warehouse: { select: { id: true, code: true, name: true } },
-        product: {
-          select: {
-            id: true, name: true, sku: true, sellingPrice: true, reorderLevel: true,
-            brand: { select: { id: true, name: true } },
+    const [rows, allBrands] = await Promise.all([
+      prisma.stockLevel.findMany({
+        where: { ...where, quantity: { not: 0 }, product: { status: "ACTIVE" } },
+        select: {
+          quantity: true,
+          warehouse: { select: { id: true, code: true, name: true } },
+          product: {
+            select: {
+              id: true, name: true, sku: true, sellingPrice: true, reorderLevel: true,
+              brand: { select: { id: true, name: true } },
+            },
           },
         },
-      },
-      orderBy: { product: { name: "asc" } },
-    });
+        orderBy: { product: { name: "asc" } },
+      }),
+      prisma.brand.findMany({
+        where: { isActive: true },
+        select: { id: true, name: true },
+        orderBy: { name: "asc" },
+      }),
+    ]);
 
     // At store level a product may hold stock in more than one warehouse, and the screen
     // shows one row per product. Summing here rather than in the query keeps the per-warehouse
@@ -115,6 +122,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ loc
       totalUnits: products.reduce((s, p) => s + p.qty, 0),
       totalValue: products.reduce((s, p) => s + p.value, 0),
       productCount: products.length,
+      brands: allBrands,
       products,
     });
   } catch (error) {
