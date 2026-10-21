@@ -103,6 +103,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     if (!stockCount) return errorResponse("Stock count not found", 404);
 
     const countedItems = stockCount.items.filter((i) => i.countedQty !== null).length;
+    const positiveItems = stockCount.items.filter((i) => (i.countedQty ?? 0) > 0).length;
+    const zeroItems = stockCount.items.filter((i) => i.countedQty === 0).length;
+    const totalCountedUnits = stockCount.items.reduce((sum, i) => sum + (i.countedQty || 0), 0);
     const totalVariance = stockCount.items.reduce((sum, i) => sum + (i.variance || 0), 0);
     const itemsWithVariance = stockCount.items.filter((i) => i.variance !== null && i.variance !== 0).length;
 
@@ -118,6 +121,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       // belongs to. Audits saved without a bin approve as verify-only.
       canCorrectStock: Boolean(stockCount.binId && stockCount.warehouseId),
       countedItems,
+      positiveItems,
+      zeroItems,
+      totalCountedUnits,
       totalItems: stockCount.items.length,
       totalVariance,
       itemsWithVariance,

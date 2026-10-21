@@ -9,6 +9,7 @@ import { compressImageFull } from "@/lib/media-compress";
 import { uploadMedia } from "@/lib/media-upload";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
+import { DocumentViewerModal } from "@/components/document-viewer-modal";
 
 const log = createLogger("transfers:document-card");
 
@@ -72,6 +73,7 @@ export function DocumentCard({
   const [number, setNumber] = useState(docNumber ?? "");
   const [date, setDate] = useState(docDate ? docDate.slice(0, 10) : "");
   const [showForm, setShowForm] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
 
   // A pre-policy order. NEVER rendered as "no document needed" — it means the rule did not
   // exist when this was raised, which is a different and less reassuring statement.
@@ -175,14 +177,13 @@ export function DocumentCard({
               </p>
             )}
             <div className="flex gap-2 pt-1">
-              <a
-                href={docUrl ?? "#"}
-                target="_blank"
-                rel="noopener noreferrer"
+              <button
+                type="button"
+                onClick={() => setShowPreview(true)}
                 className="inline-flex items-center gap-1.5 text-xs text-blue-600 font-medium min-h-[44px] focus-ring"
               >
                 <ExternalLink className="h-4 w-4" /> View
-              </a>
+              </button>
               {canAttach && (
                 <button
                   type="button"
@@ -264,6 +265,15 @@ export function DocumentCard({
             <p className="text-xs text-red-700 break-words">{error}</p>
           </div>
         )}
+
+        <DocumentViewerModal
+          open={showPreview}
+          onClose={() => setShowPreview(false)}
+          url={docUrl}
+          title={docLabel(requiredDocType)}
+          docNumber={docNumber}
+          docDate={docDate}
+        />
       </CardContent>
     </Card>
   );
