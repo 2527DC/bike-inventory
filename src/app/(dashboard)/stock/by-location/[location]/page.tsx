@@ -32,6 +32,7 @@ interface LocData {
   totalUnits: number;
   totalValue: number;
   productCount: number;
+  brands?: Array<{ id: string; name: string }> | null;
   products: LocProduct[];
 }
 
@@ -70,12 +71,15 @@ export default function StockByLocationDetailPage({ params }: { params: Promise<
     else router.push(kind === "store" ? "/stock/by-store" : "/stock/by-bin");
   };
 
-  // Brands present in this location, with per-brand unit totals (for the dropdown).
+  // All system brands + brands present in this location, with per-brand unit totals (for the dropdown).
   const brands = useMemo(() => {
     const map = new Map<string, { key: string; name: string; qty: number }>();
+    for (const b of data?.brands || []) {
+      map.set(b.id, { key: b.id, name: b.name, qty: 0 });
+    }
     for (const p of data?.products || []) {
       const key = p.brandId || "UNBRANDED";
-      const cur = map.get(key) || { key, name: p.brandName, qty: 0 };
+      const cur = map.get(key) || { key, name: p.brandName || "Unbranded", qty: 0 };
       cur.qty += p.qty;
       map.set(key, cur);
     }
