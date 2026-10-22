@@ -3,8 +3,29 @@
 Status: pending — **Part A built 24 Sep 2026** on `feat/zoho-vendor-sync` (from `origin/main` @ `045c89d`);
 `tsc`, `eslint`, `npm run build` pass; the preview logic was run read-only against the test
 database's Zoho: **100 Zoho vendors — 2 already here, 98 new, 0 clashes, 97 with a GSTIN.**
-Not yet clicked through in the browser. **Part B not built** — blocked on
-`prisma/data/vendor-and-issues-backup.sql`, which is not on this machine.
+Not yet clicked through in the browser. **Part B built 25 Sep 2026** —
+`scripts/db/import-vendor-issues.mjs`, reading the old app's data-only pg_dump `bch-local.sql`
+(`--file=` for another) instead of the absent `prisma/data/vendor-and-issues-backup.sql`.
+Deviations from §3 Part B: Prisma instead of psql (psql is not installed on this machine);
+rows are inserted in the target's own column order after a width check, not via temp tables;
+the original author is **kept** when that user exists in the target (fallback: oldest active
+system-role user); a GSTIN shared by several current vendors falls through to exact name.
+Dry run against the Supabase database in `.env` (98 Zoho vendors): **184 issues + 291 notes —
+173 by GSTIN, 10 by name, 1 unattached (ISS-202607-0018, a CLIENT issue with no vendor)**;
+not yet run for real. Rollback without pg_dump (not installed here): before writing, the
+script saves `backups/vendor-issues-rollback-<time>.sql` (delete the inserted issues, notes
+cascade; restore/delete the ISS counters), run with `--rollback=<file>`. Full cycle — import,
+re-run skips all 184, rollback back to 0 — tested on a throwaway Postgres 17 container with
+the 98 Supabase vendors copied in. Issues imported to Supabase by the owner 25 Sep 2026
+(`backups/vendor-issues-rollback-20260925-131143.sql`).
+
+**Addition, 25 Sep 2026 (owner: "similerly i need an opening balange to be inserted to the
+respected vendor"):** the same script copies `Vendor.openingBalance` from the backup onto the
+mapped current vendor, only where it is still 0 (never overwrites; re-run is a no-op), in the
+same transaction, with a restore-to-0 line per vendor in the rollback file. 12 vendors,
+₹91,59,382.23. ALPHA INDIA and ALPHAVECTOR both carry ₹2,44,356 in the backup — **copied to
+both, owner's decision**. Tested on the throwaway container (import, re-run, rollback, and a
+hand-set balance left untouched); dry run on Supabase matches.
 Branch: `feat/zoho-vendor-sync`.
 
 Every `file:line` below was read from disk on 24 Sep 2026.
