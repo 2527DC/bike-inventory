@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { SearchableSelect, type SearchableSelectOption } from "@/components/ui/searchable-select";
 import { TransactionItem } from "@/components/transaction-item";
 import { usePermissions } from "@/lib/use-permissions";
+import { formatDateTime } from "@/lib/utils";
 
 const log = createLogger("stock:detail");
 
@@ -108,10 +109,6 @@ interface ProductDetail {
 
 function fmt(val: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(val);
-}
-
-function formatTime(dateStr: string) {
-  return new Date(dateStr).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
 }
 
 function parseTransactionLabel(notes: string | null, type: string): string {
@@ -671,7 +668,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ id: st
                 productName={product.name}
                 sku={product.sku}
                 quantity={t.quantity}
-                time={formatTime(t.createdAt)}
+                time={formatDateTime(t.createdAt)}
                 reference={t.referenceNo || undefined}
                 label={parseTransactionLabel(t.notes, t.type)}
               />
