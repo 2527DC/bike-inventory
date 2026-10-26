@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { ArrowLeft, Power, Tag, Plus, Pencil, Check, X, GitMerge, Clock } from "lucide-react";
+import { ArrowLeft, Power, Tag, Plus, Pencil, Check, X, GitMerge, Clock, Search } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -72,6 +72,7 @@ export default function BrandsPage() {
   const [outcome, setOutcome] = useState<ToggleOutcome | null>(null);
   // Default Active: the inactive rows are the retired ones, shown on request.
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ACTIVE");
+  const [search, setSearch] = useState("");
 
   // Inline edit — one row at a time. `draft` holds only what is being changed.
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -268,10 +269,13 @@ export default function BrandsPage() {
 
   const activeCount = brands.filter((b) => b.isActive).length;
   const inactiveCount = brands.length - activeCount;
-  const visible =
-    statusFilter === "ALL" ? brands
-    : statusFilter === "ACTIVE" ? brands.filter((b) => b.isActive)
-    : brands.filter((b) => !b.isActive);
+  const query = search.trim().toLowerCase();
+  const visible = brands.filter((b) => {
+    if (statusFilter === "ACTIVE" && !b.isActive) return false;
+    if (statusFilter === "INACTIVE" && b.isActive) return false;
+    if (query && !b.name.toLowerCase().includes(query)) return false;
+    return true;
+  });
   // Merging INTO a retired brand would hide the moved products; only live brands are targets.
   const mergeTargets = brands.filter((b) => b.isActive);
 
@@ -284,6 +288,7 @@ export default function BrandsPage() {
         <div className="flex-1">
           <h1 className="text-lg font-bold text-slate-900">Brands</h1>
           <p className="text-xs text-slate-500 tabular-nums">
+            {query ? `${visible.length} found · ` : ""}
             {activeCount} active{inactiveCount > 0 ? ` · ${inactiveCount} inactive` : ""} · lead time is days to deliver
           </p>
         </div>
@@ -319,6 +324,29 @@ export default function BrandsPage() {
         </Card>
       )}
 
+      {/* Search by name */}
+      <div className="relative mb-3">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+        <Input
+          type="text"
+          placeholder="Search brands by name..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="pl-9 pr-9 min-h-[40px]"
+          aria-label="Search brands by name"
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch("")}
+            aria-label="Clear search"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+
       {/* Active / Inactive / All — the same pill row /vendors uses for its sort. */}
       <div className="flex gap-1.5 mb-3 pb-1" role="group" aria-label="Show brands">
         {STATUS_CHIPS.map((s) => (
@@ -345,10 +373,30 @@ export default function BrandsPage() {
         </div>
       ) : visible.length === 0 ? (
         <div className="text-center py-12">
-          <Tag className="h-12 w-12 text-slate-300 mx-auto mb-3" />
-          <p className="text-sm text-slate-500">
-            No {statusFilter === "INACTIVE" ? "inactive" : "active"} brands
-          </p>
+          {query ? (
+            <>
+              <Search className="h-12 w-12 text-slate-300 mx-auto mb-3" />
+              <p className="text-sm font-medium text-slate-600">
+                No brands matching &ldquo;{search.trim()}&rdquo;
+              </p>
+              <p className="text-xs text-slate-400 mt-1">Check spelling or try a different status filter</p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3 text-xs"
+                onClick={() => setSearch("")}
+              >
+                Clear search
+              </Button>
+            </>
+          ) : (
+            <>
+              <Tag className="h-12 w-12 text-slate-300 mx-auto mb-3" />
+              <p className="text-sm text-slate-500">
+                No {statusFilter === "INACTIVE" ? "inactive" : "active"} brands
+              </p>
+            </>
+          )}
         </div>
       ) : (
         <div className="space-y-1.5">
