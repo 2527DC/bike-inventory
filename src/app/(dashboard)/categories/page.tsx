@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, Fragment } from "react";
 import Link from "next/link";
-import { ArrowLeft, Tag, Plus, Check, X, Package } from "lucide-react";
+import { ArrowLeft, Tag, Plus, Check, X, Package, Search } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -72,6 +72,7 @@ export default function CategoriesPage() {
   const [outcome, setOutcome] = useState<ToggleOutcome | null>(null);
   // Default Active: the inactive rows are the retired ones, shown on request.
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ACTIVE");
+  const [search, setSearch] = useState("");
 
   // Inline edit — one row at a time. `draft` holds only what is being changed.
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -107,6 +108,12 @@ export default function CategoriesPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (search.trim()) {
+      setCollapsed(new Set());
+    }
+  }, [search]);
 
   function startEdit(c: CategoryItem) {
     setEditingId(c.id);
@@ -282,10 +289,29 @@ export default function CategoriesPage() {
 
   const activeCount = categories.filter((c) => c.isActive).length;
   const inactiveCount = categories.length - activeCount;
-  const visible =
+  const query = search.trim().toLowerCase();
+  const statusFiltered =
     statusFilter === "ALL" ? categories
     : statusFilter === "ACTIVE" ? categories.filter((c) => c.isActive)
     : categories.filter((c) => !c.isActive);
+
+  // When searching, find direct matches and include their ancestors so hierarchy context is preserved
+  const categoryById = new Map(categories.map((c) => [c.id, c]));
+  let visible = statusFiltered;
+  let matchCount = 0;
+  if (query) {
+    const matching = statusFiltered.filter((c) => c.name.toLowerCase().includes(query));
+    matchCount = matching.length;
+    const keepIds = new Set<string>();
+    for (const m of matching) {
+      let curr: CategoryItem | undefined = m;
+      while (curr) {
+        keepIds.add(curr.id);
+        curr = curr.parentId ? categoryById.get(curr.parentId) : undefined;
+      }
+    }
+    visible = statusFiltered.filter((c) => keepIds.has(c.id));
+  }
   // Merging INTO a retired category would hide the moved products; only live ones are targets.
   const mergeTargets = categories.filter((c) => c.isActive);
   // A new or moved category goes under a live parent — the API refuses to activate a child
@@ -365,6 +391,7 @@ export default function CategoriesPage() {
         <div className="flex-1">
           <h1 className="text-lg font-bold text-slate-900">Categories</h1>
           <p className="text-xs text-slate-500 tabular-nums">
+            {query ? `${matchCount} found · ` : ""}
             {activeCount} active{inactiveCount > 0 ? ` · ${inactiveCount} inactive` : ""} · {totalProducts} product
             {totalProducts === 1 ? "" : "s"} filed
           </p>
@@ -421,6 +448,29 @@ export default function CategoriesPage() {
         </Card>
       )}
 
+      {/* Search by name */}
+      <div className="relative mb-3">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+        <Input
+          type="text"
+          placeholder="Search categories by name..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="pl-9 pr-9 min-h-[40px]"
+          aria-label="Search categories by name"
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch("")}
+            aria-label="Clear search"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+
       {/* Active / Inactive / All — the same pill row /vendors uses for its sort. */}
       <div className="flex gap-1.5 mb-3 pb-1" role="group" aria-label="Show categories">
         {STATUS_CHIPS.map((s) => (
@@ -456,10 +506,30 @@ export default function CategoriesPage() {
         </div>
       ) : visible.length === 0 ? (
         <div className="text-center py-12">
-          <Tag className="h-12 w-12 text-slate-300 mx-auto mb-3" />
-          <p className="text-sm text-slate-500">
-            No {statusFilter === "INACTIVE" ? "inactive" : "active"} categories
-          </p>
+          {query ? (
+            <>
+              <Search className="h-12 w-12 text-slate-300 mx-auto mb-3" />
+              <p className="text-sm font-medium text-slate-600">
+                No categories matching &ldquo;{search.trim()}&rdquo;
+              </p>
+              <p className="text-xs text-slate-400 mt-1">Check spelling or try a different status filter</p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3 text-xs"
+                onClick={() => setSearch("")}
+              >
+                Clear search
+              </Button>
+            </>
+          ) : (
+            <>
+              <Tag className="h-12 w-12 text-slate-300 mx-auto mb-3" />
+              <p className="text-sm text-slate-500">
+                No {statusFilter === "INACTIVE" ? "inactive" : "active"} categories
+              </p>
+            </>
+          )}
         </div>
       ) : (
         <div className="space-y-1.5">{renderNodes(tree)}</div>
