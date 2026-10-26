@@ -44,7 +44,7 @@ export function TransactionItem({
           {sku} {reference ? `| ${reference}` : ""}
         </p>
       </div>
-      <div className="text-right shrink-0">
+      <div className="text-right shrink-0 max-w-[50%]">
         <p
           className={cn("text-base font-bold", {
             "text-green-600": direction === "in",
@@ -54,7 +54,7 @@ export function TransactionItem({
           {direction === "in" ? "+" : "-"}
           {quantity}
         </p>
-        <p className="text-sm text-slate-400">{time}</p>
+        <p className="text-xs text-slate-400 tabular-nums leading-tight">{time}</p>
       </div>
     </div>
   );

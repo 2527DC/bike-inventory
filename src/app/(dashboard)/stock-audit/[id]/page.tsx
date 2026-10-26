@@ -16,7 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ActionConfirmation } from "@/components/ui/action-confirmation";
 import { SkeletonList } from "@/components/ui/skeleton";
-import { fuzzyMatch } from "@/lib/utils";
+import { fuzzyMatch, formatDateTime } from "@/lib/utils";
 import { apiTry } from "@/lib/api-client";
 import { createLogger } from "@/lib/logger";
 
@@ -50,6 +50,8 @@ interface StockCountSummary {
   dueDate: string;
   completedAt: string | null;
   approvedAt: string | null;
+  createdAt?: string;
+  updatedAt?: string;
   approvedBy: { name: string } | null;
   rejectionReason: string | null;
   notes: string | null;
@@ -593,14 +595,38 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
           <ArrowLeft className="h-5 w-5 text-slate-600" />
         </Link>
         <div className="flex-1 min-w-0">
-          <h1 className="text-lg font-bold text-slate-900 truncate">{summary.title}</h1>
-          <p className="text-xs text-slate-500 tabular-nums truncate">
-            {summary.countNo && <span className="font-mono text-slate-400">{summary.countNo} | </span>}
-            {summary.assignedTo.name} | Due: {new Date(summary.dueDate).toLocaleDateString("en-IN")}
-            {/* WHERE to count. An assigned audit used to say only who and when. */}
-            {summary.scopeLabel && ` | ${summary.scopeLabel}`}
-            {summary.bin && ` | Bin ${summary.bin.code} (${summary.bin.name})${summary.bin.floor ? ` Fl ${summary.bin.floor}` : ""}${summary.bin.zone ? ` Zone ${summary.bin.zone}` : ""}`}
-          </p>
+          <h1 className="text-lg font-bold text-slate-900 leading-snug">{summary.title}</h1>
+          <div className="text-xs text-slate-500 tabular-nums space-y-0.5 mt-0.5">
+            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+              {summary.countNo && <span className="font-mono text-slate-400">{summary.countNo} ·</span>}
+              <span className="font-medium text-slate-700">{summary.assignedTo.name}</span>
+              {summary.completedAt ? (
+                <span className="text-emerald-700 font-medium">
+                  · Done: {formatDateTime(summary.completedAt)}
+                </span>
+              ) : summary.approvedAt ? (
+                <span className="text-emerald-700 font-medium">
+                  · Done: {formatDateTime(summary.approvedAt)}
+                </span>
+              ) : (
+                <span>
+                  · Due: {new Date(summary.dueDate).toLocaleDateString("en-IN")}
+                </span>
+              )}
+            </div>
+            {(summary.scopeLabel || summary.bin) && (
+              <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-x-1.5">
+                {summary.scopeLabel && <span>{summary.scopeLabel}</span>}
+                {summary.bin && (
+                  <span>
+                    · Bin {summary.bin.code} ({summary.bin.name})
+                    {summary.bin.floor ? ` Fl ${summary.bin.floor}` : ""}
+                    {summary.bin.zone ? ` Zone ${summary.bin.zone}` : ""}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
           {summary.bin?.directions && (
             <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 mt-1 inline-block">
               📍 Landmark & Directions: {summary.bin.directions}
@@ -716,7 +742,7 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
             <div>
               <p className="text-sm font-medium text-green-900">Approved</p>
               <p className="text-[11px] text-green-700 tabular-nums">
-                By {summary.approvedBy?.name} on {summary.approvedAt ? new Date(summary.approvedAt).toLocaleDateString("en-IN") : "—"}
+                By {summary.approvedBy?.name} on {summary.approvedAt ? formatDateTime(summary.approvedAt) : "—"}
               </p>
             </div>
           </CardContent>
@@ -933,6 +959,11 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                       </button>
                     )}
                   </div>
+                  {isCounted && item.countedAt && (
+                    <p className="text-[10px] text-slate-400 mt-1 tabular-nums">
+                      Counted: {formatDateTime(item.countedAt)}
+                    </p>
+                  )}
                 </div>
               );
             }
@@ -995,6 +1026,11 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                               ) : (
                                 <p className="flex-1 text-xs text-slate-600 tabular-nums">
                                   Total <span className="font-semibold text-slate-900">{displayVal}</span>
+                                  {item.countedAt && (
+                                    <span className="text-[11px] text-slate-400 ml-1.5 font-normal">
+                                      · {formatDateTime(item.countedAt)}
+                                    </span>
+                                  )}
                                 </p>
                               )}
                               {variance !== null && (
@@ -1009,18 +1045,25 @@ export default function StockAuditDetailPage({ params }: { params: Promise<{ id:
                       })()}
                     </div>
                   ) : item.countedQty !== null ? (
-                    <div className="flex items-center gap-2 mt-2 text-xs tabular-nums">
-                      <span className="text-slate-700">Counted <span className="font-semibold">{item.countedQty}</span></span>
-                      {!nonAssemblableBin && item.assembledQty !== null && item.unassembledQty !== null && (
-                        <span className="text-slate-500">({item.assembledQty} assembled · {item.unassembledQty} unassembled)</span>
+                    <div className="mt-2 text-xs tabular-nums space-y-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-slate-700">Counted <span className="font-semibold">{item.countedQty}</span></span>
+                        {!nonAssemblableBin && item.assembledQty !== null && item.unassembledQty !== null && (
+                          <span className="text-slate-500">({item.assembledQty} assembled · {item.unassembledQty} unassembled)</span>
+                        )}
+                        {item.variance === 0 ? (
+                          <span className="text-green-600">· matches</span>
+                        ) : item.variance !== null ? (
+                          <span className={`font-medium ${item.variance > 0 ? "text-green-600" : "text-red-600"}`}>
+                            · {item.variance > 0 ? "+" : ""}{item.variance} vs system
+                          </span>
+                        ) : null}
+                      </div>
+                      {item.countedAt && (
+                        <p className="text-[11px] text-slate-400">
+                          Counted on {formatDateTime(item.countedAt)}
+                        </p>
                       )}
-                      {item.variance === 0 ? (
-                        <span className="text-green-600">· matches</span>
-                      ) : item.variance !== null ? (
-                        <span className={`font-medium ${item.variance > 0 ? "text-green-600" : "text-red-600"}`}>
-                          · {item.variance > 0 ? "+" : ""}{item.variance} vs system
-                        </span>
-                      ) : null}
                     </div>
                   ) : null}
                 </CardContent>
