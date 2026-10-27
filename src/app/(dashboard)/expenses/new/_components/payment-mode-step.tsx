@@ -9,7 +9,7 @@ interface PaymentModeStepProps {
   onNext: () => void;
 }
 
-/** Step 3 — Payment mode selection: UPI and Cash only. */
+/** Step 4 — Payment mode selection: UPI and Cash only. */
 export function PaymentModeStep({ value, onChange, onNext }: PaymentModeStepProps) {
   return (
     <div>

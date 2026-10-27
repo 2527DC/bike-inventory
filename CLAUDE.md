@@ -158,6 +158,25 @@ Anything that used to run on a schedule is now a button behind `requireFeature`:
 to trigger it, raise it rather than reintroducing a scheduler. See
 `docs/implementation/completed/cron-removal-plan.md` for what was removed and what was knowingly given up.
 
+## Branches and deployments
+
+Decided 12 Oct 2026. Two long-lived branches, and each has exactly one deployment:
+
+| Branch | Deploys to | When | Database |
+|---|---|---|---|
+| `test` | Vercel `testing-bch-ops` → `bike-inventory-delta.vercel.app` | automatically, on every push | the test Supabase project |
+| `main` | the VPS — production | **by hand only**: Actions ▸ Deploy to VPS ▸ Run workflow ▸ `main` | production |
+
+- Work flows **feature branch → `test` → `main`**. Branch off `test` and open the PR with
+  `gh pr create --base test` — the GitHub default branch is still `main`, so a bare
+  `gh pr create` targets the wrong one. `test` reaches `main` by a PR from `test` into `main`.
+- `test` may be pushed to directly (owner, 12 Oct 2026). `main` never — see AGENTS.md.
+- `vercel.json` `git.deploymentEnabled` builds `test` only; `main` and every other branch
+  build nothing on Vercel. Vercel's Production Branch is `test`.
+- `.github/workflows/deploy-vps.yml` fails its first step on any branch but `main`.
+- Vercel applies no migrations (`scripts/vercel-build.mjs`). A migration merged to `test`
+  must be applied to the test database by hand before it is exercised there.
+
 ## Database changes go through Prisma Migrate
 
 Decided 2 Sep 2026, the day before production. `prisma db push` was fine while the database

@@ -1,20 +1,20 @@
-// Shared shapes for the stepped expense entry flow (0909-expense-multi-entry-flow-plan, Part C).
+// Shared shapes for the stepped expense entry flow (plan 1210-expense-store-department-and-payer,
+// Part C).
 //
-// Everything here is client state. Nothing is written until the review screen's Submit sends
-// the whole batch to POST /api/expenses/batch in one call.
+// Everything here is client state. Nothing is written until the photo step's Submit sends this
+// ONE expense to POST /api/expenses, with the store picked in the top bar and who paid.
 import type { ExpenseCategory, PaymentMode } from "@/types";
+import type { ExpensePayerInput } from "@/lib/validations";
 
 export type { ExpenseCategory, PaymentMode };
 
-/** One completed expense in the batch. `key` is client-only; the server mints the real id. */
-export interface ExpenseRow {
-  key: string;
-  amount: number;
-  category: ExpenseCategory;
-  description: string;
-  paymentMode: PaymentMode;
-  /** The uploaded receipt photo, or null when none was attached. */
-  receiptUrl: string | null;
+/** Who paid, as the steps collect it. `userId` and `name` survive a switch between kinds. */
+export interface PayerDraft {
+  kind: ExpensePayerInput["kind"];
+  /** The staff member picked under "Staff member". */
+  userId: string | null;
+  /** The name typed under "Someone not on staff". */
+  name: string;
 }
 
 /** The expense being typed right now. `amount` stays text until the step validates it. */
@@ -22,6 +22,7 @@ export interface Draft {
   amount: string;
   category: ExpenseCategory | null;
   description: string;
+  payer: PayerDraft;
   paymentMode: PaymentMode;
   receiptUrl: string | null;
 }
@@ -30,14 +31,95 @@ export const EMPTY_DRAFT: Draft = {
   amount: "",
   category: null,
   description: "",
+  // "Me" is pre-selected (E3): most expenses are paid by the person recording them.
+  payer: { kind: "self", userId: null, name: "" },
   paymentMode: "UPI",
   receiptUrl: null,
 };
 
-export type Step = "amount" | "category" | "paymentMode" | "photo";
+export type Step = "amount" | "category" | "payer" | "paymentMode" | "photo";
 
-/** The per-expense steps: amount → category → paymentMode → photo. Description and review removed. */
-export const ENTRY_STEPS: readonly Step[] = ["amount", "category", "paymentMode", "photo"];
+/** The per-expense steps: amount → category → who paid → payment mode → photo. */
+export const ENTRY_STEPS: readonly Step[] = ["amount", "category", "payer", "paymentMode", "photo"];
+
+// ---- GET /api/expenses/options (src/app/api/expenses/options/route.ts) ----
+
+export interface StoreOption {
+  id: string;
+  code: string;
+  name: string;
+}
+
+export interface StaffOption {
+  id: string;
+  name: string;
+}
+
+export interface RecentPayer {
+  name: string;
+  count: number;
+}
+
+export interface ExpenseOptions {
+  /** The signed-in person; `storeId` is their assigned store, which the session does not carry. */
+  me: { id: string; name: string; storeId: string | null };
+  /** Active stores only. */
+  stores: StoreOption[];
+  /** Active staff. */
+  users: StaffOption[];
+  /** Typed outsider names from the last 180 days, most used first. */
+  recentPayers: RecentPayer[];
+}
+
+/**
+ * The store selected before anyone taps (E5): the only active store when there is one, else the
+ * person's own store when it is among the active ones, else none — the top bar then asks.
+ */
+export function defaultStoreId(options: ExpenseOptions): string | null {
+  if (options.stores.length === 1) return options.stores[0].id;
+  const own = options.me.storeId;
+  return own && options.stores.some((s) => s.id === own) ? own : null;
+}
+
+/**
+ * A typed name as the server stores it: trimmed, inner runs of whitespace made one space.
+ * Mirrors `normalisePayerName` in src/lib/expenses/assignment.ts, which cannot be imported here —
+ * it is server code.
+ */
+export function normaliseName(name: string): string {
+  return name.trim().replace(/\s+/g, " ");
+}
+
+/** The comparison key for two spellings of one name: "Iqbal bhai " and "Iqbal Bhai" match. */
+export function nameKey(name: string): string {
+  return normaliseName(name).toLowerCase();
+}
+
+/** The `payer` body POST /api/expenses expects, or null while the choice is incomplete. */
+export function payerBody(payer: PayerDraft): ExpensePayerInput | null {
+  if (payer.kind === "self") return { kind: "self" };
+  if (payer.kind === "user") return payer.userId ? { kind: "user", userId: payer.userId } : null;
+  const name = normaliseName(payer.name);
+  return name.length >= 2 ? { kind: "name", name } : null;
+}
+
+/** The sentence under a disabled Submit, naming what is still missing; null when nothing is. */
+export function missingBeforeSubmit(opts: {
+  storeCount: number;
+  storeId: string | null;
+  payerReady: boolean;
+}): string | null {
+  const payerStep = ENTRY_STEPS.indexOf("payer") + 1;
+  if (opts.storeCount === 0) {
+    return "There is no active store to charge this to. Add one under Settings › Store management.";
+  }
+  if (!opts.storeId && !opts.payerReady) {
+    return `Pick the store at the top and who paid (step ${payerStep}) to submit.`;
+  }
+  if (!opts.storeId) return "Pick the store at the top to submit.";
+  if (!opts.payerReady) return `Choose who paid (step ${payerStep}) to submit.`;
+  return null;
+}
 
 // A Record rather than an array so that adding a value to the Prisma enum (and to the type
 // in src/types) fails compilation here until it gets a label — a category with no card would
@@ -93,37 +175,4 @@ export function parseAmount(raw: string): number | null {
 
 export function formatCurrency(amount: number): string {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(amount);
-}
-
-export function draftFromRow(row: ExpenseRow): Draft {
-  return {
-    amount: String(row.amount),
-    category: row.category,
-    description: row.description,
-    paymentMode: row.paymentMode,
-    receiptUrl: row.receiptUrl,
-  };
-}
-
-/** A completed row from the draft, or null when a required step is still invalid. */
-export function rowFromDraft(draft: Draft, key: string): ExpenseRow | null {
-  const amount = parseAmount(draft.amount);
-  if (amount === null || !draft.category) return null;
-  const description = draft.description.trim() || CATEGORY_LABELS[draft.category].label;
-  return {
-    key,
-    amount,
-    category: draft.category,
-    description,
-    paymentMode: draft.paymentMode,
-    receiptUrl: draft.receiptUrl,
-  };
-}
-
-export function newRowKey(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-export function batchTotal(rows: ExpenseRow[]): number {
-  return Math.round(rows.reduce((sum, r) => sum + r.amount, 0) * 100) / 100;
 }

@@ -295,6 +295,9 @@ model Store {
   // resolved to on TransferOrder. Restrict: a store with transfer history is not deletable.
   transfersFrom TransferOrder[] @relation("TransferOrderFromStore")
   transfersTo   TransferOrder[] @relation("TransferOrderToStore")
+
+  // Expenses paid from this store's money. Restrict: a store with expense history is not deletable.
+  expenses Expense[] @relation("ExpenseStore")
 }
 
 /// What kind of place a warehouse is. FLOOR is the shop — where a customer sees the bike;
@@ -408,6 +411,7 @@ model User {
   sentPOs                  PurchaseOrder[]   @relation("POSentBy")
   recordedPayments         VendorPayment[]   @relation("PaymentRecordedBy")
   recordedExpenses         Expense[]         @relation("ExpenseRecordedBy")
+  paidExpenses             Expense[]         @relation("ExpensePaidBy")
   recordedCustomerPayments CustomerPayment[] @relation("CustomerPaymentRecordedBy")
   createdIssues            VendorIssue[]     @relation("IssueCreatedBy")
   issueNotes               VendorIssueNote[] @relation("IssueNoteAuthor")
@@ -1371,7 +1375,18 @@ model Expense {
   amount       Float
   category     ExpenseCategory
   description  String
+  // The payer as it should READ: the staff user's name at entry, or a typed outsider's name
+  // (a Porter driver). Always filled, so every existing reader keeps working.
   paidBy       String
+  // Set when the payer is a staff user (plan 1210-expense-store, D6). Null = a typed outsider.
+  // SetNull: a deleted user leaves `paidBy` as the record of who it was.
+  paidById     String?
+  paidByUser   User?           @relation("ExpensePaidBy", fields: [paidById], references: [id], onDelete: SetNull)
+  // The store whose money paid it (D1, E2). Required by the API for every new expense; nullable
+  // in the database for one release, because the old code still saves without it between
+  // `migrate deploy` and the new code going live (CLAUDE.md migration rule 7).
+  storeId      String?
+  store        Store?          @relation("ExpenseStore", fields: [storeId], references: [id], onDelete: Restrict)
   paymentMode  PaymentMode
   referenceNo  String?
   receiptUrl   String?
@@ -1384,6 +1399,8 @@ model Expense {
   @@index([date])
   @@index([category])
   @@index([recordedById])
+  @@index([storeId])
+  @@index([paidById])
 }
 
 // ─── BANK STATEMENT RECONCILIATION ───

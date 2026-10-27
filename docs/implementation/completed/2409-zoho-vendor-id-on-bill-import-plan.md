@@ -1,8 +1,6 @@
 # The bill import saves Zoho's vendor id, and resolves the vendor by that id instead of by name
 
-Status: pending — built 24 Sep 2026 on `feat/zoho-vendor-id`; Q1–Q4 answered. Migration
-`20260924034908_vendor_zoho_vendor_id` applied to the test database; verified there by a real
-fetch + approve (4 bills → 2 vendors, each with its Zoho id and GSTIN). Not yet merged or on production.
+Status: completed — 13 Oct 2026, merged 24 Sep in PR #62; migration `20260924034908_vendor_zoho_vendor_id` verified on test by a real fetch and approve.
 Branch: `feat/zoho-vendor-id`.
 
 Every `file:line` below was read from disk on 24 Sep 2026.

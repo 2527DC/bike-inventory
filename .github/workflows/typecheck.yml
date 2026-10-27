@@ -1,6 +1,6 @@
 name: CI
 
-# Pre-merge gate. Runs when a pull request targeting main is opened, and again on every
+# Pre-merge gate. Runs when a pull request targeting main or test is opened, and again on every
 # push to that pull request, so a failure is visible before the code lands.
 #
 # ┌─────────────┐      needs      ┌─────────┐

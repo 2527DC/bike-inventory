@@ -87,6 +87,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
             analyticsDevices: true,
             deliveries: true,
             stockCounts: true,
+            expenses: true,
           },
         },
       },
@@ -102,6 +103,8 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     // sentence this route exists to produce.
     if (store._count.deliveries) blockers.push(`${store._count.deliveries} delivery/deliveries`);
     if (store._count.stockCounts) blockers.push(`${store._count.stockCounts} stock audit(s)`);
+    // Expense.storeId is Restrict too (plan 1210-expense-store, A3) — same reason as above.
+    if (store._count.expenses) blockers.push(`${store._count.expenses} expense(s)`);
     // Users are NOT a blocker: User.storeId is SetNull, so deleting a store unassigns staff
     // rather than destroying them. Mentioned in the message so the effect is not a surprise.
 

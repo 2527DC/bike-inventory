@@ -317,6 +317,10 @@ export interface Expense {
   category: ExpenseCategory;
   description: string;
   paidBy: string;
+  /** Set when the payer is a staff user; absent for a typed outsider. */
+  paidById?: string;
+  /** The store whose money paid it. Required for new expenses; absent on rows saved before it existed. */
+  storeId?: string;
   paymentMode: PaymentMode;
   referenceNo?: string;
   receiptUrl?: string;

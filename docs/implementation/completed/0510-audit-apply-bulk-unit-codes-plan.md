@@ -1,6 +1,6 @@
 # "Set system stock to the counts" stops timing out — unit codes are made in one batch, not one at a time
 
-Status: in-progress — approved 5 Oct 2026 ("ok implemnt the implementation"); built and verified on a local restore of production (§6); committed on its branch 5 Oct, no PR yet. Test-database pass (§4.1–4.2) and the browser pass are the owner's.
+Status: completed — 13 Oct 2026, merged 5 Oct in PR #74. The test-database pass (§4.1–4.2) and the browser pass are the owner's.
 Branch: `fix/0510-audit-apply-timeout`, created from `origin/main` at `99eebe2`.
 
 ---

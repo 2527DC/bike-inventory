@@ -1,38 +1,43 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
+import { ZodError } from "zod";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
-import { expenseSchema } from "@/lib/validations";
+import { expenseUpdateSchema } from "@/lib/validations";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { tryGetStorage } from "@/lib/storage";
 import { createLogger } from "@/lib/logger";
+import { logActivity } from "@/lib/activity-log";
+import { EXPENSE_INCLUDE } from "@/lib/expenses/filters";
 
 const log = createLogger("expenses:delete");
+const editLog = createLogger("expenses:edit");
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     await requireFeature("expenses", "view");
     const { id } = await params;
-    const expense = await prisma.expense.findUnique({
-      where: { id },
-      include: { recordedBy: { select: { name: true } } },
-    });
+    const expense = await prisma.expense.findUnique({ where: { id }, include: EXPENSE_INCLUDE });
 
     if (!expense) return errorResponse("Expense not found", 404);
     return successResponse(expense);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed to fetch expense", 500);
+    editLog.error("fetch failed", { reason: error instanceof Error ? error.message : String(error) });
+    return errorResponse("Failed to fetch expense", 500);
   }
 }
 
+// PUT /api/expenses/[id] — no screen calls this (plan 1210-expense-store, E8: a wrong store or
+// payer is fixed by deleting and re-entering). It does not accept a payer or a store: a
+// free-text `paidBy` would desynchronise `paidById`.
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     await requireFeature("expenses", "edit");
     const { id } = await params;
     const body = await req.json();
-    const data = expenseSchema.partial().parse(body);
+    const data = expenseUpdateSchema.parse(body);
 
     const expense = await prisma.expense.update({
       where: { id },
@@ -41,46 +46,105 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         ...(data.amount !== undefined && { amount: data.amount }),
         ...(data.category && { category: data.category }),
         ...(data.description && { description: data.description }),
-        ...(data.paidBy && { paidBy: data.paidBy }),
         ...(data.paymentMode && { paymentMode: data.paymentMode }),
         ...(data.referenceNo !== undefined && { referenceNo: data.referenceNo }),
         ...(data.notes !== undefined && { notes: data.notes }),
       },
-      include: { recordedBy: { select: { name: true } } },
+      include: EXPENSE_INCLUDE,
     });
 
+    editLog.info("expense updated", { expenseId: id, fields: Object.keys(data) });
     return successResponse(expense);
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status);
-    return errorResponse(error instanceof Error ? error.message : "Failed to update expense", 400);
+    if (error instanceof ZodError) {
+      const message = error.issues[0]?.message ?? "Invalid expense details";
+      editLog.warn("update failed validation", { message });
+      return errorResponse(message, 400);
+    }
+    editLog.error("update failed", { reason: error instanceof Error ? error.message : String(error) });
+    return errorResponse("Failed to update expense", 400);
   }
 }
 
+/** "Transport ₹1,200 12 Oct 2026" — the human reference the activity feed shows. */
+function expenseRef(e: { category: string; amount: number; date: Date }): string {
+  const category = e.category
+    .toLowerCase()
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+  const amount = `₹${e.amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+  const date = e.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" });
+  return `${category} ${amount} ${date}`;
+}
+
+// DELETE /api/expenses/[id] — a hard delete (owner, 12 Oct 2026, E9), recorded in the activity
+// log. One transaction: any bank statement line this expense was created from goes back to
+// "to review" (otherwise it stays marked EXPENSE, pointing at a row that no longer exists —
+// L10), the row is deleted, and the log entry is written. Then the receipt photo is removed.
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    await requireFeature("expenses", "delete");
+    const user = await requireFeature("expenses", "delete");
     const { id } = await params;
 
-    const existing = await prisma.expense.findUnique({ where: { id }, select: { receiptUrl: true } });
+    const existing = await prisma.expense.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        category: true,
+        amount: true,
+        date: true,
+        paidBy: true,
+        receiptUrl: true,
+        store: { select: { name: true } },
+        recordedBy: { select: { name: true } },
+      },
+    });
     if (!existing) return errorResponse("Expense not found", 404);
 
-    // Row first, then the object (plan Q6b). A row that outlives its photo is a broken link;
-    // a photo that outlives its row is an orphan, which is the lesser fault — and both
+    // Row first, then the object (plan 0909 Q6b). A row that outlives its photo is a broken
+    // link; a photo that outlives its row is an orphan, which is the lesser fault — and both
     // providers treat deleting an absent object as success, so a retry is safe.
-    await prisma.expense.delete({ where: { id } });
+    const bankLinesReopened = await prisma.$transaction(async (tx) => {
+      const reopened = await tx.bankTransaction.updateMany({
+        where: { confirmedExpenseId: id },
+        data: { matchStatus: "UNMATCHED", confirmedExpenseId: null, processedAt: null },
+      });
+      await tx.expense.delete({ where: { id } });
+      await logActivity(tx, {
+        module: "expenses",
+        action: "deleted",
+        entityType: "Expense",
+        entityId: id,
+        entityRef: expenseRef(existing),
+        details: [
+          existing.store?.name ?? "No store",
+          `paid by ${existing.paidBy}`,
+          `recorded by ${existing.recordedBy.name}`,
+          reopened.count ? `${reopened.count} bank line(s) back to review` : null,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        userId: user.id,
+        userName: user.name,
+      });
+      return reopened.count;
+    });
+
     const hadReceipt = Boolean(existing.receiptUrl);
-    log.info("row deleted", { expenseId: id, hadReceipt });
+    log.info("row deleted", { expenseId: id, hadReceipt, bankLinesReopened, deletedById: user.id });
 
     if (existing.receiptUrl) await removeReceipt(id, existing.receiptUrl);
 
-    return successResponse({ deleted: true });
+    return successResponse({ deleted: true, bankLinesReopened });
   } catch (error) {
     if (error instanceof AuthError) {
       log.warn("delete refused", { status: error.status });
       return errorResponse(error.message, error.status);
     }
     log.error("delete failed", { reason: error instanceof Error ? error.message : String(error) });
-    return errorResponse(error instanceof Error ? error.message : "Failed to delete expense", 400);
+    return errorResponse("Failed to delete expense", 400);
   }
 }
 

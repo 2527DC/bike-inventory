@@ -1,101 +1,157 @@
 "use client";
 
-import { useState, useEffect } from "react";
+// Expense report — "how much did <person> spend at <store> in <period>" (plan
+// 1210-expense-store-department-and-payer, R4, Part E2). Group by who paid, store or category;
+// tapping a row filters by it and moves on to the next grouping, so the owner's question
+// (Iqbal Bhai, at BCH, this month) is two taps. "View these expenses" opens /expenses with the
+// same filters, and the two totals agree because both are built by src/lib/expenses/filters.ts.
+//
+// Loads when the filters change and when someone taps Retry. No polling.
+
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { DateFilter, type DateRangeKey } from "@/components/date-filter";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { SkeletonList } from "@/components/ui/skeleton";
+import { apiTry } from "@/lib/api-client";
+import { createLogger } from "@/lib/logger";
+import { usePermissions } from "@/lib/use-permissions";
+import { FilterBar, categoryLabel } from "./_components/report-filters";
+import { EmptyState, GroupByPills, GroupList, TotalCard } from "./_components/summary-results";
+import type { ExpenseSummary, GroupBy, ReportFilters, SummaryGroup } from "./_components/types";
+import { apiQuery, drillInto, listHref, readFilters, reportSearch, windowOf } from "./_components/url-state";
 
-interface ExpenseSummaryData {
-  total: number;
-  dailyAvg: number;
-  totalCount: number;
-  categories: Array<{ category: string; amount: number; count: number; percentage: number }>;
-}
+const log = createLogger("reports:expense-summary");
 
-function fmt(amount: number) {
-  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
-}
-
-const CATEGORY_COLORS: Record<string, string> = {
-  DELIVERY: "border-l-blue-500 bg-blue-50/30",
-  TRANSPORT: "border-l-purple-500 bg-purple-50/30",
-  SHOP_MAINTENANCE: "border-l-orange-500 bg-orange-50/30",
-  UTILITIES: "border-l-cyan-500 bg-cyan-50/30",
-  SALARY_ADVANCE: "border-l-pink-500 bg-pink-50/30",
-  FOOD_TEA: "border-l-amber-500 bg-amber-50/30",
-  STATIONERY: "border-l-indigo-500 bg-indigo-50/30",
-  MISCELLANEOUS: "border-l-slate-500 bg-slate-50/30",
-};
-
+/**
+ * `useSearchParams` in a Client Component must sit under a Suspense boundary, or the
+ * production build fails prerendering the page (node_modules/next/dist/docs/01-app/
+ * 03-api-reference/04-functions/use-search-params.md → Prerendering).
+ */
 export default function ExpenseSummaryPage() {
-  const [data, setData] = useState<ExpenseSummaryData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0];
-  const today = new Date().toISOString().split("T")[0];
-  const [dateFrom, setDateFrom] = useState(thirtyDaysAgo);
-  const [dateTo, setDateTo] = useState(today);
+  return (
+    <Suspense fallback={<SkeletonList count={5} type="card" />}>
+      <ExpenseSummaryScreen />
+    </Suspense>
+  );
+}
+
+function ExpenseSummaryScreen() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const { canView } = usePermissions();
+
+  // The URL is the state (see _components/url-state.ts).
+  const filters = readFilters(new URLSearchParams(searchParams.toString()));
+  const query = apiQuery(filters);
+
+  const [reloadKey, setReloadKey] = useState(0);
+  const requestKey = `${query}|${reloadKey}`;
+  // The last successful answer is kept while the next one loads, so the pickers keep their
+  // options; `loading` is derived from which request the latest outcome belongs to.
+  const [data, setData] = useState<ExpenseSummary | null>(null);
+  const [outcome, setOutcome] = useState<{ key: string; error: string | null } | null>(null);
+  const loading = outcome?.key !== requestKey;
+  const error = loading ? null : outcome?.error ?? null;
+
+  // Names for store/payer keys picked from a group row, for the chip once that grouping is gone.
+  const [picked, setPicked] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    setLoading(true);
-    fetch(`/api/reports/expense-summary?dateFrom=${dateFrom}&dateTo=${dateTo}`)
-      .then((r) => r.json())
-      .then((res) => { if (res.success) setData(res.data); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [dateFrom, dateTo]);
+    let cancelled = false;
+    // apiTry, never fetch().json(): an expired session answers with the login page as HTML and
+    // status 200, which used to surface here as "No expense data" (L3).
+    apiTry<ExpenseSummary>(`/api/reports/expense-summary?${query}`).then((res) => {
+      if (cancelled) return;
+      if (res.isAuth) {
+        log.warn("session expired, sending to login", { status: res.status });
+        const back = `${window.location.pathname}${window.location.search}`;
+        router.push(`/login?callbackUrl=${encodeURIComponent(back)}`);
+        return;
+      }
+      if (res.error || !res.data) {
+        log.error("summary load failed", { status: res.status, message: res.error, isTimeout: res.isTimeout });
+        setOutcome({ key: requestKey, error: res.error || "Could not load the expense summary." });
+        return;
+      }
+      setData(res.data);
+      setOutcome({ key: requestKey, error: null });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [query, requestKey, router]);
+
+  const update = (patch: Partial<ReportFilters>) =>
+    router.replace(`${pathname}${reportSearch({ ...filters, ...patch })}`, { scroll: false });
+
+  const onDateChange = (key: DateRangeKey, from?: string, to?: string) => {
+    if (key === "custom" && !(from && to)) {
+      // The Custom chip only opens the date inputs; keep showing the current window until Apply.
+      const w = windowOf(filters);
+      update({ range: "custom", dateFrom: w?.from ?? null, dateTo: w?.to ?? null });
+      return;
+    }
+    update({ range: key, dateFrom: key === "custom" ? from! : null, dateTo: key === "custom" ? to! : null });
+  };
+
+  const onPick = (g: SummaryGroup) => {
+    setPicked((p) => ({ ...p, [`${filters.groupBy}|${g.key}`]: g.label }));
+    update(drillInto(filters, g.key));
+  };
+
+  const labelFor = (dim: GroupBy, key: string): string => {
+    if (dim === "category") return categoryLabel(key);
+    if (dim === "store" && key === "none") return "No store";
+    const fromOptions =
+      dim === "store"
+        ? data?.options.stores.find((s) => s.id === key)?.name
+        : data?.options.payers.find((p) => p.key === key)?.label;
+    const fromGroups = data?.groupBy === dim ? data.groups.find((g) => g.key === key)?.label : undefined;
+    return (
+      fromOptions ??
+      fromGroups ??
+      picked[`${dim}|${key}`] ??
+      (dim === "store" ? "Selected store" : key.startsWith("name:") ? key.slice(5) : "Selected person")
+    );
+  };
+
+  const anyFilter = Boolean(filters.storeId || filters.payer || filters.category);
+  const shown = !loading && !error ? data : null;
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/reports" aria-label="Back" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring"><ArrowLeft className="h-5 w-5 text-slate-600" /></Link>
+      <div className="mb-3 flex items-center gap-3">
+        <Link href="/reports" aria-label="Back to reports" className="-ml-2 rounded-lg p-2 hover:bg-slate-100 focus-ring">
+          <ArrowLeft className="h-5 w-5 text-slate-600" />
+        </Link>
         <h1 className="text-lg font-bold text-slate-900">Expense Summary</h1>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 mb-3">
-        <div><label className="text-xs text-slate-500">From</label><Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div>
-        <div><label className="text-xs text-slate-500">To</label><Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div>
-      </div>
+      <DateFilter value={filters.range} onChange={onDateChange} className="mb-3" />
 
-      {data && (
-        <div className="grid grid-cols-2 gap-2 mb-4">
-          <Card className="bg-red-50 border-red-200"><CardContent className="p-3">
-            <p className="text-[11px] text-red-600">Total Expenses</p>
-            <p className="text-xl font-bold text-red-700 tabular-nums">{fmt(data.total)}</p>
-            <p className="text-[11px] text-red-500 tabular-nums">{data.totalCount} entries</p>
-          </CardContent></Card>
-          <Card><CardContent className="p-3">
-            <p className="text-[11px] text-slate-500">Daily Average</p>
-            <p className="text-xl font-bold text-slate-900 tabular-nums">{fmt(data.dailyAvg)}</p>
-          </CardContent></Card>
-        </div>
-      )}
+      <FilterBar filters={filters} options={data?.options ?? null} labelFor={labelFor} onChange={update} />
+
+      {error && <ErrorBanner message={error} onRetry={() => setReloadKey((k) => k + 1)} />}
 
       {loading ? (
-        <SkeletonList count={6} type="card" />
-      ) : (
-        <div className="space-y-2">
-          {data?.categories.map((cat) => (
-            <Card key={cat.category} className={`border-l-4 ${CATEGORY_COLORS[cat.category] || "border-l-slate-500"}`}>
-              <CardContent className="p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <p className="text-sm font-medium text-slate-900">{cat.category.replace(/_/g, " ")}</p>
-                  <p className="text-sm font-bold text-slate-900 tabular-nums">{fmt(cat.amount)}</p>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-500 tabular-nums">{cat.count} entries</span>
-                  <span className="text-xs text-slate-500 tabular-nums">{cat.percentage}%</span>
-                </div>
-                <div className="w-full bg-slate-200 rounded-full h-1.5 mt-1.5">
-                  <div className="bg-slate-500 h-1.5 rounded-full" style={{ width: `${cat.percentage}%` }} />
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-          {data?.categories.length === 0 && <p className="text-sm text-slate-400 text-center py-8">No expense data</p>}
-        </div>
-      )}
+        <SkeletonList count={5} type="card" />
+      ) : shown ? (
+        <>
+          <TotalCard data={shown} listHref={canView("expenses") ? listHref(filters, shown) : null} />
+          {shown.totalCount === 0 ? (
+            <EmptyState onClear={anyFilter ? () => update({ storeId: null, payer: null, category: null }) : null} />
+          ) : (
+            <>
+              <GroupByPills value={filters.groupBy} onChange={(groupBy) => update({ groupBy })} />
+              <GroupList groups={shown.groups} groupBy={shown.groupBy} onPick={onPick} />
+            </>
+          )}
+        </>
+      ) : null}
     </div>
   );
 }

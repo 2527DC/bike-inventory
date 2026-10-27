@@ -633,44 +633,44 @@ export const EXPENSE_CATEGORIES = [
 export const EXPENSE_PAYMENT_MODES = ["CASH", "CHEQUE", "NEFT", "RTGS", "UPI", "CREDIT_ADJUSTMENT"] as const;
 
 /**
- * One expense as the stepped entry flow sends it (0909-expense-multi-entry-flow-plan, Part B).
- *
- * `paidBy` is deliberately absent. The batch route stamps it from the session (decision D2), so
- * a client cannot record an expense under someone else's name — the server derives it, the
- * client never supplies it. `date` is absent too: it is shared by the whole batch (D6).
+ * Who paid an expense (plan 1210-expense-store-department-and-payer, D6/E3): the signed-in
+ * person, another staff member, or a typed name for someone not on staff (a Porter driver).
+ * The server turns it into `paidById` + `paidBy` (src/lib/expenses/assignment.ts) — the client
+ * never sends `paidBy` text directly.
  */
-export const expenseRowSchema = z.object({
-  amount: z.number().min(0.01, "Amount must be positive"),
-  category: z.enum(EXPENSE_CATEGORIES),
-  description: z.string().max(500).optional().default(""),
-  paymentMode: z.enum(EXPENSE_PAYMENT_MODES),
-  /** One receipt photo, already uploaded through /api/media/presign. Null when none. */
-  receiptUrl: z.string().url().optional().nullable(),
-  referenceNo: z.string().optional(),
-  notes: z.string().optional(),
-});
+export const expensePayerSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("self") }),
+  z.object({ kind: z.literal("user"), userId: z.string().min(1, "Pick the staff member") }),
+  z.object({ kind: z.literal("name"), name: z.string().trim().min(2, "Type the payer's name").max(80) }),
+]);
+export type ExpensePayerInput = z.infer<typeof expensePayerSchema>;
 
-/** The body of POST /api/expenses/batch: one date and one payer, many rows (D6). */
-export const expenseBatchSchema = z.object({
-  date: z.string().min(1, "Date is required"),
-  expenses: z
-    .array(expenseRowSchema)
-    .min(1, "Add at least one expense")
-    .max(50, "A batch can hold at most 50 expenses"),
-});
-
-// Single-row shape, kept for PUT /api/expenses/[id]. `paidBy` is optional here only because
-// PUT still edits historical rows that carry a typed name; POST /api/expenses no longer reads
-// it from the body and stamps the session user instead (D2).
+// The body of POST /api/expenses. Every new expense names its store and who paid (D1, D6).
+// The batch shape (expenseRowSchema / expenseBatchSchema) was removed with its route on
+// 12 Oct 2026 (decision E7): nothing had called it since the 18 Sep single-expense form.
 export const expenseSchema = z.object({
   date: z.string().min(1, "Date is required"),
   amount: z.number().min(0.01, "Amount must be positive"),
   category: z.enum(EXPENSE_CATEGORIES),
   description: z.string().optional().default(""),
-  paidBy: z.string().min(1, "Paid by is required").optional(),
   paymentMode: z.enum(EXPENSE_PAYMENT_MODES),
   referenceNo: z.string().optional(),
   receiptUrl: z.string().url().optional().nullable(),
+  notes: z.string().optional(),
+  storeId: z.string().min(1, "Pick the store this expense belongs to"),
+  payer: expensePayerSchema,
+});
+
+// PUT /api/expenses/[id]. Deliberately has no payer and no store: a free-text `paidBy` here
+// would desynchronise `paidById`, and a wrong store or payer is fixed by deleting and
+// re-entering the expense (decision E8). No screen calls PUT today.
+export const expenseUpdateSchema = z.object({
+  date: z.string().min(1, "Date is required").optional(),
+  amount: z.number().min(0.01, "Amount must be positive").optional(),
+  category: z.enum(EXPENSE_CATEGORIES).optional(),
+  description: z.string().optional(),
+  paymentMode: z.enum(EXPENSE_PAYMENT_MODES).optional(),
+  referenceNo: z.string().optional(),
   notes: z.string().optional(),
 });
 
