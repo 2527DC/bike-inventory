@@ -46,7 +46,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ loc
       ? { warehouseId: warehouse.id }
       : { warehouse: { storeId: store!.id } };
 
-    const [rows, allBrands] = await Promise.all([
+    const storeId = store?.id ?? warehouse?.storeId ?? null;
+    const warehouseId = warehouse?.id ?? null;
+
+    const binWhere = warehouse
+      ? { warehouseId: warehouse.id, isActive: true }
+      : { warehouse: { storeId: store!.id, isActive: true }, isActive: true };
+
+    const [rows, allBrands, bins, warehouseList] = await Promise.all([
       prisma.stockLevel.findMany({
         where: { ...where, quantity: { not: 0 }, product: { status: "ACTIVE" } },
         select: {
@@ -66,6 +73,24 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ loc
         select: { id: true, name: true },
         orderBy: { name: "asc" },
       }),
+      prisma.bin.findMany({
+        where: binWhere,
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          warehouseId: true,
+          warehouse: { select: { id: true, code: true, name: true } },
+        },
+        orderBy: { code: "asc" },
+      }),
+      store
+        ? prisma.warehouse.findMany({
+            where: { storeId: store.id, isActive: true },
+            select: { id: true, code: true, name: true },
+            orderBy: { name: "asc" },
+          })
+        : Promise.resolve(null),
     ]);
 
     // At store level a product may hold stock in more than one warehouse, and the screen
@@ -115,14 +140,18 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ loc
       // "warehouse" or "store", so the page can say which it is showing without guessing
       // from the code's spelling.
       level: warehouse ? "warehouse" : "store",
+      storeId,
+      warehouseId,
       // The heading comes from the resolved row, so BCH_STORE renders "BCH Store" with no
       // lookup table in the component.
       label: warehouse?.name ?? store!.name,
       warehouses: warehouseTotals,
+      warehouseList,
       totalUnits: products.reduce((s, p) => s + p.qty, 0),
       totalValue: products.reduce((s, p) => s + p.value, 0),
       productCount: products.length,
       brands: allBrands,
+      bins,
       products,
     });
   } catch (error) {
