@@ -19,6 +19,8 @@ import { apiTry } from "@/lib/api-client";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { usePermissions } from "@/lib/use-permissions";
 import { ReorderTab } from "./_components/reorder-tab";
+import { InvoiceReviewModal } from "./new/_components/invoice-review-modal";
+import type { VendorOption } from "./new/_components/vendor-section";
 
 const PO_COLUMNS: ExportColumn[] = [
   { header: "PO Number", key: "poNumber" },
@@ -95,6 +97,14 @@ function PurchaseOrdersScreen() {
   const mayOrders = canView("purchase_orders");
   const mayReorder = canView("reorder");
 
+  const [vendors, setVendors] = useState<VendorOption[]>([]);
+
+  useEffect(() => {
+    apiTry<VendorOption[]>("/api/vendors?limit=500").then(({ data }) => {
+      if (data) setVendors(data);
+    });
+  }, []);
+
   const requested: TabKey = searchParams.get("tab") === "reorder" ? "reorder" : "orders";
   const tab: TabKey =
     requested === "reorder"
@@ -111,13 +121,21 @@ function PurchaseOrdersScreen() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
         <h1 className="text-lg font-bold text-slate-900">Purchase Orders</h1>
-        <Link href="/purchase-orders/new">
-          <Button size="sm" className="bg-blue-600 hover:bg-blue-700">
-            <Plus className="h-4 w-4 mr-1" /> New PO
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          <InvoiceReviewModal
+            vendors={vendors}
+            onSuccess={() => {
+              window.location.reload();
+            }}
+          />
+          <Link href="/purchase-orders/new">
+            <Button size="sm" className="bg-blue-600 hover:bg-blue-700">
+              <Plus className="h-4 w-4 mr-1" /> New PO
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {/* Top tab bar — the assembly/page.tsx pattern. Only when both tabs are granted; with one,

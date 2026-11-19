@@ -18,6 +18,7 @@ import {
 } from "./_components/vendor-section";
 import { SheetImport } from "./_components/sheet-import";
 import { ReorderItemsModal, type PickedReorderLine } from "./_components/reorder-items-modal";
+import { InvoiceReviewModal } from "./_components/invoice-review-modal";
 
 const log = createLogger("purchase-orders:new");
 
@@ -437,13 +438,21 @@ export default function NewPurchaseOrderPage() {
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <Link href="/purchase-orders" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
-          <ArrowLeft className="h-5 w-5 text-slate-600" />
-        </Link>
-        <h1 className="text-lg font-bold text-slate-900 truncate">
-          {sections.length > 1 ? `New Purchase Orders (${sections.length})` : "New Purchase Order"}
-        </h1>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div className="flex items-center gap-3">
+          <Link href="/purchase-orders" className="p-2 -ml-2 rounded-lg hover:bg-slate-100 focus-ring" aria-label="Back">
+            <ArrowLeft className="h-5 w-5 text-slate-600" />
+          </Link>
+          <h1 className="text-lg font-bold text-slate-900 truncate">
+            {sections.length > 1 ? `New Purchase Orders (${sections.length})` : "New Purchase Order"}
+          </h1>
+        </div>
+        <InvoiceReviewModal
+          vendors={vendors}
+          onSuccess={(result) => {
+            log.info("invoice created successfully", result);
+          }}
+        />
       </div>
 
       {pageError && (

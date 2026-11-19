@@ -177,27 +177,85 @@ export class BooksClient extends IntegrationClient {
   }
 
   async createBill(data: {
-    vendorName: string; billNo: string; billDate: string;
-    dueDate: string; amount: number;
-    lineItems: Array<{ name: string; quantity: number; rate: number; gstPercent?: number; hsn?: string }>;
+    vendorName?: string;
+    vendorId?: string;
+    billNo: string;
+    billDate: string;
+    dueDate?: string;
+    referenceNumber?: string;
+    amount?: number;
+    gstNo?: string;
+    lineItems: Array<{
+      name: string;
+      quantity: number;
+      rate: number;
+      gstPercent?: number;
+      hsn?: string;
+    }>;
   }) {
-    return this.apiCall("POST", "/bills", {
-      JSONString: JSON.stringify({
-        vendor_name: data.vendorName,
-        bill_number: data.billNo,
-        date: data.billDate,
-        due_date: data.dueDate,
-        is_inclusive_tax: false,
-        gst_treatment: "business_gst",
-        line_items: data.lineItems.map((item) => ({
-          name: item.name,
-          quantity: item.quantity,
-          rate: item.rate,
-          tax_percentage: item.gstPercent || 0,
-          hsn_or_sac: item.hsn || "",
-        })),
-      }),
-    }, "bills.create");
+    const payload: Record<string, unknown> = {
+      bill_number: data.billNo,
+      date: data.billDate,
+      due_date: data.dueDate || data.billDate,
+      is_inclusive_tax: false,
+      gst_treatment: "business_gst",
+      line_items: data.lineItems.map((item) => ({
+        name: item.name,
+        quantity: item.quantity,
+        rate: item.rate,
+        tax_percentage: item.gstPercent || 0,
+        hsn_or_sac: item.hsn || "",
+      })),
+    };
+
+    if (data.vendorId) payload.vendor_id = data.vendorId;
+    if (data.vendorName) payload.vendor_name = data.vendorName;
+    if (data.referenceNumber) payload.reference_number = data.referenceNumber;
+    if (data.gstNo) payload.gst_no = data.gstNo;
+
+    return this.apiCall<{ bill?: { bill_id: string; bill_number: string; total: number } }>(
+      "POST",
+      "/bills",
+      {
+        JSONString: JSON.stringify(payload),
+      },
+      "bills.create"
+    );
+  }
+
+  /**
+   * Upload an invoice file attachment to an existing bill in Zoho Books.
+   * Best-effort: failures log a warning rather than aborting the creation flow.
+   */
+  async attachFileToBill(
+    billId: string,
+    fileName: string,
+    fileBytes: ArrayBuffer | Buffer | Uint8Array,
+    mimeType = "application/pdf"
+  ) {
+    if (!this.accessToken || !this.organizationId) {
+      throw new Error(`${this.label} client not initialized`);
+    }
+
+    const url = `${this.apiBase}/bills/${billId}/attachment?organization_id=${this.organizationId}`;
+    const formData = new FormData();
+    const blob = new Blob([fileBytes as unknown as BlobPart], { type: mimeType });
+    formData.append("attachment", blob, fileName);
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Zoho-oauthtoken ${this.accessToken}`,
+      },
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      throw new Error(`Zoho attachment upload failed (${res.status}): ${errText}`);
+    }
+
+    return await res.json().catch(() => ({}));
   }
 
   /**
