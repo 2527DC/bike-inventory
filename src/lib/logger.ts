@@ -71,6 +71,14 @@ export function redact(value: unknown, depth = 0): unknown {
   if (value == null) return value;
   if (typeof value === "string") return value.length > 500 ? value.slice(0, 500) + "…" : value;
   if (typeof value !== "object") return value;
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      ...(value.stack ? { stack: value.stack.slice(0, 500) } : {}),
+      ...(value.cause ? { cause: redact(value.cause, depth + 1) } : {}),
+    };
+  }
   if (depth > 3) return "[deep]";
 
   if (Array.isArray(value)) {

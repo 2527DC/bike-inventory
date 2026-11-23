@@ -44,6 +44,7 @@ export interface VendorOption {
   id: string;
   name: string;
   code: string;
+  zohoVendorId?: string | null;
 }
 
 export type SectionStatus = "idle" | "running" | "created" | "failed";
