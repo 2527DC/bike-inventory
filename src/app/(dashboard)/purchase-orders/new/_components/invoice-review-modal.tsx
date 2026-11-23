@@ -166,6 +166,7 @@ export function InvoiceReviewModal({ vendors, onSuccess }: Props) {
         dueDate: dueDate || invoiceDate,
         referenceNumber,
         lineItems,
+        taxType: invoiceData?.invoice?.taxType,
         totals: {
           subTotal,
           taxTotal,
@@ -201,14 +202,19 @@ export function InvoiceReviewModal({ vendors, onSuccess }: Props) {
 
       onSuccess(data);
     } catch (err) {
-      log.error("saving invoice error", { error: err instanceof Error ? err.message : String(err) });
-      setError(err instanceof Error ? err.message : "Failed to create invoice");
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log.error(`saving invoice error: ${errMsg}`, { error: errMsg });
+      setError(errMsg || "Failed to create invoice");
     } finally {
       setSaving(false);
     }
   };
 
   const selectedVendor = vendors.find((v) => v.id === selectedVendorId);
+  const isLinkedToZoho = Boolean(
+    selectedVendor?.zohoVendorId ||
+      (invoiceData?.matchedVendor?.id === selectedVendorId && invoiceData?.matchedVendor?.zohoVendorId)
+  );
 
   return (
     <>
@@ -251,9 +257,25 @@ export function InvoiceReviewModal({ vendors, onSuccess }: Props) {
             {/* Modal Body */}
             <div className="p-6 overflow-y-auto flex-1 space-y-6">
               {error && (
-                <div className="p-4 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 text-red-700 dark:text-red-300 text-sm flex items-start gap-3">
-                  <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5" />
-                  <div className="flex-1 font-medium">{error}</div>
+                <div className="p-4 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 text-red-700 dark:text-red-300 text-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5" />
+                    <div className="font-medium">{error}</div>
+                  </div>
+                  {pushToZoho && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="shrink-0 text-xs border-red-300 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-700 dark:text-red-300"
+                      onClick={() => {
+                        setPushToZoho(false);
+                        setError(null);
+                      }}
+                    >
+                      Save PO without Zoho push
+                    </Button>
+                  )}
                 </div>
               )}
 
@@ -354,15 +376,28 @@ export function InvoiceReviewModal({ vendors, onSuccess }: Props) {
                           <Building className="h-3.5 w-3.5" />
                           Vendor / Supplier
                         </label>
-                        {selectedVendor?.id ? (
-                          <Badge variant="success" className="text-[10px]">
-                            Matched in DB
-                          </Badge>
-                        ) : (
-                          <Badge variant="warning" className="text-[10px]">
-                            Select Vendor
-                          </Badge>
-                        )}
+                        <div className="flex items-center gap-1.5">
+                          {selectedVendor?.id ? (
+                            <>
+                              <Badge variant="success" className="text-[10px]">
+                                Matched in DB
+                              </Badge>
+                              {isLinkedToZoho ? (
+                                <Badge variant="info" className="text-[10px]">
+                                  Linked in Zoho
+                                </Badge>
+                              ) : (
+                                <Badge variant="default" className="text-[10px]">
+                                  Auto-links in Zoho
+                                </Badge>
+                              )}
+                            </>
+                          ) : (
+                            <Badge variant="warning" className="text-[10px]">
+                              Select Vendor
+                            </Badge>
+                          )}
+                        </div>
                       </div>
                       <select
                         value={selectedVendorId}
@@ -555,11 +590,11 @@ export function InvoiceReviewModal({ vendors, onSuccess }: Props) {
                           className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
                         <span className="font-semibold text-gray-900 dark:text-gray-100">
-                          Push Bill to Zoho Books
+                          Push Draft Bill to Zoho Books
                         </span>
                       </label>
                       <span className="text-xs text-gray-500">
-                        (Posts to Purchases → Bills with original PDF attached)
+                        (Posts to Purchases → Bills as Draft with original PDF attached)
                       </span>
                     </div>
 
@@ -606,13 +641,13 @@ export function InvoiceReviewModal({ vendors, onSuccess }: Props) {
                   <Button variant="ghost" onClick={() => setIsOpen(false)} disabled={saving}>
                     Cancel
                   </Button>
-                  <Button
+                    <Button
                     onClick={handleSaveAndPush}
                     disabled={saving || !selectedVendorId || lineItems.length === 0}
                     className="bg-blue-600 hover:bg-blue-700 text-white gap-2 font-semibold shadow"
                   >
                     {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-                    {pushToZoho ? "Create Bill in Zoho Books & Save" : "Save Purchase Order Only"}
+                    {pushToZoho ? "Save as Draft & Sync to Zoho Books" : "Save Draft Purchase Order"}
                   </Button>
                 </div>
               </div>

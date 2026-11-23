@@ -29,6 +29,7 @@ interface RequestBody {
   dueDate?: string | null;
   referenceNumber?: string | null;
   lineItems: LineItemPayload[];
+  taxType?: "IGST" | "CGST_SGST";
   totals: {
     subTotal: number;
     taxTotal: number;
@@ -51,6 +52,7 @@ export async function POST(req: NextRequest) {
       dueDate,
       referenceNumber,
       lineItems,
+      taxType,
       totals,
       pushToZoho = true,
       fileBase64,
@@ -73,24 +75,220 @@ export async function POST(req: NextRequest) {
     let zohoBillId: string | null = null;
     let zohoBillNumber: string | null = null;
     let zohoNotice: string | null = null;
+    let activeZohoVendorId = vendor.zohoVendorId;
+
+    // ─── 0. Resolve or Auto-Create Products in Local DB ─────────────────────────
+    const zoho = await getBooks();
+    const defaultCat = await prisma.category.findFirst({ where: { isActive: true } });
+    const defaultBrand = await prisma.brand.findFirst({ where: { isActive: true } });
+
+    const processedLineItems = await Promise.all(
+      lineItems.map(async (li) => {
+        let productId = li.matchedProductId;
+        let zohoItemId: string | undefined;
+
+        // Try extracting SKU from item description (e.g. "10190", "10223" or similar code)
+        const skuMatch = li.name.match(/\b(10\d{3})\b/) || li.name.match(/\b([A-Z0-9]{4,10})\b/);
+        const extractedSku = skuMatch ? skuMatch[1] : undefined;
+
+        if (productId) {
+          const existing = await prisma.product.findUnique({
+            where: { id: productId },
+            select: { id: true, zohoItemId: true },
+          });
+          if (existing) {
+            return {
+              ...li,
+              matchedProductId: existing.id,
+              zohoItemId: existing.zohoItemId || undefined,
+            };
+          }
+        }
+
+        // Search local product by SKU or name
+        let product = extractedSku
+          ? await prisma.product.findFirst({
+              where: { sku: extractedSku },
+              select: { id: true, zohoItemId: true },
+            })
+          : null;
+
+        if (!product) {
+          product = await prisma.product.findFirst({
+            where: { name: { equals: li.name.trim(), mode: "insensitive" } },
+            select: { id: true, zohoItemId: true },
+          });
+        }
+
+        if (product) {
+          return {
+            ...li,
+            matchedProductId: product.id,
+            zohoItemId: product.zohoItemId || undefined,
+          };
+        }
+
+        // Product not in local DB: Search in Zoho Books items catalog
+        if (zoho) {
+          try {
+            const searchText = extractedSku || li.name.trim();
+            const zRes = await (zoho as any).apiCall(
+              "GET",
+              `/items?search_text=${encodeURIComponent(searchText)}&per_page=5`,
+              undefined,
+              "items.list"
+            );
+            const zItems = zRes?.items || [];
+            const matchedZoho = zItems.find(
+              (it: any) =>
+                (extractedSku && it.sku === extractedSku) ||
+                it.name.trim().toLowerCase() === li.name.trim().toLowerCase()
+            ) || zItems[0];
+
+            if (matchedZoho) {
+              zohoItemId = matchedZoho.item_id;
+
+              // Check if already linked locally by zohoItemId
+              const existingByZoho = await prisma.product.findFirst({
+                where: { zohoItemId: matchedZoho.item_id },
+                select: { id: true },
+              });
+              if (existingByZoho) {
+                return {
+                  ...li,
+                  matchedProductId: existingByZoho.id,
+                  zohoItemId,
+                };
+              }
+
+              // Extract color if present in name (e.g. RED, GRN, BLK, WHT, BLU)
+              const colorMatch = (matchedZoho.name || li.name).match(
+                /\b(RED|GREEN|GRN|BLACK|BLK|WHITE|WHT|BLUE|BLU|GREY|YELLOW|ORANGE)\b/i
+              );
+              const color = colorMatch ? colorMatch[1].toUpperCase() : undefined;
+
+              const createdProduct = await prisma.product.create({
+                data: {
+                  sku: matchedZoho.sku || extractedSku || `SKU-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+                  name: matchedZoho.name || li.name.trim(),
+                  zohoItemId: matchedZoho.item_id,
+                  costPrice: li.rate || matchedZoho.purchase_rate || 0,
+                  sellingPrice: matchedZoho.rate || (li.rate * 1.3),
+                  hsnCode: li.hsn || matchedZoho.hsn_or_sac || "87116090",
+                  categoryId: defaultCat?.id || "cmupdcntw002albmepjpxnwy2",
+                  brandId: defaultBrand?.id || "br10998253bc9a1ab9f6296",
+                  color: color || null,
+                  currentStock: 0,
+                },
+              });
+
+              log.info("auto-created product from Zoho item in local DB", {
+                productId: createdProduct.id,
+                sku: createdProduct.sku,
+                name: createdProduct.name,
+              });
+
+              return {
+                ...li,
+                matchedProductId: createdProduct.id,
+                zohoItemId,
+              };
+            }
+          } catch (itemErr) {
+            log.warn("failed to lookup/auto-create item from Zoho", {
+              name: li.name,
+              error: itemErr instanceof Error ? itemErr.message : String(itemErr),
+            });
+          }
+        }
+
+        return { ...li, matchedProductId: null, zohoItemId: undefined };
+      })
+    );
 
     // ─── 1. Push to Zoho Books if enabled ──────────────────────────────────────────
     if (pushToZoho) {
       try {
-        const zoho = await getBooks();
         if (!zoho) {
           log.warn("Zoho Books client is not connected; skipping Zoho push", { vendorId });
           zohoNotice = "Zoho Books is not connected. Saved in local app only.";
         } else {
+          // If vendor is not linked to Zoho yet, attempt auto-resolution or creation in Zoho
+          if (!activeZohoVendorId) {
+            log.info("vendor not linked to Zoho Books; attempting auto-resolution/creation", {
+              vendorId: vendor.id,
+              vendorName: vendor.name,
+              gstin: vendor.gstin,
+            });
+
+            try {
+              // 1. Search Zoho contacts by vendor name or GSTIN
+              const searchRes = await zoho.searchContacts(vendor.gstin || vendor.name, "vendor");
+              const contacts = searchRes?.contacts || [];
+              const matched = contacts.find((c) => {
+                if (vendor.gstin && c.gst_no && c.gst_no.trim().toLowerCase() === vendor.gstin.trim().toLowerCase()) {
+                  return true;
+                }
+                return c.contact_name.trim().toLowerCase() === vendor.name.trim().toLowerCase();
+              }) || (contacts.length === 1 ? contacts[0] : null);
+
+              if (matched?.contact_id) {
+                activeZohoVendorId = matched.contact_id;
+                await prisma.vendor.update({
+                  where: { id: vendor.id },
+                  data: { zohoVendorId: activeZohoVendorId },
+                });
+                log.info("auto-linked vendor to existing Zoho contact", {
+                  vendorId: vendor.id,
+                  zohoVendorId: activeZohoVendorId,
+                  contactName: matched.contact_name,
+                });
+              } else {
+                // 2. Not found in Zoho contacts: create vendor contact in Zoho Books
+                log.info("vendor not found in Zoho; creating contact in Zoho Books", {
+                  vendorName: vendor.name,
+                });
+                const createContactRes = await zoho.createContact({
+                  name: vendor.name,
+                  gstin: vendor.gstin || undefined,
+                });
+
+                if (createContactRes?.contact?.contact_id) {
+                  activeZohoVendorId = createContactRes.contact.contact_id;
+                  await prisma.vendor.update({
+                    where: { id: vendor.id },
+                    data: { zohoVendorId: activeZohoVendorId },
+                  });
+                  log.info("created new Zoho contact for vendor", {
+                    vendorId: vendor.id,
+                    zohoVendorId: activeZohoVendorId,
+                  });
+                }
+              }
+            } catch (autoErr) {
+              log.warn("failed auto-resolving/creating Zoho contact for vendor", {
+                vendorId: vendor.id,
+                error: autoErr instanceof Error ? autoErr.message : String(autoErr),
+              });
+            }
+          }
+
+          if (!activeZohoVendorId) {
+            return errorResponse(
+              `Vendor "${vendor.name}" is not linked to Zoho Books, and auto-linking could not find or create a matching contact in Zoho. Please link the vendor under Vendors (/vendors) or uncheck "Push Bill to Zoho Books" to save the Purchase Order directly.`,
+              400
+            );
+          }
+
           log.info("pushing bill to Zoho Books", {
             vendorId: vendor.id,
-            zohoVendorId: vendor.zohoVendorId,
+            zohoVendorId: activeZohoVendorId,
             billNo: invoiceNumber,
             amount: totals.grandTotal,
           });
 
           const zohoRes = await zoho.createBill({
-            vendorId: vendor.zohoVendorId || undefined,
+            vendorId: activeZohoVendorId,
             vendorName: vendor.name,
             billNo: invoiceNumber.trim(),
             billDate: invoiceDate,
@@ -98,12 +296,14 @@ export async function POST(req: NextRequest) {
             referenceNumber: referenceNumber || undefined,
             amount: totals.grandTotal,
             gstNo: vendor.gstin || undefined,
-            lineItems: lineItems.map((li) => ({
+            taxType: taxType || (vendor.gstin && !vendor.gstin.trim().toUpperCase().startsWith("29") ? "IGST" : "CGST_SGST"),
+            lineItems: processedLineItems.map((li) => ({
               name: li.name.trim(),
               quantity: li.quantity,
               rate: li.rate,
               gstPercent: li.gstPercent || 0,
               hsn: li.hsn || undefined,
+              itemId: li.zohoItemId,
             })),
           });
 
@@ -132,22 +332,55 @@ export async function POST(req: NextRequest) {
           error: zohoErr instanceof Error ? zohoErr.message : String(zohoErr),
         });
         const msg = zohoErr instanceof Error ? zohoErr.message : "Zoho Books API error";
-        return errorResponse(`Zoho Books bill creation failed: ${msg}. Check vendor linkage in Zoho or retry without Zoho push.`, 400);
+
+        // If bill already exists in Zoho Books, attempt to look it up and link it
+        if ((/already exists/i.test(msg) || /already been created/i.test(msg) || /already created/i.test(msg)) && zoho) {
+          try {
+            log.info("bill already exists in Zoho Books; finding existing bill to link", {
+              billNo: invoiceNumber.trim(),
+            });
+            const zBills = await (zoho as any).apiCall(
+              "GET",
+              `/bills?bill_number=${encodeURIComponent(invoiceNumber.trim())}`,
+              undefined,
+              "bills.list"
+            );
+            const existingZohoBill = (zBills?.bills || []).find(
+              (b: any) => b.bill_number?.trim().toLowerCase() === invoiceNumber.trim().toLowerCase()
+            ) || zBills?.bills?.[0];
+
+            if (existingZohoBill?.bill_id) {
+              zohoBillId = existingZohoBill.bill_id;
+              zohoBillNumber = existingZohoBill.bill_number;
+              zohoNotice = `Bill "${zohoBillNumber}" already exists in Zoho Books and was linked.`;
+              log.info("linked to existing Zoho bill", { billId: zohoBillId, billNumber: zohoBillNumber });
+            } else {
+              return errorResponse(`Zoho Books bill creation failed: ${msg}. Check vendor linkage in Zoho or retry without Zoho push.`, 400);
+            }
+          } catch (lookupErr) {
+            log.warn("failed to lookup existing Zoho bill", {
+              error: lookupErr instanceof Error ? lookupErr.message : String(lookupErr),
+            });
+            return errorResponse(`Zoho Books bill creation failed: ${msg}. Check vendor linkage in Zoho or retry without Zoho push.`, 400);
+          }
+        } else {
+          return errorResponse(`Zoho Books bill creation failed: ${msg}. Check vendor linkage in Zoho or retry without Zoho push.`, 400);
+        }
       }
     }
 
-    // ─── 2. Create local Purchase Order ───────────────────────────────────────────
+    // ─── 2. Create local Purchase Order (Saved as DRAFT) ─────────────────────────
     const poResult = await createPurchaseOrder(
       {
         vendorId: vendor.id,
-        items: lineItems.map((li) => ({
+        items: processedLineItems.map((li) => ({
           name: li.name.trim(),
           quantity: li.quantity,
           productId: li.matchedProductId || undefined,
         })),
         expectedDate: dueDate || invoiceDate,
         notes: `Created from Vendor Invoice ${invoiceNumber}${zohoBillNumber ? ` (Zoho Bill: ${zohoBillNumber})` : ""}`,
-        submit: true,
+        submit: false, // Created as DRAFT
       },
       { id: user.id, name: user.name },
       { verifyVendorSupplies: false }

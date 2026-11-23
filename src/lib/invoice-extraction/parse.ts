@@ -91,7 +91,8 @@ Rules:
 2. Rate must be unit price before tax. If only line taxable amount is given, calculate rate = taxable amount / quantity.
 3. Determine taxType: If IGST is charged, set "IGST"; if CGST and SGST are charged, set "CGST_SGST".
 4. Ensure all line items are extracted accurately without skipping rows.
-5. Return ONLY a valid JSON object matching the schema.`;
+5. If there are handwritten annotations, notes, or stamps detailing color, SKU, or variant breakdowns and quantities (e.g. "Red: 15, Green: 15, Black: 4, White: 3, Blue: 3", or SKU codes like 10190, 10223), break them down into individual line items specifying the exact item name with the color/SKU (e.g. "DTR LITHIUM - RED (10190)") and its respective quantity and unit rate.
+6. Return ONLY a valid JSON object matching the schema.`;
 
   let result;
   try {

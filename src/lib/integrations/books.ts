@@ -80,7 +80,7 @@ export class BooksClient extends IntegrationClient {
     name: string; gstin?: string | null; email?: string | null;
     phone?: string | null; city?: string | null; state?: string | null;
   }) {
-    return this.apiCall("POST", "/contacts", {
+    return this.apiCall<{ contact?: { contact_id: string; contact_name: string } }>("POST", "/contacts", {
       JSONString: JSON.stringify({
         contact_name: vendor.name,
         contact_type: "vendor",
@@ -102,6 +102,7 @@ export class BooksClient extends IntegrationClient {
         contact_id: string;
         contact_name: string;
         contact_type: string;
+        gst_no?: string;
         email?: string;
         phone?: string;
         mobile?: string;
@@ -185,42 +186,102 @@ export class BooksClient extends IntegrationClient {
     referenceNumber?: string;
     amount?: number;
     gstNo?: string;
+    taxType?: "IGST" | "CGST_SGST";
     lineItems: Array<{
       name: string;
       quantity: number;
       rate: number;
       gstPercent?: number;
       hsn?: string;
+      accountId?: string;
+      itemId?: string;
     }>;
   }) {
-    const payload: Record<string, unknown> = {
-      bill_number: data.billNo,
-      date: data.billDate,
-      due_date: data.dueDate || data.billDate,
-      is_inclusive_tax: false,
-      gst_treatment: "business_gst",
-      line_items: data.lineItems.map((item) => ({
-        name: item.name,
-        quantity: item.quantity,
-        rate: item.rate,
-        tax_percentage: item.gstPercent || 0,
-        hsn_or_sac: item.hsn || "",
-      })),
+    const INTRA_TAX_MAP: Record<number, string> = {
+      0: "1593656000000022480", // GST0
+      5: "1593656000000022486", // GST5
+      18: "1593656000000022498", // GST18
     };
 
-    if (data.vendorId) payload.vendor_id = data.vendorId;
-    if (data.vendorName) payload.vendor_name = data.vendorName;
-    if (data.referenceNumber) payload.reference_number = data.referenceNumber;
-    if (data.gstNo) payload.gst_no = data.gstNo;
+    const INTER_TAX_MAP: Record<number, string> = {
+      0: "1593656000000022390", // IGST0
+      5: "1593656000000022392", // IGST5
+      18: "1593656000000022396", // IGST18
+    };
 
-    return this.apiCall<{ bill?: { bill_id: string; bill_number: string; total: number } }>(
-      "POST",
-      "/bills",
-      {
-        JSONString: JSON.stringify(payload),
-      },
-      "bills.create"
-    );
+    let isInterstate = false;
+    if (data.taxType === "IGST") {
+      isInterstate = true;
+    } else if (data.gstNo) {
+      const cleanGst = data.gstNo.trim().toUpperCase();
+      if (/^\d{2}/.test(cleanGst) && !cleanGst.startsWith("29")) {
+        isInterstate = true;
+      }
+    }
+
+    const buildPayload = (interstate: boolean): Record<string, unknown> => {
+      const taxMap = interstate ? INTER_TAX_MAP : INTRA_TAX_MAP;
+      const defaultTax = interstate ? "1593656000000022392" : "1593656000000022486";
+      const zeroTax = interstate ? "1593656000000022390" : "1593656000000022480";
+
+      const payload: Record<string, unknown> = {
+        bill_number: data.billNo,
+        date: data.billDate,
+        due_date: data.dueDate || data.billDate,
+        is_inclusive_tax: false,
+        gst_treatment: "business_gst",
+        is_draft: true,
+        line_items: data.lineItems.map((item) => {
+          const gst = item.gstPercent ?? 0;
+          const taxId = taxMap[gst] || (gst === 0 ? zeroTax : defaultTax);
+          const line: Record<string, unknown> = {
+            name: item.name,
+            quantity: item.quantity,
+            rate: item.rate,
+            tax_id: taxId,
+            hsn_or_sac: item.hsn || "",
+            account_id: item.accountId || "1593656000000000567", // Cost of Goods Sold
+          };
+          if (item.itemId) line.item_id = item.itemId;
+          return line;
+        }),
+      };
+
+      if (data.vendorId) payload.vendor_id = data.vendorId;
+      if (data.vendorName) payload.vendor_name = data.vendorName;
+      if (data.referenceNumber) payload.reference_number = data.referenceNumber;
+      if (data.gstNo) payload.gst_no = data.gstNo;
+
+      return payload;
+    };
+
+    try {
+      return await this.apiCall<{ bill?: { bill_id: string; bill_number: string; total: number } }>(
+        "POST",
+        "/bills",
+        buildPayload(isInterstate),
+        "bills.create"
+      );
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes("IGST has to be applied") && !isInterstate) {
+        return this.apiCall<{ bill?: { bill_id: string; bill_number: string; total: number } }>(
+          "POST",
+          "/bills",
+          buildPayload(true),
+          "bills.create"
+        );
+      }
+      if (errMsg.includes("IGST cannot be applied") && isInterstate) {
+        return this.apiCall<{ bill?: { bill_id: string; bill_number: string; total: number } }>(
+          "POST",
+          "/bills",
+          buildPayload(false),
+          "bills.create"
+        );
+      }
+      throw err;
+    }
   }
 
   /**
