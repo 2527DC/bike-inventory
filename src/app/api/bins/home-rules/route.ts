@@ -154,7 +154,9 @@ export async function POST(req: NextRequest) {
     // subcategory. Only ACTIVE children count — a category whose children were all deactivated
     // is a leaf again, and blocking it would strand the rule. One read of the whole table
     // answers this for every chosen category AND builds their paths, instead of a query each.
-    const all = await prisma.category.findMany({ select: { id: true, name: true, parentId: true, isActive: true } });
+    const all = await prisma.category.findMany({
+      select: { id: true, name: true, parentId: true, isActive: true, _count: { select: { products: true } } },
+    });
     const byId = new Map(all.map((c) => [c.id, c]));
     const withActiveChildren = new Set(all.filter((c) => c.isActive && c.parentId).map((c) => c.parentId as string));
 
@@ -163,7 +165,9 @@ export async function POST(req: NextRequest) {
       const c = byId.get(id);
       if (!c) problems.push("a category that no longer exists");
       else if (!c.isActive) problems.push(`${pathFrom(byId, id)} (inactive)`);
-      else if (withActiveChildren.has(id)) problems.push(`${pathFrom(byId, id)} (choose a subcategory of it)`);
+      else if (withActiveChildren.has(id) && (c._count?.products ?? 0) === 0) {
+        problems.push(`${pathFrom(byId, id)} (choose a subcategory of it)`);
+      }
     }
     if (problems.length > 0) {
       log.warn("home bin rule refused", { reason: "category not a usable leaf", warehouseId, binId, problems: problems.length });

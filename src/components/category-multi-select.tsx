@@ -21,6 +21,7 @@ import type { CategoryTreeRow } from "@/lib/categories/tree";
 
 export interface CategoryMultiSelectRow extends CategoryTreeRow {
   isActive?: boolean;
+  _count?: { products?: number; children?: number };
 }
 
 interface Props {
@@ -57,7 +58,7 @@ function leafOptions(categories: CategoryMultiSelectRow[]): LeafOption[] {
   };
 
   return active
-    .filter((c) => !parents.has(c.id))
+    .filter((c) => !parents.has(c.id) || (c._count?.products ?? 0) > 0)
     .map((c) => ({ id: c.id, name: c.name, path: pathOf(c) }))
     .sort((a, b) => a.path.localeCompare(b.path));
 }
