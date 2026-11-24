@@ -262,6 +262,7 @@ jobs:
       - name: Pack the build
         run: |
           set -euo pipefail
+          chmod -R a+rX .next public
           tar -czf build.tgz \
             --exclude='.next/cache' \
             .next public package.json package-lock.json next.config.ts tsconfig.json prisma
@@ -559,6 +560,7 @@ jobs:
           set -euo pipefail
           tar -xzf build.tgz
           rm -f build.tgz
+          chmod -R a+rX .next public
           if [ ! -f .next/BUILD_ID ]; then
             echo "::error::.next/BUILD_ID is missing from the artifact."
             exit 1
@@ -639,7 +641,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          sshpass -e rsync -az --delete \
+          sshpass -e rsync -az --delete-after --delay-updates \
             --exclude='.next/cache' \
             --exclude='/node_modules' \
             --exclude='/.env' \
@@ -648,6 +650,9 @@ jobs:
             -e "ssh -p $SSH_PORT" \
             .next public package.json package-lock.json next.config.ts tsconfig.json prisma \
             "$VPS_USER@$VPS_HOST:$DEPLOY_PATH/"
+
+          sshpass -e ssh -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
+            "chmod -R a+rX '$DEPLOY_PATH/.next' '$DEPLOY_PATH/public'"
 
       - name: Install dependencies on the VPS (only if the lockfile changed)
         env:
