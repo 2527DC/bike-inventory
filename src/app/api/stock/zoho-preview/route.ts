@@ -2,11 +2,12 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 import { NextRequest } from "next/server";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { requireFeature, AuthError } from "@/lib/auth-helpers";
 import { getInventory } from "@/lib/integrations";
-import { getTodayIST } from "@/lib/services/timezone";
+import { getTodayIST, istDayBounds } from "@/lib/services/timezone";
 import { resolveBillWindow } from "@/lib/zoho/date-window";
 import { DEFAULT_BRAND, PLACEHOLDER_CATEGORY } from "@/lib/import-placeholders";
 import { createLogger } from "@/lib/logger";
@@ -30,10 +31,18 @@ export interface StockPreviewItem {
   stockOnHand: number;
 }
 
+// Date-only and unqualified timestamps from the inventory organisation are IST.
+function itemTimestamp(value?: string) {
+  if (!value) return -Infinity;
+  const local = value.length === 10 ? `${value}T00:00:00` : value;
+  const ms = Date.parse(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(local) ? local : `${local}+05:30`);
+  return Number.isFinite(ms) ? ms : -Infinity;
+}
+
 /**
  * GET /api/stock/zoho-preview — WRITES NOTHING.
  *
- * Previews active items from Zoho Inventory within a specified rolling date window (?days=3|7|30),
+ * Previews active items from Zoho Inventory in a rolling window (?days=3|7|30) or inclusive fromDate/toDate range,
  * classifying each item against local Products, Brands, and Categories.
  */
 export async function GET(req: NextRequest) {
@@ -44,12 +53,25 @@ export async function GET(req: NextRequest) {
     await requireFeature("stock", "fetch");
 
     const { searchParams } = new URL(req.url);
+    const today = getTodayIST();
+    const fromDate = searchParams.get("fromDate");
+    const toDate = searchParams.get("toDate");
     const daysParam = searchParams.get("days");
-    const days = daysParam ? parseInt(daysParam, 10) : 7;
-    const window = resolveBillWindow(
-      { days: Number.isFinite(days) && days > 0 ? days : 7 },
-      getTodayIST()
-    );
+    let window;
+    if (fromDate !== null || toDate !== null) {
+      const date = z.iso.date();
+      if (!fromDate || !toDate || !date.safeParse(fromDate).success || !date.safeParse(toDate).success) {
+        return errorResponse("Choose a valid start and end date.", 400);
+      }
+      if (fromDate > toDate) return errorResponse("End date must be on or after start date.", 400);
+      if (toDate > today) return errorResponse("Choose today or an earlier end date.", 400);
+      window = { from: fromDate, to: toDate, clampedToFy: false };
+    } else {
+      const days = daysParam ? parseInt(daysParam, 10) : 7;
+      window = resolveBillWindow({ days: Number.isFinite(days) && days > 0 ? days : 7 }, today);
+    }
+    const start = istDayBounds(window.from).start.getTime();
+    const end = istDayBounds(window.to).end.getTime();
 
     const zoho = await getInventory();
     if (!zoho) {
@@ -110,11 +132,8 @@ export async function GET(req: NextRequest) {
       // Strictly active
       if (item.status?.toLowerCase() !== "active") continue;
 
-      // Filter by date window: item.last_modified_time or item.created_time >= window.from
-      const modDate = item.last_modified_time ? item.last_modified_time.slice(0, 10) : "";
-      const crDate = item.created_time ? item.created_time.slice(0, 10) : "";
-      const itemDate = modDate && crDate ? (modDate >= crDate ? modDate : crDate) : (modDate || crDate);
-      if (!itemDate || itemDate < window.from) continue;
+      const updated = Math.max(itemTimestamp(item.last_modified_time), itemTimestamp(item.created_time));
+      if (updated < start || updated > end) continue;
 
       const zohoId = item.item_id;
       if (!zohoId) continue;

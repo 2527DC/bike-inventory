@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo } from "react";
 import {
   Cloud,
   Loader2,
@@ -9,16 +9,15 @@ import {
   CheckSquare,
   Square,
   Search,
-  Sparkles,
-  Package,
   Layers,
   Tags,
-  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { apiFetch, apiTry } from "@/lib/api-client";
+import { getTodayIST } from "@/lib/services/timezone";
+import { resolveBillWindow } from "@/lib/zoho/date-window";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("stock:zoho-import-sheet");
@@ -82,6 +81,7 @@ export interface ZohoStockImportSheetProps {
 
 type ImportStep = "idle" | "previewing" | "review" | "importing" | "success";
 type RangeDays = 3 | 7 | 30;
+type SyncWindow = { days: RangeDays } | { fromDate: string; toDate: string };
 
 function normalizeProductItem(item: Record<string, unknown>, idx: number): ZohoProductItem {
   const zohoId = String(
@@ -154,13 +154,16 @@ function normalizeProductItem(item: Record<string, unknown>, idx: number): ZohoP
   };
 }
 
-export function ZohoStockImportSheet({
-  isOpen,
+export function ZohoStockImportSheet({ isOpen, ...props }: ZohoStockImportSheetProps) {
+  return isOpen ? <StockImportDialog {...props} /> : null;
+}
+
+function StockImportDialog({
   onClose,
   onImportComplete,
-}: ZohoStockImportSheetProps) {
+}: Omit<ZohoStockImportSheetProps, "isOpen">) {
   const [step, setStep] = useState<ImportStep>("idle");
-  const [days, setDays] = useState<RangeDays>(7);
+  const [range, setRange] = useState<SyncWindow>({ days: 7 });
   const [products, setProducts] = useState<ZohoProductItem[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
@@ -181,26 +184,13 @@ export function ZohoStockImportSheet({
     createdCategories: number;
   } | null>(null);
 
-  // Reset internal state when sheet opens
-  useEffect(() => {
-    if (isOpen) {
-      setStep("idle");
-      setDays(7);
-      setProducts([]);
-      setSelectedIds(new Set());
-      setSearch("");
-      setError(null);
-      setImportResult(null);
-    }
-  }, [isOpen]);
-
   const handleClose = useCallback(() => {
     if (step === "previewing" || step === "importing") return;
     onClose();
   }, [step, onClose]);
 
   const fetchPreview = useCallback(
-    async (selectedRange: RangeDays) => {
+    async (selectedRange: SyncWindow) => {
       setStep("previewing");
       setError(null);
       setProducts([]);
@@ -208,20 +198,21 @@ export function ZohoStockImportSheet({
       setSearch("");
 
       try {
-        log.info("Fetching active products from Zoho", { days: selectedRange });
-        const queryUrl = `/api/stock/zoho-preview?days=${selectedRange}`;
+        log.info("Fetching active products from Zoho", selectedRange);
+        const params = new URLSearchParams(
+          "days" in selectedRange ? { days: String(selectedRange.days) } : selectedRange
+        );
+        const queryUrl = `/api/stock/zoho-preview?${params}`;
 
         // Attempt GET first
         let res = await apiTry<ZohoPreviewApiResponse>(queryUrl, { timeoutMs: 90_000 });
 
         // If GET returned 405 Method Not Allowed, fallback to POST with json payload
         if (res.error && (res.error.includes("405") || res.error.includes("Method Not Allowed"))) {
-          log.warn("GET /api/stock/zoho-preview returned 405, attempting POST fallback", {
-            days: selectedRange,
-          });
+          log.warn("GET /api/stock/zoho-preview returned 405, attempting POST fallback", selectedRange);
           res = await apiTry<ZohoPreviewApiResponse>("/api/stock/zoho-preview", {
             method: "POST",
-            json: { days: selectedRange },
+            json: selectedRange,
             timeoutMs: 90_000,
           });
         }
@@ -354,7 +345,7 @@ export function ZohoStockImportSheet({
     setError(null);
 
     try {
-      log.info("Importing selected Zoho products", { count: selectedItems.length, days });
+      log.info("Importing selected Zoho products", { count: selectedItems.length, ...range });
 
       const cleanItems = selectedItems.map((p) => ({
         zohoId: p.zohoId,
@@ -367,7 +358,7 @@ export function ZohoStockImportSheet({
       }));
 
       const payload = {
-        days,
+        ...range,
         items: cleanItems,
         products: cleanItems,
         ids: selectedItems.map((p) => p.zohoId),
@@ -432,22 +423,38 @@ export function ZohoStockImportSheet({
       setError(friendlyMsg);
       setStep("review");
     }
-  }, [products, selectedIds, days, onImportComplete]);
-
-  if (!isOpen) return null;
+  }, [products, selectedIds, range, onImportComplete]);
 
   const busy = step === "previewing" || step === "importing";
 
+  const today = getTodayIST();
+  const custom = "fromDate" in range ? range : null;
+  let rangeError = "";
+  if (custom) {
+    if (!custom.fromDate || !custom.toDate) rangeError = "Choose both a start and an end date.";
+    else if (custom.fromDate > custom.toDate) rangeError = "End date must be on or after start date.";
+    else if (custom.toDate > today) rangeError = "Choose today or an earlier end date.";
+  }
+
+  function editRange(next: SyncWindow) {
+    setRange(next);
+    setProducts([]);
+    setSelectedIds(new Set());
+    setSearch("");
+    setError(null);
+    setStep("idle");
+  }
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-xs sm:p-4 transition-opacity"
+      className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-xs sm:p-4 transition-opacity"
       onClick={handleClose}
       role="dialog"
       aria-modal="true"
       aria-label="Fetch Active Products from Zoho"
     >
       <div
-        className="w-full sm:max-w-2xl bg-white rounded-t-2xl sm:rounded-2xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+        className="w-full sm:max-w-2xl bg-white rounded-t-2xl sm:rounded-2xl max-h-[92dvh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -475,12 +482,12 @@ export function ZohoStockImportSheet({
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 sm:p-5 space-y-4">
           {error && (
             <ErrorBanner
               message={error}
               type="error"
-              onRetry={step === "idle" ? () => void fetchPreview(days) : undefined}
+              onRetry={step === "idle" && !rangeError ? () => void fetchPreview(range) : undefined}
               onDismiss={() => setError(null)}
             />
           )}
@@ -488,51 +495,63 @@ export function ZohoStockImportSheet({
           {/* STEP 1: Range selector chips and preview button */}
           {(step === "idle" || step === "review") && (
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-slate-700">Sync window:</span>
-                  <div className="flex items-center gap-1.5">
-                    {([3, 7, 30] as const).map((d) => (
+              <fieldset>
+                <legend className="mb-2 text-xs font-semibold text-slate-700">Sync window</legend>
+                <div className="flex flex-wrap gap-1.5">
+                  {([3, 7, 30, "custom"] as const).map((option) => {
+                    const active = "days" in range ? option === range.days : option === "custom";
+                    return (
                       <button
-                        key={d}
+                        key={option}
                         type="button"
-                        disabled={busy}
+                        aria-pressed={active}
                         onClick={() => {
-                          setDays(d);
-                          if (step === "review") {
-                            void fetchPreview(d);
+                          if (active) return;
+                          if (option === "custom") {
+                            const initial = resolveBillWindow(range, today);
+                            editRange({ fromDate: initial.from, toDate: initial.to });
+                          } else {
+                            setRange({ days: option });
+                            setError(null);
+                            if (step === "review") void fetchPreview({ days: option });
                           }
                         }}
-                        className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
-                          days === d
-                            ? "bg-blue-600 text-white shadow-xs"
-                            : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-100"
+                        className={`min-h-11 sm:min-h-8 rounded-full px-3 text-xs font-medium focus-visible:outline-2 focus-visible:outline-blue-600 ${
+                          active ? "bg-blue-600 text-white" : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
                         }`}
                       >
-                        {d} days
+                        {option === "custom" ? "Custom range" : `${option} days`}
                       </button>
+                    );
+                  })}
+                </div>
+              </fieldset>
+
+              {custom && (
+                <>
+                  <div className="grid gap-3 min-[420px]:grid-cols-2">
+                    {(["fromDate", "toDate"] as const).map((field) => (
+                      <label key={field} className="min-w-0 space-y-1 block text-sm font-medium text-slate-700">
+                        <span>{field === "fromDate" ? "From" : "To"}</span>
+                        <Input
+                          type="date"
+                          required
+                          value={custom[field]}
+                          max={today}
+                          min={field === "toDate" ? custom.fromDate : undefined}
+                          onChange={(e) => editRange({ ...custom, [field]: e.target.value })}
+                          aria-describedby={rangeError ? "zoho-stock-date-error" : undefined}
+                          className="h-11 min-w-0 text-base sm:text-sm"
+                        />
+                      </label>
                     ))}
                   </div>
-                </div>
-
-                {step === "idle" && (
-                  <Button
-                    type="button"
-                    onClick={() => void fetchPreview(days)}
-                    disabled={busy}
-                    className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs h-8 px-3.5"
-                  >
-                    <Cloud className="h-3.5 w-3.5" />
-                    Preview Active Products
-                  </Button>
-                )}
-              </div>
+                  {rangeError && <p id="zoho-stock-date-error" role="status" className="text-xs text-red-700">{rangeError}</p>}
+                </>
+              )}
 
               {step === "idle" && (
-                <p className="text-[11px] text-slate-500">
-                  Retrieves active products modified within the selected window. Missing brands
-                  and categories will be automatically identified.
-                </p>
+                <p className="text-xs text-slate-500">Preview active products updated during the selected dates (IST).</p>
               )}
             </div>
           )}
@@ -548,8 +567,7 @@ export function ZohoStockImportSheet({
                 Fetching active products from Zoho...
               </p>
               <p className="text-xs text-slate-400 max-w-sm">
-                Scanning items updated in the last {days} days and matching local brands &
-                categories.
+                Matching products in your selected date range with local brands and categories.
               </p>
             </div>
           )}
@@ -663,7 +681,7 @@ export function ZohoStockImportSheet({
               <div className="space-y-2 max-h-[46vh] overflow-y-auto pr-1">
                 {filteredProducts.length === 0 ? (
                   <div className="py-8 text-center text-slate-400 text-xs bg-slate-50 rounded-xl border border-slate-200">
-                    No products matched your search.
+                    {products.length ? "No products matched your search." : "No active products were updated in this date range."}
                   </div>
                 ) : (
                   filteredProducts.map((p) => {
@@ -822,7 +840,7 @@ export function ZohoStockImportSheet({
         </div>
 
         {/* Footer Actions */}
-        <div className="border-t border-slate-200 px-5 py-3.5 bg-slate-50/80 flex items-center justify-between shrink-0">
+        <div className="border-t border-slate-200 px-4 sm:px-5 pt-3.5 pb-[max(0.875rem,env(safe-area-inset-bottom))] bg-slate-50/80 flex items-center justify-between shrink-0">
           {step === "review" && (
             <>
               <Button
@@ -830,7 +848,7 @@ export function ZohoStockImportSheet({
                 variant="outline"
                 onClick={handleClose}
                 disabled={busy}
-                className="text-xs h-9"
+                className="text-xs h-11 sm:h-9"
               >
                 Cancel
               </Button>
@@ -838,7 +856,7 @@ export function ZohoStockImportSheet({
                 type="button"
                 onClick={() => void runImport()}
                 disabled={busy || selectedIds.size === 0}
-                className="bg-blue-600 hover:bg-blue-700 text-white text-xs h-9 px-4 font-semibold shadow-xs"
+                className="bg-blue-600 hover:bg-blue-700 text-white text-xs h-11 sm:h-9 px-4 font-semibold shadow-xs"
               >
                 Import Selected ({selectedIds.size})
               </Button>
@@ -846,14 +864,17 @@ export function ZohoStockImportSheet({
           )}
 
           {step === "idle" && (
-            <div className="w-full flex justify-end">
+            <div className="w-full flex items-center justify-between gap-3">
+              <Button type="button" variant="outline" onClick={handleClose} className="h-11 sm:h-9 text-xs">
+                Close
+              </Button>
               <Button
                 type="button"
-                variant="outline"
-                onClick={handleClose}
-                className="text-xs h-9"
+                onClick={() => void fetchPreview(range)}
+                disabled={Boolean(rangeError)}
+                className="h-11 sm:h-9 flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 text-white text-xs"
               >
-                Close
+                <Cloud className="h-4 w-4" /> Preview Active Products
               </Button>
             </div>
           )}
