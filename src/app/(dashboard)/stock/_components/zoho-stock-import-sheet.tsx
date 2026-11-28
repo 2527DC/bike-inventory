@@ -9,19 +9,22 @@ import {
   CheckSquare,
   Square,
   Search,
-  Sparkles,
-  Package,
   Layers,
   Tags,
-  AlertTriangle,
+  Database,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { apiFetch, apiTry } from "@/lib/api-client";
+import { getTodayIST } from "@/lib/services/timezone";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("stock:zoho-import-sheet");
+
+const IMPORT_BATCH_SIZE = 250;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface ZohoProductItem {
   zohoId: string;
@@ -34,6 +37,7 @@ export interface ZohoProductItem {
   categoryName?: string | null;
   categoryIsNew?: boolean;
   status: "new" | "update";
+  modifiedAt?: string;
   raw?: Record<string, unknown>;
 }
 
@@ -45,8 +49,17 @@ export interface ZohoPreviewCounts {
   existingProducts?: number;
   update?: number;
   existing?: number;
+  brandsToCreate?: number;
   newBrands?: number;
+  categoriesToCreate?: number;
   newCategories?: number;
+}
+
+export interface ZohoCacheMeta {
+  totalItems: number;
+  cachedAt: string;
+  lastModifiedCursor?: string;
+  source?: "cache" | "delta" | "full";
 }
 
 export interface ZohoPreviewApiResponse {
@@ -55,6 +68,7 @@ export interface ZohoPreviewApiResponse {
   rows?: Record<string, unknown>[];
   counts?: ZohoPreviewCounts;
   summary?: ZohoPreviewCounts;
+  cache?: ZohoCacheMeta;
 }
 
 export interface ZohoImportApiResponse {
@@ -81,7 +95,35 @@ export interface ZohoStockImportSheetProps {
 }
 
 type ImportStep = "idle" | "previewing" | "review" | "importing" | "success";
-type RangeDays = 3 | 7 | 30;
+type PresetDays = 3 | 7 | 30 | 180 | 365;
+type SyncWindow = { days: PresetDays } | { all: true } | { fromDate: string; toDate: string };
+type SyncMode = "cache" | "delta" | "full";
+
+const PRESET_CHIPS: ReadonlyArray<{ days: PresetDays; label: string }> = [
+  { days: 3, label: "3 days" },
+  { days: 7, label: "7 days" },
+  { days: 30, label: "30 days" },
+  { days: 180, label: "6 months" },
+  { days: 365, label: "1 year" },
+];
+
+function subtractCalendarDays(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d) - (days - 1) * DAY_MS).toISOString().slice(0, 10);
+}
+
+function formatCacheTimestamp(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
 
 function normalizeProductItem(item: Record<string, unknown>, idx: number): ZohoProductItem {
   const zohoId = String(
@@ -139,6 +181,13 @@ function normalizeProductItem(item: Record<string, unknown>, idx: number): ZohoP
       ? "new"
       : "update";
 
+  const modifiedAt =
+    typeof item.modifiedAt === "string"
+      ? item.modifiedAt
+      : typeof item.last_modified_time === "string"
+      ? item.last_modified_time.slice(0, 10)
+      : undefined;
+
   return {
     zohoId,
     name,
@@ -150,21 +199,134 @@ function normalizeProductItem(item: Record<string, unknown>, idx: number): ZohoP
     categoryName,
     categoryIsNew,
     status,
+    modifiedAt,
     raw: item,
   };
 }
 
-export function ZohoStockImportSheet({
-  isOpen,
+async function requestPreview(
+  selectedRange: SyncWindow,
+  syncMode: SyncMode
+): Promise<
+  | {
+      ok: true;
+      cache?: ZohoCacheMeta;
+      normalized: ZohoProductItem[];
+      summaryStats: {
+        totalActive: number;
+        newProducts: number;
+        existingProducts: number;
+        newBrands: number;
+        newCategories: number;
+      };
+    }
+  | { ok: false; error: string }
+> {
+  try {
+    log.info("Fetching active products preview", { selectedRange, syncMode });
+    const params = new URLSearchParams({ sync: syncMode });
+    if ("all" in selectedRange) {
+      params.set("all", "1");
+    } else if ("days" in selectedRange) {
+      params.set("days", String(selectedRange.days));
+    } else {
+      params.set("fromDate", selectedRange.fromDate);
+      params.set("toDate", selectedRange.toDate);
+    }
+
+    const queryUrl = `/api/stock/zoho-preview?${params}`;
+    let res = await apiTry<ZohoPreviewApiResponse>(queryUrl, { timeoutMs: 120_000 });
+
+    if (res.error && (res.error.includes("405") || res.error.includes("Method Not Allowed"))) {
+      log.warn("GET /api/stock/zoho-preview returned 405, attempting POST fallback");
+      res = await apiTry<ZohoPreviewApiResponse>("/api/stock/zoho-preview", {
+        method: "POST",
+        json: { ...selectedRange, sync: syncMode },
+        timeoutMs: 120_000,
+      });
+    }
+
+    if (res.error || !res.data) {
+      const errMsg = res.error || "Failed to fetch preview from Zoho.";
+      const isDisconnected =
+        errMsg.toLowerCase().includes("not connected") ||
+        errMsg.toLowerCase().includes("disconnected") ||
+        errMsg.toLowerCase().includes("integration") ||
+        errMsg.toLowerCase().includes("credentials");
+
+      const userFriendlyError = isDisconnected
+        ? "Zoho Inventory is not connected. Please connect it in Settings > Integrations, then try again."
+        : errMsg;
+
+      log.error("Zoho stock preview error", { message: userFriendlyError });
+      return { ok: false, error: userFriendlyError };
+    }
+
+    const data = res.data;
+    const rawList =
+      data.products || data.items || data.rows || (Array.isArray(data) ? data : []);
+    const normalized = rawList.map((item, idx) =>
+      normalizeProductItem(item as Record<string, unknown>, idx)
+    );
+
+    const counts = (data.counts || data.summary || {}) as Record<string, number | undefined>;
+    const totalActive = counts.totalActive ?? counts.total ?? normalized.length;
+    const newProducts =
+      counts.newProducts ?? counts.new ?? normalized.filter((p) => p.status === "new").length;
+    const existingProducts =
+      counts.existingProducts ??
+      counts.existing ??
+      counts.update ??
+      normalized.filter((p) => p.status === "update").length;
+
+    const newBrandsSet = new Set(
+      normalized.filter((p) => p.brandIsNew && p.brandName).map((p) => p.brandName)
+    );
+    const newCategoriesSet = new Set(
+      normalized.filter((p) => p.categoryIsNew && p.categoryName).map((p) => p.categoryName)
+    );
+
+    const newBrands = counts.brandsToCreate ?? counts.newBrands ?? newBrandsSet.size;
+    const newCategories =
+      counts.categoriesToCreate ?? counts.newCategories ?? newCategoriesSet.size;
+
+    return {
+      ok: true,
+      cache: data.cache,
+      normalized,
+      summaryStats: {
+        totalActive,
+        newProducts,
+        existingProducts,
+        newBrands,
+        newCategories,
+      },
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Unexpected error during preview fetch";
+    log.error("Zoho preview error", { message: msg });
+    return { ok: false, error: msg };
+  }
+}
+
+export function ZohoStockImportSheet({ isOpen, ...props }: ZohoStockImportSheetProps) {
+  return isOpen ? <StockImportDialog {...props} /> : null;
+}
+
+function StockImportDialog({
   onClose,
   onImportComplete,
-}: ZohoStockImportSheetProps) {
-  const [step, setStep] = useState<ImportStep>("idle");
-  const [days, setDays] = useState<RangeDays>(7);
+}: Omit<ZohoStockImportSheetProps, "isOpen">) {
+  const [step, setStep] = useState<ImportStep>("previewing");
+  const [range, setRange] = useState<SyncWindow>({ days: 7 });
   const [products, setProducts] = useState<ZohoProductItem[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
+  const [visibleLimit, setVisibleLimit] = useState(200);
   const [error, setError] = useState<string | null>(null);
+  const [cacheInfo, setCacheInfo] = useState<ZohoCacheMeta | null>(null);
+  const [syncModeInFlight, setSyncModeInFlight] = useState<SyncMode>("cache");
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
 
   const [summaryStats, setSummaryStats] = useState({
     totalActive: 0,
@@ -181,121 +343,79 @@ export function ZohoStockImportSheet({
     createdCategories: number;
   } | null>(null);
 
-  // Reset internal state when sheet opens
-  useEffect(() => {
-    if (isOpen) {
-      setStep("idle");
-      setDays(7);
-      setProducts([]);
-      setSelectedIds(new Set());
-      setSearch("");
-      setError(null);
-      setImportResult(null);
-    }
-  }, [isOpen]);
+  const today = getTodayIST();
+  const custom = "fromDate" in range ? range : null;
+  const rangeError = !custom
+    ? null
+    : !custom.fromDate || !custom.toDate
+    ? "Choose both start and end dates."
+    : custom.fromDate > custom.toDate
+    ? "End date must be on or after start date."
+    : custom.toDate > today
+    ? "Choose today or an earlier end date."
+    : null;
 
   const handleClose = useCallback(() => {
     if (step === "previewing" || step === "importing") return;
     onClose();
   }, [step, onClose]);
 
+  const applyPreviewResult = useCallback(
+    (result: Awaited<ReturnType<typeof requestPreview>>) => {
+      if (!result.ok) {
+        setError(result.error);
+        setStep("idle");
+        return;
+      }
+      if (result.cache) setCacheInfo(result.cache);
+      setSummaryStats(result.summaryStats);
+      setProducts(result.normalized);
+      setSelectedIds(new Set(result.normalized.map((p) => p.zohoId)));
+      setStep("review");
+    },
+    []
+  );
+
   const fetchPreview = useCallback(
-    async (selectedRange: RangeDays) => {
+    async (selectedRange: SyncWindow, syncMode: SyncMode = "cache") => {
+      setSyncModeInFlight(syncMode);
       setStep("previewing");
       setError(null);
       setProducts([]);
       setSelectedIds(new Set());
       setSearch("");
+      setVisibleLimit(200);
+      const result = await requestPreview(selectedRange, syncMode);
+      applyPreviewResult(result);
+    },
+    [applyPreviewResult]
+  );
 
-      try {
-        log.info("Fetching active products from Zoho", { days: selectedRange });
-        const queryUrl = `/api/stock/zoho-preview?days=${selectedRange}`;
+  // Auto-load from local cache on open (0 Zoho API load when cache exists)
+  useEffect(() => {
+    let cancelled = false;
+    requestPreview({ days: 7 }, "cache").then((result) => {
+      if (!cancelled) applyPreviewResult(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [applyPreviewResult]);
 
-        // Attempt GET first
-        let res = await apiTry<ZohoPreviewApiResponse>(queryUrl, { timeoutMs: 90_000 });
-
-        // If GET returned 405 Method Not Allowed, fallback to POST with json payload
-        if (res.error && (res.error.includes("405") || res.error.includes("Method Not Allowed"))) {
-          log.warn("GET /api/stock/zoho-preview returned 405, attempting POST fallback", {
-            days: selectedRange,
-          });
-          res = await apiTry<ZohoPreviewApiResponse>("/api/stock/zoho-preview", {
-            method: "POST",
-            json: { days: selectedRange },
-            timeoutMs: 90_000,
-          });
-        }
-
-        if (res.error || !res.data) {
-          const errMsg = res.error || "Failed to fetch preview from Zoho.";
-          const isDisconnected =
-            errMsg.toLowerCase().includes("not connected") ||
-            errMsg.toLowerCase().includes("disconnected") ||
-            errMsg.toLowerCase().includes("integration") ||
-            errMsg.toLowerCase().includes("credentials");
-
-          const userFriendlyError = isDisconnected
-            ? "Zoho Inventory is not connected. Please connect it in Settings > Integrations, then try again."
-            : errMsg;
-
-          log.error("Zoho stock preview error", { message: userFriendlyError });
-          setError(userFriendlyError);
-          setStep("idle");
-          return;
-        }
-
-        const data = res.data;
-        const rawList =
-          data.products || data.items || data.rows || (Array.isArray(data) ? data : []);
-
-        const normalized = rawList.map((item, idx) =>
-          normalizeProductItem(item as Record<string, unknown>, idx)
-        );
-
-        // Derive summary counts
-        const counts = (data.counts || data.summary || {}) as Record<string, number | undefined>;
-        const totalActive =
-          counts.totalActive ?? counts.total ?? normalized.length;
-        const newProducts =
-          counts.newProducts ??
-          counts.new ??
-          normalized.filter((p) => p.status === "new").length;
-        const existingProducts =
-          counts.existingProducts ??
-          counts.existing ??
-          counts.update ??
-          normalized.filter((p) => p.status === "update").length;
-
-        const newBrandsSet = new Set(
-          normalized.filter((p) => p.brandIsNew && p.brandName).map((p) => p.brandName)
-        );
-        const newCategoriesSet = new Set(
-          normalized.filter((p) => p.categoryIsNew && p.categoryName).map((p) => p.categoryName)
-        );
-
-        const newBrands = counts.brandsToCreate ?? counts.newBrands ?? newBrandsSet.size;
-        const newCategories = counts.categoriesToCreate ?? counts.newCategories ?? newCategoriesSet.size;
-
-        setSummaryStats({
-          totalActive,
-          newProducts,
-          existingProducts,
-          newBrands,
-          newCategories,
-        });
-
-        setProducts(normalized);
-        // By default select all active products
-        setSelectedIds(new Set(normalized.map((p) => p.zohoId)));
-        setStep("review");
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : "Unexpected error during preview fetch";
-        log.error("Zoho preview error", { message: msg });
-        setError(msg);
+  const selectRangeAndPreview = useCallback(
+    (nextRange: SyncWindow) => {
+      setRange(nextRange);
+      if ("fromDate" in nextRange) {
+        // Let user edit/apply dates cleanly without firing on partial range
+        setProducts([]);
+        setSelectedIds(new Set());
         setStep("idle");
+        setError(null);
+      } else {
+        void fetchPreview(nextRange, "cache");
       }
     },
-    []
+    [fetchPreview]
   );
 
   const toggleProduct = useCallback((zohoId: string) => {
@@ -319,6 +439,11 @@ export function ZohoStockImportSheet({
     );
   }, [products, search]);
 
+  const displayedProducts = useMemo(
+    () => filteredProducts.slice(0, visibleLimit),
+    [filteredProducts, visibleLimit]
+  );
+
   const allFilteredSelected = useMemo(() => {
     if (filteredProducts.length === 0) return false;
     return filteredProducts.every((p) => selectedIds.has(p.zohoId));
@@ -326,21 +451,15 @@ export function ZohoStockImportSheet({
 
   const toggleSelectAll = useCallback(() => {
     if (allFilteredSelected) {
-      // Deselect all currently filtered products
       setSelectedIds((prev) => {
         const next = new Set(prev);
-        for (const p of filteredProducts) {
-          next.delete(p.zohoId);
-        }
+        for (const p of filteredProducts) next.delete(p.zohoId);
         return next;
       });
     } else {
-      // Select all currently filtered products
       setSelectedIds((prev) => {
         const next = new Set(prev);
-        for (const p of filteredProducts) {
-          next.add(p.zohoId);
-        }
+        for (const p of filteredProducts) next.add(p.zohoId);
         return next;
       });
     }
@@ -352,9 +471,10 @@ export function ZohoStockImportSheet({
 
     setStep("importing");
     setError(null);
+    setImportProgress({ done: 0, total: selectedItems.length });
 
     try {
-      log.info("Importing selected Zoho products", { count: selectedItems.length, days });
+      log.info("Importing selected Zoho products", { count: selectedItems.length });
 
       const cleanItems = selectedItems.map((p) => ({
         zohoId: p.zohoId,
@@ -366,46 +486,30 @@ export function ZohoStockImportSheet({
         sellingPrice: p.sellingPrice !== undefined ? Number(p.sellingPrice) : undefined,
       }));
 
-      const payload = {
-        days,
-        items: cleanItems,
-        products: cleanItems,
-        ids: selectedItems.map((p) => p.zohoId),
-        itemIds: selectedItems.map((p) => p.zohoId),
-      };
+      let createdCount = 0;
+      let updatedCount = 0;
+      let brandsCount = 0;
+      let categoriesCount = 0;
 
-      const res = await apiFetch<ZohoImportApiResponse>("/api/stock/zoho-import", {
-        method: "POST",
-        json: payload,
-        timeoutMs: 180_000,
-      });
+      for (let i = 0; i < cleanItems.length; i += IMPORT_BATCH_SIZE) {
+        const chunk = cleanItems.slice(i, i + IMPORT_BATCH_SIZE);
+        const res = await apiFetch<ZohoImportApiResponse>("/api/stock/zoho-import", {
+          method: "POST",
+          json: { items: chunk },
+          timeoutMs: 180_000,
+        });
 
-      const createdCount =
-        res.created ??
-        res.productsCreated ??
-        res.createdCount ??
-        selectedItems.filter((p) => p.status === "new").length;
+        createdCount += res.created ?? res.productsCreated ?? res.createdCount ?? 0;
+        updatedCount += res.updated ?? res.productsUpdated ?? res.updatedCount ?? 0;
+        brandsCount += res.createdBrands ?? res.brandsCreated ?? res.newBrands ?? 0;
+        categoriesCount +=
+          res.createdCategories ?? res.categoriesCreated ?? res.newCategories ?? 0;
 
-      const updatedCount =
-        res.updated ??
-        res.productsUpdated ??
-        res.updatedCount ??
-        selectedItems.filter((p) => p.status === "update").length;
-
-      const brandsCount =
-        res.createdBrands ??
-        res.brandsCreated ??
-        res.newBrands ??
-        new Set(selectedItems.filter((p) => p.brandIsNew && p.brandName).map((p) => p.brandName))
-          .size;
-
-      const categoriesCount =
-        res.createdCategories ??
-        res.categoriesCreated ??
-        res.newCategories ??
-        new Set(
-          selectedItems.filter((p) => p.categoryIsNew && p.categoryName).map((p) => p.categoryName)
-        ).size;
+        setImportProgress({
+          done: Math.min(i + chunk.length, cleanItems.length),
+          total: cleanItems.length,
+        });
+      }
 
       setImportResult({
         createdProducts: createdCount,
@@ -414,8 +518,8 @@ export function ZohoStockImportSheet({
         createdCategories: categoriesCount,
       });
 
+      setImportProgress(null);
       setStep("success");
-      // Notify parent to refresh products on /stock
       onImportComplete();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to import selected products";
@@ -429,12 +533,11 @@ export function ZohoStockImportSheet({
         : msg;
 
       log.error("Zoho import error", { message: friendlyMsg });
+      setImportProgress(null);
       setError(friendlyMsg);
       setStep("review");
     }
-  }, [products, selectedIds, days, onImportComplete]);
-
-  if (!isOpen) return null;
+  }, [products, selectedIds, onImportComplete]);
 
   const busy = step === "previewing" || step === "importing";
 
@@ -475,65 +578,163 @@ export function ZohoStockImportSheet({
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
           {error && (
             <ErrorBanner
               message={error}
               type="error"
-              onRetry={step === "idle" ? () => void fetchPreview(days) : undefined}
+              onRetry={
+                step === "idle" && !rangeError ? () => void fetchPreview(range, "cache") : undefined
+              }
               onDismiss={() => setError(null)}
             />
           )}
 
-          {/* STEP 1: Range selector chips and preview button */}
+          {/* Sync Window & Local Cache Controls */}
           {(step === "idle" || step === "review") && (
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-slate-700">Sync window:</span>
-                  <div className="flex items-center gap-1.5">
-                    {([3, 7, 30] as const).map((d) => (
-                      <button
-                        key={d}
-                        type="button"
-                        disabled={busy}
-                        onClick={() => {
-                          setDays(d);
-                          if (step === "review") {
-                            void fetchPreview(d);
-                          }
-                        }}
-                        className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
-                          days === d
-                            ? "bg-blue-600 text-white shadow-xs"
-                            : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-100"
-                        }`}
-                      >
-                        {d} days
-                      </button>
-                    ))}
-                  </div>
-                </div>
+              {/* Preset chips + All Active + Custom */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs font-semibold text-slate-700 mr-1">Sync window:</span>
+                {PRESET_CHIPS.map(({ days, label }) => {
+                  const active = "days" in range && range.days === days;
+                  return (
+                    <button
+                      key={days}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => selectRangeAndPreview({ days })}
+                      className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+                        active
+                          ? "bg-blue-600 text-white shadow-xs"
+                          : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-100"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
 
-                {step === "idle" && (
-                  <Button
-                    type="button"
-                    onClick={() => void fetchPreview(days)}
-                    disabled={busy}
-                    className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs h-8 px-3.5"
-                  >
-                    <Cloud className="h-3.5 w-3.5" />
-                    Preview Active Products
-                  </Button>
-                )}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => selectRangeAndPreview({ all: true })}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+                    "all" in range
+                      ? "bg-blue-600 text-white shadow-xs"
+                      : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-100"
+                  }`}
+                >
+                  All Active
+                </button>
+
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    selectRangeAndPreview({
+                      fromDate: custom?.fromDate ?? subtractCalendarDays(today, 7),
+                      toDate: custom?.toDate ?? today,
+                    })
+                  }
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+                    custom
+                      ? "bg-blue-600 text-white shadow-xs"
+                      : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-100"
+                  }`}
+                >
+                  From → To
+                </button>
               </div>
 
-              {step === "idle" && (
-                <p className="text-[11px] text-slate-500">
-                  Retrieves active products modified within the selected window. Missing brands
-                  and categories will be automatically identified.
-                </p>
+              {/* Custom Date Range inputs */}
+              {custom && (
+                <div className="space-y-2 pt-1">
+                  <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 items-end">
+                    {(["fromDate", "toDate"] as const).map((field) => (
+                      <label
+                        key={field}
+                        className="flex flex-col gap-1 text-[11px] font-medium text-slate-600"
+                      >
+                        {field === "fromDate" ? "From" : "To"}
+                        <Input
+                          type="date"
+                          value={custom[field]}
+                          min={field === "toDate" ? custom.fromDate || undefined : undefined}
+                          max={field === "fromDate" ? custom.toDate || today : today}
+                          disabled={busy}
+                          onChange={(e) => {
+                            const next = { ...custom, [field]: e.target.value };
+                            setRange(next);
+                            setProducts([]);
+                            setSelectedIds(new Set());
+                            setStep("idle");
+                          }}
+                          aria-describedby={rangeError ? "zoho-stock-date-error" : undefined}
+                          className="h-11 sm:h-9 min-w-0 text-base sm:text-xs bg-white"
+                        />
+                      </label>
+                    ))}
+                    <Button
+                      type="button"
+                      disabled={busy || Boolean(rangeError)}
+                      onClick={() => void fetchPreview(custom, "cache")}
+                      className="h-11 sm:h-9 bg-blue-600 hover:bg-blue-700 text-white text-xs px-4"
+                    >
+                      Apply Dates
+                    </Button>
+                  </div>
+                  {rangeError && (
+                    <p id="zoho-stock-date-error" role="status" className="text-xs text-red-700">
+                      {rangeError}
+                    </p>
+                  )}
+                </div>
               )}
+
+              {/* Local Cache status & sync actions */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80">
+                <div className="flex items-center gap-1.5 text-[11px] text-slate-600">
+                  <Database className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                  {cacheInfo ? (
+                    <span>
+                      <strong className="font-semibold text-slate-800">
+                        Local Cache ({cacheInfo.totalItems.toLocaleString("en-IN")} items)
+                      </strong>{" "}
+                      · Updated {formatCacheTimestamp(cacheInfo.cachedAt)} ·{" "}
+                      <span className="text-emerald-700 font-medium">
+                        0 Zoho API load on filter
+                      </span>
+                    </span>
+                  ) : (
+                    <span>Local cache ready — sync from Zoho to refresh items.</span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void fetchPreview(range, "delta")}
+                    className="h-7 px-2.5 text-[11px] bg-white gap-1 text-blue-700 border-blue-200 hover:bg-blue-50"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    Sync Latest (Delta)
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void fetchPreview(range, "full")}
+                    className="h-7 px-2.5 text-[11px] bg-white text-slate-700 border-slate-200 hover:bg-slate-100"
+                  >
+                    Full Rebuild
+                  </Button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -545,11 +746,14 @@ export function ZohoStockImportSheet({
                 <Cloud className="absolute h-5 w-5 text-blue-600" />
               </div>
               <p className="text-sm font-semibold text-slate-800">
-                Fetching active products from Zoho...
+                {syncModeInFlight === "full"
+                  ? "Rebuilding full Zoho item cache..."
+                  : syncModeInFlight === "delta"
+                  ? "Syncing latest changes from Zoho..."
+                  : "Loading products for selected window..."}
               </p>
               <p className="text-xs text-slate-400 max-w-sm">
-                Scanning items updated in the last {days} days and matching local brands &
-                categories.
+                Matching active items with your local products, brands, and categories.
               </p>
             </div>
           )}
@@ -559,11 +763,13 @@ export function ZohoStockImportSheet({
             <div className="py-14 flex flex-col items-center justify-center text-center space-y-3">
               <Loader2 className="h-10 w-10 text-blue-600 animate-spin" />
               <p className="text-sm font-semibold text-slate-800">
-                Importing {selectedIds.size} selected products...
+                {importProgress
+                  ? `Importing ${importProgress.done.toLocaleString("en-IN")} of ${importProgress.total.toLocaleString("en-IN")} selected products...`
+                  : `Importing ${selectedIds.size.toLocaleString("en-IN")} selected products...`}
               </p>
               <p className="text-xs text-slate-500 max-w-sm">
-                Creating missing brands and categories, updating inventory levels, and saving
-                product records. Please wait.
+                Creating missing brands and categories and updating product records (including exact
+                Zoho SKUs). Please wait.
               </p>
             </div>
           )}
@@ -620,13 +826,17 @@ export function ZohoStockImportSheet({
                 <div className="relative flex-1">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                   <Input
-                    placeholder="Search by name, SKU, brand, category..."
+                    placeholder="Search by name, SKU (e.g. 1387), brand, category..."
                     value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    className="pl-8 text-xs h-8"
+                    onChange={(e) => {
+                      setSearch(e.target.value);
+                      setVisibleLimit(200);
+                    }}
+                    className="pl-8 text-xs h-9 sm:h-8"
                   />
                   {search && (
                     <button
+                      type="button"
                       onClick={() => setSearch("")}
                       className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
                     >
@@ -660,116 +870,132 @@ export function ZohoStockImportSheet({
               </div>
 
               {/* Scrollable list of product cards */}
-              <div className="space-y-2 max-h-[46vh] overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-[44vh] overflow-y-auto pr-1">
                 {filteredProducts.length === 0 ? (
                   <div className="py-8 text-center text-slate-400 text-xs bg-slate-50 rounded-xl border border-slate-200">
-                    No products matched your search.
+                    {products.length
+                      ? "No products matched your search."
+                      : "No active products were updated in this date range."}
                   </div>
                 ) : (
-                  filteredProducts.map((p) => {
-                    const isSelected = selectedIds.has(p.zohoId);
-                    return (
-                      <div
-                        key={p.zohoId}
-                        onClick={() => toggleProduct(p.zohoId)}
-                        className={`cursor-pointer rounded-xl border p-3 transition-all ${
-                          isSelected
-                            ? "border-blue-300 bg-blue-50/40 shadow-xs"
-                            : "border-slate-200 bg-white hover:border-slate-300"
-                        }`}
-                      >
-                        <div className="flex items-start gap-3">
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleProduct(p.zohoId)}
-                            onClick={(e) => e.stopPropagation()}
-                            className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                          />
+                  <>
+                    {displayedProducts.map((p) => {
+                      const isSelected = selectedIds.has(p.zohoId);
+                      return (
+                        <div
+                          key={p.zohoId}
+                          onClick={() => toggleProduct(p.zohoId)}
+                          className={`cursor-pointer rounded-xl border p-3 transition-all ${
+                            isSelected
+                              ? "border-blue-300 bg-blue-50/40 shadow-xs"
+                              : "border-slate-200 bg-white hover:border-slate-300"
+                          }`}
+                        >
+                          <div className="flex items-start gap-3">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleProduct(p.zohoId)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            />
 
-                          <div className="flex-1 min-w-0 space-y-1.5">
-                            {/* Product Title and Badges */}
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="min-w-0">
-                                <p className="text-xs font-bold text-slate-900 truncate">
-                                  {p.name}
-                                </p>
-                                <p className="text-[11px] font-mono text-slate-500">
-                                  SKU: {p.sku}
-                                </p>
+                            <div className="flex-1 min-w-0 space-y-1.5">
+                              {/* Product Title and Badges */}
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="text-xs font-bold text-slate-900 truncate">
+                                    {p.name}
+                                  </p>
+                                  <p className="text-[11px] font-mono text-slate-500">
+                                    SKU: {p.sku}
+                                    {p.modifiedAt ? ` · Modified: ${p.modifiedAt}` : ""}
+                                  </p>
+                                </div>
+
+                                <span
+                                  className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                                    p.status === "new"
+                                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                      : "bg-blue-50 text-blue-700 border-blue-200"
+                                  }`}
+                                >
+                                  {p.status === "new" ? "New Product" : "Update"}
+                                </span>
                               </div>
 
-                              <span
-                                className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
-                                  p.status === "new"
-                                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                                    : "bg-blue-50 text-blue-700 border-blue-200"
-                                }`}
-                              >
-                                {p.status === "new" ? "New Product" : "Update"}
-                              </span>
-                            </div>
-
-                            {/* Prices & Taxonomy row */}
-                            <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px]">
-                              {/* Price tags */}
-                              <span className="font-semibold text-slate-800 bg-slate-100 px-2 py-0.5 rounded">
-                                Selling: ₹{p.sellingPrice.toLocaleString("en-IN")}
-                              </span>
-
-                              {p.costPrice !== undefined && (
-                                <span className="text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
-                                  Cost: ₹{p.costPrice.toLocaleString("en-IN")}
+                              {/* Prices & Taxonomy row */}
+                              <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px]">
+                                <span className="font-semibold text-slate-800 bg-slate-100 px-2 py-0.5 rounded">
+                                  Selling: ₹{p.sellingPrice.toLocaleString("en-IN")}
                                 </span>
-                              )}
 
-                              {/* Brand badge */}
-                              {p.brandName ? (
-                                <span
-                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border ${
-                                    p.brandIsNew
-                                      ? "bg-purple-50 text-purple-700 border-purple-200 font-medium"
-                                      : "bg-slate-100 text-slate-600 border-slate-200"
-                                  }`}
-                                >
-                                  <Tags className="h-3 w-3 shrink-0" />
-                                  Brand: {p.brandName}
-                                  {p.brandIsNew && (
-                                    <span className="text-[9px] bg-purple-200/80 px-1 py-0.2 rounded font-semibold">
-                                      New
-                                    </span>
-                                  )}
-                                </span>
-                              ) : (
-                                <span className="text-slate-400 text-[10px]">No Brand</span>
-                              )}
+                                {p.costPrice !== undefined && (
+                                  <span className="text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
+                                    Cost: ₹{p.costPrice.toLocaleString("en-IN")}
+                                  </span>
+                                )}
 
-                              {/* Category badge */}
-                              {p.categoryName ? (
-                                <span
-                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border ${
-                                    p.categoryIsNew
-                                      ? "bg-amber-50 text-amber-700 border-amber-200 font-medium"
-                                      : "bg-slate-100 text-slate-600 border-slate-200"
-                                  }`}
-                                >
-                                  <Layers className="h-3 w-3 shrink-0" />
-                                  Category: {p.categoryName}
-                                  {p.categoryIsNew && (
-                                    <span className="text-[9px] bg-amber-200/80 px-1 py-0.2 rounded font-semibold">
-                                      New
-                                    </span>
-                                  )}
-                                </span>
-                              ) : (
-                                <span className="text-slate-400 text-[10px]">No Category</span>
-                              )}
+                                {p.brandName ? (
+                                  <span
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border ${
+                                      p.brandIsNew
+                                        ? "bg-purple-50 text-purple-700 border-purple-200 font-medium"
+                                        : "bg-slate-100 text-slate-600 border-slate-200"
+                                    }`}
+                                  >
+                                    <Tags className="h-3 w-3 shrink-0" />
+                                    Brand: {p.brandName}
+                                    {p.brandIsNew && (
+                                      <span className="text-[9px] bg-purple-200/80 px-1 py-0.2 rounded font-semibold">
+                                        New
+                                      </span>
+                                    )}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400 text-[10px]">No Brand</span>
+                                )}
+
+                                {p.categoryName ? (
+                                  <span
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border ${
+                                      p.categoryIsNew
+                                        ? "bg-amber-50 text-amber-700 border-amber-200 font-medium"
+                                        : "bg-slate-100 text-slate-600 border-slate-200"
+                                    }`}
+                                  >
+                                    <Layers className="h-3 w-3 shrink-0" />
+                                    Category: {p.categoryName}
+                                    {p.categoryIsNew && (
+                                      <span className="text-[9px] bg-amber-200/80 px-1 py-0.2 rounded font-semibold">
+                                        New
+                                      </span>
+                                    )}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400 text-[10px]">No Category</span>
+                                )}
+                              </div>
                             </div>
                           </div>
                         </div>
+                      );
+                    })}
+
+                    {filteredProducts.length > displayedProducts.length && (
+                      <div className="pt-2 text-center">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setVisibleLimit((n) => n + 200)}
+                          className="text-xs"
+                        >
+                          Show more ({filteredProducts.length - displayedProducts.length} remaining)
+                        </Button>
                       </div>
-                    );
-                  })
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -790,7 +1016,6 @@ export function ZohoStockImportSheet({
                 </p>
               </div>
 
-              {/* Counts Grid */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 border border-slate-200 rounded-xl p-4">
                 <div className="text-center">
                   <p className="text-xs text-slate-500 font-medium">Products Created</p>
@@ -822,7 +1047,7 @@ export function ZohoStockImportSheet({
         </div>
 
         {/* Footer Actions */}
-        <div className="border-t border-slate-200 px-5 py-3.5 bg-slate-50/80 flex items-center justify-between shrink-0">
+        <div className="border-t border-slate-200 px-4 sm:px-5 pt-3.5 pb-[max(0.875rem,env(safe-area-inset-bottom))] bg-slate-50/80 flex items-center justify-between shrink-0">
           {step === "review" && (
             <>
               <Button
@@ -830,7 +1055,7 @@ export function ZohoStockImportSheet({
                 variant="outline"
                 onClick={handleClose}
                 disabled={busy}
-                className="text-xs h-9"
+                className="text-xs h-11 sm:h-9"
               >
                 Cancel
               </Button>
@@ -838,7 +1063,7 @@ export function ZohoStockImportSheet({
                 type="button"
                 onClick={() => void runImport()}
                 disabled={busy || selectedIds.size === 0}
-                className="bg-blue-600 hover:bg-blue-700 text-white text-xs h-9 px-4 font-semibold shadow-xs"
+                className="bg-blue-600 hover:bg-blue-700 text-white text-xs h-11 sm:h-9 px-4 font-semibold shadow-xs"
               >
                 Import Selected ({selectedIds.size})
               </Button>
@@ -846,15 +1071,25 @@ export function ZohoStockImportSheet({
           )}
 
           {step === "idle" && (
-            <div className="w-full flex justify-end">
+            <div className="w-full flex items-center justify-between gap-3">
               <Button
                 type="button"
                 variant="outline"
                 onClick={handleClose}
-                className="text-xs h-9"
+                className="h-11 sm:h-9 text-xs"
               >
                 Close
               </Button>
+              {custom && (
+                <Button
+                  type="button"
+                  onClick={() => void fetchPreview(custom, "cache")}
+                  disabled={Boolean(rangeError)}
+                  className="h-11 sm:h-9 flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 text-white text-xs"
+                >
+                  <Cloud className="h-4 w-4 mr-1.5" /> Preview Active Products
+                </Button>
+              )}
             </div>
           )}
 
@@ -863,7 +1098,7 @@ export function ZohoStockImportSheet({
               <Button
                 type="button"
                 onClick={handleClose}
-                className="bg-slate-900 hover:bg-slate-800 text-white text-xs h-9 px-6 font-semibold"
+                className="bg-slate-900 hover:bg-slate-800 text-white text-xs h-11 sm:h-9 px-6 font-semibold"
               >
                 Done
               </Button>
