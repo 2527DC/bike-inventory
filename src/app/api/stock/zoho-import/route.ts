@@ -147,7 +147,7 @@ export async function POST(req: NextRequest) {
           where: {
             OR: [
               { zohoItemId: { in: zohoIds } },
-              { sku: { in: skus } },
+              ...(skus.length > 0 ? [{ sku: { in: skus, mode: "insensitive" as const } }] : []),
             ],
           },
           select: {
@@ -193,11 +193,24 @@ export async function POST(req: NextRequest) {
           const hsnCode = item.hsnCode !== undefined ? (item.hsnCode?.trim() || null) : undefined;
 
           if (existing) {
+            const skuOwner = sku ? productBySku.get(sku.toLowerCase()) : undefined;
+            const skuConflict = Boolean(skuOwner && skuOwner.id !== existing.id);
+            if (skuConflict) {
+              log.warn("zoho import skipped sku update due to conflict", {
+                productId: existing.id,
+                currentSku: existing.sku,
+                zohoSku: sku,
+                conflictingProductId: skuOwner!.id,
+              });
+            }
+            const shouldUpdateSku = Boolean(sku && sku !== existing.sku && !skuConflict);
+
             const updateData: Parameters<typeof tx.product.update>[0]["data"] = {
               name: item.name.trim(),
               brandId,
               categoryId,
               status: ProductStatus.ACTIVE,
+              ...(shouldUpdateSku ? { sku } : {}),
               ...(costPrice !== undefined ? { costPrice } : {}),
               ...(sellingPrice !== undefined ? { sellingPrice, mrp: sellingPrice } : {}),
               ...(gstRate !== undefined ? { gstRate } : {}),
@@ -221,8 +234,11 @@ export async function POST(req: NextRequest) {
               },
             });
 
+            if (shouldUpdateSku && existing.sku) {
+              productBySku.delete(existing.sku.trim().toLowerCase());
+            }
             if (updatedProd.zohoItemId) productByZohoId.set(updatedProd.zohoItemId, updatedProd);
-            if (updatedProd.sku) productBySku.set(updatedProd.sku.toLowerCase(), updatedProd);
+            if (updatedProd.sku) productBySku.set(updatedProd.sku.trim().toLowerCase(), updatedProd);
             updated++;
           } else {
             let finalSku = sku || `ZOHO-${zohoId}`;
